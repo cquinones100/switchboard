@@ -749,6 +749,13 @@ fn a_train_of_one_red_on_both_attempts_drops_its_pr_and_is_run_again_once() {
     w.step();
     w.step();
     assert!(w.queue().train.unwrap().rerun.is_some());
+    // Another job's failure while the rerun's run hasn't ended waits.
+    *w.fake.still_running.lock().unwrap() = 1;
+    w.step();
+    assert!(
+        w.queue().train.is_some(),
+        "not dropped while the rerun runs"
+    );
     w.step();
     assert!(w.queue().train.is_none());
     assert!(w.queue().status(1).starts_with("dropped CI failed"));

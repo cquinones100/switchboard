@@ -124,12 +124,13 @@ pub struct Train {
     pub rerun: Option<Rerun>,
 }
 
-/// A red train's failed jobs run again: their names, and the first one's
-/// GitHub Actions job, whose failure is the first attempt's until the
-/// rerun's own check runs replace it.
+/// A red train's failed jobs run again: the GitHub Actions run, their
+/// names, and the first one's job, whose failure is the first attempt's
+/// until the rerun's own check runs replace it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Rerun {
+    pub run: String,
     pub names: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<String>,

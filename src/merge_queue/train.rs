@@ -31,8 +31,8 @@
 //! moved, the train is tested again. Red the first time, its failed jobs
 //! are run again once the run has ended (GitHub's "Re-run failed jobs"), since a test that fails
 //! now and then on a busy runner shouldn't drop a PR that is fine, and the
-//! train waits on that attempt as on the first; a failure still showing
-//! from the job that failed is the first attempt's, until the rerun's own
+//! train waits on that attempt as on the first; a failure showing before
+//! that run has ended again is the first attempt's, until the rerun's own
 //! check runs replace it. Red again, or with no rerun to be had, a train of
 //! one drops its PR, and a longer one is split into halves tested first,
 //! until the PR at fault is the only one dropped. A PR taken out of the queue ends its train. A
@@ -484,16 +484,17 @@ async fn ride(
         return Ok(tell);
     }
     let required = forge.required(&at.branch).await?;
-    let seen = match forge.checks(&train.commit, required.as_deref()).await? {
-        // The job that failed, still showing failed after it was run again:
-        // GitHub hasn't made the rerun's check runs yet.
-        Seen::Failed { job: Some(job), .. }
-            if train.rerun.as_ref().and_then(|r| r.job.as_ref()) == Some(&job) =>
-        {
-            Seen::Running
+    let mut seen = forge.checks(&train.commit, required.as_deref()).await?;
+    // A failure while the run run again hasn't ended is the first
+    // attempt's, still showing until GitHub makes the rerun's check runs
+    // (the job that failed, known without asking, or another that failed
+    // beside it), or one the rerun's run will end on anyway.
+    if let (Seen::Failed { job, .. }, Some(rerun)) = (&seen, &train.rerun) {
+        let same_job = job.is_some() && *job == rerun.job;
+        if same_job || !forge.run_finished(&rerun.run).await? {
+            seen = Seen::Running;
         }
-        seen => seen,
-    };
+    }
     if train.passed && seen != Seen::Passed {
         super::change(&at.common, |q| {
             if let Some(t) = q.train.as_mut() {
@@ -542,6 +543,7 @@ async fn ride(
             }
             if can_rerun && forge.rerun(&run).await.is_ok() {
                 let rerun = Rerun {
+                    run: run.clone(),
                     names: names.clone(),
                     job,
                 };

@@ -1375,6 +1375,7 @@ mod tests {
                         head: "h".into(),
                     }],
                     rerun: Some(Rerun {
+                        run: "77".into(),
                         names: vec!["Tests (macOS arm64, 1 of 2)".into()],
                         job: Some("9".into()),
                     }),
