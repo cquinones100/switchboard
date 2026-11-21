@@ -257,3 +257,36 @@ button {
 body.refused main { padding: 48px 24px; }
 body.refused h1 { font-size: 16px; }
 body.refused p { color: var(--dim); }
+
+/* ── The drawer's search (board 173) ── */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 12px 2px;
+  padding: 0 4px 0 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  min-height: 40px;
+}
+.search .prompt { color: var(--accent); font-weight: 700; }
+.search input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px; /* under 16px, iOS zooms the page in on focus */
+  color: var(--text);
+  background: none;
+  border: 0;
+  outline: none;
+  padding: 8px 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.search input::placeholder { color: var(--faint); }
+.search input::-webkit-search-cancel-button { display: none; }
+.search .clear { display: none; color: var(--accent); font-weight: 700; padding: 6px 12px; border-radius: 999px; background: var(--raised); }
+.search .clear.shown { display: block; }
+.hit { color: var(--accent); font-weight: 700; }
+.row .where-line .faint { color: var(--faint); }
+.drawer .big.again { width: calc(100% - 32px); margin: 0 16px; }
