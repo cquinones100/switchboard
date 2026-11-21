@@ -2,7 +2,9 @@
 // tabs, Needs you first, with its search; a tab's channel of recent turns
 // with the prompt it waits on as a card of buttons; the composer; pairing.
 // Everything shown comes from the computer's own answers and is put on the
-// page as text, never as HTML. Images from the photo library (board 174)
+// page as text, never as HTML: Claude's replies are Markdown, parsed by the
+// vendored markdown-it (raw HTML off) and built into elements from its
+// tokens (`markdown`), so nothing in a reply is read as HTML. Images from the photo library (board 174)
 // wait over the composer and go with the message, kept on the computer first.
 "use strict";
 
@@ -513,6 +515,63 @@ async function loadTurns() {
 
 const messageKey = (m) => m.who + ":" + m.at + ":" + m.text.length;
 
+// markdown-it (assets/phone/markdown-it.min.js, loaded before this file),
+// with raw HTML off, so `<img onerror=…>` stays text, and bare addresses
+// made links; null where it isn't loaded, which leaves replies as text.
+const md = typeof markdownit === "function" ? markdownit({ html: false, linkify: true }) : null;
+
+// The page's elements for a reply's Markdown, built from markdown-it's
+// tokens with `el`, every piece of text a text node: a table in a box that
+// scrolls sideways, and a link only for http and https, opening in the
+// browser and shown by its text; any other link is its text alone.
+function markdown(text) {
+  const root = el("div", { class: "body md" });
+  const stack = [root];
+  const top = () => stack[stack.length - 1];
+  const opened = (t) => {
+    if (t.hidden) return [top(), top()]; // a tight list's paragraph
+    if (t.type === "table_open") {
+      const table = el("table");
+      return [el("div", { class: "table" }, table), table];
+    }
+    if (t.type === "link_open") {
+      const href = t.attrGet("href") || "";
+      const node = /^https?:\/\//i.test(href)
+        ? el("a", { href, target: "_blank", rel: "noopener noreferrer" })
+        : el("span", { class: "link" });
+      return [node, node];
+    }
+    const align = (t.attrGet("style") || "").replace("text-align:", "");
+    const node = el(t.tag, { class: align || null, start: t.type === "ordered_list_open" ? t.attrGet("start") : null });
+    return [node, node];
+  };
+  const leaf = (t) => {
+    if (t.type === "code_inline") return el("code", {}, t.content);
+    if (t.type === "fence" || t.type === "code_block") return el("pre", {}, el("code", {}, t.content.replace(/\n$/, "")));
+    if (t.type === "softbreak") return "\n";
+    if (t.type === "hardbreak") return el("br");
+    if (t.type === "hr") return el("hr");
+    if (t.type === "image") return t.content; // its alt text: no image from elsewhere
+    return t.content || null;
+  };
+  const walk = (tokens) => {
+    for (const t of tokens) {
+      if (t.type === "inline") walk(t.children || []);
+      else if (t.nesting === 1) {
+        const [outer, inner] = opened(t);
+        if (outer !== top()) top().append(outer);
+        stack.push(inner);
+      } else if (t.nesting === -1) stack.pop();
+      else {
+        const kid = leaf(t);
+        if (kid !== null) top().append(kid instanceof Node ? kid : document.createTextNode(kid));
+      }
+    }
+  };
+  walk(md.parse(text, {}));
+  return root;
+}
+
 function message(m, i, all) {
   if (m.who === "tool") return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, m.text));
   const prev = all[i - 1];
@@ -521,8 +580,11 @@ function message(m, i, all) {
   const when = el("span", { class: "when" }, ago(m.at));
   when.at = m.at;
   const key = messageKey(m);
-  const folded = (m.text.split("\n").length > 10 || m.text.length > 700) && !state.unfolded.has(key);
-  const body = m.text ? el("div", { class: "body" + (folded ? " folded" : "") }, m.text) : null;
+  const body = !m.text ? null : m.who !== "you" && md ? markdown(m.text) : el("div", { class: "body" }, m.text);
+  // Rendered, a link's address and the Markdown's marks aren't counted.
+  const shown = body ? body.textContent : "";
+  const folded = (m.text.split("\n").length > 10 || shown.length > 700) && !state.unfolded.has(key);
+  if (folded) body.classList.add("folded");
   const images = (m.images || []).length
     ? el(
         "div",

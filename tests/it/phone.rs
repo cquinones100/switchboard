@@ -565,6 +565,82 @@ for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"])
     );
 }
 
+/// Claude's replies (assets/phone/app.js's `markdown`), rendered in Node
+/// with the vendored markdown-it over a stand-in document and read back as
+/// HTML: a table in a box of its own with its header row, a link by its
+/// text opening in the browser, a code block, raw HTML and a `javascript:`
+/// link left as text, and a message of yours left as typed; skipped without
+/// Node.
+#[test]
+fn claudes_replies_are_markdown_and_yours_stay_text() {
+    let script = r##"
+const vm = require("vm");
+const fs = require("fs");
+const path = require("path");
+class Node {
+  constructor(tag) { this.tagName = tag; this.children = []; this.attrs = {}; this.className = ""; this.text = ""; this.listeners = {};
+    const node = this;
+    this.classList = { add: (c) => { node.className = (node.className + " " + c).trim(); }, remove() {} };
+  }
+  get textContent() { return this.text + this.children.map((c) => c.textContent).join(""); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  addEventListener(k, f) { this.listeners[k] = f; }
+  append(...kids) { this.children.push(...kids); }
+  all() { return this.children.flatMap((c) => [c, ...c.all()]); }
+}
+// An element as HTML, its text escaped, to read what was built.
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const html = (n) => n.tagName === "#text" ? esc(n.text)
+  : "<" + n.tagName + (n.className ? ' class="' + n.className + '"' : "")
+    + Object.entries(n.attrs).map(([k, v]) => " " + k + '="' + v + '"').join("") + ">"
+    + n.children.map(html).join("") + "</" + n.tagName + ">";
+const ctx = vm.createContext({
+  Node,
+  document: { getElementById: () => null, addEventListener: () => {}, createElement: (t) => new Node(t), createTextNode: (text) => Object.assign(new Node("#text"), { text }) },
+  window: { addEventListener: () => {} },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(path.join(path.dirname(process.argv[1]), "markdown-it.min.js"), "utf8"), ctx);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const body = (who, text) => {
+  ctx.m = { who, text, at: 1 };
+  const msg = vm.runInContext("message(m, 0, [m])", ctx);
+  return msg.children.find((c) => c.className.split(" ").includes("body"));
+};
+const cases = [
+  ["claude", "| Tab | State |\n| --- | :-: |\n| 12 | **waiting** |"],
+  ["claude", "See [#12](https://github.com/o/r/issues/12)."],
+  ["claude", "```rust\nfn main() {}\n```"],
+  ["claude", "<img src=x onerror=alert(1)>"],
+  ["claude", "[run](javascript:alert(1)) and [mail](mailto:a@b.c)"],
+  ["you", "make it **bold** <b>"],
+];
+for (const [who, text] of cases) console.log(html(body(who, text)));
+// Folded by the text shown: a long address alone doesn't fold a reply.
+console.log("long link folded=" + body("claude", "[x](https://example.com/" + "a".repeat(800) + ")").className.includes("folded"));
+console.log("long text folded=" + body("claude", "word ".repeat(150)).className.includes("folded"));
+"##;
+    let Some(stdout) = run_app_js(script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            r#"<div class="body md"><div class="table"><table><thead><tr><th>Tab</th><th class="center">State</th></tr></thead><tbody><tr><td>12</td><td class="center"><strong>waiting</strong></td></tr></tbody></table></div></div>"#,
+            r#"<div class="body md"><p>See <a href="https://github.com/o/r/issues/12" target="_blank" rel="noopener noreferrer">#12</a>.</p></div>"#,
+            r#"<div class="body md"><pre><code>fn main() {}</code></pre></div>"#,
+            r#"<div class="body md"><p>&lt;img src=x onerror=alert(1)&gt;</p></div>"#,
+            r#"<div class="body md"><p>[run](javascript:alert(1)) and <span class="link">mail</span></p></div>"#,
+            r#"<div class="body">make it **bold** &lt;b&gt;</div>"#,
+            "long link folded=false",
+            "long text folded=true",
+        ],
+        "{stdout}"
+    );
+}
+
 /// A stand-in for the phone app in a tab of its own, marked as the phone
 /// app's or not: a process that writes the app's lock with its pid and the
 /// build given, then waits, run by a shell that goes on once it ends, as

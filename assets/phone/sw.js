@@ -18,6 +18,7 @@ const TAPPED_KEY = "/tapped";
 const SHELL = [
   "/",
   "/app.js",
+  "/markdown-it.min.js",
   "/app.css",
   "/manifest.webmanifest",
   "/icon.svg",
