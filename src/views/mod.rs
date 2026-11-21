@@ -82,7 +82,7 @@ pub enum Command {
     /// M-v: the branch's PR description in Claude's place, or closed.
     PrView,
     /// M-i: the tab's ticket (its Linear ticket or project, or its GitHub
-    /// issue) in a pane to the right, or closed.
+    /// issue) in Claude's place, or closed.
     TicketView,
     /// M-r: the branch's PR in the browser.
     OpenPr,

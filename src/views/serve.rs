@@ -328,7 +328,8 @@ impl Server {
 
     /// Runs `switchboard <args>` in a pane to the right of `pane`, taking
     /// `percent` of its width, focused and marked with `mark`, as the views'
-    /// `split-window -h` did. Gives the new pane, or says why there is none.
+    /// `split-window -h` did, the PR and the ticket in its place instead.
+    /// Gives the new pane, or says why there is none.
     pub fn open_beside(
         &mut self,
         pane: PaneId,
