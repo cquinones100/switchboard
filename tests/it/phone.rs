@@ -1370,6 +1370,17 @@ mod preview_server {
         let (_, frame) = http(at, "GET", "/preview", None);
         assert!(frame.contains("<iframe"), "{frame}");
         assert_eq!(http(at, "GET", "/sw.js", None).0, 404, "no service worker");
+        // A page whose name was pointed at 127.0.0.1 is refused.
+        let mut stream = std::net::TcpStream::connect(at).unwrap();
+        write!(
+            stream,
+            "GET /api/tabs HTTP/1.1\r\nHost: rebound.example:{}\r\nConnection: close\r\n\r\n",
+            at.port()
+        )
+        .unwrap();
+        let mut refused = String::new();
+        std::io::Read::read_to_string(&mut stream, &mut refused).unwrap();
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
         assert_eq!(json_of(at, "/api/me")["paired"], true);
         let tabs = json_of(at, "/api/tabs");
         assert_eq!(tabs["live"], true);

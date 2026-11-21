@@ -165,6 +165,8 @@ impl Data {
 
 pub struct Preview {
     dir: PathBuf,
+    /// The port served on, which a request's Host must name.
+    port: u16,
     data: Mutex<Data>,
     tabs: watch::Sender<Value>,
     reload: broadcast::Sender<String>,
@@ -227,8 +229,10 @@ pub async fn serve(listener: tokio::net::TcpListener, dir: PathBuf) -> Result<()
     let data = Data::new();
     let (tabs, _) = watch::channel(data.snapshot());
     let (reload, _) = broadcast::channel(16);
+    let port = listener.local_addr()?.port();
     let preview = Arc::new(Preview {
         dir,
+        port,
         data: Mutex::new(data),
         tabs,
         reload,
@@ -293,8 +297,38 @@ fn routes(preview: Arc<Preview>) -> Router {
         .route("/api/tabs/{pane}/seen", post(seen))
         .route("/api/tabs/{pane}/close", post(close))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
+        .layer(middleware::from_fn_with_state(
+            preview.clone(),
+            loopback_host_only,
+        ))
         .layer(middleware::from_fn(headers))
         .with_state(preview)
+}
+
+/// Whether a request's Host names this preview on the loopback address,
+/// so a page whose own name was pointed at 127.0.0.1 (DNS rebinding)
+/// can't read what the app sent, such as an image of yours.
+pub fn loopback_host(host: Option<&str>, port: u16) -> bool {
+    host.is_some_and(|h| {
+        [format!("127.0.0.1:{port}"), format!("localhost:{port}")]
+            .iter()
+            .any(|ok| h.eq_ignore_ascii_case(ok))
+    })
+}
+
+async fn loopback_host_only(
+    State(preview): State<Arc<Preview>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok());
+    if !loopback_host(host, preview.port) {
+        return (StatusCode::FORBIDDEN, "Not for this address").into_response();
+    }
+    next.run(req).await
 }
 
 /// The real server's headers, never kept, so a reload reads the files
@@ -732,6 +766,15 @@ mod tests {
             assert!(names.contains(&name), "{name}");
         }
         assert!(!names.contains(&"sw.js"));
+    }
+
+    #[test]
+    fn only_a_loopback_host_on_its_port_is_answered() {
+        assert!(loopback_host(Some("127.0.0.1:4174"), 4174));
+        assert!(loopback_host(Some("localhost:4174"), 4174));
+        assert!(!loopback_host(Some("evil.example:4174"), 4174));
+        assert!(!loopback_host(Some("127.0.0.1:4175"), 4174));
+        assert!(!loopback_host(None, 4174));
     }
 
     #[test]
