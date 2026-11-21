@@ -1227,8 +1227,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
     // Esc closes it and brings the hints back.
     client.send(b"\x1b");
     client.wait_for("the hints back", |s| {
-        cell_of(s, "Read a link beside this pane").is_none()
-            && cell_of(s, "SIDE PANEL").is_some()
+        cell_of(s, "Read a link beside this pane").is_none() && cell_of(s, "SIDE PANEL").is_some()
     });
     // Off, it goes in the middle of the screen, over the pane.
     drop(client);
@@ -1501,9 +1500,7 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     assert_eq!(opened(&server).len(), 1, "none of them opened anything");
     // With a split there are no columns beside the pane: each is opened.
     server.ok(&["split", "-R"]);
-    client.wait_for("the hints gone", |s| {
-        cell_of(s, "SIDE PANEL").is_none()
-    });
+    client.wait_for("the hints gone", |s| cell_of(s, "SIDE PANEL").is_none());
     server.ok(&["look", &shot, &other]);
     assert_eq!(
         wait_opened(&server, 3),
