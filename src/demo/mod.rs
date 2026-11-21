@@ -36,6 +36,8 @@
 //!   server's images in it.
 //! - `usage`: a made-up week of spend by tab, the rate limits and the
 //!   request audit, for the Usage view.
+//! - `phone`: the made-up Claude tabs and turns `switchboard phone
+//!   preview` serves the phone app (`phone::preview`).
 //!
 //! The connectors' kept answers (`calendar.json`, `slack.json`,
 //! `slack-threads.json`) are written
@@ -46,6 +48,7 @@
 
 pub mod agent;
 pub mod fixtures;
+pub mod phone;
 pub mod services;
 pub mod stand_in;
 pub mod tour;
