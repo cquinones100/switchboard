@@ -884,6 +884,18 @@ mod tests {
         assert!(cert_and_key(b"").is_err());
     }
 
+    /// Zooming would throw the channel out of its layout (issue 187).
+    #[test]
+    fn the_page_viewport_turns_zooming_off() {
+        let page = include_str!("../../assets/phone/index.html");
+        let viewport = page
+            .lines()
+            .find(|line| line.contains("name=\"viewport\""))
+            .expect("a viewport meta tag");
+        assert!(viewport.contains("maximum-scale=1"), "{viewport}");
+        assert!(viewport.contains("user-scalable=no"), "{viewport}");
+    }
+
     #[test]
     fn the_origin_leaves_out_the_default_port() {
         assert_eq!(
