@@ -1464,7 +1464,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
 fn pictures_beside_a_pane_stay_up_through_the_keys_typed_into_it() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
         .as_str()
         .unwrap()
@@ -1499,7 +1499,7 @@ fn pictures_beside_a_pane_stay_up_through_the_keys_typed_into_it() {
     // M-Esc alone closes them, and the pane never sees it.
     client.send(b"\x1b\x1b");
     client.wait_for("the pictures gone", |s| {
-        cell_of(s, "M-Esc close").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+        cell_of(s, "M-Esc close").is_none() && cell_of(s, "SIDE PANEL").is_some()
     });
     // A key after it, once the pane shows it, means M-Esc would have too.
     client.type_text("after\r");
