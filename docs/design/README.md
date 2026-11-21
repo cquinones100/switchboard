@@ -320,3 +320,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: a tab's menu on the phone
 
 - [175. A tab's menu in the phone's drawer, from a long press on its row: Mark seen on a finished tab and Close tab; Close tab asks Close tab <n> <name>? \[Y/n\] first, Close as yes before No, and the closed tab leaves the drawer](https://cquinones100.github.io/switchboard/design/175.html)
+
+## Proposal: a tab's reminder from the phone
+
+- [176. Remind me in a tab's menu in the phone's drawer: Remind me after Mark seen and before Close tab opens a sheet at the foot, When (the workspace's five times, each with its clock time, or one typed) and What for; the row then says ⏰, the time left and the note; on a tab with a reminder the menu offers Clear the reminder first and the sheet is Change the reminder; a time the server can't read is refused in the workspace's words, the sheet kept open](https://cquinones100.github.io/switchboard/design/176.html)
