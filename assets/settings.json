@@ -108,6 +108,13 @@
     "default": true
   },
   {
+    "key": "sidebar_enter_menu",
+    "category": "Sidebar",
+    "label": "Enter opens the row's menu",
+    "description": "Enter or Space on a row of the sidebar opens the menu m opens for it, as Enter does in mission control: a tab's with Go to tab chosen for Enter and Peek chosen for Space, so a second press does what the key did alone; a notification's its own menu. l and the right arrow still go to the tab. Off, Enter goes to the tab or into the notification, and Space peeks at the tab, as before",
+    "default": true
+  },
+  {
     "key": "sidebar_select",
     "category": "Sidebar",
     "label": "Select several tabs",
@@ -1160,6 +1167,13 @@
     "default": true
   },
   {
+    "key": "tab_prs",
+    "category": "Tabs and status bar",
+    "label": "Follow every PR a tab's session opens",
+    "description": "A tab follows each pull request its Claude opens or looks at (gh pr create or view), from any branch or repository, as well as its branch's: its label leads with the current one, the sidebar and its Tabs card list each with where it stands, and \"Show another of this tab's PRs\" makes another current for M-v and M-d. A merged or closed one leaves the list once you have looked at the tab. Off, a tab has only its branch's PR",
+    "default": true
+  },
+  {
     "key": "accent_colors",
     "category": "Tabs and status bar",
     "label": "Project colors",
@@ -1568,6 +1582,13 @@
     "category": "Safety",
     "label": "Security review in the review loop",
     "description": "/review-loop runs Claude Code's /security-review on the branch once before its first round, its findings fixed or asked about as the rounds' are",
+    "default": true
+  },
+  {
+    "key": "review_parallel",
+    "category": "Safety",
+    "label": "Review from three angles at once",
+    "description": "Each round of codex-review on a branch runs three reviewers at once, one looking hardest at failure paths, one at the skills, docs, settings and callers the change touches, one at the change against its claims, their findings merged into the round's one answer, which is clean only when all three find nothing; off, a round runs one reviewer with no focus",
     "default": true
   },
   {

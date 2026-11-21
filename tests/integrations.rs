@@ -560,15 +560,22 @@ fn a_fork_s_pr_is_found_by_the_branch_it_tracks() {
             "refs/heads/feature",
         ],
     );
+    // Its own name first, which has no PR, then the branch it tracks.
     let fake = Fake::github(
         "tok-7",
-        vec![answer(
-            200,
-            json!({ "data": { "repository": { "pullRequests": { "nodes": [
-            pr_node(11, "OPEN", "acme", "feature"),
-            pr_node(10, "OPEN", "someone", "feature"),
-        ] } } } }),
-        )],
+        vec![
+            answer(
+                200,
+                json!({ "data": { "repository": { "pullRequests": { "nodes": [] } } } }),
+            ),
+            answer(
+                200,
+                json!({ "data": { "repository": { "pullRequests": { "nodes": [
+                pr_node(11, "OPEN", "acme", "feature"),
+                pr_node(10, "OPEN", "someone", "feature"),
+            ] } } } }),
+            ),
+        ],
     );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
@@ -578,7 +585,9 @@ fn a_fork_s_pr_is_found_by_the_branch_it_tracks() {
         .unwrap()
         .unwrap();
     assert_eq!(pr.number, 10);
-    assert_eq!(fake.seen()[0].body["variables"]["head"], "feature");
+    let seen = fake.seen();
+    assert_eq!(seen[0].body["variables"]["head"], "someone-feature");
+    assert_eq!(seen[1].body["variables"]["head"], "feature");
 }
 
 #[test]

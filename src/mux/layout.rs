@@ -421,6 +421,35 @@ impl Layout {
             .map(|(id, ..)| id)
     }
 
+    /// The panes along the tab's `side` edge, top to bottom (left to right
+    /// along the top or bottom edge): where moving in from beyond that edge,
+    /// as from the sidebar, lands.
+    pub fn at_edge(&self, area: Rect, side: Direction) -> Vec<PaneId> {
+        let mut live: Vec<(PaneId, Rect)> = self
+            .place(area)
+            .panes
+            .into_iter()
+            .filter(|(_, r)| r.width > 0 && r.height > 0)
+            .collect();
+        let edge = |r: &Rect| -> i64 {
+            match side {
+                Direction::Left => -i64::from(r.x),
+                Direction::Right => i64::from(r.right()),
+                Direction::Up => -i64::from(r.y),
+                Direction::Down => i64::from(r.bottom()),
+            }
+        };
+        let Some(far) = live.iter().map(|(_, r)| edge(r)).max() else {
+            return Vec::new();
+        };
+        live.retain(|(_, r)| edge(r) == far);
+        live.sort_by_key(|(_, r)| match side {
+            Direction::Left | Direction::Right => (r.y, r.x),
+            Direction::Up | Direction::Down => (r.x, r.y),
+        });
+        live.into_iter().map(|(id, _)| id).collect()
+    }
+
     /// Moves one of `pane`'s edges by `cells` toward `dir`, as tmux's
     /// `resize-pane` did: its edge on that side when it has one, growing it
     /// and taking from its neighbor there, else its edge on the other side,
@@ -1443,6 +1472,19 @@ mod tests {
                 even(false, vec![pane(3), pane(4), pane(5)]),
             ],
         )
+    }
+
+    #[test]
+    fn the_panes_along_each_edge() {
+        let layout = grid();
+        let area = rect(0, 0, 81, 31);
+        assert_eq!(layout.at_edge(area, Direction::Left), vec![p(1), p(2)]);
+        assert_eq!(
+            layout.at_edge(area, Direction::Right),
+            vec![p(3), p(4), p(5)]
+        );
+        assert_eq!(layout.at_edge(area, Direction::Up), vec![p(1), p(3)]);
+        assert_eq!(layout.at_edge(area, Direction::Down), vec![p(2), p(5)]);
     }
 
     #[test]

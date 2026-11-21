@@ -901,7 +901,18 @@ pub fn sidebar_lines(
                     .is_some()
                     .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
                 let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
-                let room = cols.saturating_sub(4 + width(&number) + tick_cols + chip_w);
+                // A tab following several PRs: the current one's number
+                // before its name, how many more after it, dim (board 127).
+                let (name, more) = match tab.prs.first() {
+                    Some(current) if current.current => (
+                        format!("#{} {}", current.number, tab.name),
+                        format!(" +{}", tab.prs.len() - 1),
+                    ),
+                    Some(_) => (tab.name.clone(), format!(" +{}", tab.prs.len())),
+                    None => (tab.name.clone(), String::new()),
+                };
+                let room =
+                    cols.saturating_sub(4 + width(&number) + tick_cols + chip_w + width(&more));
                 let mut first = Row::default();
                 tick(&mut first, tab.id);
                 first
@@ -911,7 +922,10 @@ pub fn sidebar_lines(
                     .put(" ", Style::new())
                     .put(number, fg(number_color(tab, theme)))
                     .put(" ", Style::new())
-                    .put(text::cut(&tab.name, room), name_style);
+                    .put(text::cut(&name, room), name_style);
+                if !more.is_empty() {
+                    first.put(more, fg(theme.dim));
+                }
                 if let Some(chip) = by_you {
                     first.put(" ", Style::new());
                     first.spans.extend(chip);
@@ -943,19 +957,37 @@ pub fn sidebar_lines(
                 if let Some(c) = tab.checks.filter(|c| c.fail > 0) {
                     doing.insert(0, format!("✕ {} failing", c.fail));
                 }
-                if let Some(n) = tab.pr.filter(|n| !tab.name.contains(&format!("#{n}"))) {
+                if let Some(n) = tab
+                    .pr
+                    .filter(|n| tab.prs.is_empty() && !tab.name.contains(&format!("#{n}")))
+                {
                     doing.push(format!("#{n}"));
                 }
                 // The other repository first, so a long state never cuts it.
                 if let Some(repo) = &tab.from_repo {
                     doing.insert(0, repo.clone());
                 }
-                if !doing.is_empty() {
+                if !doing.is_empty() || !tab.prs.is_empty() {
                     let mut second = Row::default();
-                    second.put("    ", Style::new()).put(
-                        text::cut(&doing.join(" · "), cols.saturating_sub(6)),
-                        fg(theme.dim),
-                    );
+                    second.put("    ", Style::new());
+                    // Each PR's mark by where it stands, the current one
+                    // first, before what it is doing.
+                    let mut used = 4;
+                    for pr in &tab.prs {
+                        let words = format!(" #{}  ", pr.number);
+                        if used + 1 + width(&words) > cols.saturating_sub(2) {
+                            break;
+                        }
+                        second.spans.push(kit::mark(pr.mark, 0, theme));
+                        second.put(words.clone(), fg(theme.dim));
+                        used += 1 + width(&words);
+                    }
+                    if !doing.is_empty() {
+                        second.put(
+                            text::cut(&doing.join(" · "), cols.saturating_sub(2 + used)),
+                            fg(theme.dim),
+                        );
+                    }
                     lines.push(kit_row(second));
                     owners.push(Some(Owner::Tab(tab.id)));
                 }
@@ -1023,7 +1055,10 @@ pub fn sidebar_lines(
             // which needs you, so the sidebar says so too.
             let pr = tab
                 .pr
-                .map(|n| format!("#{n}"))
+                .map(|n| match tab.prs.len() {
+                    0 => format!("#{n}"),
+                    all => format!("#{n} +{}", all - 1),
+                })
                 .filter(|pr| !tab.name.contains(pr.as_str()));
             let failing = tab
                 .checks

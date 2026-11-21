@@ -84,7 +84,7 @@ fn prompt_and_answer_read_and_press_a_claude_panes_prompt() {
     assert_eq!(found["question"], "Do you want to proceed?");
     assert_eq!(
         found["options"][1],
-        json!({"n": 2, "label": "No", "checked": null})
+        json!({"n": 2, "label": "No", "checked": null, "detail": ""})
     );
 
     let (code, _, err) = server.run(&["answer", "-t", &pane, "maybe"]);
@@ -110,6 +110,30 @@ fn prompt_and_answer_read_and_press_a_claude_panes_prompt() {
         "logged: {}",
         server.log()
     );
+}
+
+#[test]
+fn the_prompt_the_phone_reads_has_each_choices_explainer() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = claude_pane(&server);
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "clear; printf 'Which fixture?\\n\\342\\235\\257 1. Small\\n     The fixture the PR adds\\n  2. Big\\n     The stress set\\n\\nEnter to select\\n'; cat",
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    wait_until(&server, "the question shown", || {
+        screen(&server, &pane)
+            .lines()
+            .any(|l| l.trim() == "The stress set")
+    });
+    let found: Value = serde_json::from_str(&server.ok(&["prompt", "-t", &pane])).unwrap();
+    assert_eq!(found["options"][0]["detail"], "The fixture the PR adds");
+    assert_eq!(found["options"][1]["detail"], "The stress set");
 }
 
 #[test]
@@ -262,7 +286,7 @@ fn the_drawers_search_keeps_the_tabs_matching_in_their_groups() {
 const vm = require("vm");
 const fs = require("fs");
 const ctx = vm.createContext({
-  document: { getElementById: () => null },
+  document: { getElementById: () => null, addEventListener: () => {} },
   fetch: () => new Promise(() => {}),
   console,
 });
