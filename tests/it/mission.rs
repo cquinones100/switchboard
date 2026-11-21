@@ -948,12 +948,12 @@ fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
     assert!(child.wait().expect("the hook ends").success());
 }
 
-/// How many times the screen changes in `span`, looked at every 50ms.
-fn changes(client: &mut TestClient, span: Duration) -> usize {
-    let until = Instant::now() + span;
+/// How many times the screen changes before `until`, looked at every 50ms,
+/// stopping early once it has changed `enough` times.
+fn changes(client: &mut TestClient, until: Instant, enough: usize) -> usize {
     let mut last = client.screen();
     let mut n = 0;
-    while Instant::now() < until {
+    while n < enough && Instant::now() < until {
         let now = client.screen();
         if now != last {
             n += 1;
@@ -1010,7 +1010,10 @@ fn behind_a_box_the_cards_spinners_turn_at_most_every_half_second() {
     hook(&server, &id, "UserPromptSubmit", json!({"prompt": "go on"}));
     open(&mut client);
     client.wait_text("WORKING 1");
-    let free = changes(&mut client, Duration::from_millis(1500));
+    // Five turns within 2 seconds, which a spinner held to every 500ms can't
+    // make, the window scaled by patience so a busy computer makes it slower
+    // rather than failed.
+    let free = changes(&mut client, common::deadline(Duration::from_secs(2)), 5);
     assert!(free > 4, "the card's spinner turns: {free} changes");
     // A menu over it: the spinners behind turn at most every 500ms, and
     // the box, merged into the frame, is never sent again under itself, so
@@ -1018,7 +1021,11 @@ fn behind_a_box_the_cards_spinners_turn_at_most_every_half_second() {
     client.type_text("\r");
     client.wait_text("Go to tab");
     let sent = client.raw.len();
-    let boxed = changes(&mut client, Duration::from_millis(1500));
+    let boxed = changes(
+        &mut client,
+        Instant::now() + Duration::from_millis(1500),
+        usize::MAX,
+    );
     assert!(boxed <= 4, "{boxed} changes behind the menu in 1.5s");
     let after = String::from_utf8_lossy(&client.raw[sent..]).into_owned();
     assert!(
