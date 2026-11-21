@@ -1536,6 +1536,11 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
         tabs(&server.list())[0]["id"].as_str().unwrap(),
     ]);
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    // Folded on screen again, so the click finds the folded line rather
+    // than the tab the unfolded group drew there.
+    client.wait_for("folded again", |s| {
+        !s.iter().any(|l| left(l, 34).contains("bee"))
+    });
     let fold = row_of(&mut client, "OTHER REPOS") + 1;
     client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", fold + 1, fold + 1).as_bytes());
     wait_list(&server, "unfolded by a click", |l| {

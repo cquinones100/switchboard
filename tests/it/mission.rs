@@ -4016,7 +4016,12 @@ fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     client.type_text("\r");
     let asked = client.wait_text("\"On it\"").join("\n");
     assert!(asked.contains("[Y/n]"), "{asked}");
-    assert!(!calls.exists(), "nothing goes before the yes");
+    // Only the thread beside the message may have been read by then.
+    let sent = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert!(
+        sent.lines().all(|l| l.contains("slack_read_thread")),
+        "nothing goes before the yes: {sent}"
+    );
     client.type_text("\r");
     client.wait_text("Sent to #dev.");
     let asked = std::fs::read_to_string(&calls).unwrap();
@@ -4149,8 +4154,16 @@ fn a_slack_reply_is_left_as_a_draft_in_slack_and_its_thread_opened() {
         screen.lines().any(|l| l.contains('›') && l.contains("OK")),
         "OK is chosen as it opens: {screen}"
     );
+    // The thread beside the message is read through the connector too, in
+    // its own call, which may come before or after the draft.
+    let drafts = |asked: &str| {
+        asked
+            .lines()
+            .filter(|l| !l.contains("slack_read_thread"))
+            .count()
+    };
     let asked = std::fs::read_to_string(&calls).unwrap();
-    assert_eq!(asked.lines().count(), 1, "{asked}");
+    assert_eq!(drafts(&asked), 1, "{asked}");
     assert!(
         asked.contains("ToolSearch,mcp__claude_ai_Slack__slack_send_message_draft "),
         "the draft tool alone: {asked}"
@@ -4172,7 +4185,7 @@ fn a_slack_reply_is_left_as_a_draft_in_slack_and_its_thread_opened() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
-        std::fs::read_to_string(&calls).unwrap().lines().count(),
+        drafts(&std::fs::read_to_string(&calls).unwrap()),
         1,
         "no second draft"
     );
