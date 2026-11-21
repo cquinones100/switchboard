@@ -547,7 +547,7 @@ impl Action {
                 "Past the edge it comes round to the far side; from the leftmost pane it goes into the sidebar. In the diff and Notes it moves between the app's own windows first.".into()
             }
             Action::PrevTab | Action::NextTab => {
-                "Tabs go in the order the sidebar shows them, coming round past either end.".into()
+                "Tabs go in their session's order, the one they opened in (a moved tab in its new place), coming round past either end.".into()
             }
             Action::TabBack | Action::TabForward => {
                 "Through the tabs you visited, as a browser's back and forward do; with nothing that way it does nothing. Off in Settings (tab_back_forward), they go to the tab on the left and right.".into()
