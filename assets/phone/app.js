@@ -868,6 +868,7 @@ function listen() {
     if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
     render();
     if (turned) loadTurns();
+    tabsRead();
   };
   source.onerror = () => {
     state.live = false;
@@ -880,7 +881,11 @@ function listen() {
 // tabs again, saying "Reconnecting" meanwhile rather than "offline".
 const RECONNECTING_MS = 5000;
 
-async function reconnect() {
+// `posted` is the tap a push's message named ({ tab, at }), for when the
+// worker keeps none.
+async function reconnect(posted) {
+  tabsFresh = false;
+  wantTapped(posted);
   state.reconnectingUntil = Date.now() + RECONNECTING_MS;
   render();
   setTimeout(render, RECONNECTING_MS + 100);
@@ -892,8 +897,72 @@ async function reconnect() {
     if (state.live) state.lastHeard = Date.now();
     render();
     if (state.open) loadTurns();
+    tabsRead();
   } catch (_) {
-    // The stream says when the computer is back.
+    // The stream says when the computer is back, and brings the tabs.
+  }
+}
+
+// A push tapped while the page was frozen or closed: the service worker keeps
+// its tab until the page says it took it, and the page asks for it as it
+// starts or comes back, once it has read the tabs since (by asking, or from
+// the stream), never against the tabs it held while it slept. One tapped over a minute ago
+// is left, so coming back later stays where it was; one for a tab since
+// closed shows the drawer.
+const TAPPED_MS = 60000;
+let tookTapped = 0; // when the tapped push the page opened last was tapped
+let tabsFresh = false; // the tabs were read since the page started or came back
+let pendingTap = null; // { posted }: a tapped push's tab to ask for once they are
+
+function wantTapped(posted) {
+  pendingTap = { posted: posted || (pendingTap && pendingTap.posted) };
+  if (tabsFresh) tabsRead();
+}
+
+function tabsRead() {
+  tabsFresh = true;
+  if (!pendingTap) return;
+  const { posted } = pendingTap;
+  pendingTap = null;
+  openTapped(posted);
+}
+
+function askTapped(worker) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const done = (answer) => {
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve(answer || {});
+    };
+    const timer = setTimeout(done, 2000);
+    channel.port1.onmessage = (event) => done(event.data);
+    worker.postMessage({ tapped: true }, [channel.port2]);
+  });
+}
+
+async function openTapped(posted) {
+  const worker = navigator.serviceWorker && navigator.serviceWorker.controller;
+  const kept = worker ? await askTapped(worker).catch(() => ({})) : {};
+  // The tap a message named when the worker kept none (it couldn't, or an
+  // older worker doesn't answer).
+  const tapped = kept.tab ? kept : posted || {};
+  if (!tapped.tab) return;
+  // Taken off what the worker keeps only now, so an answer that came too late
+  // leaves it for the next ask.
+  if (worker) worker.postMessage({ took: tapped.at });
+  const isFresh = Date.now() - tapped.at <= TAPPED_MS;
+  const isOpenedAlready = tapped.at === tookTapped;
+  if (!isFresh || isOpenedAlready) return;
+  tookTapped = tapped.at;
+  const tab = String(tapped.tab);
+  if (state.tabs.some((t) => number(t) === tab)) {
+    // A window opened for the push opened it from its address already.
+    if (state.open !== tab) openTab(tab);
+  } else {
+    state.open = null;
+    history.replaceState(null, "", "#");
+    render();
   }
 }
 
@@ -916,7 +985,12 @@ async function offerPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
   const registration = await navigator.serviceWorker.register("/sw.js");
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data && event.data.open) openTab(String(event.data.open));
+    // Read the tabs again first, since a page that slept holds old ones; the
+    // tab is taken from what the worker keeps, so it opens once.
+    // The tap's time is the worker's, so it matches what the worker keeps;
+    // an older worker's message has none.
+    const data = event.data || {};
+    if (data.open) reconnect({ tab: String(data.open), at: data.at || Date.now() });
   });
   if (Notification.permission === "denied") return;
   const subscribe = async () => {
@@ -981,16 +1055,22 @@ async function start() {
     }
     return pair();
   }
-  const r = await api("/api/tabs").catch(() => ({ tabs: [], live: false }));
-  state.tabs = r.tabs || [];
-  state.live = !!r.live;
-  state.close = r.close !== false;
+  tabsFresh = false;
+  const r = await api("/api/tabs").catch(() => null);
+  const hasTabs = r !== null;
+  state.tabs = (r && r.tabs) || [];
+  state.live = !!(r && r.live);
+  state.close = !r || r.close !== false;
   state.lastHeard = Date.now();
   const wanted = decodeURIComponent(location.hash.slice(1));
   if (wanted && state.tabs.some((t) => number(t) === wanted)) openTab(wanted);
   else render();
   listen();
   offerPush().catch(() => {});
+  // Then a tapped push's tab, since a window opened for one may start at "/",
+  // once the tabs are read.
+  wantTapped();
+  if (hasTabs) tabsRead();
 }
 
 // Safari pinches to zoom with these whatever the viewport says.

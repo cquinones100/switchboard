@@ -1046,3 +1046,184 @@ run(`tap(300, 100); openTab(number(state.tabs[1])); button = title(state.tabs[1]
         "{stdout}"
     );
 }
+
+/// A tapped push (assets/phone/sw.js's `notificationclick`) and the page
+/// asking for its tab as it starts, comes back or is told (assets/phone/app.js's
+/// `start`, `cameBack` and `offerPush`),
+/// the worker and the page each run in Node with the browser stood in for;
+/// skipped without Node.
+#[test]
+fn a_tapped_pushs_tab_opens_once_as_the_page_comes_back() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone");
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const path = require("path");
+const later = (f, ms) => { const t = setTimeout(f, ms); t.unref(); return t; };
+const settle = () => new Promise((r) => setTimeout(r, 50));
+
+// The worker: its caches, clients and events stood in for.
+const listeners = {};
+const stores = new Map();
+const opened = [];
+const sent = [];
+let windows = [];
+const worker = vm.createContext({
+  self: {
+    addEventListener: (type, fn) => (listeners[type] = fn),
+    location: { origin: "https://phone" },
+    clients: {
+      matchAll: async () => windows,
+      openWindow: async (url) => opened.push(url),
+    },
+  },
+  caches: {
+    open: async (name) => {
+      if (!stores.has(name)) stores.set(name, new Map());
+      const store = stores.get(name);
+      return {
+        put: async (key, res) => store.set(key, await res.text()),
+        match: async (key) => (store.has(key) ? new Response(store.get(key)) : undefined),
+        delete: async (key) => store.delete(key),
+      };
+    },
+    keys: async () => [...stores.keys()],
+  },
+  Response,
+  console,
+});
+vm.runInContext(fs.readFileSync(path.join(process.argv[1], "sw.js"), "utf8"), worker);
+const tap = async (tab) => {
+  const waits = [];
+  listeners.notificationclick({ notification: { close() {}, data: { tab } }, waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+};
+
+// The page, its worker the one above.
+let now = Date.now();
+let tabsFail = false;
+const pageListeners = {};
+const controller = {
+  postMessage: (data, ports) => listeners.message({ data, ports: ports || [], waitUntil: () => {} }),
+};
+const serviceWorker = {
+  controller,
+  register: async () => ({}),
+  addEventListener: (type, fn) => (pageListeners[type] = fn),
+};
+const answer = (body) => Promise.resolve({ ok: true, status: 200, json: async () => body });
+const page = vm.createContext({
+  document: { getElementById: () => null, addEventListener: () => {}, visibilityState: "visible" },
+  window: { addEventListener: () => {}, PushManager: {} },
+  location: { hash: "" },
+  history: { replaceState: () => {} },
+  navigator: { serviceWorker },
+  Notification: { permission: "denied" },
+  fetch: (url) =>
+    url === "/api/me"
+      ? answer({ paired: true })
+      : url === "/api/tabs"
+        ? tabsFail
+          ? Promise.reject(new Error("offline"))
+          : answer({ live: true, tabs: [{ pane: "%7" }, { pane: "%9" }] })
+        : new Promise(() => {}),
+  MessageChannel,
+  setTimeout: later,
+  clearTimeout,
+  console,
+});
+vm.runInContext(fs.readFileSync(path.join(process.argv[1], "app.js"), "utf8"), page);
+vm.runInContext(`render = () => {}; listen = () => {}; loadTurns = async () => {};`, page);
+vm.runInContext(`Date.now = () => globalThis.now();`, page);
+page.now = () => now;
+const openIn = async (open, run) => {
+  vm.runInContext(`state.open = ${JSON.stringify(open)};`, page);
+  run();
+  await settle();
+  return String(vm.runInContext("state.open", page));
+};
+const backOn = (open) => openIn(open, () => page.cameBack());
+
+(async () => {
+  await settle(); // the page's own start, with nothing tapped
+  // Closed, and the tabs not read as it starts: the tab waits for the next
+  // coming back rather than being lost.
+  await tap("7");
+  console.log("opened=" + opened.join(","));
+  tabsFail = true;
+  console.log("unread=" + (await openIn("9", () => page.start())));
+  tabsFail = false;
+  console.log("back=" + (await backOn("9")));
+  // Taken once: coming back again stays where it is.
+  console.log("again=" + (await backOn("9")));
+  // In the background: the window focused, told, and sent to the tab.
+  const told = [];
+  let posted = null;
+  windows = [{ focus: async () => {}, postMessage: (m) => told.push((posted = m).open), navigate: async (url) => told.push(url) }];
+  await tap("7");
+  console.log("told=" + told.join(","));
+  // The page running: the message opens it, and coming back after doesn't again.
+  console.log("message=" + (await openIn("9", () => pageListeners.message({ data: posted }))));
+  console.log("after=" + (await backOn("9")));
+  // A page the worker doesn't control: the tab the message names, which the
+  // worker, asked later, doesn't hand out again.
+  await tap("7");
+  serviceWorker.controller = null;
+  console.log("uncontrolled=" + (await openIn("9", () => pageListeners.message({ data: posted }))));
+  serviceWorker.controller = controller;
+  console.log("afterUncontrolled=" + (await backOn("9")));
+  // Coming back with the tabs not read: left, never taken against the tabs
+  // held, and opened once the stream brings them.
+  await tap("7");
+  tabsFail = true;
+  console.log("failedBack=" + (await backOn("9")));
+  tabsFail = false;
+  console.log("stream=" + (await openIn("9", () => vm.runInContext("tabsRead()", page))));
+  // Tapped over a minute ago: left alone.
+  await tap("7");
+  now += 61000;
+  console.log("old=" + (await backOn("9")));
+  // A tab since closed: the drawer.
+  now = Date.now();
+  await tap("5");
+  console.log("closed=" + (await backOn("9")));
+})();
+"#;
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&dir)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "opened=/#7",
+            "unread=9",
+            "back=7",
+            "again=9",
+            "told=7,/#7",
+            "message=7",
+            "after=9",
+            "uncontrolled=7",
+            "afterUncontrolled=9",
+            "failedBack=9",
+            "stream=7",
+            "old=9",
+            "closed=null",
+        ],
+        "{stdout}"
+    );
+}
