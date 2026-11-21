@@ -37,6 +37,8 @@ struct Fake {
     rerun_refused: Mutex<bool>,
     /// How many looks after a rerun still show the first attempt's failure.
     stale: Mutex<u32>,
+    /// How many times a failed run is still running its other jobs.
+    still_running: Mutex<u32>,
 }
 
 impl Forge for Fake {
@@ -90,6 +92,13 @@ impl Forge for Fake {
         } else {
             Seen::Passed
         })
+    }
+
+    async fn run_finished(&self, _run: &str) -> Result<bool> {
+        let mut running = self.still_running.lock().unwrap();
+        let finished = *running == 0;
+        *running = running.saturating_sub(1);
+        Ok(finished)
     }
 
     async fn rerun(&self, run: &str) -> Result<()> {
@@ -230,6 +239,7 @@ impl World {
                 reruns: Mutex::new(Vec::new()),
                 rerun_refused: Mutex::new(false),
                 stale: Mutex::new(0),
+                still_running: Mutex::new(0),
             },
             work,
             _scratch: scratch,
@@ -694,9 +704,16 @@ fn a_train_that_fails_once_and_passes_on_its_rerun_merges() {
     };
     *w.fake.flaky.lock().unwrap() = true;
     *w.fake.stale.lock().unwrap() = 1;
+    *w.fake.still_running.lock().unwrap() = 1;
     w.pr(1, "one.txt", "1\n");
     w.pr(2, "two.txt", "2\n");
     w.step();
+    assert!(w.step().is_empty());
+    assert!(
+        w.fake.reruns.lock().unwrap().is_empty(),
+        "no rerun while the run's other jobs still run"
+    );
+    assert_eq!(w.in_train(), [1, 2]);
     let told = w.step();
     let train = w.queue().train.unwrap();
     assert_eq!(w.fake.reruns.lock().unwrap().len(), 1);

@@ -29,7 +29,7 @@
 //! merging there, it waiting to be queued again and those after it staying
 //! queued for the next train, since what follows was tested with it. The default branch having
 //! moved, the train is tested again. Red the first time, its failed jobs
-//! are run again (GitHub's "Re-run failed jobs"), since a test that fails
+//! are run again once the run has ended (GitHub's "Re-run failed jobs"), since a test that fails
 //! now and then on a busy runner shouldn't drop a PR that is fine, and the
 //! train waits on that attempt as on the first; a failure still showing
 //! from the job that failed is the first attempt's, until the rerun's own
@@ -93,6 +93,8 @@ pub trait Forge {
     async fn checks(&self, sha: &str, required: Option<&[String]>) -> Result<Seen>;
     /// Squash-merges a PR, refused unless its head is still `head`.
     async fn merge(&self, number: u64, head: &str) -> Result<(), MergeError>;
+    /// Whether a GitHub Actions run has ended, every job of it.
+    async fn run_finished(&self, run: &str) -> Result<bool>;
     /// Runs a GitHub Actions run's failed jobs again.
     async fn rerun(&self, run: &str) -> Result<()>;
     /// A link to a GitHub Actions run, for what is said of a red train.
@@ -164,6 +166,13 @@ impl Forge for GitHub {
             .await
             .map_err(merge_error)?;
         Ok(())
+    }
+
+    async fn run_finished(&self, run: &str) -> Result<bool> {
+        use crate::integrations::github;
+        let path = format!("repos/{}/actions/runs/{run}", self.repo);
+        let answer = github::rest("GET", &path, None, SOURCE).await?;
+        Ok(answer.get("status").and_then(|s| s.as_str()) == Some("completed"))
     }
 
     async fn rerun(&self, run: &str) -> Result<()> {
@@ -524,11 +533,14 @@ async fn ride(
             };
             // Once, and only for a GitHub Actions run, which can be run
             // again; a request that fails drops or splits as below.
-            if train.rerun.is_none()
-                && !requeued_alone
-                && run != "-"
-                && forge.rerun(&run).await.is_ok()
-            {
+            let can_rerun = train.rerun.is_none() && !requeued_alone && run != "-";
+            // GitHub runs a run's failed jobs again only once the run has
+            // ended, so the train waits for its other jobs first, up to
+            // `TIMEOUT` as any run does.
+            if can_rerun && now - train.since <= TIMEOUT && !forge.run_finished(&run).await? {
+                return Ok(tell);
+            }
+            if can_rerun && forge.rerun(&run).await.is_ok() {
                 let rerun = Rerun {
                     names: names.clone(),
                     job,
