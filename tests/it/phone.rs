@@ -614,6 +614,7 @@ const cases = [
   ["claude", "```rust\nfn main() {}\n```"],
   ["claude", "<img src=x onerror=alert(1)>"],
   ["claude", "[run](javascript:alert(1)) and [mail](mailto:a@b.c)"],
+  ["claude", "Updated README.md; see https://example.com"],
   ["you", "make it **bold** <b>"],
 ];
 for (const [who, text] of cases) console.log(html(body(who, text)));
@@ -638,6 +639,7 @@ console.log("long code folded=" + body("claude", "```\n" + "x\n".repeat(12) + "`
             r#"<div class="body md"><pre><code>fn main() {}</code></pre></div>"#,
             r#"<div class="body md"><p>&lt;img src=x onerror=alert(1)&gt;</p></div>"#,
             r#"<div class="body md"><p>[run](javascript:alert(1)) and <span class="link">mail</span></p></div>"#,
+            r#"<div class="body md"><p>Updated README.md; see <a href="https://example.com" target="_blank" rel="noopener noreferrer">https://example.com</a></p></div>"#,
             r#"<div class="body">make it **bold** &lt;b&gt;</div>"#,
             "long link folded=false",
             "long text folded=true",
