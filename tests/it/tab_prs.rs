@@ -254,9 +254,11 @@ fn a_tab_follows_every_pr_its_session_opens() {
     client.type_text("\r");
     let t = wait_tab(&server, "#318 current", |t| t["pr"] == 318);
     assert!(t["label"].as_str().unwrap().starts_with("#318 "), "{t}");
-    // Its title, never the branch's PR's, goes with its number.
+    // Its title, never the branch's PR's, goes with its number, and is
+    // the name the tab's banners and notices use.
     wait_tab(&server, "#318's title", |t| {
         t["label"] == "#318 Title of acme/oncall-tools#318"
+            && t["name"] == "Title of acme/oncall-tools#318"
     });
     let deadline = common::deadline(Duration::from_secs(20));
     while !github.seen().iter().any(|r| {

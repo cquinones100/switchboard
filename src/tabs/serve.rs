@@ -160,13 +160,15 @@ impl Server {
             path: Some(dir),
             gone: false,
         };
-        let tab = self.tabs.get_mut(&tab_id).expect("checked above");
-        tab.auto_name = shown.label.clone();
         if self.tab_names.shown.get(&tab_id) != Some(&shown) {
             self.tab_names.shown.insert(tab_id, shown);
             if let Some(name) = self.session_of_tab(tab_id).map(|s| s.name.clone()) {
                 self.dirty_session(&name);
             }
+        }
+        let auto_name = self.tab_facts_label(tab_id);
+        if let Some(tab) = self.tabs.get_mut(&tab_id) {
+            tab.auto_name = auto_name;
         }
     }
 
@@ -192,7 +194,7 @@ impl Server {
         if !back_in_its_main_clone {
             return;
         }
-        let name = shown.label.clone();
+        let name = self.tab_facts_label(tab_id);
         if let Some(tab) = self.tabs.get_mut(&tab_id) {
             tab.opts.insert("@tab_name".into(), name);
         }
@@ -282,6 +284,14 @@ impl Server {
     /// front when its branch has one. Stored as it is: nothing here reads a
     /// `#` as a format, so none is doubled.
     pub fn tab_label(&self, tab: TabId) -> String {
+        let facts = self.tab_facts_label(tab);
+        label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
+    }
+
+    /// The tab's label with no name of its own and no PR number: its
+    /// ticket and title, else its current PR's title, else its directory's
+    /// name.
+    fn tab_facts_label(&self, tab: TabId) -> String {
         let shown = self.tab_names.shown.get(&tab);
         let by_pr = shown.and_then(|s| s.untitled.as_deref()).map(|untitled| {
             match self.tab_pr_title(tab) {
@@ -289,12 +299,10 @@ impl Server {
                 None => untitled.to_string(),
             }
         });
-        let facts = by_pr
-            .as_deref()
-            .or_else(|| shown.map(|s| s.label.as_str()))
-            .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.as_str()))
-            .unwrap_or("");
-        label::label(self.tab_own_name(tab), facts, self.tab_pr(tab))
+        by_pr
+            .or_else(|| shown.map(|s| s.label.clone()))
+            .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.clone()))
+            .unwrap_or_default()
     }
 
     /// The color the tab wears: its project's, or gray with the
