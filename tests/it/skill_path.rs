@@ -1157,3 +1157,31 @@ fn the_review_loop_s_cap_question_has_its_options_and_queue_and_clean_waits_on_i
         assert!(queue.contains(said), "{said}");
     }
 }
+
+#[test]
+fn queue_and_clean_uses_switchboard_s_merge_queue_only_with_its_setting_on() {
+    let text = fs::read_to_string(skills_dir().join("queue-and-clean/SKILL.md")).unwrap();
+    let queuing = section(&text, "Queuing");
+    assert!(
+        queuing.contains(
+            "`switchboard setting pr_merge_queue` and `switchboard setting github` both print `on`"
+        ) && queuing.contains("`queue=false`"),
+        "Switchboard's queue only with the setting on and no queue of GitHub's"
+    );
+    assert!(
+        queuing.contains("the setting off among them")
+            && queuing.contains("`gh pr merge <number> --auto --match-head-commit <headRefOid>`"),
+        "with the setting off it turns on auto-merge as before"
+    );
+    let ours = &queuing[queuing.find("### Switchboard's merge queue").unwrap()..];
+    let ours = &ours[..ours.find("### Waiting").unwrap()];
+    assert!(ours.contains("switchboard land-lock queue-pr <number>"));
+    assert!(
+        !ours.contains("--auto"),
+        "a PR in the queue never gets auto-merge"
+    );
+    let watching = section(&text, "Watching");
+    let watch = &watching[watching.find("### Watching Switchboard's queue").unwrap()..];
+    assert!(watch.contains("switchboard land-lock pr-status <number>"));
+    assert!(watch.contains("Go to \"Fixing\""), "a dropped PR is fixed");
+}

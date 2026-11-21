@@ -103,6 +103,14 @@
 //! land-lock test [--leak-ok] [--command <cmd>] [--base <ref>] [--again] [--here]
 //!                     runs the landing's tests, here or in CI as repos.json
 //!                     says, and records them (src/cmd/land_test.rs)
+//! land-lock queue-pr|dequeue-pr|pr-status <number>, move-pr <number> up|down|first, pr-queue
+//!                     Switchboard's merge queue of PRs, for a repository
+//!                     that lands through PRs with no merge queue of
+//!                     GitHub's: a PR added at the back (exit 3 when it is
+//!                     there already), taken out, where it is, moved, and
+//!                     the whole queue (src/merge_queue), kept in the main
+//!                     clone's git directory beside the landing queue and
+//!                     run by the workspace's server in trains
 //! land-lock settle [--command <cmd>] [--patch <id>]
 //!                     takes the lock (waiting its turn), rebases onto the
 //!                     branch landed on as it is now, tests or checks the
@@ -164,7 +172,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|settle [--command <cmd>] [--patch <id>]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|settle [--command <cmd>] [--patch <id>]|queue-pr|dequeue-pr|pr-status <number>|move-pr <number> up|down|first|pr-queue|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -207,6 +215,14 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
         return ExitCode::from(2);
     };
     let here = PathBuf::from(here);
+    // Switchboard's merge queue of PRs (src/merge_queue).
+    if matches!(
+        command,
+        "queue-pr" | "dequeue-pr" | "move-pr" | "pr-status" | "pr-queue"
+    ) && let Some(code) = crate::merge_queue::command(command, &args[1..], &common, &here)
+    {
+        return ExitCode::from(code);
+    }
     let target = given_target.or_else(|| recorded_target(&here));
     let push_target = target.clone();
     let lock_here = here.clone();
@@ -1080,7 +1096,7 @@ pub fn branch_of_suffix(suffix: &str) -> String {
 /// An entry for the worktree at `path`, taken or joined now, naming the
 /// Claude session and the pane this runs in when it runs in one, or, for a
 /// process that holds it itself (`pid`), that process and the pane alone.
-fn new_entry(path: &str, pid: Option<u32>) -> Value {
+pub(crate) fn new_entry(path: &str, pid: Option<u32>) -> Value {
     let mut entry = json!({
         "path": path,
         "since": util::js_number(util::now_ms() as f64),
