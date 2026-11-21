@@ -404,14 +404,10 @@ impl Server {
             .map(|v| prs::read(v))
             .unwrap_or_default();
         let eligible = |pr: &TabPr| {
-            let facts = self.tab_pr_facts(pr);
-            let merged = facts.is_some_and(|f| f.state == crate::facts::PrState::Merged);
-            let made_stays = if merged {
-                self.landed_pr_stays(tab, pr, &all)
-            } else {
-                made.iter().any(|m| m.same(pr))
-            };
-            made_stays || facts.is_some_and(|f| f.state == crate::facts::PrState::Open)
+            made.iter().any(|m| m.same(pr))
+                || self
+                    .tab_pr_facts(pr)
+                    .is_some_and(|f| f.state == crate::facts::PrState::Open)
         };
         prs::current(
             &all,
@@ -422,8 +418,8 @@ impl Server {
     }
 
     /// Whether `pr`, among the tab's PRs `all`, is a merged one its session
-    /// made that may stay its current PR where the tab is now
-    /// (`prs::merged_stays_current`).
+    /// made that the lookups keep on its list where the tab is now
+    /// (`prs::merged_stays_current`), current as long as it stays there.
     fn landed_pr_stays(&self, tab: TabId, pr: &TabPr, all: &[TabPr]) -> bool {
         let Some(t) = self.tabs.get(&tab) else {
             return false;
@@ -453,6 +449,7 @@ impl Server {
         };
         let another_open = all.iter().any(|p| {
             !p.same(pr)
+                && made.iter().any(|m| m.same(p))
                 && self
                     .tab_pr_facts(p)
                     .is_some_and(|f| f.state == crate::facts::PrState::Open)

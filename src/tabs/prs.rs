@@ -124,7 +124,8 @@ pub fn joined(branch: Option<&TabPr>, opened: &[TabPr]) -> Vec<TabPr> {
 /// one the session made, else one the lookups know is open), so a merged
 /// PR the session only looked at never becomes a branchless tab's PR and
 /// files it under Merged, while one it made stays current, marked merged,
-/// while `merged_stays_current` holds.
+/// until it leaves the list, which the lookups keep it on while
+/// `merged_stays_current` holds.
 pub fn current(
     all: &[TabPr],
     branch: Option<&TabPr>,
@@ -146,7 +147,7 @@ pub struct Place<'a> {
     pub on_default: bool,
     /// Whether its directory's repository is the PR's, or isn't known yet.
     pub same_repo: bool,
-    /// Whether another PR it follows is open.
+    /// Whether another PR its session made is open.
     pub another_open: bool,
 }
 

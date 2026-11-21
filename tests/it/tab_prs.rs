@@ -357,12 +357,13 @@ fn a_tab_whose_made_pr_merged_stays_under_merged_back_on_the_default_branch() {
 
     // Other work on a new branch takes it out of Merged and off the list.
     git(&dir, &["checkout", "-q", "-b", "web-151"]);
-    wait_tab(&server, "the PR no longer current", |t| t["pr"].is_null());
-    assert_ne!(tab(&server)["stage"]["key"], "merged");
     let deadline = common::deadline(Duration::from_secs(30));
     while !prs(&tab(&server)).is_empty() {
         assert!(Instant::now() < deadline, "the PR stayed listed");
         server.ok(&["sources", "refresh"]);
         std::thread::sleep(Duration::from_millis(300));
     }
+    let t = tab(&server);
+    assert!(t["pr"].is_null(), "{t}");
+    assert_ne!(t["stage"]["key"], "merged");
 }
