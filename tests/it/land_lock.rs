@@ -1891,6 +1891,7 @@ fn squash_folds_the_branch_into_one_commit_and_moves_the_review_only_when_safe()
 fn queue_pr_keeps_order_across_worktrees_and_refuses_a_pr_twice() {
     let tmp = TempDir::new("land-lock-prs");
     let home = tmp.path();
+    common::write_settings(home, json!({ "pr_merge_queue": true }));
     let repo = repo(home);
     let one = worktree(home, &repo, home, "one");
     let two = worktree(home, &repo, home, "two");
@@ -1926,6 +1927,13 @@ fn queue_pr_keeps_order_across_worktrees_and_refuses_a_pr_twice() {
         stdout(&lock(home, &one, &["pr-status", "7"])),
         "queued 1 of 2\n"
     );
+    common::write_settings(home, json!({}));
+    assert_eq!(
+        stdout(&lock(home, &one, &["pr-status", "7"])),
+        "held Settings' pr_merge_queue is off · queued 1 of 2\n",
+        "with the setting off, nothing moves a queued PR"
+    );
+    common::write_settings(home, json!({ "pr_merge_queue": true }));
     assert_eq!(code(&lock(home, &one, &["dequeue-pr", "7"])), 0);
     assert_eq!(code(&lock(home, &one, &["dequeue-pr", "7"])), 3);
     assert_eq!(stdout(&lock(home, &one, &["pr-status", "7"])), "none\n");

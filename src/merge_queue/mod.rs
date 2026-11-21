@@ -243,6 +243,31 @@ impl Queue {
             None => "none".into(),
         }
     }
+
+    /// What `land-lock pr-status` says of a PR while the server doesn't run
+    /// the queue, `why` saying why: a PR waiting or under test is held,
+    /// since nothing will move it until the queue runs again.
+    pub fn status_stopped(&self, number: u64, why: &str) -> String {
+        if let Some(t) = self.train.as_ref().filter(|_| self.testing(number)) {
+            return format!("held {why} · testing {}", t.branch);
+        }
+        match self.line(number) {
+            Some(line) => format!("held {why} · queued {line} of {}", self.prs.len()),
+            None => self.status(number),
+        }
+    }
+}
+
+/// Why the workspace's server doesn't run the queues, when a setting
+/// stops it (`serve::runs`).
+pub fn stopped() -> Option<&'static str> {
+    if !crate::settings::is_on(SETTING) {
+        return Some("Settings' pr_merge_queue is off");
+    }
+    if !crate::settings::is_on("github") {
+        return Some("Settings' github is off");
+    }
+    None
 }
 
 fn keep_last<T>(list: &mut Vec<T>) {
@@ -385,7 +410,11 @@ pub fn command(command: &str, args: &[String], common: &Path, here: &Path) -> Op
             let Some(number) = number() else {
                 return Some(usage("pr-status <number>"));
             };
-            println!("{}", read(common).status(number));
+            let queue = read(common);
+            match stopped() {
+                Some(why) => println!("{}", queue.status_stopped(number, why)),
+                None => println!("{}", queue.status(number)),
+            }
             0
         }
         "pr-queue" => {
@@ -556,5 +585,33 @@ mod tests {
         q.merged_pr(1, 9);
         assert_eq!(q.status(1), "merged");
         assert_eq!(q.status(5), "none");
+    }
+
+    #[test]
+    fn a_pr_waiting_while_the_queue_is_stopped_is_held() {
+        let mut q = Queue::default();
+        queue_pr(&mut q, pr(1)).unwrap();
+        queue_pr(&mut q, pr(2)).unwrap();
+        q.train = Some(Train {
+            branch: "ci/train-x".into(),
+            prs: vec![Tested {
+                number: 1,
+                head: "h".into(),
+            }],
+            ..Train::default()
+        });
+        let why = "Settings' pr_merge_queue is off";
+        assert_eq!(
+            q.status_stopped(1, why),
+            "held Settings' pr_merge_queue is off · testing ci/train-x"
+        );
+        assert_eq!(
+            q.status_stopped(2, why),
+            "held Settings' pr_merge_queue is off · queued 2 of 2"
+        );
+        q.train = None;
+        q.merged_pr(1, 9);
+        assert_eq!(q.status_stopped(1, why), "merged");
+        assert_eq!(q.status_stopped(5, why), "none");
     }
 }
