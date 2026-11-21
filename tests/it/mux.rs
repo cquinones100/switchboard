@@ -1570,7 +1570,7 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     client.wait_for("the hints gone", |s| cell_of(s, "SIDE PANEL").is_none());
     let said = server.ok(&["look", &shot, &other]);
     assert!(
-        said.starts_with("Opened in the desktop's viewer: the tab has no side panel"),
+        said.starts_with("Opening in the desktop's viewer: the tab has no side panel"),
         "{said}"
     );
     assert_eq!(

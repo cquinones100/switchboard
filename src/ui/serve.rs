@@ -612,7 +612,7 @@ impl Server {
                 let files = files.into_iter().map(|(f, _)| f).collect();
                 open_outside(files, self.tx.clone(), client, false);
                 return Reply::ok(
-                    why.map(|why| format!("Opened in the desktop's viewer: {why}\n"))
+                    why.map(|why| format!("Opening in the desktop's viewer: {why}\n"))
                         .unwrap_or_default(),
                 );
             }
