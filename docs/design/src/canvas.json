@@ -752,6 +752,30 @@
     "PhoneTabViewsList.dc.html": {
       "title": "190. The list of views with a tab's section: a tab with none of PR, ticket or note says so; from the drawer, with no tab in front, mission control's views alone; a tab's section lists only what it has",
       "page": "design"
+    },
+    "LandsSettings.dc.html": {
+      "title": "191. After: how each repository lands, in Settings' Repositories: one way each, its check that the way is set up, when a tab there is done, and a repository with none set landing nothing until you choose (today: repos.json's landing, guessed when unset, and the global Land PRs through Switchboard's merge queue)",
+      "page": "design"
+    },
+    "LandsChoose.dc.html": {
+      "title": "192. After: choosing how a repository lands: Switchboard's merge queue, GitHub's merge queue, GitHub's auto-merge, straight to main or a merge service, the one set marked; what the chosen way does, when a tab is done, what it never does and what it needs; what is landing finishes the old way",
+      "page": "design"
+    },
+    "LandsLanding.dc.html": {
+      "title": "193. After: Landing, a section per repository by its one way, the header naming the way and when a tab there is done, that way's steps as columns, every way ending in landed and cleaned up (today: board 5, straight on main or through a PR)",
+      "page": "design"
+    },
+    "LandsAutopilot.dc.html": {
+      "title": "194. After: Autopilot naming how its repository lands, a Landing card where it is in that way, Landed the PRs merged and cleaned up, the chosen card saying when it is done (today: board 16)",
+      "page": "design"
+    },
+    "LandsPrs.dc.html": {
+      "title": "195. After: PRs, Merge queue become Landing, each card saying where it is in its repository's way (a train, GitHub's queue, the service), the pane naming the way (today: board 10)",
+      "page": "design"
+    },
+    "LandsCi.dc.html": {
+      "title": "196. After: CI saying what each run means for landing in its repository's way, a train of Switchboard's merge queue listed by the PRs it tests (today: board 20)",
+      "page": "design"
     }
   }
 }

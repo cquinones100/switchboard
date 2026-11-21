@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-23 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-24 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -348,6 +348,15 @@ The relay's DM, threads and Home tab.
 
 - [189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note (the note only while phone_tab_note is on, off by default), each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's](https://cquinones100.github.io/switchboard/design/189.html)
 - [190. The list of views with a tab's section: a tab with none of PR, ticket or note says so; from the drawer, with no tab in front, mission control's views alone; a tab's section lists only what it has](https://cquinones100.github.io/switchboard/design/190.html)
+
+## Proposal: one way to land per repository
+
+- [191. After: how each repository lands, in Settings' Repositories: one way each, its check that the way is set up, when a tab there is done, and a repository with none set landing nothing until you choose (today: repos.json's landing, guessed when unset, and the global Land PRs through Switchboard's merge queue)](https://cquinones100.github.io/switchboard/design/191.html)
+- [192. After: choosing how a repository lands: Switchboard's merge queue, GitHub's merge queue, GitHub's auto-merge, straight to main or a merge service, the one set marked; what the chosen way does, when a tab is done, what it never does and what it needs; what is landing finishes the old way](https://cquinones100.github.io/switchboard/design/192.html)
+- [193. After: Landing, a section per repository by its one way, the header naming the way and when a tab there is done, that way's steps as columns, every way ending in landed and cleaned up (today: board 5, straight on main or through a PR)](https://cquinones100.github.io/switchboard/design/193.html)
+- [194. After: Autopilot naming how its repository lands, a Landing card where it is in that way, Landed the PRs merged and cleaned up, the chosen card saying when it is done (today: board 16)](https://cquinones100.github.io/switchboard/design/194.html)
+- [195. After: PRs, Merge queue become Landing, each card saying where it is in its repository's way (a train, GitHub's queue, the service), the pane naming the way (today: board 10)](https://cquinones100.github.io/switchboard/design/195.html)
+- [196. After: CI saying what each run means for landing in its repository's way, a train of Switchboard's merge queue listed by the PRs it tests (today: board 20)](https://cquinones100.github.io/switchboard/design/196.html)
 
 ## Other boards
 
