@@ -1187,10 +1187,12 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
     );
 }
 
+// `switchboard upgrade --latest` reaches the server as `upgrade-latest`
+// (`upgrade::on_the_wire`), which the tests send as the binary does.
 #[test]
 fn upgrade_latest_is_only_for_switchboards_clone() {
     let server = TestServer::start();
-    let (code, _, err) = server.run(&["upgrade", "--latest"]);
+    let (code, _, err) = server.ask(&["upgrade-latest"]);
     assert_eq!(code, 1);
     assert!(err.contains("is for developing Switchboard"), "{err}");
 }
@@ -1256,7 +1258,7 @@ fn upgrade_latest_builds_the_main_clone_and_says_what_happened() {
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let server_pid = server.pid().unwrap();
-    let latest = || server.run(&["upgrade", "--latest"]);
+    let latest = || server.ask(&["upgrade-latest"]);
 
     // Uncommitted changes: said, and nothing built.
     std::fs::write(main.join("file"), "").unwrap();

@@ -392,10 +392,27 @@ pub fn asks_upgrade(args: &[String]) -> bool {
         && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
 }
 
-/// Whether an upgrade's arguments ask for M-p's build first
-/// (`switchboard upgrade --latest`).
+/// What `switchboard upgrade --latest` sends the server: a command of
+/// its own, so a server from before it answers that it has no such
+/// command, rather than taking it for a plain `upgrade` and restarting
+/// on the binary on disk with nothing built.
+pub const LATEST_COMMAND: &str = "upgrade-latest";
+
+/// The arguments the binary sends the server for `args`:
+/// `upgrade --latest` as `LATEST_COMMAND`, anything else as it is.
+pub fn on_the_wire(args: Vec<String>) -> Vec<String> {
+    match args.as_slice() {
+        [upgrade, latest] if upgrade == "upgrade" && latest == "--latest" => {
+            vec![LATEST_COMMAND.to_string()]
+        }
+        _ => args,
+    }
+}
+
+/// Whether a command asks for M-p's build first (`switchboard upgrade
+/// --latest`, sent as `LATEST_COMMAND`).
 pub fn asks_latest(args: &[String]) -> bool {
-    args.get(1).is_some_and(|a| a == "--latest")
+    args.first().is_some_and(|a| a == LATEST_COMMAND)
 }
 
 /// What `switchboard upgrade --latest` says outside Switchboard's clone.
@@ -728,18 +745,20 @@ impl Server {
                             text.push_str(&format!("\n{line}"));
                         }
                         self.latest_answered(text, false);
-                        let row_shows =
-                            by_command || client.is_some_and(|c| self.build_row_shows(c));
-                        match build.filter(|_| row_shows) {
-                            // The row says it failed until it is clicked, and
-                            // its steps say why.
-                            Some(build) => {
-                                self.upgrade.shown = Some(Shown::Failed { build, why, lines })
-                            }
-                            None => self.say(
-                                client,
-                                &format!("The build failed: {why}. Switchboard goes on as it was."),
-                            ),
+                        let row_seen = match client {
+                            Some(c) => self.build_row_shows(c),
+                            None => self.clients.keys().any(|c| self.build_row_shows(*c)),
+                        };
+                        let said =
+                            format!("The build failed: {why}. Switchboard goes on as it was.");
+                        if !row_seen {
+                            self.say(client, &said);
+                        }
+                        // The row says it failed until it is clicked, and
+                        // its steps say why: kept for a command whether or
+                        // not a sidebar shows it now.
+                        if let Some(build) = build.filter(|_| row_seen || by_command) {
+                            self.upgrade.shown = Some(Shown::Failed { build, why, lines })
                         }
                     }
                 }
@@ -1473,6 +1492,9 @@ mod tests {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(asks_upgrade(&args(&["upgrade"])));
         assert!(!asks_upgrade(&args(&["upgrade", "--help"])));
+        assert!(asks_latest(&on_the_wire(args(&["upgrade", "--latest"]))));
+        assert_eq!(on_the_wire(args(&["upgrade"])), args(&["upgrade"]));
+        assert!(!asks_upgrade(&args(&[LATEST_COMMAND])));
         assert!(!asks_upgrade(&args(&["list"])));
         assert!(!asks_upgrade(&[]));
     }
