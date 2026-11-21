@@ -133,6 +133,9 @@ pub struct Row {
     pub phases: Vec<(String, i64)>,
     /// Now, in seconds, for the time of a stage still running.
     pub now: i64,
+    /// Whether its repository is Switchboard's clone (src/dev.rs), the one
+    /// place a landing runs leak-check; elsewhere the stage reads "not run".
+    pub leak_checked: bool,
 }
 
 /// An option's time in seconds, none when unset or zero.
@@ -239,8 +242,17 @@ fn timed(mut cells: [Cell; 8], r: &Row) -> [Cell; 8] {
     cells
 }
 
-/// A tab's eight stages' cells, without their times.
+/// A tab's eight stages' cells, without their times: the leak check's
+/// "not run" outside Switchboard's clone, whatever stage the tab is at.
 fn cells(r: &Row) -> [Cell; 8] {
+    let mut out = stage_cells(r);
+    if !r.leak_checked {
+        out[4] = ("waiting", "not run".into());
+    }
+    out
+}
+
+fn stage_cells(r: &Row) -> [Cell; 8] {
     let mut out: [Cell; 8] = std::array::from_fn(|_| waiting());
     let phase = r.phase.as_deref().unwrap_or("");
     out[0] = if r.was_in || r.left {
@@ -771,6 +783,7 @@ mod tests {
             ended: None,
             phases: Vec::new(),
             now: 0,
+            leak_checked: true,
         }
     }
 
@@ -815,6 +828,13 @@ mod tests {
             "record": { "leak": { "skipped": true } },
         }));
         assert_eq!(stages(&r)[4], ("waiting", "not run".to_string()));
+        // Nor for a tab that landed there, or hasn't reached the lock.
+        let mut landed = r.clone();
+        landed.landing = None;
+        landed.left = true;
+        landed.leak_checked = false;
+        assert_eq!(stages(&landed)[4], ("waiting", "not run".to_string()));
+        r.landing = Some(json!({ "holding": true, "phase": "pushing" }));
         assert_eq!(s[6], ("running", "pushing…".to_string()));
         r.landing = Some(json!({ "holding": false, "place": 2 }));
         assert_eq!(stages(&r)[5], ("queued", "2 in line".to_string()));

@@ -2151,6 +2151,7 @@ mod tests {
             ended: None,
             phases: Vec::new(),
             now: 0,
+            leak_checked: true,
         };
         let view = View {
             id: ViewId::Autopilot,

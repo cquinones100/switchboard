@@ -339,7 +339,8 @@ impl Run {
         // leak-check is a rule of Switchboard's own repository alone
         // (src/dev.rs): elsewhere it isn't run, and the base needn't be
         // published.
-        let scan = !leak_ok && crate::dev::is_switchboard_clone(&self.top);
+        let in_clone = crate::dev::is_switchboard_clone(&self.top);
+        let scan = !leak_ok && in_clone;
         // leak-check scans from where the change leaves what is already
         // public, so a base that isn't on a branch of the remote pushed to
         // (`--base HEAD`, or a commit only another remote has) would let
@@ -367,7 +368,7 @@ impl Run {
             })
         });
         let published = published.filter(|_| on_a_remote);
-        if scan && published.is_none() {
+        if in_clone && published.is_none() {
             println!(
                 "{base} isn't on a remote branch, so leak-check would miss what isn't published: pass the base the commit is on, as fetched"
             );

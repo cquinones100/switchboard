@@ -31,6 +31,20 @@ pub fn is_switchboard_clone(dir: &Path) -> bool {
     has_sources(top) && origin_url(top).is_some_and(|url| names_switchboard(&url))
 }
 
+/// `is_switchboard_clone`, answered once a process for each directory, for
+/// what asks on the drawing path (autopilot's board), where no file is read
+/// again: a checkout's being Switchboard's clone doesn't change while it runs.
+pub fn is_switchboard_clone_remembered(dir: &Path) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, is)) = seen.iter().find(|(d, _)| d == dir) {
+        return *is;
+    }
+    let is = is_switchboard_clone(dir);
+    seen.push((dir.to_path_buf(), is));
+    is
+}
+
 /// Whether the running build was made from Switchboard's clone: the
 /// checkout M-p's restart would build (`mux::latest::checkout`, none for a
 /// release build), decided once a process, since it stays the same while

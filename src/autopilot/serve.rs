@@ -1958,6 +1958,7 @@ impl Server {
             opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
         };
         let mut rows = Vec::new();
+        let leak_checked = crate::dev::is_switchboard_clone_remembered(&self.autopilot.mode.repo);
         let mut open = std::collections::HashSet::new();
         for model in self.sidebar_all_tabs() {
             let Some(tab) = self.tabs.get(&model.id) else {
@@ -2012,6 +2013,7 @@ impl Server {
                     .map(|a| a.phases.clone())
                     .unwrap_or_default(),
                 now: util::now_secs(),
+                leak_checked,
             });
         }
         let now = util::now_ms();
@@ -2041,6 +2043,7 @@ impl Server {
                 ended,
                 phases: Vec::new(),
                 now: util::now_secs(),
+                leak_checked,
             });
         }
         rows

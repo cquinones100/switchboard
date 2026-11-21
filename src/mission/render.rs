@@ -10186,6 +10186,7 @@ mod tests {
             ended: None,
             phases: Vec::new(),
             now: 0,
+            leak_checked: true,
         }
     }
 
