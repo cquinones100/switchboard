@@ -2116,4 +2116,110 @@ mod tickets {
             "no ticket AB-4 asked for"
         );
     }
+
+    /// A clone of acme/widgets on `main`, with no ticket in its branch,
+    /// whose `tickets` in repos.json is `provider`.
+    fn widgets_set_to(server: &TestServer, provider: &str) -> std::path::PathBuf {
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(&work, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let config = server.home.join(".config/switchboard");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("repos.json"),
+            json!({ "acme/widgets": { "tickets": provider } }).to_string(),
+        )
+        .unwrap();
+        work
+    }
+
+    #[test]
+    fn m_i_with_no_ticket_in_a_github_repository_asks_for_one_of_its_open_issues() {
+        let github = Fake::github("test-token", |request| {
+            let path = request.path();
+            if request.query().contains("issues(states: OPEN") {
+                Some(Reply::json(
+                    200,
+                    json!({ "data": { "viewer": { "login": "me" }, "repository": { "issues": { "nodes": [
+                        { "number": 13, "title": "Someone else's", "assignees": { "nodes": [] } },
+                        { "number": 12, "title": "Make the widget blue", "assignees": { "nodes": [{ "login": "me" }] } }
+                    ] } } } }),
+                ))
+            } else if path.starts_with("/repos/acme/widgets/issues/12/comments") {
+                Some(Reply::json(200, json!([])))
+            } else if path.starts_with("/repos/acme/widgets/issues/12") {
+                Some(Reply::json(
+                    200,
+                    json!({ "number": 12, "title": "Make the widget blue", "state": "open",
+                        "body": "It is red.", "user": { "login": "sam" },
+                        "created_at": "2026-10-01T09:00:00Z", "updated_at": "2026-10-01T09:00:00Z",
+                        "assignees": [], "labels": [], "comments": 0 }),
+                ))
+            } else {
+                None
+            }
+        });
+        let linear = fake_linear();
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+                ("LINEAR_API_KEY", "test-key"),
+                ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+            ],
+            &json!({"notifications": false, "tips": false, "ux2": false,
+                "sidebar": false, "photos": false})
+            .to_string(),
+        );
+        let work = widgets_set_to(&server, "github");
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        client.send(b"\x1bi");
+        let screen = client.wait_text("'s issue");
+        let at = |row: &str| screen.iter().position(|l| l.contains(row));
+        let (yours, other) = (
+            at("#12  Make the widget blue · assigned to you"),
+            at("#13  Someone else's"),
+        );
+        assert!(yours.is_some() && yours < other, "yours first: {screen:?}");
+        assert!(
+            !screen.iter().any(|l| l.contains("AB-2")),
+            "no Linear ticket: {screen:?}"
+        );
+        client.type_text("\r");
+        client.wait_text("It is red.");
+        let tabs = server.list()["sessions"][0]["tabs"].clone();
+        assert_eq!(
+            tabs[0]["options"]["@tab_ticket"], "acme/widgets#12",
+            "{tabs}"
+        );
+    }
+
+    #[test]
+    fn m_i_with_no_ticket_in_a_linear_repository_asks_for_one_of_your_linear_tickets() {
+        let linear = fake_linear();
+        let server = linear_server(&linear);
+        let work = widgets_set_to(&server, "linear");
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        client.send(b"\x1bi");
+        client.wait_text("'s ticket or project");
+        client.wait_text("AB-2  New work");
+    }
 }
