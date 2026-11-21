@@ -533,19 +533,18 @@ impl Server {
     }
 
     /// Answers the `switchboard upgrade --latest` waiting on the build, if
-    /// one is, with `text` (exiting 1 unless `ok`); otherwise
-    /// `otherwise` runs.
-    fn latest_answered(&mut self, text: String, ok: bool, otherwise: impl FnOnce(&mut Server)) {
-        match self.upgrade.latest_asker.take() {
-            Some(asker) => {
-                let reply = match ok {
-                    true => Reply::ok(format!("{text}\n")),
-                    false => Reply::fail(text),
-                };
-                let _ = asker.send(Answer::Reply(reply));
-            }
-            None => otherwise(self),
-        }
+    /// one is, with `text` (exiting 1 unless `ok`); whether it was
+    /// answered, so a command that has gone away (a Bash call timed out
+    /// during a long build) leaves what it would have said to the screen.
+    fn latest_answered(&mut self, text: String, ok: bool) -> bool {
+        let Some(asker) = self.upgrade.latest_asker.take() else {
+            return false;
+        };
+        let reply = match ok {
+            true => Reply::ok(format!("{text}\n")),
+            false => Reply::fail(text),
+        };
+        asker.send(Answer::Reply(reply)).is_ok()
     }
 
     /// Whether the build row shows on a client's screen: in the sidebar.
@@ -708,27 +707,33 @@ impl Server {
                             false => format!("Already on the latest build. {note}"),
                         };
                         let text = text.trim_end().to_string();
-                        self.latest_answered(text.clone(), true, |s| s.say(client, &text));
+                        if !self.latest_answered(text.clone(), true) {
+                            self.say(client, &text);
+                        }
                     }
-                    Err(why) if self.upgrade.latest_asker.is_some() => {
+                    Err(why) => {
+                        // A command's failure leaves the row as M-p's does,
+                        // in every sidebar, as well as answering it.
+                        let by_command = self.upgrade.latest_asker.is_some();
                         let mut text =
                             format!("Switchboard didn't build: {why}. It goes on as it was.");
                         for line in &lines {
                             text.push_str(&format!("\n{line}"));
                         }
-                        self.latest_answered(text, false, |_| {});
-                    }
-                    Err(why) => {
-                        match build.filter(|_| client.is_some_and(|c| self.build_row_shows(c))) {
+                        let answered = self.latest_answered(text, false);
+                        let row_shows =
+                            by_command || client.is_some_and(|c| self.build_row_shows(c));
+                        match build.filter(|_| row_shows) {
                             // The row says it failed until it is clicked, and
                             // its steps say why.
                             Some(build) => {
                                 self.upgrade.shown = Some(Shown::Failed { build, why, lines })
                             }
-                            None => self.say(
+                            None if !answered => self.say(
                                 client,
                                 &format!("The build failed: {why}. Switchboard goes on as it was."),
                             ),
+                            None => {}
                         }
                     }
                 }
