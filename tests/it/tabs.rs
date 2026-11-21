@@ -506,12 +506,14 @@ mod from_the_services {
                 )
             })
         });
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &github.url),
-        ]);
-        settings(&server, json!({}));
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+            ],
+            &all_settings(json!({})).to_string(),
+        );
         let work = server.dir.path().join("widgets");
         repo(&work, "retry-failed-fetches");
         git(
@@ -527,9 +529,8 @@ mod from_the_services {
         let mut client = server.attach(100, 30);
         client.wait_text("$");
         client.type_text(&format!("cd {}\r", work.display()));
-        client.wait_for("the PR's title", |s| {
-            s[29].ends_with("1:#12345 Retry UTF-8 fetches")
-        });
+        // The header names it by its number then its label.
+        client.wait_for("the PR's title", |s| s[0].contains("1 #12345 Retry UTF-8"));
         let tab = first_tab(&server);
         assert_eq!(tab["label"], "#12345 Retry UTF-8 fetches");
         // What a landing pins and Claude's context gets leaves it out.
