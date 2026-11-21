@@ -3011,6 +3011,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "url",
+ "webpki-roots 1.0.11",
  "zbus",
 ]
 

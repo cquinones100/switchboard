@@ -164,7 +164,7 @@ pub async fn serve(status: Status, config: super::config::Config) -> Result<()> 
     let push_key = match push::key() {
         Ok(key) => Some(Arc::new(key)),
         Err(e) => {
-            eprintln!("phone: no Web Push: {e:#}");
+            super::log::line(&format!("no Web Push: {e:#}"));
             None
         }
     };
@@ -178,12 +178,12 @@ pub async fn serve(status: Status, config: super::config::Config) -> Result<()> 
     });
     let router = routes(app.clone());
     for l in &listeners {
-        eprintln!(
-            "phone: serving https://{}:{} on {}",
+        super::log::line(&format!(
+            "serving https://{}:{} on {}",
             status.name,
             config.port,
             l.local_addr()?
-        );
+        ));
     }
     let mut tasks = Vec::new();
     for listener in listeners {
@@ -235,6 +235,9 @@ fn routes(app: Arc<App>) -> Router {
             get(|| file("manifest.webmanifest")),
         )
         .route("/icon.svg", get(|| file("icon.svg")))
+        .route("/icon-180.png", get(|| png(ICON_180)))
+        .route("/icon-192.png", get(|| png(ICON_192)))
+        .route("/icon-512.png", get(|| png(ICON_512)))
         .route("/api/me", get(me))
         .route("/api/pair", post(pair_start).get(pair_look))
         .route("/api/tabs", get(tabs))
@@ -291,7 +294,15 @@ async fn headers(req: Request, next: Next) -> Response {
 fn before_pairing(path: &str, method: &Method) -> bool {
     matches!(
         path,
-        "/" | "/app.js" | "/app.css" | "/sw.js" | "/manifest.webmanifest" | "/icon.svg" | "/api/me"
+        "/" | "/app.js"
+            | "/app.css"
+            | "/sw.js"
+            | "/manifest.webmanifest"
+            | "/icon.svg"
+            | "/icon-180.png"
+            | "/icon-192.png"
+            | "/icon-512.png"
+            | "/api/me"
     ) && method == Method::GET
         || path == "/api/pair"
 }
@@ -327,7 +338,7 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
         // Unreadable, it admits no one: the plain refusal, why only in the
         // log, so a device refused learns nothing of what runs here.
         Err(why) => {
-            eprintln!("phone: refused {path} from {ip}: {why}");
+            super::log::line(&format!("refused {path} from {ip}: {why}"));
             return refuse(Refusal::NotListed, Some(ip), &path);
         }
     };
@@ -337,7 +348,9 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
     };
     // Off, said only to a device it would answer.
     if settings::setting("phone") != Some(Value::Bool(true)) {
-        eprintln!("phone: refused {path} from {ip}: the phone app is off in Settings");
+        super::log::line(&format!(
+            "refused {path} from {ip}: the phone app is off in Settings"
+        ));
         return (StatusCode::SERVICE_UNAVAILABLE, "The phone app is off.").into_response();
     }
     if let Err(refusal) = guard::same_origin(
@@ -371,11 +384,7 @@ fn whois(ip: IpAddr) -> Option<Peer> {
 /// A 403, logged with why; the page says only that it was refused.
 fn refuse(refusal: Refusal, ip: Option<IpAddr>, path: &str) -> Response {
     let from = ip.map(|i| i.to_string()).unwrap_or_else(|| "?".into());
-    eprintln!(
-        "phone: {} refused {path} from {from}: {}",
-        util::local_now().strftime("%H:%M:%S"),
-        refusal.why()
-    );
+    super::log::line(&format!("refused {path} from {from}: {}", refusal.why()));
     if path.starts_with("/api/") {
         let why = if refusal == Refusal::NotPaired {
             "not paired"
@@ -395,6 +404,17 @@ fn refuse(refusal: Refusal, ip: Option<IpAddr>, path: &str) -> Response {
 /// The refused page (board 169): it names neither the computer nor what is
 /// checked, and looks the same to every device refused.
 const REFUSED: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><title>Switchboard</title><link rel=stylesheet href=/app.css><body class=refused><main><h1>Not for this device</h1><p>This page answers one person's devices alone.</p></main></body>";
+
+/// The home screen's icons, drawn from icon.svg: iOS's (180, square, since
+/// iOS rounds it itself), and the manifest's 192 and 512 (maskable, its art
+/// inside the safe zone).
+const ICON_180: &[u8] = include_bytes!("../../assets/phone/icon-180.png");
+const ICON_192: &[u8] = include_bytes!("../../assets/phone/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../../assets/phone/icon-512.png");
+
+async fn png(bytes: &'static [u8]) -> Response {
+    ([(header::CONTENT_TYPE, "image/png")], bytes).into_response()
+}
 
 async fn page() -> Response {
     file("index.html").await
@@ -483,7 +503,7 @@ async fn pair_start(device: Option<axum::Extension<Device>>) -> Response {
     if let Err(e) = pairing::start(&device, &code, util::now_ms()) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
-    eprintln!("phone: {device} asked to pair");
+    super::log::line(&format!("{device} asked to pair"));
     let asked = device.clone();
     let _ = tokio::task::spawn_blocking(move || socket::ask(&["phone-pair", &asked])).await;
     axum::Json(json!({
@@ -514,7 +534,7 @@ async fn pair_look(device: Option<axum::Extension<Device>>) -> Response {
     if let Err(e) = pairing::add(&device, &token, now) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
-    eprintln!("phone: paired {device}");
+    super::log::line(&format!("paired {device}"));
     let cookie = format!(
         "{}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000",
         guard::COOKIE
@@ -830,7 +850,7 @@ async fn follow(tx: watch::Sender<Value>, push_key: Option<Arc<EcdsaKeyPair>>) {
     let mut last: Option<Value> = None;
     loop {
         if let Err(e) = follow_once(&tx, &push_key, &mut last).await {
-            eprintln!("phone: Switchboard's server: {e:#}");
+            super::log::line(&format!("Switchboard's server: {e:#}"));
         }
         tx.send_modify(|v| v["live"] = json!(false));
         tokio::time::sleep(RETRY).await;
@@ -880,7 +900,9 @@ async fn follow_once(
                                     .trim_start_matches('%')
                                     .to_string(),
                             );
-                            tokio::spawn(async move { push::send(&key, &title, &id).await });
+                            tokio::spawn(async move {
+                                push::send(&key, &title, &id).await;
+                            });
                         }
                     }
                     *last = Some(now.clone());
@@ -983,5 +1005,66 @@ mod tests {
         assert!(!before_pairing("/api/tabs", &Method::GET));
         assert!(!before_pairing("/api/tabs/%1/answer", &Method::POST));
         assert!(!before_pairing("/", &Method::POST));
+    }
+
+    /// A PNG's width and height, from its IHDR.
+    fn size_of(png: &[u8]) -> (u32, u32) {
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let at = |n: usize| u32::from_be_bytes(png[n..n + 4].try_into().unwrap());
+        (at(16), at(20))
+    }
+
+    /// What an installed app needs: iOS's 180 icon on the page, the
+    /// manifest's id and its 192 and 512 icons (one maskable), each served
+    /// before pairing as the page's other files are.
+    #[test]
+    fn the_app_carries_its_home_screen_icons() {
+        assert_eq!(size_of(ICON_180), (180, 180));
+        assert_eq!(size_of(ICON_192), (192, 192));
+        assert_eq!(size_of(ICON_512), (512, 512));
+        let index = include_str!("../../assets/phone/index.html");
+        assert!(index.contains(r#"rel="apple-touch-icon" sizes="180x180" href="/icon-180.png""#));
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../assets/phone/manifest.webmanifest")).unwrap();
+        assert_eq!(manifest["id"], "/");
+        let icons = manifest["icons"].as_array().unwrap();
+        let icon = |src: &str| icons.iter().find(|i| i["src"] == src).cloned();
+        assert_eq!(icon("/icon-192.png").unwrap()["sizes"], "192x192");
+        let large = icon("/icon-512.png").unwrap();
+        assert_eq!(
+            (large["sizes"].as_str(), large["purpose"].as_str()),
+            (Some("512x512"), Some("maskable"))
+        );
+        for path in ["/icon-180.png", "/icon-192.png", "/icon-512.png"] {
+            assert!(before_pairing(path, &Method::GET), "{path}");
+        }
+    }
+
+    /// The service worker keeps a copy of the page's own files, and lets
+    /// everything under /api/ go to the computer untouched.
+    #[test]
+    fn the_service_worker_keeps_the_apps_files_and_never_the_api() {
+        let sw = include_str!("../../assets/phone/sw.js");
+        assert!(sw.contains(r#"addEventListener("fetch""#));
+        assert!(
+            sw.contains(r#"url.pathname.startsWith("/api/") || !isShell(url)) return;"#),
+            "a request under /api/ is left to the browser"
+        );
+        let shell = &sw[sw.find("const SHELL = [").unwrap()..];
+        let shell = &shell[..shell.find("];").unwrap()];
+        for file in [
+            "\"/\"",
+            "/app.js",
+            "/app.css",
+            "/icon-180.png",
+            "/manifest.webmanifest",
+        ] {
+            assert!(shell.contains(file), "{file} kept");
+        }
+        assert!(!shell.contains("/api"), "nothing of the API kept: {shell}");
+        // Each file it keeps is one the server serves before pairing.
+        for path in shell.split('"').skip(1).step_by(2) {
+            assert!(before_pairing(path, &Method::GET), "{path}");
+        }
     }
 }

@@ -168,6 +168,8 @@ pub enum Action {
     PhoneApp,
     /// Stop the phone app.
     StopPhoneApp,
+    /// A test notification pushed to each phone (src/phone).
+    TestPhonePush,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
     /// M-p's "Sync your Switchboard files now" (src/files).
@@ -290,6 +292,7 @@ impl Action {
             "stop-slack-relay" => Action::StopSlackRelay,
             "phone-app" => Action::PhoneApp,
             "stop-phone-app" => Action::StopPhoneApp,
+            "test-phone-push" => Action::TestPhonePush,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
             "new-claude-tab" => Action::NewClaudeTab,
@@ -403,6 +406,7 @@ impl Action {
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::PhoneApp => "phone-app".into(),
             Action::StopPhoneApp => "stop-phone-app".into(),
+            Action::TestPhonePush => "test-phone-push".into(),
             Action::Update(command) => command.name().into(),
             Action::Files(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
@@ -516,6 +520,7 @@ impl Action {
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::PhoneApp => "Open the phone app in its own tab".into(),
             Action::StopPhoneApp => "Stop the phone app".into(),
+            Action::TestPhonePush => "Send a test notification to my phone".into(),
             Action::Update(command) => command.about().into(),
             Action::Files(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest main".into(),
@@ -705,6 +710,9 @@ impl Action {
             Action::StopPhoneApp => {
                 "Runs switchboard phone stop: your phone reaches nothing until it starts again.".into()
             }
+            Action::TestPhonePush => {
+                "Runs switchboard phone test: one push to each phone that turned notifications on in the app, and says what each push service answered, as phone.log keeps it.".into()
+            }
             Action::Update(command) => command.detail().into(),
             Action::Files(command) => command.detail().into(),
             Action::Upgrade => {
@@ -789,6 +797,7 @@ impl Action {
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::PhoneApp | Action::StopPhoneApp => &["phone", "remote", "tailscale"],
+            Action::TestPhonePush => &["phone", "remote", "notifications", "push"],
             Action::Update(command) => command.tags(),
             Action::Files(command) => command.tags(),
             // "build" and "disk" from its old name, "on the latest build on disk".
@@ -929,6 +938,7 @@ impl Action {
             Action::StopSlackRelay,
             Action::PhoneApp,
             Action::StopPhoneApp,
+            Action::TestPhonePush,
             Action::Upgrade,
             Action::HideBuildRow,
             Action::RestoreLayout,
