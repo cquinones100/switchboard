@@ -676,7 +676,8 @@ impl Server {
     /// tab is in front of someone marks each, and the next answer takes the
     /// marked ones off. The branch's PR, never stored, shows as it always
     /// has, and a merged one the session made stays while
-    /// `prs::merged_stays_current` holds for it, so a tab whose PR landed
+    /// `prs::merged_stays_current` holds for it (on the default branch, the
+    /// newest such alone), so a tab whose PR landed
     /// keeps it once the landing has moved it back to the main clone.
     pub fn drop_finished_tab_prs(&mut self, done: impl Fn(&TabPr) -> bool) {
         let ids: Vec<TabId> = self
@@ -690,10 +691,23 @@ impl Server {
         for id in ids {
             let in_front = self.tab_in_front(id);
             let all = self.tab_prs(id);
-            let landed: Vec<TabPr> = all
+            // Each on its own branch stays; on the default branch, only the
+            // newest, which is the one current there.
+            let staying: Vec<&TabPr> = all
                 .iter()
                 .filter(|p| self.landed_pr_stays(id, p, &all))
-                .cloned()
+                .collect();
+            let branch = self.tab_names.shown.get(&id).and_then(|s| s.branch.clone());
+            let on_head = |p: &TabPr| {
+                self.tab_pr_facts(p).is_some_and(|f| {
+                    !f.head.is_empty() && branch.as_deref() == Some(f.head.as_str())
+                })
+            };
+            let newest = staying.iter().rev().find(|p| !on_head(p)).copied();
+            let landed: Vec<TabPr> = staying
+                .iter()
+                .filter(|p| on_head(p) || newest.is_some_and(|n| n.same(p)))
+                .map(|p| (*p).clone())
                 .collect();
             let t = self.tabs.get_mut(&id).expect("listed above");
             let list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
