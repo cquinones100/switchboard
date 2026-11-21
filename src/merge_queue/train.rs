@@ -549,6 +549,8 @@ async fn ride(
                     if let Some(t) = q.train.as_mut() {
                         t.rerun = Some(rerun);
                         t.passed = false;
+                        // The rerun has `TIMEOUT` of its own.
+                        t.since = now;
                     }
                 })?;
                 for tested in &train.prs {
