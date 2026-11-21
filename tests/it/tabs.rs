@@ -499,6 +499,14 @@ mod from_the_services {
         });
         let tab = first_tab(&server);
         assert_eq!(tab["label"], "#12345 Retry UTF-8 fetches");
+        // What a landing pins and Claude's context gets leaves it out.
+        let id = tab["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            server
+                .ok(&["show", "-t", &id, "@tab_label_without_pr_title"])
+                .trim(),
+            "#12345 widgets:retry-failed-fetches"
+        );
 
         // wt-jump still finds it by the PR's number at the front of its
         // label, from another tab.

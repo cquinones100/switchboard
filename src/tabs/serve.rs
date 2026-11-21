@@ -194,7 +194,7 @@ impl Server {
         if !back_in_its_main_clone {
             return;
         }
-        let name = self.tab_facts_label(tab_id);
+        let name = self.tab_facts_without_pr_title(tab_id);
         if let Some(tab) = self.tabs.get_mut(&tab_id) {
             tab.opts.insert("@tab_name".into(), name);
         }
@@ -288,16 +288,23 @@ impl Server {
         label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
     }
 
-    /// The tab's label as the ticket lookups read it for a ticket's ID:
-    /// `tab_label` with its directory's name in place of a PR's title,
-    /// which is someone's words (`Fix UTF-8 paths`), never a ticket.
-    pub fn tab_label_for_tickets(&self, tab: TabId) -> String {
-        let shown = self.tab_names.shown.get(&tab);
-        let facts = shown
+    /// `tab_label` with its directory's name in place of a PR's title
+    /// (`@tab_label_without_pr_title`), for what reads the label for a
+    /// ticket's ID, pins it as the tab's name or hands it to Claude: a PR's
+    /// title is anyone's words (`Fix UTF-8 paths`), never a ticket.
+    pub fn tab_label_without_pr_title(&self, tab: TabId) -> String {
+        let facts = self.tab_facts_without_pr_title(tab);
+        label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
+    }
+
+    /// `tab_facts_label` with its directory's name in place of a PR's title.
+    fn tab_facts_without_pr_title(&self, tab: TabId) -> String {
+        self.tab_names
+            .shown
+            .get(&tab)
             .map(|s| s.untitled.clone().unwrap_or_else(|| s.label.clone()))
             .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.clone()))
-            .unwrap_or_default();
-        label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
+            .unwrap_or_default()
     }
 
     /// The tab's label with no name of its own and no PR number: its

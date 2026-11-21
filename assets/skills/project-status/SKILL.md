@@ -35,7 +35,7 @@ Arguments: optional, the project's name, a Linear project link, or a ticket ID o
 1. **Find the project.** The first of these that gives one:
    - The argument: a project name or link is the project; a ticket ID (`ABC-123`) or link names its project.
    - The branch: `git branch --show-current` in the session's directory, read for a ticket ID as `wt` writes them (`abc-123-…`), then that ticket's project.
-   - The tab's name, when `$SWITCHBOARD_PANE` is set: `switchboard show @tab_label`, read for a ticket ID.
+   - The tab's name, when `$SWITCHBOARD_PANE` is set: `switchboard show @tab_label_without_pr_title`, read for a ticket ID.
    - The conversation: a ticket or project this session has been working on.
 
    Read the ticket with the Linear connector's `get_issue` and take its project. A ticket with no project has no project status: say so, offer the ticket's own status instead, and stop. When nothing names one, list the projects of the tickets assigned to the user that are in progress (`list_issues`, assignee "me") and ask which, with `AskUserQuestion`.

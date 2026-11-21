@@ -979,8 +979,7 @@ fn queue_and_clean_pins_the_tabs_name_before_anything_moves() {
         .iter()
         .find(|(name, _)| name == "queue-and-clean")
         .unwrap();
-    let pin =
-        "switchboard set @tab_name \"$(switchboard show @tab_label | sed -E 's/^#[0-9]+ //')\"";
+    let pin = "switchboard set @tab_name \"$(switchboard show @tab_label_without_pr_title | sed -E 's/^#[0-9]+ //')\"";
     let keeping = queue
         .split("## Keeping the tab's name")
         .nth(1)

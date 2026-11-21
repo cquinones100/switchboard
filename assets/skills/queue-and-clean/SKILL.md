@@ -78,10 +78,10 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR;
 First of all, before "Before watching" or "No PR", and only when `$SWITCHBOARD_PANE` is set: pin the tab's title as its name, while it still comes from the worktree's branch (its ticket and PR). Once the worktree is gone and the pane restarts in the main clone, on its default branch, the title would change to the repository's name; a name of its own wins over the branch. When `switchboard show @tab_name` prints nothing, run:
 
 ```
-switchboard set @tab_name "$(switchboard show @tab_label | sed -E 's/^#[0-9]+ //')"
+switchboard set @tab_name "$(switchboard show @tab_label_without_pr_title | sed -E 's/^#[0-9]+ //')"
 ```
 
-The `sed` takes off the `#<PR> ` the label starts with when the branch has a PR, which the tab puts in front of its name itself, so it isn't shown twice. Skip it when `@tab_label` is empty. A tab with a name of its own already (`/wt`'s, autopilot's, one you gave it) keeps it, and a full title it keeps in `@tab_title` is left as it is.
+The `sed` takes off the `#<PR> ` the label starts with when the branch has a PR, which the tab puts in front of its name itself, so it isn't shown twice. A PR's title is left out of it, the directory's name in its place, since anything that reads the name for a ticket's ID or hands it to Claude would take the title, anyone's words, as it. Skip it when the label it prints is empty. A tab with a name of its own already (`/wt`'s, autopilot's, one you gave it) keeps it, and a full title it keeps in `@tab_title` is left as it is.
 
 ## Before watching
 
