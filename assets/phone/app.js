@@ -21,6 +21,7 @@ const state = {
   chosen: [], // { file, url }: the images chosen from the photo library, waiting over the composer
   full: null, // the name of the image shown whole, or null
   error: "",
+  explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
 };
 
 function el(tag, attrs, ...kids) {
@@ -405,22 +406,49 @@ function card(tab) {
     { class: "card" },
     el("div", { class: "top" }, el("span", {}, "● Waiting on you"), p.multi ? el("span", { class: "chip y" }, "choose several") : null),
     el("div", { class: "question" }, p.question || "Claude asks"),
-    options.map((o, i) =>
-      el(
-        "button",
-        {
-          class: "option" + (i === 0 && !p.multi ? " lit" : "") + (o.checked ? " ticked" : ""),
-          onclick: () => answer(String(o.n)),
-          disabled: waiting,
-        },
-        el("span", { class: "n" }, o.n + "."),
-        o.label,
-      ),
-    ),
+    options.map((o, i) => choice(p, o, i, waiting)),
     p.multi ? el("button", { class: "option lit", onclick: () => answer("submit"), disabled: waiting }, "Submit") : null,
     state.error ? el("div", { class: "error" }, state.error) : null,
   );
   return c;
+}
+
+// One choice: its button, which answers, and, when the question explains
+// it, an info button beside it that shows the explainer under it and hides
+// it again, answering nothing.
+function choice(p, o, i, waiting) {
+  const button = el(
+    "button",
+    {
+      class: "option" + (i === 0 && !p.multi ? " lit" : "") + (o.checked ? " ticked" : ""),
+      onclick: () => answer(String(o.n)),
+      disabled: waiting,
+    },
+    el("span", { class: "n" }, o.n + "."),
+    o.label,
+  );
+  if (!o.detail) return button;
+  const key = p.id + ":" + o.n;
+  const open = state.explained === key;
+  const info = el(
+    "button",
+    {
+      class: "info" + (open ? " lit" : ""),
+      "aria-label": open ? "Hide what this choice means" : "Show what this choice means",
+      "aria-expanded": String(open),
+      onclick: () => {
+        state.explained = open ? "" : key;
+        render();
+      },
+    },
+    "i",
+  );
+  return el(
+    "div",
+    { class: "choice" },
+    el("div", { class: "row" }, button, info),
+    open ? el("div", { class: "explainer" }, o.detail) : null,
+  );
 }
 
 // A prompt as it stands: its id and which options are ticked, so a tick
@@ -666,6 +694,11 @@ async function start() {
   else render();
   listen();
   offerPush().catch(() => {});
+}
+
+// Safari pinches to zoom with these whatever the viewport says.
+for (const name of ["gesturestart", "gesturechange"]) {
+  document.addEventListener(name, (event) => event.preventDefault(), { passive: false });
 }
 
 start();
