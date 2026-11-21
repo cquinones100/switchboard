@@ -162,6 +162,13 @@ impl Server {
         };
         if self.tab_names.shown.get(&tab_id) != Some(&shown) {
             self.tab_names.shown.insert(tab_id, shown);
+            if self
+                .tabs
+                .get(&tab_id)
+                .is_some_and(|t| t.opts.contains_key(super::beside::OPTION))
+            {
+                self.on_task_soon(move |server| server.beside_check(tab_id));
+            }
             if let Some(name) = self.session_of_tab(tab_id).map(|s| s.name.clone()) {
                 self.dirty_session(&name);
             }
@@ -519,6 +526,7 @@ impl Server {
             t.opts.insert(prs::LIST.into(), prs::write(&list));
             t.opts.insert(prs::MADE.into(), prs::write(&made));
             self.dirty_tab_everywhere(tab);
+            self.beside_check(tab);
         }
     }
 

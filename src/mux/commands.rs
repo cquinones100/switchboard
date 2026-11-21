@@ -1171,6 +1171,11 @@ impl Server {
                 if name == crate::sidebar::model::LANDED && !unset {
                     self.behind_check();
                 }
+                // A plan, note or ticket set as a new tab opens may be what
+                // goes beside its pane.
+                if name != crate::tabs::beside::OPTION {
+                    self.beside_check(t);
+                }
                 self.dirty_tab(t);
             }
         }

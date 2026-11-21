@@ -394,6 +394,12 @@ impl Server {
         });
     }
 
+    /// Runs `then` back on the server's task once what it is doing now is
+    /// done, after the events already waiting.
+    pub(crate) fn on_task_soon(&self, then: impl FnOnce(&mut Server) + Send + 'static) {
+        let _ = self.tx.send(Event::Notes(NotesEvent(Box::new(then))));
+    }
+
     // ── Options ──────────────────────────────────────────────────────────────
 
     pub(crate) fn tab_opt(&self, tab: TabId, name: &str) -> Option<String> {
@@ -763,6 +769,18 @@ impl Server {
             return;
         }
         self.ask_note_if_none(tab, client);
+        self.open_tab_notes(client, here, tab);
+    }
+
+    /// The tab's own Notes started beside `here` on the tab's note, as M-e
+    /// starts it with an app in each tab; gives its pane.
+    pub(crate) fn open_tab_notes(
+        &mut self,
+        client: Option<ClientId>,
+        here: PaneId,
+        tab: TabId,
+    ) -> Option<PaneId> {
+        let own_tab = self.tab_opt(tab, "@notes").as_deref() == Some("1");
         let picked = self.note_and_why(tab);
         let note = picked.as_ref().map(|(n, _)| n.as_str());
         let said = picked.as_ref().and_then(|(_, why)| why.said());
@@ -781,8 +799,12 @@ impl Server {
                 }
                 self.set_pane_opt(pane, "@notes_pane", Some("1"));
                 self.note_arrived(tab);
+                Some(pane)
             }
-            Err(e) => self.say(client, &format!("Couldn't open Notes: {e}")),
+            Err(e) => {
+                self.say(client, &format!("Couldn't open Notes: {e}"));
+                None
+            }
         }
     }
 
@@ -811,6 +833,8 @@ impl Server {
         if let Some(slot) = self.panes.get_mut(&pane) {
             slot.tab = to;
         }
+        // Notes brought in by hand: the tab is as you set it.
+        self.beside_done(to);
         self.relayout(to);
         self.name_tab(to);
         self.dirty_everywhere(to);
@@ -982,6 +1006,7 @@ impl Server {
             return;
         }
         self.set_tab_opt(tab, PLAN_NOTE, Some(""));
+        self.plans_looked_for.insert(tab);
         self.notes_off_task(
             move || {
                 let dir = store::notes_dir();
@@ -991,9 +1016,12 @@ impl Server {
                 Some(rel)
             },
             move |server, found| {
+                server.plans_looked_for.remove(&tab);
                 if let Some(rel) = found {
                     server.set_tab_opt(tab, PLAN_NOTE, Some(&rel));
                 }
+                // A new tab waiting on its plan opens it now.
+                server.beside_check(tab);
             },
         );
     }

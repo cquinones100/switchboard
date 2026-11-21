@@ -425,6 +425,17 @@ impl Server {
         // The work's, never Notes' beside it, which runs in your home.
         let dir = self.work_dir(tab, pane, dir);
         let pane = self.work_pane(tab, pane);
+        self.open_pr_view(tab, pane, &dir);
+    }
+
+    /// The PR view beside `pane`, the work's pane of `tab` in `dir`, as M-v
+    /// opens it; gives its pane.
+    pub(crate) fn open_pr_view(
+        &mut self,
+        tab: TabId,
+        pane: PaneId,
+        dir: &std::path::Path,
+    ) -> Option<PaneId> {
         let dir = dir.to_string_lossy().into_owned();
         // A tab following several PRs opens on its current one, by its
         // number when it isn't its branch's (src/tabs/prs.rs).
@@ -439,7 +450,7 @@ impl Server {
         let replaced = crate::settings::is_on("ux2")
             .then(|| self.clear_beside(tab))
             .flatten();
-        if let Some((lone, width)) = replaced {
+        let opened = if let Some((lone, width)) = replaced {
             let mut full = vec![exe()];
             full.extend(command);
             match self.open_in_place_keeping(lone, "pr-view", full, None, Some(width)) {
@@ -447,14 +458,19 @@ impl Server {
                     if let Some(slot) = self.panes.get_mut(&view) {
                         slot.opts.insert(PR_VIEW.into(), "1".into());
                     }
+                    Some(view)
                 }
-                Err(e) => self.say(None, &format!("Couldn't open it in the side panel: {e}")),
+                Err(e) => {
+                    self.say(None, &format!("Couldn't open it in the side panel: {e}"));
+                    None
+                }
             }
         } else {
-            self.open_beside(pane, PR_VIEW, command, VIEW_PERCENT);
-        }
+            self.open_beside(pane, PR_VIEW, command, VIEW_PERCENT)
+        };
         // What the lookups know now is where the view starts following.
         self.views_follow(None);
+        opened
     }
 
     /// The ticket a tab's work is on: one chosen for it (`@tab_ticket`),
@@ -605,19 +621,20 @@ impl Server {
         self.open_ticket_view(anchor, found);
     }
 
-    /// The ticket view for `found` beside `pane`.
-    fn open_ticket_view(&mut self, pane: PaneId, found: Ticket) {
+    /// The ticket view for `found` beside `pane`; gives its pane.
+    pub(crate) fn open_ticket_view(&mut self, pane: PaneId, found: Ticket) -> Option<PaneId> {
         let arg = found.arg();
-        if let Some(view) = self.open_beside(
+        let view = self.open_beside(
             pane,
             TICKET_VIEW,
             vec!["ticket-view".into(), "--ticket".into(), arg.clone()],
             VIEW_PERCENT,
-        ) && let Some(slot) = self.panes.get_mut(&view)
-        {
+        );
+        if let Some(slot) = view.and_then(|v| self.panes.get_mut(&v)) {
             slot.opts.insert(TICKET_ID.into(), arg);
         }
         self.views_follow(None);
+        view
     }
 
     /// "Choose this tab's ticket or project…": your Linear tickets and
@@ -844,7 +861,7 @@ impl Server {
                         let replaced = was_open.is_some_and(|v| server.panes.contains_key(&v));
                         match pane {
                             Some(pane) if !replaced && (open || was_open.is_some()) => {
-                                server.open_ticket_view(pane, chosen)
+                                server.open_ticket_view(pane, chosen);
                             }
                             _ => server.say(
                                 Some(client),

@@ -137,6 +137,9 @@ impl Server {
             beside_width(tool, spread.width, spare.width)
         });
         let made = self.spawn_pane(tab_id, cwd, Some(command), width, rows)?;
+        if !self.opening_beside {
+            self.beside_done(tab_id);
+        }
         let tab = self.tabs.get_mut(&tab_id).expect("checked above");
         match beside {
             Some((spread, _)) => {
@@ -190,7 +193,7 @@ impl Server {
     /// `views_beside_narrow_pane` on, the tab one pane (nothing beside it,
     /// not zoomed) capped narrower than its spread, with at least
     /// `BESIDE_LEAST` columns right of its rule.
-    fn spare_beside(&self, tab_id: TabId) -> Option<(Rect, Rect)> {
+    pub(crate) fn spare_beside(&self, tab_id: TabId) -> Option<(Rect, Rect)> {
         if !crate::settings::is_on("views_beside_narrow_pane") {
             return None;
         }
