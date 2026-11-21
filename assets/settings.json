@@ -1571,6 +1571,13 @@
     "default": true
   },
   {
+    "key": "review_parallel",
+    "category": "Safety",
+    "label": "Review from three angles at once",
+    "description": "Each round of codex-review on a branch runs three reviewers at once, one looking hardest at failure paths, one at the skills, docs, settings and callers the change touches, one at the change against its claims, their findings merged into the round's one answer, which is clean only when all three find nothing; off, a round runs one reviewer with no focus",
+    "default": true
+  },
+  {
     "key": "confirm_close",
     "category": "Safety",
     "label": "Ask before closing a pane",

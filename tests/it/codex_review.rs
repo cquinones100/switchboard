@@ -139,7 +139,9 @@ fn on_main_with_no_pr_it_reviews_the_commits_not_yet_on_origin() {
     let run = review(home, &work, &["--dry-run", "--reviewer", "claude"]);
     assert!(run.status.success(), "{}", text(&run.stderr));
     let out = text(&run.stdout);
-    assert!(out.starts_with("# claude -p --output-format json --json-schema {"));
+    assert!(out.starts_with(
+        "# Reviewer 1 of 3: failure paths\n# claude -p --output-format json --json-schema {"
+    ));
     assert!(out.contains("Not pushed yet"));
     assert!(!out.contains("Pushed already"));
     assert!(out.contains("There is no pull request for this branch yet"));
@@ -466,7 +468,9 @@ fn the_reviewer_gets_the_repository_s_rules_as_the_base_has_them_and_your_own() 
 
     let run = review(home, &work, &["--dry-run", "--reviewer", "claude"]);
     assert!(run.status.success(), "{}", text(&run.stderr));
-    let out = text(&run.stdout);
+    // The first of the three reviewers' prompts, which differ only in focus.
+    let all = text(&run.stdout);
+    let out = all.split("\n# Reviewer 2 of 3").next().unwrap().to_string();
     assert!(out.contains("## Rules"));
     assert!(out.contains(
         "Where the repository's rules and the reviewer's own disagree, the repository's win"
@@ -1188,4 +1192,252 @@ fn a_ticket_s_rounds_count_to_two_clean_ones_on_the_same_text() {
     let second = on(&other_arg, clean, "next");
     assert_eq!(second["round"], 2, "the other's place kept");
     assert_eq!(second["next"], "confirm");
+}
+
+/// A clone with a branch's change beyond origin's main.
+fn a_change(home: &Path) -> std::path::PathBuf {
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    work
+}
+
+// Each reviewer is asked for every defect it can verify; with
+// review_parallel on, three reviewers each get a focus, and off, one gets
+// none. A ticket's prompt keeps its own reporting rule.
+#[test]
+fn a_round_asks_three_reviewers_for_every_defect_each_from_its_angle() {
+    let tmp = TempDir::new("cr-angles");
+    let home = tmp.path();
+    let work = a_change(home);
+    let dry = |args: &[&str]| {
+        let run = review(
+            home,
+            &work,
+            &[&["--dry-run", "--reviewer", "claude", "--no-rules"], args].concat(),
+        );
+        assert!(run.status.success(), "{}", text(&run.stderr));
+        text(&run.stdout)
+    };
+
+    let out = dry(&[]);
+    assert!(!out.contains("Prefer fewer"), "{out}");
+    assert_eq!(
+        out.matches("Report every concrete defect you can verify, not only the first")
+            .count(),
+        3,
+        "{out}"
+    );
+    for (n, focus) in [
+        "failure paths",
+        "the change's other surfaces",
+        "the change against its claims",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert!(
+            out.contains(&format!("# Reviewer {} of 3: {focus}\n", n + 1)),
+            "{out}"
+        );
+        assert!(out.contains(&format!("Yours is {focus}: ")), "{out}");
+    }
+
+    fs::write(home.join("settings.json"), r#"{"review_parallel": false}"#).unwrap();
+    let out = dry(&[]);
+    assert!(!out.contains("# Reviewer"), "{out}");
+    assert!(!out.contains("## Your focus"), "{out}");
+    assert_eq!(
+        out.matches("Report every concrete defect you can verify")
+            .count(),
+        1,
+        "{out}"
+    );
+    fs::remove_file(home.join("settings.json")).unwrap();
+
+    let ticket = home.join("ticket.md");
+    fs::write(&ticket, "# FEAT: Count the b's\n").unwrap();
+    let out = dry(&["--ticket", &ticket.to_string_lossy()]);
+    assert!(!out.contains("## Your focus"), "{out}");
+    assert!(!out.contains("Report every concrete defect"), "{out}");
+    assert!(
+        out.contains(
+            "Do not pad the list; more than 12 is a sign you are listing rather than judging."
+        ),
+        "{out}"
+    );
+}
+
+/// A stand-in Claude whose answer depends on its focus: `answers` is the
+/// sh for each of the three focuses, in order, and `count` gets a line a
+/// call.
+fn claude_by_focus(home: &Path, answers: [&str; 3], count: &Path) {
+    let arms: String = [
+        "failure paths",
+        "the change's other surfaces",
+        "the change against its claims",
+    ]
+    .iter()
+    .zip(answers)
+    .map(|(focus, sh)| format!("  *{}*) {sh} ;;\n", sh_quote(&format!("Yours is {focus}:"))))
+    .collect();
+    Claude::new()
+        .answer(&format!(
+            "p=$(cat)\necho x >> {}\ncase \"$p\" in\n{arms}  *) echo '{{\"structured_output\":{{\"summary\":\"one\",\"findings\":[]}}}}' ;;\nesac",
+            sh_quote(&count.to_string_lossy())
+        ))
+        .install(&home.join("bin"));
+}
+
+fn said(findings: &str) -> String {
+    format!(
+        "echo {}",
+        sh_quote(&format!(
+            r#"{{"structured_output":{{"summary":"s","findings":[{findings}]}}}}"#
+        ))
+    )
+}
+
+fn round_by_focus(home: &Path, work: &Path, step: &str) -> Output {
+    let mut cmd = Command::new(BIN);
+    cmd.args([
+        "codex-review",
+        "--reviewer",
+        "claude",
+        "--no-rules",
+        "--round",
+        step,
+    ])
+    .current_dir(work)
+    .stdin(Stdio::null());
+    env(&mut cmd, home);
+    cmd.output().unwrap()
+}
+
+#[test]
+fn three_reviewers_make_one_round_their_findings_merged() {
+    let tmp = TempDir::new("cr-merge");
+    let home = tmp.path();
+    let work = a_change(home);
+    let count = home.join("calls");
+    let clean = said("");
+    let high = said(
+        r#"{"title":"h","severity":"high","category":"correctness","file":"b.txt","line":10,"detail":"d"}"#,
+    );
+    let medium = said(
+        r#"{"title":"m","severity":"medium","category":"correctness","file":"b.txt","line":13,"detail":"d"},{"title":"o","severity":"medium","category":"rules","file":"b.txt","line":13,"detail":"d"}"#,
+    );
+
+    // One reviewer finding something makes the round's findings.
+    claude_by_focus(home, [&clean, &clean, &medium], &count);
+    let out = round_by_focus(home, &work, "start");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "triage", "{json}");
+    assert_eq!(json["findings"].as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(
+        fs::read_to_string(&count).unwrap().lines().count(),
+        3,
+        "three reviewers"
+    );
+
+    // Two reviewers' findings 3 lines apart in one category are one, at the
+    // higher severity; another category stays.
+    claude_by_focus(home, [&high, &clean, &medium], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2, "{json}");
+    assert_eq!(findings[0]["severity"], "high", "{json}");
+    assert_eq!(findings[0]["line"], 10, "{json}");
+    assert_eq!(findings[1]["category"], "rules", "{json}");
+    assert_eq!(json["round"], 2, "the three are one round: {json}");
+
+    // Findings tied to no line are never one defect.
+    let whole = said(
+        r#"{"title":"w","severity":"medium","category":"rules","file":"b.txt","line":0,"detail":"d"}"#,
+    );
+    claude_by_focus(home, [&whole, &whole, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["findings"].as_array().unwrap().len(), 2, "{json}");
+
+    // None finding anything is clean.
+    claude_by_focus(home, [&clean, &clean, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "confirm", "{json}");
+    assert_eq!(json["round"], 4, "{json}");
+
+    // Off, one reviewer.
+    fs::write(home.join("settings.json"), r#"{"review_parallel": false}"#).unwrap();
+    fs::write(&count, "").unwrap();
+    let out = round_by_focus(home, &work, "next");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        fs::read_to_string(&count).unwrap().lines().count(),
+        1,
+        "one reviewer"
+    );
+}
+
+#[test]
+fn a_failed_reviewer_leaves_the_others_findings_and_the_round_unclean() {
+    let tmp = TempDir::new("cr-failed");
+    let home = tmp.path();
+    let work = a_change(home);
+    let count = home.join("calls");
+    let clean = said("");
+    let found = said(
+        r#"{"title":"f","severity":"medium","category":"correctness","file":"b.txt","line":1,"detail":"d"}"#,
+    );
+    let broken = "echo broken >&2; exit 1";
+
+    claude_by_focus(home, [&found, broken, &clean], &count);
+    let out = round_by_focus(home, &work, "start");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["findings"].as_array().unwrap().len(), 1, "{json}");
+    let warnings = json["warnings"].to_string();
+    assert!(warnings.contains("the change's other surfaces"), "{json}");
+    assert!(!warnings.contains("failure paths"), "{json}");
+
+    claude_by_focus(home, [&clean, &clean, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "confirm", "{json}");
+
+    // The others finding nothing fails the round, as one reviewer failing
+    // did, leaving the clean round before it and the loop's place as they
+    // were.
+    claude_by_focus(home, [&clean, broken, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
+    // So do lows alone in a confirmation round, which would have been left.
+    let low = said(
+        r#"{"title":"l","severity":"low","category":"other","file":"b.txt","line":1,"detail":"d"}"#,
+    );
+    claude_by_focus(home, [&low, broken, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
+    assert!(
+        text(&out.stderr).contains("the change's other surfaces"),
+        "{}",
+        text(&out.stderr)
+    );
+    claude_by_focus(home, [&clean, &clean, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "done", "{json}");
+    assert_eq!(json["round"], 3, "{json}");
+
+    // All failing fails the round.
+    claude_by_focus(home, [broken, broken, broken], &count);
+    let out = round_by_focus(home, &work, "start");
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
 }
