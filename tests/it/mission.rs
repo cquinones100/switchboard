@@ -724,7 +724,9 @@ fn reopen_lists_the_worktrees_no_tab_has_open_and_its_menus_open_and_remove_them
     pick(&mut client, "Remove the worktree…");
     client.wait_text("[Y/n]");
     client.type_text("\r");
-    client.wait_text("changes not committed");
+    // The answer, not the question, whose words say the same: a key sent
+    // while the removal's busy box is up never reaches the view.
+    client.wait_text("Kept wt-dirty: it has changes not committed.");
     assert!(dirty.exists());
     // Its first option opens a tab there.
     client.type_text("\x1b");
