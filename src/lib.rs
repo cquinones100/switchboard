@@ -62,6 +62,8 @@
 //!   ahead; lazygit in a pane's place.
 //! - `relay`: the Slack relay, a Slack app talking to you in its DM about
 //!   your tabs while you are away.
+//! - `phone`: the phone app, `switchboard phone`, a web app served on your
+//!   tailnet alone for answering and messaging your Claude tabs.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the
 //!   hourly look for a new release, offered in a box.
 //! - `notes`: the server's side of Notes, whose app is a crate of its own
@@ -110,6 +112,7 @@ pub mod mux;
 pub mod net;
 pub mod notes;
 pub mod paths;
+pub mod phone;
 pub mod photos;
 pub mod platform;
 pub mod presence;
