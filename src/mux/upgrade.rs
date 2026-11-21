@@ -1117,6 +1117,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     }
     eprintln!("switchboard server: {text}");
     server.restarted();
+    server.phone_after_upgrade();
     let client = handover.client.map(ClientId);
     match handover.asker.filter(|fd| pty::is_open(*fd)) {
         Some(fd) => {
