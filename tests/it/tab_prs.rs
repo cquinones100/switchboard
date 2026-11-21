@@ -3,7 +3,8 @@
 //! another repository, and the tab lists them beside its branch's, its
 //! label leading with the current one, the sidebar showing how many more;
 //! "Show another of this tab's PRs" makes another current, which M-v then
-//! opens; a merged one leaves the list once the tab has been in front; the
+//! opens; a merged one leaves the list once the tab has been in front, but
+//! one it made stays current back on the default branch until other work; the
 //! list survives a restart; and with Settings' `tab_prs` off only the
 //! branch's PR shows. GitHub is a stand-in on 127.0.0.1.
 

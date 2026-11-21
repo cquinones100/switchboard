@@ -124,7 +124,7 @@ pub fn joined(branch: Option<&TabPr>, opened: &[TabPr]) -> Vec<TabPr> {
 /// one the session made, else one the lookups know is open), so a merged
 /// PR the session only looked at never becomes a branchless tab's PR and
 /// files it under Merged, while one it made stays current, marked merged,
-/// until it leaves the list.
+/// while `merged_stays_current` holds.
 pub fn current(
     all: &[TabPr],
     branch: Option<&TabPr>,
