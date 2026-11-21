@@ -238,7 +238,9 @@ fn a_tab_follows_every_pr_its_session_opens() {
         s.iter().any(|l| l.contains("#2040") && l.contains("+2"))
     });
 
-    // The picker makes another current, which M-v opens by its number.
+    // The picker makes another current, which the PR view open in the tab
+    // opens again on, by its number.
+    server.ok(&["press", "pr-view"]);
     server.ok(&["press", "tab-prs"]);
     client.wait_text("Show another of this tab's PRs");
     client.type_text("318");
@@ -248,7 +250,6 @@ fn a_tab_follows_every_pr_its_session_opens() {
     client.type_text("\r");
     let t = wait_tab(&server, "#318 current", |t| t["pr"] == 318);
     assert!(t["label"].as_str().unwrap().starts_with("#318 "), "{t}");
-    server.ok(&["press", "pr-view"]);
     let deadline = common::deadline(Duration::from_secs(20));
     while !github.seen().iter().any(|r| {
         r.json()["variables"]["number"] == 318 && r.json()["variables"]["name"] == "oncall-tools"

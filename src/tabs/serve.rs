@@ -324,15 +324,23 @@ impl Server {
             .get(&tab)
             .and_then(|t| t.opts.get(prs::CURRENT))
             .and_then(|v| TabPr::parse(v));
-        let open = |pr: &TabPr| {
-            self.tab_pr_facts(pr)
-                .is_some_and(|f| f.state == crate::facts::PrState::Open)
+        let made = self
+            .tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get(prs::MADE))
+            .map(|v| prs::read(v))
+            .unwrap_or_default();
+        let eligible = |pr: &TabPr| {
+            made.iter().any(|m| m.same(pr))
+                || self
+                    .tab_pr_facts(pr)
+                    .is_some_and(|f| f.state == crate::facts::PrState::Open)
         };
         prs::current(
             &all,
             self.tab_branch_pr(tab).as_ref(),
             picked.as_ref(),
-            open,
+            eligible,
         )
     }
 
@@ -429,12 +437,19 @@ impl Server {
             return;
         };
         let mut list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
+        let mut made = prs::read(t.opts.get(prs::MADE).map_or("", String::as_str));
         let mut changed = false;
-        for pr in opened {
+        for opened in opened {
             let pr = TabPr {
-                number: pr.number,
-                repo: Some(pr.repo),
+                number: opened.number,
+                repo: Some(opened.repo),
             };
+            if opened.made
+                && let Some(more) = prs::with(&made, pr.clone())
+            {
+                made = more;
+                changed = true;
+            }
             if let Some(more) = prs::with(&list, pr) {
                 list = more;
                 changed = true;
@@ -442,6 +457,7 @@ impl Server {
         }
         if changed {
             t.opts.insert(prs::LIST.into(), prs::write(&list));
+            t.opts.insert(prs::MADE.into(), prs::write(&made));
             self.dirty_tab_everywhere(tab);
         }
     }
@@ -489,7 +505,7 @@ impl Server {
             .prompt(format!("{count} PRs> "))
             .keep_order()
             .start_on(start);
-        self.pick(client, picker, move |server, _, picked| {
+        self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;
             };
@@ -499,8 +515,31 @@ impl Server {
                 .find(|p| p.key() == picked.value);
             if let Some(pr) = chosen {
                 server.pick_tab_pr(tab, &pr);
+                server.reopen_on_current_pr(client, tab);
             }
         });
+    }
+
+    /// The PR view or the diff open in the tab in front of `client`, opened
+    /// again on the tab's current PR once another is picked, so a pick from
+    /// their own menus shows the PR picked.
+    fn reopen_on_current_pr(&mut self, client: ClientId, tab: TabId) {
+        let in_front = self
+            .clients
+            .get(&client)
+            .and_then(|c| self.session(&c.session))
+            .is_some_and(|s| s.current == tab);
+        if !in_front {
+            return;
+        }
+        if let Some(view) = self.marked_in(tab, crate::views::PR_VIEW) {
+            self.kill_pane(view);
+            self.view_command(client, crate::views::Command::PrView);
+        }
+        if let Some(diff) = self.diff_here(client) {
+            self.kill_pane(diff);
+            self.diff_command(client, crate::diff::Command::Diff);
+        }
     }
 
     /// Makes `pr` the tab's current PR, for M-v, M-d and its label.
@@ -546,6 +585,17 @@ impl Server {
                 .collect();
             if left.len() != list.len() {
                 seen.retain(|(tab, key)| *tab != id || left.iter().any(|p| p.key() == *key));
+                let made: Vec<TabPr> = prs::read(t.opts.get(prs::MADE).map_or("", String::as_str))
+                    .into_iter()
+                    .filter(|m| left.iter().any(|p| p.same(m)))
+                    .collect();
+                t.opts.insert(prs::MADE.into(), prs::write(&made));
+                // A pick that left the list goes with it, so the PR viewed
+                // again later isn't current by an old pick.
+                let picked = t.opts.get(prs::CURRENT).and_then(|v| TabPr::parse(v));
+                if picked.is_some_and(|p| !left.iter().any(|l| l.same(&p))) {
+                    t.opts.remove(prs::CURRENT);
+                }
                 t.opts.insert(prs::LIST.into(), prs::write(&left));
                 self.dirty_tab_everywhere(id);
             }

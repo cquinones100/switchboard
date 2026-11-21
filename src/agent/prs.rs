@@ -7,13 +7,14 @@
 //!
 //! Only those commands count, and only the address each prints of its own
 //! PR: from `gh pr create`, a line that is the address alone (what it ends
-//! with); from either, `gh pr view`'s `url:` line or a `"url"` field of
-//! `--json`, read up to the `--` before the PR's body. A line that is an
-//! address alone counts only after `gh pr create`, since `gh pr view`
-//! with `--jq` or `--template` prints a body with no `--` before it. A PR linked from a body or a comment,
-//! or a command that merely mentions an address (an `echo`, a `curl`, a
-//! PR read through the API), names none, since the session hasn't opened
-//! it.
+//! with); from either, `gh pr view`'s `url:` line or the `"url"` field of
+//! a JSON object `--json` prints (never an array, as `gh pr list` prints),
+//! read up to the `--` before the PR's body. A line that is an address
+//! alone counts only after `gh pr create`, since `gh pr view` with `--jq`
+//! or `--template` prints a body with no `--` before it. A PR linked from a
+//! body or a comment, or a command that merely mentions an address (an
+//! `echo`, a `curl`, a PR read through the API), names none, since the
+//! session hasn't opened it.
 
 use std::sync::LazyLock;
 
@@ -27,6 +28,9 @@ use crate::integrations::github::Repo;
 pub struct Opened {
     pub repo: Repo,
     pub number: u64,
+    /// Made by the call: the address alone on its line that `gh pr create`
+    /// ends with, rather than a PR looked at.
+    pub made: bool,
 }
 
 /// The PRs a `PostToolUse` hook's JSON says its call opened or looked at,
@@ -35,10 +39,7 @@ pub fn opened(payload: &Value) -> Vec<Opened> {
     static GH_PR: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?:^|[\s;&|(`])gh\s+pr\s+(?:create|view)\b").unwrap());
     static URL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r#"^(?:url:\s*)?https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$|"url"\s*:\s*"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)""#,
-        )
-        .unwrap()
+        Regex::new(r"^(?:url:\s*)?https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$").unwrap()
     });
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return Vec::new();
@@ -65,30 +66,38 @@ pub fn opened(payload: &Value) -> Vec<Opened> {
     let mut found: Vec<Opened> = Vec::new();
     // gh pr view's metadata ends at `--`, its body and comments after it.
     for line in output.lines().map(str::trim).take_while(|l| *l != "--") {
-        let named = creates || line.starts_with("url:");
-        for at in URL.captures_iter(line) {
+        // A JSON object of gh pr view --json gives its own url field; an
+        // array (gh pr list) or a body's text gives none.
+        let address = if line.starts_with('{') {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|v| v.get("url").and_then(Value::as_str).map(str::to_string))
+        } else if creates || line.starts_with("url:") {
             // An address alone on its line is gh pr create's only.
-            if at.get(1).is_some() && !named {
-                continue;
-            }
-            let part = |i: usize| {
-                at.get(i)
-                    .or_else(|| at.get(i + 3))
-                    .map_or("", |m| m.as_str())
-            };
-            let Ok(number) = part(3).parse() else {
-                continue;
-            };
-            let pr = Opened {
-                repo: Repo {
-                    owner: part(1).to_string(),
-                    name: part(2).to_string(),
-                },
-                number,
-            };
-            if !found.contains(&pr) {
-                found.push(pr);
-            }
+            Some(line.to_string())
+        } else {
+            None
+        };
+        let made = creates && line.starts_with("https://");
+        let Some(at) = address.as_deref().and_then(|a| URL.captures(a)) else {
+            continue;
+        };
+        let Ok(number) = at[3].parse() else {
+            continue;
+        };
+        let pr = Opened {
+            repo: Repo {
+                owner: at[1].to_string(),
+                name: at[2].to_string(),
+            },
+            number,
+            made,
+        };
+        if !found
+            .iter()
+            .any(|f| f.repo == pr.repo && f.number == pr.number)
+        {
+            found.push(pr);
         }
     }
     found
@@ -115,6 +124,14 @@ mod tests {
                 name: name.into(),
             },
             number,
+            made: false,
+        }
+    }
+
+    fn by_create(owner: &str, name: &str, number: u64) -> Opened {
+        Opened {
+            made: true,
+            ..pr(owner, name, number)
         }
     }
 
@@ -124,7 +141,7 @@ mod tests {
             "gh pr create --base main --title 'Map' --body x",
             "Creating pull request for web-142 into main in acme/web-app\n\nhttps://github.com/acme/web-app/pull/2040\n",
         );
-        assert_eq!(opened(&made), vec![pr("acme", "web-app", 2040)]);
+        assert_eq!(opened(&made), vec![by_create("acme", "web-app", 2040)]);
     }
 
     #[test]
@@ -133,7 +150,7 @@ mod tests {
             "cd ~/code/oncall-tools && gh pr create --draft --fill",
             "https://github.com/acme/oncall-tools/pull/318",
         );
-        assert_eq!(opened(&made), vec![pr("acme", "oncall-tools", 318)]);
+        assert_eq!(opened(&made), vec![by_create("acme", "oncall-tools", 318)]);
         let viewed = bash(
             "gh pr view 41 --repo acme/notes",
             "title:\tFixtures\nurl:\thttps://github.com/acme/notes/pull/41\n",
@@ -169,6 +186,11 @@ mod tests {
             "Stacked on this one:\nhttps://github.com/acme/notes/pull/40\n",
         );
         assert!(opened(&jq).is_empty());
+        let listed = bash(
+            "gh pr view 41 --json url && gh pr list --json number,url",
+            "{\"url\":\"https://github.com/acme/notes/pull/41\"}\n[{\"number\":7,\"url\":\"https://github.com/acme/notes/pull/7\"}]",
+        );
+        assert_eq!(opened(&listed), vec![pr("acme", "notes", 41)]);
     }
 
     #[test]
@@ -177,6 +199,9 @@ mod tests {
             "gh pr create && gh pr view",
             "https://github.com/a/b/pull/2\nhttps://github.com/a/b/pull/1\nhttps://github.com/a/b/pull/2",
         );
-        assert_eq!(opened(&made), vec![pr("a", "b", 2), pr("a", "b", 1)]);
+        assert_eq!(
+            opened(&made),
+            vec![by_create("a", "b", 2), by_create("a", "b", 1)]
+        );
     }
 }

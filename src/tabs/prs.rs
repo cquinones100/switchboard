@@ -24,6 +24,10 @@ use crate::ui::kit::Mark;
 /// The PRs the tab's session opened, `<owner>/<name>#<n>` each, separated
 /// by spaces, oldest first.
 pub const LIST: &str = "@tab_prs";
+/// The ones of `LIST` the session made with `gh pr create`, written as it
+/// is: each may stay current once merged, until it leaves the list, where a
+/// PR only looked at is current only while open.
+pub const MADE: &str = "@tab_prs_made";
 /// The one picked as current, `<owner>/<name>#<n>`.
 pub const CURRENT: &str = "@tab_pr_current";
 /// Settings' switch.
@@ -115,20 +119,22 @@ pub fn joined(branch: Option<&TabPr>, opened: &[TabPr]) -> Vec<TabPr> {
 }
 
 /// The tab's current PR among `all`: the one picked while it is listed,
-/// else the branch's, else the newest the lookups know is open (`open`),
-/// so a merged PR the session only looked at never becomes a branchless
-/// tab's PR and files it under Merged.
+/// else the branch's, else the newest that `eligible` takes (the server's:
+/// one the session made, else one the lookups know is open), so a merged
+/// PR the session only looked at never becomes a branchless tab's PR and
+/// files it under Merged, while one it made stays current, marked merged,
+/// until it leaves the list.
 pub fn current(
     all: &[TabPr],
     branch: Option<&TabPr>,
     picked: Option<&TabPr>,
-    open: impl Fn(&TabPr) -> bool,
+    eligible: impl Fn(&TabPr) -> bool,
 ) -> Option<TabPr> {
     let listed = |pr: &TabPr| all.iter().find(|p| p.same(pr)).cloned();
     picked
         .and_then(listed)
         .or_else(|| branch.and_then(listed))
-        .or_else(|| all.iter().rev().find(|p| open(p)).cloned())
+        .or_else(|| all.iter().rev().find(|p| eligible(p)).cloned())
 }
 
 /// `all` with the current one first, the rest in the order opened, as the

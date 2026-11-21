@@ -107,7 +107,7 @@ impl Server {
     }
 
     /// The diff's pane for the pane a client is in.
-    fn diff_here(&self, client: ClientId) -> Option<PaneId> {
+    pub(crate) fn diff_here(&self, client: ClientId) -> Option<PaneId> {
         self.tool_here(client, TOOL)
     }
 
