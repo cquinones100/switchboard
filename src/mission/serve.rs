@@ -159,7 +159,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("M-w", "close, whatever is open over it"),
     (
         "M-1-9",
-        "close and go to that tab;, a click on a tab in the sidebar too",
+        "close and go to that tab, or a click on a tab in the sidebar",
     ),
     (
         "M-p",

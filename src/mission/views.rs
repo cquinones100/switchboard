@@ -314,7 +314,7 @@ impl ViewId {
                 "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and, the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
             }
             ViewId::Prs => {
-                "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
+                "Columns Draft, In review, Changes asked, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
             }
             ViewId::Ci => {
                 "Failing, running and passing, each failed check with the log line that says why; the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
@@ -329,7 +329,7 @@ impl ViewId {
                 "Each routine with when it runs next, where it runs and how its last run went, then this week's runs by day; beside, the chosen one's prompt, today's runs and its next ones. n makes one, r runs it now, e changes it, p pauses it. Settings' \"Routines\" (routines)."
             }
             ViewId::Tickets => {
-                "Columns Todo, In progress, In review and Done in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
+                "Columns Todo, In progress, In review and Done, then the tickets canceled, in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
             }
             ViewId::Inbox => {
                 "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."

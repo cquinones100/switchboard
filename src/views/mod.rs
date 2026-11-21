@@ -79,7 +79,7 @@ use crate::mux::server::ClientId;
 /// multiplexer's (`mux::keys::Action::View`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
-    /// M-v: the branch's PR description in a pane to the right, or closed.
+    /// M-v: the branch's PR description in Claude's place, or closed.
     PrView,
     /// M-i: the tab's ticket (its Linear ticket or project, or its GitHub
     /// issue) in a pane to the right, or closed.
@@ -212,11 +212,9 @@ impl Command {
     /// What it does, as tmux.conf described its binding.
     pub fn about(self) -> &'static str {
         match self {
-            Command::PrView => {
-                "View the branch's PR description in a pane to the right, or close it"
-            }
+            Command::PrView => "View the branch's PR description in Claude's place, or close it",
             Command::TicketView => {
-                "View the tab's ticket (its Linear ticket or project, or its GitHub issue), with its comments, in a pane to the right, or close it"
+                "View the tab's ticket (its Linear ticket or project, or its GitHub issue), with its comments, in Claude's place, or close it"
             }
             Command::OpenPr => "Open the branch's PR in the browser",
             Command::OpenRepo => "Open the repository in the browser",

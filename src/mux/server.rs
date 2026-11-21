@@ -747,7 +747,7 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
     server.note_at_start(&problems);
     server.sidebar_load();
     server.notice_history_load();
-    // The health light, before any tab is laid out.
+    // The headers' ages, before any tab is laid out.
     server.status_tick();
     match handed {
         Some(handed) => super::upgrade::adopt(&mut server, handed),

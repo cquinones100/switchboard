@@ -577,7 +577,7 @@ impl Server {
                     .is_some())
     }
 
-    /// M-i: the tab's ticket in a view to the right, or closed; with none
+    /// M-i: the tab's ticket in Claude's place, or closed; with none
     /// found, yours to choose one from.
     fn toggle_ticket_view(&mut self, client: ClientId) {
         let Some((pane, tab, dir)) = self.here(client) else {
