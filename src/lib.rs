@@ -65,7 +65,7 @@
 //! - `relay`: the Slack relay, a Slack app talking to you in its DM about
 //!   your tabs while you are away.
 //! - `phone`: the phone app, `switchboard phone`, a web app served on your
-//!   tailnet alone for answering and messaging your Claude tabs.
+//!   tailnet alone for answering, messaging and closing your Claude tabs.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the
 //!   hourly look for a new release, offered in a box.
 //! - `notes`: the server's side of Notes, whose app is a crate of its own

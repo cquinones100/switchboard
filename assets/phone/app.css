@@ -364,3 +364,37 @@ body.refused p { color: var(--dim); }
 .hit { color: var(--accent); font-weight: 700; }
 .row .where-line .faint { color: var(--faint); }
 .drawer .big.again { width: calc(100% - 32px); margin: 0 16px; }
+
+/* ── A tab's menu and Close tab's question (board 175) ── */
+.row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.row.held { background: var(--chosen); box-shadow: inset 3px 0 0 var(--accent); position: relative; z-index: 11; }
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(11, 12, 18, 0.6);
+}
+.box {
+  position: absolute;
+  left: 24px;
+  right: 16px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 0 8px;
+  box-shadow: 0 14px 34px 8px rgba(0, 0, 0, 0.6), 0 3px 8px rgba(0, 0, 0, 0.45);
+}
+.box-head { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 14px; }
+.box-title { flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.box-close { color: var(--dim); font-weight: 700; padding: 6px 12px; min-height: 36px; }
+.menu-option { display: block; width: 100%; text-align: left; padding: 10px 14px 10px 30px; min-height: 44px; }
+.menu-option:focus-visible, .menu-option:active { background: var(--chosen); outline: none; }
+.menu-option:focus-visible::before, .menu-option:active::before { content: "›"; color: var(--yellow); font-weight: 700; margin-left: -16px; margin-right: 8px; }
+.menu-option.r { color: var(--red); }
+.box.ask { left: 16px; top: 38%; padding: 4px 14px 14px; }
+.box.ask .box-head { padding-left: 0; padding-right: 0; }
+.box.ask .question { margin: 8px 0 2px; overflow-wrap: anywhere; }
+.box.ask .dim { color: var(--dim); }
+.box.ask .answers { display: flex; gap: 10px; margin-top: 10px; }
+.box.ask .answers .option { text-align: center; }
+.toast .bad { color: var(--red); font-weight: 700; margin-right: 6px; }

@@ -1,18 +1,20 @@
-//! The server's side of the phone app: the three commands `switchboard
-//! phone` asks of it over the socket, `prompt` (a Claude pane's waiting
-//! prompt as JSON), `answer` (an option pressed, or a message typed, in a
-//! Claude pane) and `watch` (every Claude tab's state and last turn,
-//! streamed as a line of JSON each time they change), and the server's
-//! log's line for what your phone did, with no notification, since the tab
-//! itself shows it; and, after the server takes over from another build,
-//! the phone app started again in its tab on this one
+//! The server's side of the phone app: the commands `switchboard phone`
+//! asks of it over the socket, `prompt` (a Claude pane's waiting prompt as
+//! JSON), `answer` (an option pressed, or a message typed, in a Claude
+//! pane), `kill-tab -s` (a Claude tab closed, which the phone asks about
+//! first) and `watch` (every Claude tab's state and last turn, streamed as
+//! a line of JSON each time they change), and the server's log's line for
+//! what your phone did, with no notification, since you know what you did
+//! and the tab shows it; and, after the server takes over from another
+//! build, the phone app started again in its tab on this one
 //! (`phone_after_upgrade`), since a program a pane runs keeps the build it
 //! started with.
 //!
 //! A prompt is read and answered with mission control's own reader and
 //! keys (`mission::answer`), the ones the Slack relay uses, so the phone
 //! presses exactly what the answer box would. Nothing here reaches a pane
-//! that isn't running Claude: `prompt` and `answer` refuse one, and
+//! that isn't running Claude: `prompt`, `answer` and `kill-tab -s` refuse
+//! one, and
 //! `watch` lists Claude tabs alone.
 //!
 //! `watch` keeps its connection: the server takes the stream back from
@@ -217,6 +219,27 @@ impl Server {
         Ok(Reply::ok(format!("{said}\n")))
     }
 
+    /// `kill-tab -s from`: the tab of a pane running Claude closed for
+    /// `from` (the phone, which asks first), written in the server's log
+    /// as answering and messaging are; refused for a pane not running
+    /// Claude, as they are.
+    pub(crate) fn phone_close(&mut self, pane: PaneId, from: &str) -> Result<Reply, String> {
+        if !crate::settings::is_on("phone_close_tabs") {
+            return Err("closing tabs from the phone is off in Settings".into());
+        }
+        self.phone_claude_pane(pane)?;
+        let tab = self.panes[&pane].tab;
+        let n = self.tab_number(tab);
+        let name = self
+            .tabs
+            .get(&tab)
+            .map(|t| t.display_name().to_string())
+            .unwrap_or_default();
+        self.phone_did(from, tab, "closed it");
+        self.kill_tab(tab);
+        Ok(Reply::ok(format!("Closed tab {n} {name}\n")))
+    }
+
     /// Something done from elsewhere (`from`, the phone), written in the
     /// server's log alone: no notification, since the tab shows what was
     /// done there.
@@ -241,7 +264,7 @@ impl Server {
         let ask = crate::mission::ask::Ask::new(
             "Pair a phone?",
             format!(
-                "{device}, signed in to Tailscale as you, wants to answer and message your tabs from the phone app. Type the code it shows (Esc refuses):"
+                "{device}, signed in to Tailscale as you, wants to answer, message and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
             ),
         );
         self.open(
@@ -497,7 +520,8 @@ impl Server {
                 }))
             })
             .collect();
-        json!({ "tabs": tabs })
+        // Whether Close tab is offered, sent again as Settings changes it.
+        json!({ "tabs": tabs, "close": crate::settings::is_on("phone_close_tabs") })
     }
 }
 

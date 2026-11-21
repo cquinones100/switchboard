@@ -316,3 +316,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: images from the phone
 
 - [174. Images from the phone's photo library sent to a tab's Claude: + opens the library, several chosen at once; they wait as thumbnails over the field, each with an × to drop it; a message is images, words or both; in the channel a sent message shows its images as thumbnails, and a tap shows one whole](https://cquinones100.github.io/switchboard/design/174.html)
+
+## Proposal: a tab's menu on the phone
+
+- [175. A tab's menu in the phone's drawer, from a long press on its row: Mark seen on a finished tab and Close tab; Close tab asks Close tab <n> <name>? \[Y/n\] first, Close as yes before No, and the closed tab leaves the drawer](https://cquinones100.github.io/switchboard/design/175.html)

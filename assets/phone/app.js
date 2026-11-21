@@ -1,4 +1,4 @@
-// The phone app (src/phone), boards 164 to 169, 173 and 174: the drawer of Claude
+// The phone app (src/phone), boards 164 to 169, 173, 174 and 175: the drawer of Claude
 // tabs, Needs you first, with its search; a tab's channel of recent turns
 // with the prompt it waits on as a card of buttons; the composer; pairing.
 // Everything shown comes from the computer's own answers and is put on the
@@ -24,6 +24,8 @@ const state = {
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), kept across redraws
+  close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
+  menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question does
 };
 
 function el(tag, attrs, ...kids) {
@@ -140,8 +142,8 @@ async function pair() {
   setTimeout(look, 1500);
 }
 
-function toast(text) {
-  const t = el("div", { class: "toast" }, el("span", { class: "ok" }, "✓"), text);
+function toast(text, failed) {
+  const t = el("div", { class: "toast" }, failed ? el("span", { class: "bad" }, "✕") : el("span", { class: "ok" }, "✓"), text);
   document.body.append(t);
   setTimeout(() => t.remove(), 3000);
 }
@@ -256,19 +258,175 @@ function drawerList() {
     for (const t of tabs) {
       const [m, kind] = markOf(t);
       g.append(
-        el(
-          "button",
-          { class: "row", onclick: () => openTab(number(t)) },
-          el("span", { class: "mark " + kind }, m),
-          el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
-          el("span", { class: "sub" }, lit(doing(t), words)),
-          where(t, words),
+        held(
+          el(
+            "button",
+            { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "menu", "data-pane": number(t) },
+            el("span", { class: "mark " + kind }, m),
+            el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
+            el("span", { class: "sub" }, lit(doing(t), words)),
+            where(t, words),
+          ),
+          t,
         ),
       );
     }
     list.append(g);
   }
   return list;
+}
+
+// ── A tab's menu, from a long press on its row (board 175) ──
+
+const HOLD_MS = 500;
+
+// The one hold under way, kept for the whole page rather than a row:
+// the drawer is drawn again whenever the workspace changes, so the row a
+// finger went down on may be gone by the time it lifts or moves.
+const hold = { timer: null, start: null, swallow: false };
+
+function letGo() {
+  clearTimeout(hold.timer);
+  hold.timer = null;
+}
+
+document.addEventListener("pointerdown", () => { hold.swallow = false; }, true);
+for (const name of ["pointerup", "pointercancel"]) document.addEventListener(name, letGo, true);
+document.addEventListener(
+  "pointermove",
+  (e) => { if (hold.timer && Math.hypot(e.clientX - hold.start[0], e.clientY - hold.start[1]) > 10) letGo(); },
+  true,
+);
+// The click a long press ends with opens nothing and closes nothing.
+document.addEventListener(
+  "click",
+  (e) => {
+    if (!hold.swallow) return;
+    hold.swallow = false;
+    e.stopPropagation();
+    e.preventDefault();
+  },
+  true,
+);
+
+// A row's tap opens its tab, or, while a menu shows, closes it; holding
+// it, or the context menu event a screen reader's More or a keyboard's
+// menu key sends, opens its menu.
+function held(row, tab) {
+  row.addEventListener("pointerdown", (e) => {
+    letGo();
+    hold.start = [e.clientX, e.clientY];
+    hold.timer = setTimeout(() => {
+      hold.timer = null;
+      if (state.open || state.menu) return;
+      hold.swallow = true;
+      openMenu(number(tab));
+    }, HOLD_MS);
+  });
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    // Sent by a long press too, on Android, whose click then waits.
+    if (hold.timer) hold.swallow = true;
+    letGo();
+    if (!state.menu) openMenu(number(tab));
+  });
+  row.addEventListener("click", () => (state.menu ? closeMenu() : openTab(number(tab))));
+  return row;
+}
+
+// The layer over the page the menu and its question are drawn in, on the
+// body so the drawer's redraws leave it be; a tap on it outside the box,
+// or Escape, closes it.
+let menuLayer = null;
+
+function closeMenu() {
+  state.menu = null;
+  if (menuLayer) menuLayer.remove();
+  menuLayer = null;
+  document.removeEventListener("keydown", menuKeys);
+  if (!state.open) drawer();
+}
+
+function menuKeys(e) {
+  if (e.key === "Escape") closeMenu();
+}
+
+function openMenu(pane) {
+  const tab = state.tabs.find((t) => number(t) === pane);
+  if (!tab) return;
+  state.menu = { pane, asking: false };
+  drawer();
+  document.addEventListener("keydown", menuKeys);
+  showMenu(tab);
+}
+
+function layer(box) {
+  if (menuLayer) menuLayer.remove();
+  menuLayer = el("div", { class: "veil", onclick: (e) => { if (e.target === menuLayer) closeMenu(); } }, box);
+  document.body.append(menuLayer);
+}
+
+function boxHead(title) {
+  return el("div", { class: "box-head" }, el("span", { class: "box-title" }, title), el("button", { class: "box-close", "aria-label": "Close", onclick: () => closeMenu() }, "×"));
+}
+
+// The kit's box under the row: Mark seen on a finished tab, then Close
+// tab in the failed tone, as it ends the tab.
+function showMenu(tab) {
+  const n = number(tab);
+  const options = [];
+  if (tab.state === "done") options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => markSeen(n) }, "Mark seen"));
+  if (state.close) options.push(el("button", { class: "menu-option r", role: "menuitem", onclick: () => ask(n) }, "Close tab"));
+  if (!options.length) return closeMenu();
+  const box = el("div", { class: "box", role: "menu", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, boxHead("Tab " + tab.index + " · " + (tab.name || "")), options);
+  layer(box);
+  const row = app.querySelector && app.querySelector('.row[data-pane="' + n + '"]');
+  if (row && row.getBoundingClientRect) {
+    const r = row.getBoundingClientRect();
+    const below = r.bottom + 4;
+    box.style.top = below + 160 > window.innerHeight ? Math.max(8, r.top - 160) + "px" : below + "px";
+  }
+  if (options[0].focus) options[0].focus();
+}
+
+// The question Close tab asks first, as every yes/no question asks: [Y/n]
+// after it, Close (the yes) first and lit; only Close closes the tab.
+function ask(n) {
+  const tab = state.tabs.find((t) => number(t) === n);
+  if (!tab) return closeMenu();
+  state.menu = { pane: n, asking: true };
+  const yes = el("button", { class: "option lit", onclick: () => closeTab(n) }, "Close");
+  const box = el(
+    "div",
+    { class: "box ask", role: "alertdialog", "aria-label": "Close tab" },
+    boxHead("Close tab"),
+    el("div", { class: "question" }, el("b", {}, "Close tab " + tab.index + " " + (tab.name || "") + "? "), el("span", { class: "dim" }, "[Y/n]")),
+    el("div", { class: "dim" }, "Its Claude and its panes end."),
+    el("div", { class: "answers" }, yes, el("button", { class: "option", onclick: () => closeMenu() }, "No")),
+  );
+  layer(box);
+  if (yes.focus) yes.focus();
+}
+
+async function markSeen(n) {
+  closeMenu();
+  try {
+    await api("/api/tabs/" + n + "/seen", {});
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
+async function closeTab(n) {
+  closeMenu();
+  try {
+    const r = await api("/api/tabs/" + n + "/close", {});
+    state.tabs = state.tabs.filter((t) => number(t) !== n);
+    render();
+    toast(r.said);
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
 }
 
 function drawer() {
@@ -303,6 +461,7 @@ function drop(i) {
 }
 
 async function openTab(n) {
+  if (state.menu) closeMenu();
   state.open = n;
   state.messages = [];
   state.answered = null;
@@ -683,6 +842,8 @@ function listen() {
     }
     const turned = before && after && JSON.stringify(before.turn) !== JSON.stringify(after.turn);
     if (after && after.prompt) state.answered = null;
+    state.close = data.close !== false;
+    if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
     render();
     if (turned) loadTurns();
   };
@@ -801,6 +962,7 @@ async function start() {
   const r = await api("/api/tabs").catch(() => ({ tabs: [], live: false }));
   state.tabs = r.tabs || [];
   state.live = !!r.live;
+  state.close = r.close !== false;
   state.lastHeard = Date.now();
   const wanted = decodeURIComponent(location.hash.slice(1));
   if (wanted && state.tabs.some((t) => number(t) === wanted)) openTab(wanted);
