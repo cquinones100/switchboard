@@ -6,7 +6,9 @@
 //! sidebar and the Landing view show and `/queue-and-clean`'s watch reads
 //! through `land-lock pr-status`. With Settings' `pr_merge_queue` or
 //! `github` off, or in a `switchboard try`'s server, which knows none of the
-//! real workspace's tabs, nothing is stepped and what is queued waits.
+//! real workspace's tabs, nothing is stepped and what is queued waits;
+//! with either setting off, `land-lock pr-status` says the queue is held
+//! for it (`merge_queue::stopped`), so a watch ends saying why.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -15,7 +17,6 @@ use std::time::{Duration, Instant};
 use super::train::{self, Told};
 use crate::mux::PaneId;
 use crate::mux::server::{Event, Server};
-use crate::settings;
 
 /// How often a repository's queue is stepped, `SWITCHBOARD_MERGE_QUEUE_POLL`
 /// seconds for the tests.
@@ -31,7 +32,7 @@ fn poll() -> Duration {
 /// Whether this server runs the queues.
 fn runs() -> bool {
     let in_a_try = std::env::var("SWITCHBOARD_CHECKOUT").is_ok_and(|c| !c.is_empty());
-    settings::is_on(super::SETTING) && settings::is_on("github") && !in_a_try
+    super::stopped().is_none() && !in_a_try
 }
 
 /// The steps under way and when each repository was last stepped.
