@@ -373,7 +373,10 @@ pub fn column(r: &Row, stages: &[Cell; 8]) -> usize {
 
 /// How many of a tab's stages are done.
 pub fn progress(stages: &[Cell; 8]) -> usize {
-    stages.iter().filter(|c| c.0 == "done").count()
+    // A leak check not run (outside Switchboard's clone) counts once the
+    // lock after it is done, so a landed card's meter fills.
+    let skipped = stages[4].1 == "not run" && stages[5].0 == "done";
+    stages.iter().filter(|c| c.0 == "done").count() + usize::from(skipped)
 }
 
 /// The dim note under a tab's item: its tab, and where it is in words.
@@ -834,6 +837,7 @@ mod tests {
         landed.left = true;
         landed.leak_checked = false;
         assert_eq!(stages(&landed)[4], ("waiting", "not run".to_string()));
+        assert_eq!(progress(&stages(&landed)), 7, "every stage but closing");
         r.landing = Some(json!({ "holding": true, "phase": "pushing" }));
         assert_eq!(s[6], ("running", "pushing…".to_string()));
         r.landing = Some(json!({ "holding": false, "place": 2 }));
