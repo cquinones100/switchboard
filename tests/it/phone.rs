@@ -211,3 +211,76 @@ fn watch_streams_the_claude_tabs_as_they_change() {
     assert_eq!(waiting["tabs"][0]["needs"], true);
     assert_eq!(waiting["tabs"][0]["prompt"]["options"][0]["label"], "Yes");
 }
+
+/// M-p's "Send a test notification to my phone" (`phone test`): a push to
+/// each subscription of a device phone.json lists, through a stand-in push
+/// service, what each answered said and kept in phone.log, and a
+/// subscription the service says is gone forgotten. The push key is made
+/// in the stand-in Keychain on a Mac, else in secrets.json.
+#[test]
+fn the_test_notification_reaches_each_phone_and_says_what_came_back() {
+    use common::http::{Fake, Reply, Service};
+    let server = TestServer::start();
+    if switchboard::platform::NAME == "macOS" {
+        common::stand_in::security(&server.home.join("bin"), &server.home.join("keychain"));
+    }
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("phone.json"),
+        json!({"owner": "me@example.com", "devices": ["phone", "tablet"]}).to_string(),
+    )
+    .unwrap();
+
+    let (code, _, err) = server.run_binary(&["phone", "test"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("no phone has turned on notifications"),
+        "{err}"
+    );
+
+    let push = Fake::start(Service::Web, |req| match req.path() {
+        "/phone" => Some(Reply::bytes(201, "text/plain", "")),
+        "/tablet" => Some(Reply::bytes(410, "text/plain", "")),
+        _ => None,
+    });
+    // RFC 8291's example browser key and secret.
+    let sub = |device: &str| {
+        json!({
+            "device": device,
+            "endpoint": format!("{}/{device}", push.url),
+            "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+            "auth": "BTBZMqHH6r4Tts7J_aSIgg",
+        })
+    };
+    let dir = server.state.join("phone");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("push.json"),
+        json!([sub("phone"), sub("tablet"), sub("unlisted")]).to_string(),
+    )
+    .unwrap();
+
+    let (code, out, err) = server.run_binary(&["phone", "test"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("phone: sent (201)"), "{out}");
+    assert!(out.contains("tablet: gone (410)"), "{out}");
+    let paths: Vec<String> = push.seen().iter().map(|r| r.path().to_string()).collect();
+    assert_eq!(
+        paths,
+        ["/phone", "/tablet"],
+        "a device phone.json doesn't list gets nothing"
+    );
+    let log = std::fs::read_to_string(dir.join("phone.log")).unwrap();
+    assert!(log.contains("push to phone: sent (201)"), "{log}");
+    assert!(log.contains("push to tablet: gone (410)"), "{log}");
+    let kept: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("push.json")).unwrap()).unwrap();
+    let devices: Vec<&str> = kept
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["device"].as_str().unwrap())
+        .collect();
+    assert_eq!(devices, ["phone", "unlisted"]);
+}

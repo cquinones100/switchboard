@@ -259,10 +259,11 @@ impl Server {
         Ok(Reply::ok(""))
     }
 
-    /// M-p's "Open the phone app in its own tab" and "Stop the phone app":
-    /// `switchboard phone start` or `stop`, which say what went wrong in a
-    /// box, run off the server's task as the Slack relay's are.
-    pub fn phone_app(&mut self, start: bool) {
+    /// M-p's "Open the phone app in its own tab", "Stop the phone app" and
+    /// "Send a test notification to my phone": `switchboard phone start`,
+    /// `stop` or `test`, which say what came of it in a box, run off the
+    /// server's task as the Slack relay's are.
+    pub fn phone_app(&mut self, command: &str) {
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
@@ -270,7 +271,7 @@ impl Server {
             return;
         }
         let spawned = tokio::process::Command::new(exe)
-            .args(["phone", if start { "start" } else { "stop" }, "--say"])
+            .args(["phone", command, "--say"])
             .env("SWITCHBOARD", crate::mux::socket::socket_path())
             .env_remove("SWITCHBOARD_PANE")
             .stdin(std::process::Stdio::null())

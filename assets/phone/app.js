@@ -10,6 +10,8 @@ const state = {
   tabs: [],
   live: false,
   lastHeard: 0,
+  unreached: false, // the computer couldn't be reached as the app opened
+  reconnectingUntil: 0, // while the stream is opened again after the page slept, "Reconnecting" rather than "offline"
   open: null, // the pane's number of the tab open, or null for the drawer
   messages: [],
   answered: null, // what was answered last, for the folded card
@@ -154,12 +156,18 @@ function groups() {
   ].filter(([, , tabs]) => tabs.length);
 }
 
+const reconnecting = () => !state.live && Date.now() < state.reconnectingUntil;
+
 function header(...rest) {
   return el(
     "div",
     { class: "head" },
     ...rest,
-    state.live ? el("span", { class: "chip g" }, "live") : el("span", { class: "chip r" }, "offline"),
+    state.live
+      ? el("span", { class: "chip g" }, "live")
+      : reconnecting()
+        ? el("span", { class: "chip y" }, "reconnecting")
+        : el("span", { class: "chip r" }, "offline"),
   );
 }
 
@@ -188,7 +196,9 @@ function drawer() {
       "div",
       { class: "screen" },
       header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer))),
-      state.live ? null : el("div", { class: "offline-line" }, "Last heard " + ago(state.lastHeard) + " · trying again"),
+      state.live
+        ? null
+        : el("div", { class: "offline-line" }, reconnecting() ? "Reconnecting…" : "Last heard " + ago(state.lastHeard) + " · trying again"),
       list,
     ),
   );
@@ -390,8 +400,11 @@ function render(stick) {
 
 // ── The stream and Web Push ──
 
+let source = null;
+
 function listen() {
-  const source = new EventSource("/api/events");
+  if (source) source.close();
+  source = new EventSource("/api/events");
   source.onmessage = (event) => {
     let data;
     try {
@@ -419,6 +432,43 @@ function listen() {
     render();
   };
 }
+
+// iOS doesn't reopen the stream of a page that slept, so coming back to the
+// app (or back online) closes it and opens it again at once, and reads the
+// tabs again, saying "Reconnecting" meanwhile rather than "offline".
+const RECONNECTING_MS = 5000;
+
+async function reconnect() {
+  state.reconnectingUntil = Date.now() + RECONNECTING_MS;
+  render();
+  setTimeout(render, RECONNECTING_MS + 100);
+  listen();
+  try {
+    const r = await api("/api/tabs");
+    state.tabs = r.tabs || [];
+    state.live = !!r.live;
+    if (state.live) state.lastHeard = Date.now();
+    render();
+    if (state.open) loadTurns();
+  } catch (_) {
+    // The stream says when the computer is back.
+  }
+}
+
+// Back to the app: reconnected when paired, else started again when it
+// couldn't reach the computer as it opened.
+function cameBack() {
+  if (document.visibilityState === "hidden") return;
+  if (state.me && state.me.paired) reconnect();
+  else if (state.unreached) reach();
+}
+
+document.addEventListener("visibilitychange", cameBack);
+window.addEventListener("pageshow", (event) => {
+  // A page shown the first time is the one start() is opening.
+  if (event.persisted) cameBack();
+});
+window.addEventListener("online", cameBack);
 
 async function offerPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
@@ -450,14 +500,37 @@ async function offerPush() {
   new MutationObserver(drawerEnd).observe(app, { childList: true });
 }
 
+// While the computer is out of reach, one try at a time and one retry
+// waiting: the app coming back meanwhile tries now rather than adding a loop.
+let reaching = false;
+let retry = null;
+
+async function reach() {
+  if (reaching) return;
+  reaching = true;
+  clearTimeout(retry);
+  try {
+    await start();
+  } finally {
+    reaching = false;
+  }
+}
+
 async function start() {
   try {
     const res = await fetch("/api/me", { credentials: "same-origin" });
     if (!res.ok) return refused("Not for this device", "This page answers one person's devices alone.");
     state.me = await res.json();
   } catch (_) {
-    return refused("Can't reach Switchboard", "Check that this phone is on your tailnet.");
+    // Opened from the service worker's copy with the computer out of reach:
+    // tried again as the app comes back, goes online, and every few seconds.
+    state.unreached = true;
+    refused("Offline", "Can't reach Switchboard: check that this phone and the computer are on your tailnet. Trying again…");
+    clearTimeout(retry);
+    retry = setTimeout(() => state.unreached && reach(), RECONNECTING_MS);
+    return;
   }
+  state.unreached = false;
   if (!state.me.paired) {
     if (state.me.revoked) {
       refused("This phone was unpaired", "Its pairing was taken away on the computer. Pair it again to carry on.");

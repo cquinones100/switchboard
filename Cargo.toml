@@ -72,6 +72,9 @@ hyper-util = { version = "0.1", features = ["tokio", "service"], optional = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"], optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 aws-lc-rs = { version = "1", optional = true }
+# The roots a push is verified against, Mozilla's, compiled in (src/net.rs
+# says why a push doesn't use the platform's verifier).
+webpki-roots = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 tower-service = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -148,6 +151,7 @@ net = [
     "dep:tokio-rustls",
     "dep:rustls-pki-types",
     "dep:aws-lc-rs",
+    "dep:webpki-roots",
     "dep:base64",
     "dep:tower-service",
 ]
