@@ -63,6 +63,17 @@ jiff = "0.2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "net", "time", "io-util", "fs", "sync", "signal"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "charset"], optional = true }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
+# The phone app (src/phone): HTTPS served on the tailnet with the certificate
+# Tailscale issues, through rustls, and Web Push encrypted and signed with
+# aws-lc-rs, the crypto rustls already builds on.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"], optional = true }
+hyper = { version = "1", features = ["server", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio", "service"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"], optional = true }
+rustls-pki-types = { version = "1", features = ["std"], optional = true }
+aws-lc-rs = { version = "1", optional = true }
+base64 = { version = "0.22", optional = true }
+tower-service = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # The multiplexer: each pane's PTY and terminal emulator, and the screens
 # drawn into a cell buffer that is sent to each client as what changed.
@@ -128,7 +139,18 @@ default = ["net"]
 # HTTPS and WebSockets (GitHub, Linear, Slack, the calendar). Their TLS is the
 # only C the build compiles, so `cargo check --no-default-features --target
 # aarch64-apple-darwin` type-checks every macOS path from Linux.
-net = ["dep:reqwest", "dep:tokio-tungstenite"]
+net = [
+    "dep:reqwest",
+    "dep:tokio-tungstenite",
+    "dep:axum",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tokio-rustls",
+    "dep:rustls-pki-types",
+    "dep:aws-lc-rs",
+    "dep:base64",
+    "dep:tower-service",
+]
 
 [dev-dependencies]
 # Reads src/views to check every GraphQL query closes its braces.
