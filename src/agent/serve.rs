@@ -1080,7 +1080,7 @@ pub fn land_question(leak_checked: bool) -> (String, Vec<String>) {
     (
         "Land this tab without asking?".into(),
         vec![
-            "Skipped: the question before its first push or its landing's push, and medium review findings, fixed without asking".into(),
+            "Skipped: the question before its first push or its landing's push, and medium review findings, settled as the review loop recommends (or, with its setting off, fixed) without asking".into(),
             kept.into(),
             asked.into(),
         ],
