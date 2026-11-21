@@ -516,10 +516,10 @@ async function loadTurns() {
 const messageKey = (m) => m.who + ":" + m.at + ":" + m.text.length;
 
 // markdown-it (assets/phone/markdown-it.min.js, loaded before this file),
-// with raw HTML off, so `<img onerror=…>` stays text, and bare addresses
-// made links; null where it isn't loaded, which leaves replies as text.
+// with raw HTML off, so `<img onerror=…>` stays text, and bare http and https
+// addresses made links; null where it isn't loaded, which leaves replies as text.
 const md = typeof markdownit === "function" ? markdownit({ html: false, linkify: true }) : null;
-// Only an address with its scheme or `www.` is made a link, never a file name
+// Only an address written with its scheme is made a link, never a file name
 // such as README.md, which linkify-it would read as a site.
 if (md) md.linkify.set({ fuzzyLink: false, fuzzyEmail: false });
 
