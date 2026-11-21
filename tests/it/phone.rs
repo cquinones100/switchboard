@@ -577,7 +577,7 @@ fn stand_in_app(server: &TestServer, marked: bool, build: &str) -> (String, i64)
     std::fs::write(
         &app,
         format!(
-            "printf '%s\\n%s\\n%s\\n' $ '{build}' '0.0.0 (old)' > '{}'\nexec sleep 1000\n",
+            "printf '%s\\n%s\\n%s\\n' $$ '{build}' '0.0.0 (old)' > '{}'\nexec sleep 1000\n",
             lock.display()
         ),
     )
