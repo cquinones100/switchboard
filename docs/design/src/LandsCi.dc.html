@@ -208,10 +208,10 @@ head(4, 'Failing', 2, 'r');
 pr(5, 'failed', 2027, 'sidebar header on short screens', 'tab 6', "switchboard · 2 of 9 failed · out of Switchboard's queue", true, 4);
 failed(7, 'test (ubuntu)', 'assertion `left <= right` failed: rows', '4');
 failed(8, 'clippy', 'unused variable: `rows`', '4');
-pr(10, 'failed', 318, 'calendar RSVP from the menu', 'no tab', 'web-app · 1 of 6 failed · not queued', false, 3);
+pr(10, 'failed', 318, 'billing export', 'no tab', 'web-app · 1 of 6 failed · not queued', false, 3);
 failed(12, 'e2e (chromium)', 'Timeout 30000ms waiting for the menu');
 head(15, 'Running', 2, 'b');
-pr(16, 'pending', 2031, 'settings page layout', 'tab 3', "web-app · GitHub's merge queue · 4 of 5 passed", false, 2);
+pr(16, 'pending', 208, 'billing page', 'tab 4', "web-app · GitHub's merge queue's run · 4 of 5 passed", false, 2);
 // A TRAIN: Switchboard's merge queue testing PRs together, a run of no single PR's, listed by what it holds.
 T(37, 18, [MARK.pending[0], MARK.pending[1]], ' ', ['train 3', 'm', 'b'], ' ', ['#2040 + #219', 'a']); R(95, 18, 'tab 5', 'd');
 put(39, 19, "switchboard · Switchboard's merge queue · 5 of 9 passed", 'd');
