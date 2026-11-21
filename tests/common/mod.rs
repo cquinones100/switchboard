@@ -70,6 +70,9 @@ pub const QUIET: &[(&str, bool)] = &[
     ("slack_reminders", false),
     ("keep_awake", false),
     ("turn_summaries", false),
+    // A new tab opening its PR, ticket or note beside it, where a test
+    // counts the panes a capped tab has.
+    ("tab_opens_beside", false),
 ];
 
 /// Writes `home`'s `settings.json` whole: `QUIET` with `settings` (a JSON

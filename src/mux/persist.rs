@@ -424,6 +424,18 @@ fn shell_word(word: &str) -> String {
     }
 }
 
+/// A restored tab's options: as saved, but for what a new tab opening
+/// beside its pane was still choosing (`tabs::beside`), which a tab brought
+/// back doesn't do again.
+fn restored_opts(
+    opts: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut opts = super::server::land_renamed(opts);
+    opts.remove(crate::tabs::beside::OPTION);
+    opts.remove(crate::tabs::beside::NOTE_OPTION);
+    opts
+}
+
 /// What to type into a restored pane's shell, if anything.
 fn command_line(pane: &SavedPane) -> Option<String> {
     if let Some(id) = pane.claude.as_deref().filter(|id| safe_id(id)) {
@@ -433,11 +445,22 @@ fn command_line(pane: &SavedPane) -> Option<String> {
     let name = program_name(argv.first()?);
     // Notes, which ran in Neovim, came back as resurrect brought Neovim back.
     let notes = name == "switchboard" && argv.len() == 2 && argv[1] == "notes";
-    (notes || RESTARTABLE.contains(&name)).then(|| {
-        argv.iter()
+    // The PR and ticket views beside a pane (M-v, M-i, or a new tab's),
+    // which only read.
+    let view = name == "switchboard"
+        && argv
+            .get(1)
+            .is_some_and(|c| c == "pr-view" || c == "ticket-view");
+    (notes || view || RESTARTABLE.contains(&name)).then(|| {
+        let line = argv
+            .iter()
             .map(|w| shell_word(w))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" ");
+        // In the shell's place, so quitting the view closes its pane as it
+        // did before the restart, rather than leaving a shell its marks
+        // would take for the view.
+        if view { format!("exec {line}") } else { line }
     })
 }
 
@@ -1340,12 +1363,22 @@ fn restore_tab(
         if let Some(slot) = server.panes.get_mut(&id) {
             // The pane comes back as its shell, so what said what its
             // program was, or allowed it, stays behind with it.
+            // A view started again keeps the marks the keys find it by.
+            let view_again = command_line(pane).is_some()
+                && pane
+                    .command
+                    .as_ref()
+                    .and_then(|a| a.get(1))
+                    .is_some_and(|c| c == "ticket-view");
             slot.opts = pane
                 .opts
                 .iter()
                 .filter(|(name, _)| {
-                    !super::respawn::PROGRAM_MARKS.contains(&name.as_str())
-                        && !TOOL_MARKS.contains(&name.as_str())
+                    let kept = view_again
+                        && [crate::views::TICKET_VIEW, crate::views::TICKET_ID]
+                            .contains(&name.as_str());
+                    kept || (!super::respawn::PROGRAM_MARKS.contains(&name.as_str())
+                        && !TOOL_MARKS.contains(&name.as_str()))
                 })
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect();
@@ -1365,7 +1398,7 @@ fn restore_tab(
         .last_pane
         .filter(|p| panes.contains(p) && *p != tab.active);
     tab.zoomed = st.zoomed && panes.len() > 1;
-    tab.opts = super::server::land_renamed(st.opts);
+    tab.opts = restored_opts(st.opts);
     tab.layout = layout;
     server.tabs.insert(st.id, tab);
     server.next_tab = server.next_tab.max(st.id.0.saturating_add(1));
@@ -1855,5 +1888,45 @@ mod tests {
         assert_eq!(program_name("/usr/bin/nvim"), "nvim");
         assert!(is_shell("bash") && is_shell("fish"));
         assert!(!is_shell("nvim"));
+    }
+
+    #[test]
+    fn the_pr_and_ticket_views_start_again() {
+        let pr = SavedPane {
+            command: Some(vec![
+                "/home/jo/.local/bin/switchboard".into(),
+                "pr-view".into(),
+                "/home/jo/work".into(),
+            ]),
+            ..SavedPane::new(PaneId(0))
+        };
+        assert_eq!(
+            command_line(&pr).as_deref(),
+            Some("exec /home/jo/.local/bin/switchboard pr-view /home/jo/work")
+        );
+        let ticket = SavedPane {
+            command: Some(vec![
+                "switchboard".into(),
+                "ticket-view".into(),
+                "--ticket".into(),
+                "acme/widgets#12".into(),
+            ]),
+            ..SavedPane::new(PaneId(0))
+        };
+        assert_eq!(
+            command_line(&ticket).as_deref(),
+            Some("exec switchboard ticket-view --ticket 'acme/widgets#12'")
+        );
+    }
+
+    #[test]
+    fn a_restored_tab_chooses_nothing_beside_it_again() {
+        let saved = BTreeMap::from([
+            (crate::tabs::beside::OPTION.to_string(), "none".to_string()),
+            ("@tab_name".to_string(), "Work".to_string()),
+        ]);
+        let opts = restored_opts(saved);
+        assert!(!opts.contains_key(crate::tabs::beside::OPTION));
+        assert_eq!(opts.get("@tab_name").map(String::as_str), Some("Work"));
     }
 }

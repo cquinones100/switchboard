@@ -17,9 +17,11 @@
 //! - `names`: what is kept per directory and per lookup, and the lookups.
 //! - `prs`: every PR a tab follows, its session's and its branch's, and
 //!   which is current.
+//! - `beside`: what a new tab opens beside its pane, and when it gives way.
 //! - `serve`: the server's side: naming the tabs, and what later parts read
 //!   (`Server::tab_label`, `tab_color`, `tab_path`, `tab_pr`).
 
+pub mod beside;
 pub mod color;
 pub mod git;
 pub mod label;

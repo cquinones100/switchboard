@@ -542,6 +542,14 @@ impl Client {
 
 pub struct Server {
     pub(crate) tx: mpsc::UnboundedSender<Event>,
+    /// While a new tab opens a view beside its pane (src/tabs/beside.rs):
+    /// a pane focused then becomes its tab's active one without bringing
+    /// the tab to the front or taking the keys from the sidebar.
+    /// Any other pane split into or opened in a tab is the tab changed by hand.
+    pub(crate) opening_beside: bool,
+    /// The tabs whose autopilot plan is being looked for (`find_tab_plan`),
+    /// which a new tab waits for before choosing a note to open beside it.
+    pub(crate) plans_looked_for: std::collections::HashSet<TabId>,
     pub(super) pane_tx: mpsc::UnboundedSender<PaneEvent>,
     pub sessions: Vec<Session>,
     pub tabs: HashMap<TabId, Tab>,
@@ -1251,6 +1259,8 @@ impl Server {
             notices: BTreeMap::new(),
             tab_names: Default::default(),
             sources: Default::default(),
+            opening_beside: false,
+            plans_looked_for: Default::default(),
             next_tab: 1,
             next_pane: 1,
             quit: false,
@@ -1932,6 +1942,7 @@ impl Server {
         }
         // Opened from the Notifications window, it goes before it.
         self.notices_last(session);
+        self.beside_on_open(tab);
         self.refresh_name(tab);
         self.dirty_session(session);
         Ok((tab, pane))
@@ -1976,6 +1987,9 @@ impl Server {
         let tab = self.tabs.get_mut(&tab_id).expect("a pane's tab is there");
         tab.zoomed = false;
         tab.layout.split(target, pane, side, percent);
+        if !self.opening_beside {
+            self.beside_done(tab_id);
+        }
         if !background {
             self.focus_pane(pane);
         }
@@ -2421,13 +2435,18 @@ impl Server {
         let Some(tab_id) = self.panes.get(&pane).map(|s| s.tab) else {
             return;
         };
-        self.sidebar_leave_tab(tab_id);
+        if !self.opening_beside {
+            self.sidebar_leave_tab(tab_id);
+        }
         let Some(tab) = self.tabs.get_mut(&tab_id) else {
             return;
         };
         let old = tab.active;
         if old != pane {
-            tab.last_pane = Some(old);
+            // A view opened beside a new tab never counts as visited.
+            if !self.opening_beside {
+                tab.last_pane = Some(old);
+            }
             tab.active = pane;
             if let Some(slot) = self.panes.get_mut(&old) {
                 slot.left_at = Some(std::time::Instant::now());
@@ -2439,7 +2458,9 @@ impl Server {
             self.send_focus(pane, true);
             self.relayout(tab_id);
         }
-        if let Some(name) = self.session_of_tab(tab_id).map(|s| s.name.clone()) {
+        if !self.opening_beside
+            && let Some(name) = self.session_of_tab(tab_id).map(|s| s.name.clone())
+        {
             self.select_tab(&name, tab_id);
         }
         self.refresh_name(tab_id);

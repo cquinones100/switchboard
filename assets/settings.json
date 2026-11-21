@@ -932,6 +932,13 @@
     "default": true
   },
   {
+    "key": "tab_opens_beside",
+    "category": "Tabs and status bar",
+    "label": "Open a tab's ticket, PR or note beside it",
+    "description": "A new tab whose one pane leaves room in the side panel (Widest a lone pane gets, with Open views in the side panel on) opens the first it has of its PR (the PR view, as M-v opens it), its ticket (the ticket view, as M-i opens it) and its plan or note (Notes, as M-e opens it, with Notes in each tab on), the keys staying in its pane. A PR or ticket found a moment later takes the place of what comes after it in that order; once you close the view or open another pane in the tab, it is left as you set it. Off, a tab opens with the side panel empty",
+    "default": true
+  },
+  {
     "key": "diff_beside_share",
     "category": "Tabs and status bar",
     "label": "Diff's share in the side panel",
