@@ -403,25 +403,61 @@ impl Server {
             .and_then(|t| t.opts.get(prs::MADE))
             .map(|v| prs::read(v))
             .unwrap_or_default();
-        let shown = self.tab_names.shown.get(&tab);
         let eligible = |pr: &TabPr| {
             let facts = self.tab_pr_facts(pr);
-            let made_stays = facts.is_none_or(|f| {
-                f.state != crate::facts::PrState::Merged
-                    || prs::merged_stays_current(
-                        &f.head,
-                        shown.and_then(|s| s.branch.as_deref()),
-                        shown.is_some_and(|s| s.on_default),
-                    )
-            });
-            (made_stays && made.iter().any(|m| m.same(pr)))
-                || facts.is_some_and(|f| f.state == crate::facts::PrState::Open)
+            let merged = facts.is_some_and(|f| f.state == crate::facts::PrState::Merged);
+            let made_stays = if merged {
+                self.landed_pr_stays(tab, pr, &all)
+            } else {
+                made.iter().any(|m| m.same(pr))
+            };
+            made_stays || facts.is_some_and(|f| f.state == crate::facts::PrState::Open)
         };
         prs::current(
             &all,
             self.tab_branch_pr(tab).as_ref(),
             picked.as_ref(),
             eligible,
+        )
+    }
+
+    /// Whether `pr`, among the tab's PRs `all`, is a merged one its session
+    /// made that may stay its current PR where the tab is now
+    /// (`prs::merged_stays_current`).
+    fn landed_pr_stays(&self, tab: TabId, pr: &TabPr, all: &[TabPr]) -> bool {
+        let Some(t) = self.tabs.get(&tab) else {
+            return false;
+        };
+        let made = prs::read(t.opts.get(prs::MADE).map_or("", String::as_str));
+        let Some(facts) = self
+            .tab_pr_facts(pr)
+            .filter(|f| f.state == crate::facts::PrState::Merged)
+        else {
+            return false;
+        };
+        if !made.iter().any(|m| m.same(pr)) {
+            return false;
+        }
+        let shown = self.tab_names.shown.get(&tab);
+        let origin = self.tab_path(tab).and_then(|p| self.sources.origin_kept(p));
+        let same_repo = match (origin, &pr.repo) {
+            (Some(origin), Some(repo)) => origin.eq_ignore_ascii_case(&repo.to_string()),
+            _ => true,
+        };
+        let another_open = all.iter().any(|p| {
+            !p.same(pr)
+                && self
+                    .tab_pr_facts(p)
+                    .is_some_and(|f| f.state == crate::facts::PrState::Open)
+        });
+        prs::merged_stays_current(
+            &facts.head,
+            &prs::Place {
+                branch: shown.and_then(|s| s.branch.as_deref()),
+                on_default: shown.is_some_and(|s| s.on_default),
+                same_repo,
+                another_open,
+            },
         )
     }
 
@@ -650,19 +686,13 @@ impl Server {
         seen.retain(|(id, _)| ids.contains(id));
         for id in ids {
             let in_front = self.tab_in_front(id);
-            let landed = self.tab_current_pr(id).filter(|c| {
-                self.tab_pr_facts(c)
-                    .is_some_and(|f| f.state == crate::facts::PrState::Merged)
-            });
+            let all = self.tab_prs(id);
+            let landed = self
+                .tab_current_pr(id)
+                .filter(|c| self.landed_pr_stays(id, c, &all));
             let t = self.tabs.get_mut(&id).expect("listed above");
             let list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
-            let made_here = prs::read(t.opts.get(prs::MADE).map_or("", String::as_str));
-            let done = |p: &TabPr| {
-                done(p)
-                    && !landed
-                        .as_ref()
-                        .is_some_and(|l| l.same(p) && made_here.iter().any(|m| m.same(p)))
-            };
+            let done = |p: &TabPr| done(p) && !landed.as_ref().is_some_and(|l| l.same(p));
             let mut left = Vec::new();
             for pr in list.iter().filter(|p| done(p)) {
                 let key = (id, pr.key());
