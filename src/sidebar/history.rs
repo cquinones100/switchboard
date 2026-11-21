@@ -21,6 +21,10 @@ use crate::items::Item;
 /// How many days are kept, today among them.
 pub const KEEP_DAYS: i64 = 14;
 
+/// The sources that give no notifications any more: what your phone did,
+/// which the tab itself shows (src/phone).
+const RETIRED: [&str; 1] = ["phone"];
+
 /// Whether the sidebar still shows a notification, or why not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -332,12 +336,18 @@ impl History {
 
     /// The days read from their files, taken in with what was recorded
     /// before they were read: an entry kept only in memory stays, one
-    /// both have is memory's.
+    /// both have is memory's. One shown from a source that gives no
+    /// notifications any more (`RETIRED`) is taken as dismissed, since
+    /// nothing would ever take it out of the sidebar's list.
     pub fn take_loaded(&mut self, read: BTreeMap<String, Vec<Entry>>) {
         for (day, entries) in read {
             let mine = self.days.entry(day.clone()).or_default();
             let mut added = false;
-            for e in entries {
+            for mut e in entries {
+                if RETIRED.contains(&e.source.as_str()) && e.sidebar == Sidebar::Shown {
+                    e.sidebar = Sidebar::Dismissed;
+                    self.changed.insert(day.clone());
+                }
                 let have = mine
                     .iter()
                     .any(|m| m.source == e.source && m.id == e.id && m.at == e.at);
@@ -539,6 +549,20 @@ mod tests {
         let mut fresh = History::default();
         fresh.take_loaded(h.days.clone());
         assert_eq!(fresh.days["2026-11-11"].len(), 2);
+    }
+
+    #[test]
+    fn a_retired_sources_shown_entry_is_read_back_dismissed() {
+        let mut h = History::default();
+        h.record("phone", &[item("p1", "Phone: Chose 1. Yes")], NOW, &UTC);
+        h.record("slack", &[item("s1", "Hi")], NOW, &UTC);
+        let mut fresh = History::default();
+        fresh.take_loaded(h.days.clone());
+        let day = &fresh.days["2026-11-11"];
+        let of = |source: &str| day.iter().find(|e| e.source == source).unwrap().sidebar;
+        assert_eq!(of("phone"), Sidebar::Dismissed);
+        assert_eq!(of("slack"), Sidebar::Shown);
+        assert!(fresh.changed.contains("2026-11-11"), "written back");
     }
 
     #[test]

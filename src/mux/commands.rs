@@ -216,7 +216,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "seen",
-        "seen [-t tab] [-s from]: the tab seen, as if looked at: its finished Claude and a reminder come due; -s names who asked (phone), logged and shown in the notifications",
+        "seen [-t tab] [-s from]: the tab seen, as if looked at: its finished Claude and a reminder come due; -s names who asked (phone), written in the server's log",
     ),
     (
         "prompt",
@@ -224,7 +224,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "answer",
-        "answer [-t pane] [-m] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; -s names who asked (phone), logged and shown in the notifications; refused for a pane not running Claude, and typed in a pane",
+        "answer [-t pane] [-m] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; -s names who asked (phone), written in the server's log; refused for a pane not running Claude, and typed in a pane",
     ),
     (
         "watch",

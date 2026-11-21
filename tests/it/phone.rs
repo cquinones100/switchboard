@@ -137,6 +137,33 @@ fn the_prompt_the_phone_reads_has_each_choices_explainer() {
 }
 
 #[test]
+fn what_the_phone_does_is_logged_and_never_a_notification() {
+    let server = TestServer::start();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let pane = claude_pane(&server);
+
+    show_prompt(&server, &pane);
+    server.ok(&["answer", "-t", &pane, "-s", "phone", "1"]);
+    server.ok(&["seen", "-t", &pane, "-s", "phone"]);
+    let log = server.log();
+    assert!(log.contains("from your phone: tab 1 ("), "logged: {log}");
+    assert!(log.contains("): Chose 1. Yes"), "logged: {log}");
+    assert!(log.contains("): Marked seen"), "logged: {log}");
+
+    // A name set after both, drawn, so the sidebar has been drawn since.
+    server.ok(&["set", "-t", &pane, "@tab_name", "after the phone"]);
+    let screen = client.wait_text("after the phone");
+    assert!(
+        !screen
+            .iter()
+            .any(|l| l.contains("Phone:") || l.contains("from your phone")),
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
 fn a_message_reaches_a_claude_showing_no_prompt() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
