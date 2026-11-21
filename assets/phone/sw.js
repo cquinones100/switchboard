@@ -1,7 +1,8 @@
 // The phone app's service worker: what makes it installable, the Web Push
-// it shows when a tab starts waiting on you, and a copy of the app's own
+// it shows when a tab starts waiting on you or its reminder comes due, and a copy of the app's own
 // files, so it opens without the computer and says it is offline. A push
-// names the tab alone; tapping it opens the app on that tab.
+// names the tab alone (and says Reminder for a reminder, never its note);
+// tapping it opens the app on that tab.
 //
 // iOS freezes the installed app's page in the background, so a message
 // posted to it as a push is tapped can be lost, and a window opened for a

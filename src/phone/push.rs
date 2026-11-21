@@ -1,4 +1,5 @@
-//! Web Push to the installed phone app when a tab starts waiting on you:
+//! Web Push to the installed phone app when a tab starts waiting on you or
+//! its reminder comes due:
 //! the message encrypted for the phone's browser as RFC 8291 says
 //! (`aes128gcm`), and signed with the app's VAPID key (RFC 8292), both
 //! with aws-lc-rs, the crypto rustls already builds on. The key is made
