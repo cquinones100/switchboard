@@ -153,18 +153,26 @@ pub struct Facts {
     /// a `wtpr` directory's number, or one kept by a build that didn't say,
     /// which is its directory's origin's.
     pub pr_repo: Option<Repo>,
+    /// That PR's title, once its lookup has answered.
+    pub pr_title: Option<String>,
+    /// What `label` is without a PR's title, when only a PR's title can
+    /// name the tab (no ticket names it): the directory's name, which the
+    /// tab's current PR's title takes the place of once known (`Server::tab_label`).
+    pub untitled: Option<String>,
     /// The ticket its branch is for: the GitHub issue it was started for,
     /// else the Linear ticket it names, while its service's lookups are on
     /// and once its title is known.
     pub ticket: Option<Ticket>,
 }
 
-/// A branch's PR as its lookup found it: its number, and the repository it
-/// is in (`None` for one kept by a build before that said, asked again).
+/// A branch's PR as its lookup found it: its number, the repository it is
+/// in (`None` for one kept by a build before that said, asked again), and
+/// its title (`None` for one kept by a build before that kept it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchPr {
     pub number: u64,
     pub repo: Option<Repo>,
+    pub title: Option<String>,
 }
 
 struct Kept {
@@ -199,11 +207,14 @@ impl<T> Known<T> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ask {
     /// The PR for `branch` in the repository whose shared git directory is
-    /// `repo`, asked from `dir`, a checkout of it.
+    /// `repo`, asked from `dir`, a checkout of it: by the branch, or, with
+    /// `by_number`, by the number a `wtpr` directory carries, where the
+    /// repository it is in is plain.
     Pr {
         dir: PathBuf,
         repo: PathBuf,
         branch: String,
+        by_number: bool,
     },
     /// A ticket's title, by `Ticket::arg` (`ENG-42`, `owner/repo#12`).
     Title { id: String },
@@ -227,13 +238,25 @@ impl Ask {
     /// Runs the lookup, through GitHub's and Linear's APIs.
     pub async fn run(self) -> Answer {
         match self {
-            Ask::Pr { dir, repo, branch } => {
-                // By the branch, a `wtpr` directory's too: its number alone
-                // can't say which repository's it is in a fork's clone.
-                let found = match github::branch_pr_by_branch(&dir, "tab name: PR").await {
+            Ask::Pr {
+                dir,
+                repo,
+                branch,
+                by_number,
+            } => {
+                // By the branch, a `wtpr` directory's too in a fork's clone,
+                // where its number alone can't say which repository's it is.
+                let source = "tab name: PR";
+                let lookup = if by_number {
+                    github::branch_pr(&dir, source).await
+                } else {
+                    github::branch_pr_by_branch(&dir, source).await
+                };
+                let found = match lookup {
                     Ok(pr) => Ok(pr.map(|(repo, p)| BranchPr {
                         number: p.number,
                         repo: Some(repo),
+                        title: Some(p.title),
                     })),
                     // A service's failure keeps what was known; anything else
                     // (no origin, a remote not on GitHub) is a definite "no
@@ -373,37 +396,61 @@ impl Names {
         let title = ticket
             .as_ref()
             .and_then(|t| self.title_of(&t.arg(), now, asks));
-        let label = match (&ticket, &title) {
-            (Some(Ticket::Issue { number, .. }), Some(title)) => label::issue_label(*number, title),
-            (Some(t), title) => {
-                label::facts_label(&window, Some(t.short()).as_deref().zip(title.as_deref()))
-            }
-            (None, _) => label::facts_label(&window, None),
-        };
-
         // A `wtpr` worktree carries its number in its directory's name, which
-        // needs no lookup, its repository its origin. In a fork's clone it
-        // may be upstream's or origin's, which the number can't say, so its
-        // branch's PR is asked for, the number shown meanwhile, and its
-        // repository taken when that PR is the one numbered.
+        // needs no lookup, its repository its origin, or the one its review
+        // folder names. In a fork's clone it may be upstream's or origin's,
+        // which the number can't say, so its branch's PR is asked for, the
+        // number shown meanwhile, and its repository taken when that PR is
+        // the one numbered; elsewhere its PR is asked for by its number, for
+        // its title.
         let pr = if !switches.prs() {
             None
         } else if let Some(n) = github::pr_number_from_dir(dir) {
-            let repo = match github::reviewed_repo(dir) {
+            let reviewed = github::reviewed_repo(dir);
+            let in_a_fork_s_clone =
+                reviewed.is_none() && crate::sources::repo::remotes_of(dir).upstream.is_some();
+            let found = place
+                .and_then(|p| self.branch_pr(dir, p, !in_a_fork_s_clone, now, asks))
+                .filter(|found| found.number == n);
+            let repo = match reviewed {
                 Some(repo) => Some(repo),
-                None => place
-                    .filter(|_| crate::sources::repo::remotes_of(dir).upstream.is_some())
-                    .and_then(|p| self.branch_pr(dir, p, now, asks))
-                    .filter(|found| found.number == n)
-                    .and_then(|found| found.repo),
+                None => found
+                    .as_ref()
+                    .filter(|_| in_a_fork_s_clone)
+                    .and_then(|found| found.repo.clone()),
             };
-            Some(BranchPr { number: n, repo })
+            Some(BranchPr {
+                number: n,
+                repo,
+                title: found.and_then(|found| found.title),
+            })
         } else {
-            place.and_then(|p| self.branch_pr(dir, p, now, asks))
+            place.and_then(|p| self.branch_pr(dir, p, false, now, asks))
         };
-        let (pr, pr_repo) = match pr {
-            Some(found) => (Some(found.number), found.repo),
-            None => (None, None),
+        let (pr, pr_repo, pr_title) = match pr {
+            Some(found) => (Some(found.number), found.repo, found.title),
+            None => (None, None, None),
+        };
+
+        // The ticket once its service confirms it, else the PR's title once
+        // known, else the directory's name. An issue the branch was started
+        // for keeps the directory's name until its title is known, never the
+        // PR's; a Linear ID read from the branch's name may be no ticket at
+        // all (`patch-1`), so the PR's title names the tab until Linear
+        // confirms it.
+        let issue_pending = matches!(ticket, Some(Ticket::Issue { .. })) && title.is_none();
+        let named_by_ticket = ticket.is_some() && title.is_some();
+        let untitled =
+            (!named_by_ticket && !issue_pending).then(|| label::facts_label(&window, None));
+        let label = match (&ticket, &title, &pr_title) {
+            (Some(Ticket::Issue { number, .. }), Some(title), _) => {
+                label::issue_label(*number, title)
+            }
+            (Some(t), Some(title), _) => {
+                label::facts_label(&window, Some((t.short().as_str(), title.as_str())))
+            }
+            (_, _, Some(pr_title)) if !issue_pending => label::pr_label(&window, pr_title),
+            _ => label::facts_label(&window, None),
         };
         Facts {
             color,
@@ -411,6 +458,8 @@ impl Names {
             label,
             pr,
             pr_repo,
+            pr_title,
+            untitled,
             // Only once its service confirms it with a title, so a branch
             // that only looks like a ticket names none.
             ticket: ticket.filter(|_| title.is_some()),
@@ -439,6 +488,7 @@ impl Names {
         &mut self,
         dir: &Path,
         place: &GitPlace,
+        by_number: bool,
         now: Instant,
         asks: &mut Vec<Ask>,
     ) -> Option<BranchPr> {
@@ -456,6 +506,7 @@ impl Names {
                 dir: dir.to_path_buf(),
                 repo: place.common_dir.clone(),
                 branch: place.branch.clone(),
+                by_number,
             });
         }
         known.value.clone()
@@ -543,6 +594,9 @@ impl Names {
                 if let Some(at) = &found.repo {
                     entry["in"] = json!(at.to_string());
                 }
+                if let Some(title) = &found.title {
+                    entry["title"] = json!(title);
+                }
                 Some(entry)
             })
             .collect();
@@ -580,19 +634,25 @@ impl Names {
             ) else {
                 continue;
             };
-            // One kept without the repository it is in, by a build before
-            // that said, shows at once and is asked about again now.
+            // One kept without the repository it is in or its title, by a
+            // build before that kept them, shows at once and is asked about
+            // again now.
             let at = entry
                 .get("in")
                 .and_then(Value::as_str)
                 .and_then(github::parse_name_with_owner);
-            let next = if at.is_some() { next } else { now };
+            let titled = entry.get("title").and_then(Value::as_str).is_some();
+            let next = if at.is_some() && titled { next } else { now };
             self.prs
                 .entry((PathBuf::from(repo), branch.to_string()))
                 .or_insert(Known {
                     value: Some(BranchPr {
                         number: pr,
                         repo: at,
+                        title: entry
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     }),
                     next,
                     asked: None,
@@ -660,6 +720,15 @@ mod tests {
         Ok(Some(BranchPr {
             number,
             repo: github::parse_name_with_owner(repo),
+            title: None,
+        }))
+    }
+
+    fn titled(number: u64, repo: &str, title: &str) -> Result<Option<BranchPr>, String> {
+        Ok(Some(BranchPr {
+            number,
+            repo: github::parse_name_with_owner(repo),
+            title: Some(title.into()),
         }))
     }
 
@@ -671,7 +740,7 @@ mod tests {
             Answer::Pr {
                 repo: PathBuf::from("/r/.git"),
                 branch: "eng-42".into(),
-                found: found(12, "acme/upstream"),
+                found: titled(12, "acme/upstream", "Fix the login"),
             },
             now,
         );
@@ -692,6 +761,7 @@ mod tests {
         let saved = names.saved(now, 1_000);
         assert_eq!(saved["prs"][0]["pr"], 12);
         assert_eq!(saved["prs"][0]["in"], "acme/upstream");
+        assert_eq!(saved["prs"][0]["title"], "Fix the login");
         assert_eq!(saved["prs"][0]["until"], 1_000 + 24 * 3600);
         assert_eq!(
             saved["titles"].as_array().unwrap().len(),
@@ -704,7 +774,10 @@ mod tests {
         let mut again = Names::default();
         again.restore(&saved, later, 1_000 + 3600);
         let pr = &again.prs[&(PathBuf::from("/r/.git"), "eng-42".to_string())];
-        assert_eq!(pr.value, found(12, "acme/upstream").unwrap());
+        assert_eq!(
+            pr.value,
+            titled(12, "acme/upstream", "Fix the login").unwrap()
+        );
         assert!(pr.next > later + Duration::from_secs(22 * 3600));
         assert_eq!(
             again.titles["ENG-42"].value.as_deref(),
@@ -719,6 +792,7 @@ mod tests {
         // in, shows at once and is asked about again now.
         let mut older = saved.clone();
         older["prs"][0].as_object_mut().unwrap().remove("in");
+        older["prs"][0].as_object_mut().unwrap().remove("title");
         let mut again = Names::default();
         again.restore(&older, later, 1_000 + 3600);
         let pr = again
@@ -729,9 +803,22 @@ mod tests {
             pr.value,
             Some(BranchPr {
                 number: 12,
-                repo: None
+                repo: None,
+                title: None,
             })
         );
+        assert!(pr.due(later));
+
+        // One kept with its repository but no title is asked about now too.
+        let mut untitled = saved.clone();
+        untitled["prs"][0].as_object_mut().unwrap().remove("title");
+        let mut again = Names::default();
+        again.restore(&untitled, later, 1_000 + 3600);
+        let pr = again
+            .prs
+            .get_mut(&(PathBuf::from("/r/.git"), "eng-42".to_string()))
+            .unwrap();
+        assert_eq!(pr.value, found(12, "acme/upstream").unwrap());
         assert!(pr.due(later));
     }
 
@@ -793,7 +880,8 @@ mod tests {
                 Ask::Pr {
                     dir: dir.clone(),
                     repo: repo_dir.clone(),
-                    branch: "eng-42-fix-login".into()
+                    branch: "eng-42-fix-login".into(),
+                    by_number: false,
                 },
             ]
         );
@@ -809,11 +897,14 @@ mod tests {
         let pr = Answer::Pr {
             repo: repo_dir.clone(),
             branch: "eng-42-fix-login".into(),
-            found: found(12, "acme/app"),
+            found: titled(12, "acme/app", "Log in again after a timeout"),
         };
         assert!(names.answer(pr, now));
         let (facts, asks) = names.facts(&dir, now);
-        assert_eq!(facts.label, "ENG-42: Fix the login");
+        assert_eq!(
+            facts.label, "ENG-42: Fix the login",
+            "the ticket's, not the PR's"
+        );
         assert_eq!(facts.pr, Some(12));
         assert_eq!(
             facts.pr_repo.map(|r| r.to_string()).as_deref(),
@@ -954,24 +1045,45 @@ mod tests {
         let remote = |name: &str, url: &str| git(&dir, &["remote", "add", name, url]);
         assert!(remote("origin", "https://github.com/me/app.git"));
 
-        // A clone with no upstream: its origin's number, nothing asked.
+        // A clone with no upstream: its origin's number at once, its PR asked
+        // for by that number for its title.
         let (mut plain, now) = names(Switches::default());
         let (facts, asks) = plain.facts(&dir, now);
         assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
-        assert!(asks.is_empty());
-
-        // A fork's clone: the number at once, its repository asked.
-        assert!(remote("upstream", "https://github.com/acme/app.git"));
-        let (mut names, now) = names(Switches::default());
-        let (facts, asks) = names.facts(&dir, now);
-        assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
+        assert_eq!(facts.label, "pr-41-feature:feature");
         let repo_dir = dir.join(".git");
         assert_eq!(
             asks,
             vec![Ask::Pr {
                 dir: dir.clone(),
                 repo: repo_dir.clone(),
-                branch: "feature".into()
+                branch: "feature".into(),
+                by_number: true,
+            }]
+        );
+        let pr = Answer::Pr {
+            repo: repo_dir.clone(),
+            branch: "feature".into(),
+            found: titled(41, "me/app", "Retry failed fetches"),
+        };
+        assert!(plain.answer(pr, now));
+        let facts = plain.facts(&dir, now).0;
+        assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
+        assert_eq!(facts.label, "Retry failed fetches");
+        assert_eq!(facts.pr_title.as_deref(), Some("Retry failed fetches"));
+
+        // A fork's clone: the number at once, its repository asked.
+        assert!(remote("upstream", "https://github.com/acme/app.git"));
+        let (mut names, now) = names(Switches::default());
+        let (facts, asks) = names.facts(&dir, now);
+        assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
+        assert_eq!(
+            asks,
+            vec![Ask::Pr {
+                dir: dir.clone(),
+                repo: repo_dir.clone(),
+                branch: "feature".into(),
+                by_number: false,
             }]
         );
         let pr = Answer::Pr {
@@ -1043,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wtpr_directory_has_its_number_without_asking() {
+    fn a_wtpr_directory_has_its_number_without_waiting_for_its_lookup() {
         let scratch = Scratch::new("wtpr-number");
         let dir = scratch.0.join("pr-77-fix");
         if !repo(&dir) {
@@ -1054,7 +1166,157 @@ mod tests {
         let (mut names, now) = names(Switches::default());
         let (facts, asks) = names.facts(&dir, now);
         assert_eq!((facts.pr, facts.pr_repo), (Some(77), None));
-        assert!(asks.is_empty());
+        assert_eq!(facts.label, "pr-77-fix:someone-fix");
+        assert!(matches!(
+            &asks[..],
+            [Ask::Pr {
+                by_number: true,
+                ..
+            }]
+        ));
+        // Another PR's answer under the branch never names the tab.
+        let other = Answer::Pr {
+            repo: dir.join(".git"),
+            branch: "someone-fix".into(),
+            found: titled(78, "me/app", "Not this one"),
+        };
+        assert!(names.answer(other, now));
+        let facts = names.facts(&dir, now).0;
+        assert_eq!((facts.pr, facts.pr_title), (Some(77), None));
+        assert_eq!(facts.label, "pr-77-fix:someone-fix");
+    }
+
+    #[test]
+    fn a_branch_with_a_pr_and_no_ticket_is_named_by_the_pr_s_title_once_known() {
+        let scratch = Scratch::new("pr-title");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "retry-failed-fetches"]));
+        let (mut names, now) = names(Switches::default());
+        let repo_dir = dir.join(".git");
+        assert_eq!(names.facts(&dir, now).0.label, "app:retry-failed-fetches");
+        // A failure before anything is known keeps the branch.
+        let failed = Answer::Pr {
+            repo: repo_dir.clone(),
+            branch: "retry-failed-fetches".into(),
+            found: Err("GitHub couldn't be reached".into()),
+        };
+        assert!(!names.answer(failed, now));
+        assert_eq!(names.facts(&dir, now).0.label, "app:retry-failed-fetches");
+        let pr = Answer::Pr {
+            repo: repo_dir.clone(),
+            branch: "retry-failed-fetches".into(),
+            found: titled(12345, "acme/app", "Retry failed fetches"),
+        };
+        assert!(names.answer(pr, now));
+        let facts = names.facts(&dir, now).0;
+        assert_eq!(facts.pr, Some(12345));
+        assert_eq!(facts.label, "Retry failed fetches");
+        assert_eq!(
+            label::label(None, &facts.label, facts.pr),
+            "#12345 Retry failed fetches"
+        );
+        // A PR kept by a build before that kept its title: the branch.
+        let untitled = Answer::Pr {
+            repo: repo_dir,
+            branch: "retry-failed-fetches".into(),
+            found: found(12345, "acme/app"),
+        };
+        assert!(names.answer(untitled, now));
+        assert_eq!(names.facts(&dir, now).0.label, "app:retry-failed-fetches");
+    }
+
+    #[test]
+    fn a_branch_that_only_looks_like_a_ticket_takes_the_pr_s_title() {
+        let scratch = Scratch::new("pr-lookalike");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "patch-1"]));
+        let (mut names, now) = names(Switches::default());
+        names.answer(
+            Answer::Pr {
+                repo: dir.join(".git"),
+                branch: "patch-1".into(),
+                found: titled(12345, "acme/app", "Fix a typo"),
+            },
+            now,
+        );
+        // Before Linear answers, while it fails, and once it has no such
+        // ticket alike.
+        assert_eq!(names.facts(&dir, now).0.label, "Fix a typo");
+        names.answer(
+            Answer::Title {
+                id: "PATCH-1".into(),
+                found: Err("Linear couldn't be reached".into()),
+            },
+            now,
+        );
+        assert_eq!(names.facts(&dir, now).0.label, "Fix a typo");
+        // A real ticket's form wins once Linear confirms it.
+        names.answer(
+            Answer::Title {
+                id: "PATCH-1".into(),
+                found: Ok(Some("Patch the build".into())),
+            },
+            now,
+        );
+        assert_eq!(names.facts(&dir, now).0.label, "PATCH-1: Patch the build");
+    }
+
+    #[test]
+    fn a_pr_on_an_issue_s_branch_is_named_by_the_issue() {
+        let scratch = Scratch::new("pr-issue");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]));
+        assert!(git(
+            &dir,
+            &["remote", "add", "origin", "https://github.com/acme/app.git"]
+        ));
+        let (mut names, now) = names(Switches::default());
+        names.answer(
+            Answer::Pr {
+                repo: dir.join(".git"),
+                branch: "issue/12-fix-login".into(),
+                found: titled(12345, "acme/app", "Log in again after a timeout"),
+            },
+            now,
+        );
+        assert_eq!(
+            names.facts(&dir, now).0.label,
+            "app:issue/12-fix-login",
+            "the branch until the issue's title is known, never the PR's"
+        );
+        // Still the branch while the issue's lookup fails.
+        names.answer(
+            Answer::Title {
+                id: "acme/app#12".into(),
+                found: Err("GitHub couldn't be reached".into()),
+            },
+            now,
+        );
+        assert_eq!(names.facts(&dir, now).0.label, "app:issue/12-fix-login");
+        names.answer(
+            Answer::Title {
+                id: "acme/app#12".into(),
+                found: Ok(Some("FEAT: Fix the login".into())),
+            },
+            now,
+        );
+        let facts = names.facts(&dir, now).0;
+        assert_eq!(
+            label::label(None, &facts.label, facts.pr),
+            "#12345 #12: Fix the login"
+        );
     }
 
     #[test]

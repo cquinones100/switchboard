@@ -702,6 +702,7 @@ impl Server {
                             "name": tab.display_name(),
                             "own": self.tab_own_name(*id),
                             "label": self.tab_label(*id),
+                            "label_without_pr_title": self.tab_label_without_pr_title(*id),
                             "color": self.tab_color(*id).map(|c| c.hex()),
                             "path": self.tab_path(*id).map(|p| p.to_string_lossy().into_owned()),
                             "pr": self.tab_pr(*id),
@@ -1197,6 +1198,9 @@ impl Server {
             Target::Tab(t) if name == "@agent" => self.tab_agent(t).map(|a| a.name().to_string()),
             // What the tab bar shows is worked out by the server (src/tabs).
             Target::Tab(t) if name == "@tab_label" => Some(self.tab_label(t)),
+            Target::Tab(t) if name == "@tab_label_without_pr_title" => {
+                Some(self.tab_label_without_pr_title(t))
+            }
             Target::Tab(t) if name == "@tab_age" => self
                 .tabs
                 .get(&t)

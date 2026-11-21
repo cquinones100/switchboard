@@ -162,11 +162,12 @@ fn unquote(value: &str) -> String {
 }
 
 /// The facts under the title, a line each, as far as they are known: the
-/// branch (none when detached), the directory, the PR and the ticket.
+/// branch (none when detached), the directory, the PR with its title once
+/// known, and the ticket.
 pub fn facts(
     branch: Option<&str>,
     dir: Option<&str>,
-    pr: Option<u64>,
+    pr: Option<(u64, Option<&str>)>,
     ticket: Option<&str>,
 ) -> Vec<String> {
     let mut out = Vec::new();
@@ -176,8 +177,10 @@ pub fn facts(
     if let Some(d) = dir.filter(|d| !d.is_empty()) {
         out.push(format!("Directory  {d}"));
     }
-    if let Some(n) = pr {
-        out.push(format!("PR         #{n}"));
+    match pr {
+        Some((n, Some(title))) => out.push(format!("PR         #{n} {title}")),
+        Some((n, None)) => out.push(format!("PR         #{n}")),
+        None => {}
     }
     if let Some(t) = ticket {
         out.push(format!("Ticket     {t}"));
@@ -245,7 +248,12 @@ mod tests {
 
     #[test]
     fn the_box_says_the_title_then_what_is_known() {
-        let lines = facts(Some("fix-login"), Some("~/app"), Some(12), Some("ENG-42"));
+        let lines = facts(
+            Some("fix-login"),
+            Some("~/app"),
+            Some((12, None)),
+            Some("ENG-42"),
+        );
         assert_eq!(
             lines,
             [
@@ -256,6 +264,10 @@ mod tests {
             ]
         );
         assert!(facts(Some("HEAD"), None, None, None).is_empty(), "detached");
+        assert_eq!(
+            facts(None, None, Some((12, Some("Retry failed fetches"))), None),
+            ["PR         #12 Retry failed fetches"]
+        );
         assert_eq!(
             body("#12 ENG-42: Fix the login", &lines[..1]),
             "#12 ENG-42: Fix the login\n\nBranch     fix-login"

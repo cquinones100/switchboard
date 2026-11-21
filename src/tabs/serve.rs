@@ -40,6 +40,11 @@ pub struct Shown {
     /// clone, possibly the project upstream names); `None` when only its
     /// number is known, its directory's origin's then.
     pub pr_repo: Option<Repo>,
+    /// Its PR's title, once its lookup has answered.
+    pub pr_title: Option<String>,
+    /// Its label without a PR's title when only one can name it
+    /// (`names::Facts::untitled`).
+    pub untitled: Option<String>,
     /// The ticket its branch is for (`names::Facts::ticket`).
     pub ticket: Option<crate::views::ticket::Ticket>,
     /// The color it wears: its project's, or gray with the `accent_colors`
@@ -132,6 +137,8 @@ impl Server {
             label: facts.label,
             pr: facts.pr,
             pr_repo: facts.pr_repo,
+            pr_title: facts.pr_title,
+            untitled: facts.untitled,
             ticket: facts.ticket,
             color: Some(match tint {
                 _ if !switches.colors => color::GRAY,
@@ -153,13 +160,15 @@ impl Server {
             path: Some(dir),
             gone: false,
         };
-        let tab = self.tabs.get_mut(&tab_id).expect("checked above");
-        tab.auto_name = shown.label.clone();
         if self.tab_names.shown.get(&tab_id) != Some(&shown) {
             self.tab_names.shown.insert(tab_id, shown);
             if let Some(name) = self.session_of_tab(tab_id).map(|s| s.name.clone()) {
                 self.dirty_session(&name);
             }
+        }
+        let auto_name = self.tab_facts_label(tab_id);
+        if let Some(tab) = self.tabs.get_mut(&tab_id) {
+            tab.auto_name = auto_name;
         }
     }
 
@@ -185,7 +194,7 @@ impl Server {
         if !back_in_its_main_clone {
             return;
         }
-        let name = shown.label.clone();
+        let name = self.tab_facts_without_pr_title(tab_id);
         if let Some(tab) = self.tabs.get_mut(&tab_id) {
             tab.opts.insert("@tab_name".into(), name);
         }
@@ -275,12 +284,44 @@ impl Server {
     /// front when its branch has one. Stored as it is: nothing here reads a
     /// `#` as a format, so none is doubled.
     pub fn tab_label(&self, tab: TabId) -> String {
+        let facts = self.tab_facts_label(tab);
+        label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
+    }
+
+    /// `tab_label` with its directory's name in place of a PR's title
+    /// (`@tab_label_without_pr_title`), for what reads the label for a
+    /// ticket's ID, pins it as the tab's name or hands it to Claude: a PR's
+    /// title is anyone's words (`Fix UTF-8 paths`), never a ticket.
+    pub fn tab_label_without_pr_title(&self, tab: TabId) -> String {
+        let facts = self.tab_facts_without_pr_title(tab);
+        label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
+    }
+
+    /// `tab_facts_label` with its directory's name in place of a PR's title.
+    fn tab_facts_without_pr_title(&self, tab: TabId) -> String {
+        self.tab_names
+            .shown
+            .get(&tab)
+            .map(|s| s.untitled.clone().unwrap_or_else(|| s.label.clone()))
+            .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.clone()))
+            .unwrap_or_default()
+    }
+
+    /// The tab's label with no name of its own and no PR number: its
+    /// ticket and title, else its current PR's title, else its directory's
+    /// name.
+    fn tab_facts_label(&self, tab: TabId) -> String {
         let shown = self.tab_names.shown.get(&tab);
-        let facts = shown
-            .map(|s| s.label.as_str())
-            .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.as_str()))
-            .unwrap_or("");
-        label::label(self.tab_own_name(tab), facts, self.tab_pr(tab))
+        let by_pr = shown.and_then(|s| s.untitled.as_deref()).map(|untitled| {
+            match self.tab_pr_title(tab) {
+                Some(title) => label::pr_label(untitled, &title),
+                None => untitled.to_string(),
+            }
+        });
+        by_pr
+            .or_else(|| shown.map(|s| s.label.clone()))
+            .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.clone()))
+            .unwrap_or_default()
     }
 
     /// The color the tab wears: its project's, or gray with the
@@ -298,6 +339,18 @@ impl Server {
     /// its branch's, else the newest its session opened.
     pub fn tab_pr(&self, tab: TabId) -> Option<u64> {
         self.tab_current_pr(tab).map(|p| p.number)
+    }
+
+    /// The title of the tab's current PR, once known: its branch's as the
+    /// tab names last found it, another's as the PR lookups hold it.
+    pub fn tab_pr_title(&self, tab: TabId) -> Option<String> {
+        let current = self.tab_current_pr(tab)?;
+        if self.tab_branch_pr(tab).is_some_and(|b| b.same(&current)) {
+            return self.tab_names.shown.get(&tab)?.pr_title.clone();
+        }
+        self.tab_pr_facts(&current)
+            .map(|f| f.title.clone())
+            .filter(|t| !t.trim().is_empty())
     }
 
     /// The PR of the tab's branch, as the tab names last found it.
@@ -681,13 +734,14 @@ impl Server {
             (Some(whole), None) => whole,
             (None, _) => label,
         };
+        let pr_title = self.tab_pr_title(tab);
         let ticket = self
             .tab_ticket(tab)
             .map(crate::views::ticket::Ticket::short);
         let facts = title::facts(
             branch.as_deref(),
             path.as_deref().map(paths::tilde).as_deref(),
-            self.tab_pr(tab),
+            self.tab_pr(tab).map(|n| (n, pr_title.as_deref())),
             ticket.as_deref(),
         );
         let menu = Menu::new(

@@ -2,8 +2,9 @@
 //! tmux/window-names.sh put it together: the name given to the tab, else
 //! the GitHub issue its branch was started for and the issue's title
 //! (`issue_label`), or the Linear ticket its branch names and the ticket's
-//! title, once GitHub or Linear has confirmed there is one, else the name
-//! its directory gives (`color::window_name`); with `#<number> ` in front
+//! title, once GitHub or Linear has confirmed there is one, else its pull
+//! request's title once known (`pr_label`), else the name its directory
+//! gives (`color::window_name`); with `#<number> ` in front
 //! when the branch has a pull request. The number goes first because it is the short, stable
 //! half, so the tabs can be scanned by number.
 //!
@@ -59,9 +60,25 @@ pub fn issue_label(number: u64, title: &str) -> String {
         .iter()
         .find_map(|kind| title.strip_prefix(kind))
         .unwrap_or(title);
-    // Someone else wrote it, so nothing a terminal acts on is kept.
-    format!("#{number}: {title}")
-        .chars()
+    plain(&format!("#{number}: {title}"))
+}
+
+/// The label of a directory whose branch has a pull request and no ticket,
+/// once the PR's title is known: the title as GitHub has it, else, for one
+/// with nothing left to show, the directory's name (`dir_name`).
+pub fn pr_label(dir_name: &str, title: &str) -> String {
+    let title = plain(title);
+    let title = title.trim();
+    if title.is_empty() {
+        facts_label(dir_name, None)
+    } else {
+        title.to_string()
+    }
+}
+
+/// Text someone else wrote, with nothing a terminal acts on kept.
+fn plain(text: &str) -> String {
+    text.chars()
         .map(|c| if c.is_whitespace() { ' ' } else { c })
         .filter(|c| !c.is_control())
         .collect()
@@ -96,6 +113,28 @@ mod tests {
         assert_eq!(
             label(None, &issue_label(63, "FEAT: Tabs"), Some(98)),
             "#98 #63: Tabs"
+        );
+    }
+
+    #[test]
+    fn a_pr_with_no_ticket_is_named_by_its_title() {
+        assert_eq!(
+            label(
+                None,
+                &pr_label("app:retry", "Retry\tfailed\u{1b} fetches"),
+                Some(12345)
+            ),
+            "#12345 Retry failed fetches"
+        );
+        assert_eq!(
+            pr_label("app:retry", " \u{7}"),
+            "app:retry",
+            "nothing to show"
+        );
+        assert_eq!(
+            label(Some("Mine"), &pr_label("app", "Theirs"), Some(7)),
+            "#7 Mine",
+            "a name of its own wins"
         );
     }
 

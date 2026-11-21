@@ -789,7 +789,11 @@ impl Server {
         let (pr, name) = split_pr(&self.tab_label(id));
         // A note item's tab shows its whole first line, which the sidebar
         // wraps to its three lines, while its name is that item cut short.
-        let name = self.tab_full_title(id).unwrap_or(name);
+        let full = self.tab_full_title(id);
+        let ticket_name = full
+            .clone()
+            .unwrap_or_else(|| split_pr(&self.tab_label_without_pr_title(id)).1);
+        let name = full.unwrap_or(name);
         let panes = tab.layout.panes();
         // Its Claude is looked for behind a tool in its pane's place too
         // (the diff, lazygit, a view), so the tab keeps the stage its
@@ -856,6 +860,7 @@ impl Server {
             leader.map(|(_, _, since)| since).filter(|s| *s > 0)
         };
         let mut t = TabModel::new(id, index, &name);
+        t.ticket_name = ticket_name;
         t.session = s.name.clone();
         t.attached = attached;
         t.current = s.current == id;

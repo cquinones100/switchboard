@@ -78,6 +78,10 @@ pub struct TabInfo {
     pub index: usize,
     /// Its label, as the tab bar shows it.
     pub name: String,
+    /// Its label with the directory's name in place of a PR's title
+    /// (`@tab_label_without_pr_title`), which what finds a ticket's tab
+    /// reads, a PR's title being someone's words.
+    pub ticket_name: String,
     /// The directory it is named from.
     pub path: Option<PathBuf>,
     /// Its branch's PR, from the tab names' lookup.
@@ -119,6 +123,7 @@ impl Default for TabInfo {
             id: TabId(0),
             index: 0,
             name: String::new(),
+            ticket_name: String::new(),
             path: None,
             pr: None,
             pr_in: None,

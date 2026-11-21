@@ -231,9 +231,13 @@ fn a_tab_follows_every_pr_its_session_opens() {
             "acme/oncall-tools#318"
         ]
     );
-    // The branch's PR is current: the label leads with it.
+    // The branch's PR is current: the label leads with it, and with no
+    // ticket, takes its title.
     assert_eq!(t["pr"], 2040);
     assert!(t["label"].as_str().unwrap().starts_with("#2040 "), "{t}");
+    wait_tab(&server, "the branch's PR's title", |t| {
+        t["label"] == "#2040 Title of acme/web-app#2040"
+    });
     client.wait_for("the sidebar's count of the others", |s| {
         s.iter().any(|l| l.contains("#2040") && l.contains("+2"))
     });
@@ -250,6 +254,12 @@ fn a_tab_follows_every_pr_its_session_opens() {
     client.type_text("\r");
     let t = wait_tab(&server, "#318 current", |t| t["pr"] == 318);
     assert!(t["label"].as_str().unwrap().starts_with("#318 "), "{t}");
+    // Its title, never the branch's PR's, goes with its number, and is
+    // the name the tab's banners and notices use.
+    wait_tab(&server, "#318's title", |t| {
+        t["label"] == "#318 Title of acme/oncall-tools#318"
+            && t["name"] == "Title of acme/oncall-tools#318"
+    });
     let deadline = common::deadline(Duration::from_secs(20));
     while !github.seen().iter().any(|r| {
         r.json()["variables"]["number"] == 318 && r.json()["variables"]["name"] == "oncall-tools"
