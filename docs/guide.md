@@ -2726,8 +2726,8 @@ switchboard say [-t seconds] text...     a message in a box
 switchboard picture [-t pane] <file>     show a picture full size over the
                                          pane, Esc going back; fails where
                                          the terminal draws no images
-switchboard look [-t pane] <file>...     show pictures beside the tab's narrow
-                                         lone pane, stacked when several
+switchboard look [-t pane] <file>...     show pictures in the tab's side
+                                         panel, stacked when several
                                          (--before-after <before> <after>
                                          heads the two Before and after); in
                                          the desktop's viewer with no room
