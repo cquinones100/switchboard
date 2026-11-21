@@ -25,8 +25,8 @@ use crate::ui::kit::Mark;
 /// by spaces, oldest first.
 pub const LIST: &str = "@tab_prs";
 /// The ones of `LIST` the session made with `gh pr create`, written as it
-/// is: each may stay current once merged, while the tab is on its branch or
-/// its repository's default branch (`merged_stays_current`), where a PR
+/// is: each may stay current once merged, while the tab is in its
+/// repository on its branch or the default branch (`merged_stays_current`), where a PR
 /// only looked at is current only while open.
 pub const MADE: &str = "@tab_prs_made";
 /// The one picked as current, `<owner>/<name>#<n>`.
@@ -138,14 +138,27 @@ pub fn current(
         .or_else(|| all.iter().rev().find(|p| eligible(p)).cloned())
 }
 
+/// Where a tab is, for `merged_stays_current`.
+pub struct Place<'a> {
+    /// The branch its directory is on.
+    pub branch: Option<&'a str>,
+    /// Whether that is its repository's default branch.
+    pub on_default: bool,
+    /// Whether its directory's repository is the PR's, or isn't known yet.
+    pub same_repo: bool,
+    /// Whether another PR it follows is open.
+    pub another_open: bool,
+}
+
 /// Whether a merged PR the session made, `head` its branch, may still be
-/// the tab's current PR: while the tab is on that branch (before the
-/// landing's cleanup) or on its repository's default branch (the worktree
-/// removed, the tab back in the main clone), so the tab stays under Merged
-/// with the PR leading its label until it takes up other work on another
-/// branch.
-pub fn merged_stays_current(head: &str, branch: Option<&str>, on_default: bool) -> bool {
-    on_default || branch.is_some_and(|b| !head.is_empty() && b == head)
+/// the tab's current PR: while the tab is in the PR's repository, on that
+/// branch (before the landing's cleanup) or on the default branch with no
+/// other PR it follows open (the worktree removed, the tab back in the main
+/// clone), so the tab stays under Merged with the PR leading its label until
+/// it takes up other work.
+pub fn merged_stays_current(head: &str, at: &Place) -> bool {
+    let on_head = at.branch.is_some_and(|b| !head.is_empty() && b == head);
+    at.same_repo && (on_head || (at.on_default && !at.another_open))
 }
 
 /// `all` with the current one first, the rest in the order opened, as the
@@ -355,11 +368,35 @@ mod tests {
     fn a_made_pr_stays_current_after_the_tab_moves_to_the_main_clone() {
         let opened = read("acme/web-app#2024");
         let made = pr("acme/web-app#2024");
-        let current_on = |branch: Option<&str>, on_default: bool| {
+        let current_at = |at: Place| {
             current(&opened, None, None, |p| {
-                p.same(&made) && merged_stays_current("fix-login", branch, on_default)
+                p.same(&made) && merged_stays_current("fix-login", &at)
             })
         };
+        let current_on = |branch: Option<&str>, on_default: bool| {
+            current_at(Place {
+                branch,
+                on_default,
+                same_repo: true,
+                another_open: false,
+            })
+        };
+        // In another repository, or with another of its PRs open, it gives
+        // way on the default branch.
+        let elsewhere = Place {
+            branch: Some("main"),
+            on_default: true,
+            same_repo: false,
+            another_open: false,
+        };
+        assert_eq!(current_at(elsewhere), None);
+        let beside_open = Place {
+            branch: Some("main"),
+            on_default: true,
+            same_repo: true,
+            another_open: true,
+        };
+        assert_eq!(current_at(beside_open), None);
         // In the worktree on its head branch, then back in the main clone on
         // the default branch, with no branch PR there.
         assert_eq!(current_on(Some("fix-login"), false), Some(made.clone()));
