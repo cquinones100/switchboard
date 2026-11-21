@@ -359,6 +359,10 @@ struct Pending {
     on: PathBuf,
     /// What M-p's build adds to the message after the restart.
     note: String,
+    /// Why it doesn't restart is said on the screen as well as to the
+    /// asker: `upgrade --latest`'s command may have gone (a Bash call
+    /// timed out during the build), which its connection can't tell.
+    say_too: bool,
 }
 
 /// What the check off the server's task found.
@@ -415,6 +419,7 @@ impl Server {
             checked: false,
             on: on.clone().unwrap_or_default(),
             note: String::new(),
+            say_too: false,
         };
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
             self.upgrade_refused(pending, "it is restarting on the new build already");
@@ -533,18 +538,19 @@ impl Server {
     }
 
     /// Answers the `switchboard upgrade --latest` waiting on the build, if
-    /// one is, with `text` (exiting 1 unless `ok`); whether it was
-    /// answered, so a command that has gone away (a Bash call timed out
-    /// during a long build) leaves what it would have said to the screen.
-    fn latest_answered(&mut self, text: String, ok: bool) -> bool {
+    /// one is, with `text` (exiting 1 unless `ok`). What it is told is
+    /// said on the screen too, since the command may have gone (a Bash
+    /// call timed out during a long build), which its connection can't
+    /// tell.
+    fn latest_answered(&mut self, text: String, ok: bool) {
         let Some(asker) = self.upgrade.latest_asker.take() else {
-            return false;
+            return;
         };
         let reply = match ok {
             true => Reply::ok(format!("{text}\n")),
             false => Reply::fail(text),
         };
-        asker.send(Answer::Reply(reply)).is_ok()
+        let _ = asker.send(Answer::Reply(reply));
     }
 
     /// Whether the build row shows on a client's screen: in the sidebar.
@@ -687,9 +693,11 @@ impl Server {
                         on: Some(on), note, ..
                     }) => {
                         let asker = self.upgrade.latest_asker.take();
+                        let by_command = asker.is_some();
                         self.upgrade_asked(asker, client, Some(on));
                         if let Some(pending) = self.upgrade.pending.as_mut() {
                             pending.note = note;
+                            pending.say_too = by_command;
                             // Restarting, until the new build takes over.
                             self.upgrade.shown = build.map(|mut b| {
                                 b.restarting = true;
@@ -707,9 +715,8 @@ impl Server {
                             false => format!("Already on the latest build. {note}"),
                         };
                         let text = text.trim_end().to_string();
-                        if !self.latest_answered(text.clone(), true) {
-                            self.say(client, &text);
-                        }
+                        self.latest_answered(text.clone(), true);
+                        self.say(client, &text);
                     }
                     Err(why) => {
                         // A command's failure leaves the row as M-p's does,
@@ -720,7 +727,7 @@ impl Server {
                         for line in &lines {
                             text.push_str(&format!("\n{line}"));
                         }
-                        let answered = self.latest_answered(text, false);
+                        self.latest_answered(text, false);
                         let row_shows =
                             by_command || client.is_some_and(|c| self.build_row_shows(c));
                         match build.filter(|_| row_shows) {
@@ -729,11 +736,10 @@ impl Server {
                             Some(build) => {
                                 self.upgrade.shown = Some(Shown::Failed { build, why, lines })
                             }
-                            None if !answered => self.say(
+                            None => self.say(
                                 client,
                                 &format!("The build failed: {why}. Switchboard goes on as it was."),
                             ),
-                            None => {}
                         }
                     }
                 }
@@ -769,11 +775,11 @@ impl Server {
         let text =
             format!("Switchboard can't restart on the new build: {why}. It goes on as it was.");
         eprintln!("switchboard server: {text}");
-        match pending.asker {
-            Some(asker) => {
-                let _ = asker.send(Answer::Reply(Reply::fail(text)));
-            }
-            None => self.say(pending.client, &text),
+        if pending.asker.is_none() || pending.say_too {
+            self.say(pending.client, &text);
+        }
+        if let Some(asker) = pending.asker {
+            let _ = asker.send(Answer::Reply(Reply::fail(text)));
         }
     }
 }
@@ -862,6 +868,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     let pending_note = pending.note.clone();
     server.upgrade.handing = true;
     let client = pending.client;
+    let say_too = pending.say_too;
     let asker = match pending.asker {
         Some(asker) => take_asker(asker).await,
         None => None,
@@ -873,6 +880,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
             server,
             asker,
             client,
+            say_too,
             "its socket couldn't be handed over".into(),
         )
         .await;
@@ -892,7 +900,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     };
     if let Some(why) = why_not {
         resume(server, lp, listener, Vec::new());
-        fail(server, asker, client, why).await;
+        fail(server, asker, client, say_too, why).await;
         return;
     }
     super::persist::finish_writing(server);
@@ -984,7 +992,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         }
     };
     resume(server, lp, listener, held);
-    fail(server, asker, client, why).await;
+    fail(server, asker, client, say_too, why).await;
 }
 
 /// Every attached terminal's connection, given back by its task once what
@@ -1035,16 +1043,24 @@ fn resume(
 }
 
 /// Says why a handover didn't happen, to whoever asked.
-async fn fail(server: &mut Server, asker: Option<OwnedFd>, client: Option<ClientId>, why: String) {
+async fn fail(
+    server: &mut Server,
+    asker: Option<OwnedFd>,
+    client: Option<ClientId>,
+    say_too: bool,
+    why: String,
+) {
     if matches!(server.upgrade.shown, Some(Shown::Building(_))) {
         server.upgrade.shown = None;
         server.build_changed();
     }
     let text = format!("Switchboard can't restart on the new build: {why}. It goes on as it was.");
     eprintln!("switchboard server: {text}");
-    match asker {
-        Some(stream) => answer(stream, Reply::fail(text)).await,
-        None => server.say(client, &text),
+    if asker.is_none() || say_too {
+        server.say(client, &text);
+    }
+    if let Some(stream) = asker {
+        answer(stream, Reply::fail(text)).await;
     }
 }
 

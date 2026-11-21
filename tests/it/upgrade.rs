@@ -1280,6 +1280,13 @@ fn upgrade_latest_builds_the_main_clone_and_says_what_happened() {
     assert!(out.contains("Already on the latest build"), "{out}");
     assert!(target.join("args").exists(), "the main clone was built");
     assert_eq!(server.pid(), Some(server_pid));
+    // Said on the screen too, should the command have gone; put away, so
+    // the wait below takes only M-p's for its own.
+    client.wait_text("Already on the latest build");
+    client.send(b"\x1b");
+    client.wait_for("the message put away", |s| {
+        !s.iter().any(|l| l.contains("Already on the latest build"))
+    });
 
     // A build under way (M-p's, waiting on `go`): refused.
     std::fs::write(
