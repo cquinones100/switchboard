@@ -12,17 +12,17 @@
 //! why. No response allows another origin (no CORS headers), and each
 //! carries a strict Content-Security-Policy.
 //!
-//! Four things change anything, each asked of the server over its socket,
+//! Five things change anything, each asked of the server over its socket,
 //! which refuses a pane not running Claude: answering a tab's prompt,
-//! sending its Claude a message, marking it seen, and closing it (which the
-//! app asks about first). A pane is
+//! sending its Claude a message, marking it seen, setting or clearing its
+//! reminder, and closing it (which the app asks about first). A pane is
 //! taken only when the server's own `watch` lists it as a Claude tab. An
 //! image from the phone's photo library is kept on the computer first
 //! (`images`, for that tab alone, under a name made here), and the message
 //! names it, its path typed after the text.
 //! What the drawer shows comes from that stream (`follow`), passed on as
-//! server-sent events, and a tab starting to wait sends a Web Push naming
-//! it.
+//! server-sent events, and a tab starting to wait, or a tab's reminder
+//! coming due, sends a Web Push naming it.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -254,6 +254,7 @@ fn routes(app: Arc<App>) -> Router {
         .route("/api/images/{name}", get(image_of))
         .route("/api/tabs/{pane}/seen", post(seen))
         .route("/api/tabs/{pane}/close", post(close))
+        .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(subscribe))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -825,6 +826,36 @@ async fn close(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Respons
     .await
 }
 
+/// A tab's reminder set for `when` (one of the box's times, or one
+/// typed, which the server reads) with `note`, or, with `clear`, cleared.
+async fn remind(
+    State(app): State<Arc<App>>,
+    Path(pane): Path<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let Some(tab) = claude_tab(&app, &pane) else {
+        return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
+    };
+    let mut args = vec![
+        "remind".into(),
+        "-t".into(),
+        pane_of(&tab),
+        "-s".into(),
+        "phone".into(),
+    ];
+    if body["clear"] == true {
+        args.push("-c".into());
+    } else {
+        args.extend([
+            "-n".into(),
+            text_of(&body, "note"),
+            "--".into(),
+            text_of(&body, "when"),
+        ]);
+    }
+    ask(args).await
+}
+
 async fn push_key(State(app): State<Arc<App>>) -> Response {
     match &app.push_key {
         Some(key) => axum::Json(json!({"key": push::public_key(key)})).into_response(),
@@ -870,9 +901,29 @@ pub fn started_waiting(before: &Value, now: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// The tabs whose reminder came due between two of the server's lines:
+/// due now, and not due before with the same time, so each reminder is
+/// pushed once.
+pub fn came_due(before: &Value, now: &Value) -> Vec<Value> {
+    let was_due = |tab: &Value| {
+        before["tabs"].as_array().into_iter().flatten().any(|b| {
+            b["tab"] == tab["tab"]
+                && b["remind"]["due"] == true
+                && b["remind"]["at"] == tab["remind"]["at"]
+        })
+    };
+    now["tabs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["remind"]["due"] == true && !was_due(t))
+        .cloned()
+        .collect()
+}
+
 /// The server's `watch`, followed for as long as the process runs: each
 /// line handed to the page's stream, a push for each tab that started
-/// waiting, and `live` false while the server can't be reached.
+/// waiting and each whose reminder came due (its note never in it), and `live` false while the server can't be reached.
 async fn follow(tx: watch::Sender<Value>, push_key: Option<Arc<EcdsaKeyPair>>) {
     let mut last: Option<Value> = None;
     loop {
@@ -913,7 +964,9 @@ async fn follow_once(
                     // Turned off while it runs, it pushes nothing.
                     let pushing = settings::setting("phone") == Some(Value::Bool(true));
                     if let (true, Some(before), Some(key)) = (pushing, last.as_ref(), push_key) {
-                        for tab in started_waiting(before, &now) {
+                        let waiting = started_waiting(before, &now).into_iter().map(|t| (t, ""));
+                        let due = came_due(before, &now).into_iter().map(|t| (t, "Reminder"));
+                        for (tab, body) in waiting.chain(due) {
                             let title = format!(
                                 "Tab {} · {}",
                                 tab["index"],
@@ -928,7 +981,7 @@ async fn follow_once(
                                     .to_string(),
                             );
                             tokio::spawn(async move {
-                                push::send(&key, &title, &id).await;
+                                push::send(&key, &title, body, &id).await;
                             });
                         }
                     }
@@ -1026,12 +1079,40 @@ mod tests {
     }
 
     #[test]
+    fn a_reminder_that_comes_due_is_pushed_once() {
+        let remind = |at: i64, due: bool| json!({"at": at, "note": "check the deploy", "due": due});
+        let before = json!({"tabs": [
+            {"tab": "@1", "remind": remind(100, false)},
+            {"tab": "@2", "remind": remind(100, true)},
+            {"tab": "@3", "remind": remind(100, true)},
+            {"tab": "@4", "remind": null},
+        ]});
+        let now = json!({"tabs": [
+            {"tab": "@1", "remind": remind(100, true)},
+            {"tab": "@2", "remind": remind(100, true)},
+            {"tab": "@3", "remind": remind(200, true)},
+            {"tab": "@4", "remind": null},
+        ]});
+        let due: Vec<_> = came_due(&before, &now)
+            .iter()
+            .map(|t| t["tab"].clone())
+            .collect();
+        assert_eq!(
+            due,
+            [json!("@1"), json!("@3")],
+            "come due, or set again and due"
+        );
+        assert!(came_due(&now, &now).is_empty(), "never twice");
+    }
+
+    #[test]
     fn only_the_pages_files_and_pairing_come_before_pairing() {
         assert!(before_pairing("/", &Method::GET));
         assert!(before_pairing("/api/pair", &Method::POST));
         assert!(!before_pairing("/api/tabs", &Method::GET));
         assert!(!before_pairing("/api/tabs/%1/answer", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/close", &Method::POST));
+        assert!(!before_pairing("/api/tabs/1/remind", &Method::POST));
         assert!(!before_pairing("/", &Method::POST));
     }
 

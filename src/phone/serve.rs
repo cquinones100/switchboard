@@ -2,7 +2,8 @@
 //! asks of it over the socket, `prompt` (a Claude pane's waiting prompt as
 //! JSON), `answer` (an option pressed, or a message typed, in a Claude
 //! pane), `kill-tab -s` (a Claude tab closed, which the phone asks about
-//! first) and `watch` (every Claude tab's state and last turn, streamed as
+//! first), `remind` (a Claude tab's reminder set or cleared, as the
+//! workspace's reminder box does) and `watch` (every Claude tab's state and last turn, streamed as
 //! a line of JSON each time they change), and the server's log's line for
 //! what your phone did, with no notification, since you know what you did
 //! and the tab shows it; and, after the server takes over from another
@@ -13,8 +14,8 @@
 //! A prompt is read and answered with mission control's own reader and
 //! keys (`mission::answer`), the ones the Slack relay uses, so the phone
 //! presses exactly what the answer box would. Nothing here reaches a pane
-//! that isn't running Claude: `prompt`, `answer` and `kill-tab -s` refuse
-//! one, and
+//! that isn't running Claude: `prompt`, `answer`, `kill-tab -s` and
+//! `remind` refuse one, and
 //! `watch` lists Claude tabs alone.
 //!
 //! `watch` keeps its connection: the server takes the stream back from
@@ -30,10 +31,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::mission::answer::{self, Prompt};
+use crate::mission::remind;
 use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
-use crate::sidebar::model::{Rules, by_need, needs_tab};
+use crate::sidebar::model::{Rules, by_need, needs_tab, reminder_due};
 use crate::{settings, util};
 
 use super::cli;
@@ -238,6 +240,58 @@ impl Server {
         self.phone_did(from, tab, "closed it");
         self.kill_tab(tab);
         Ok(Reply::ok(format!("Closed tab {n} {name}\n")))
+    }
+
+    /// `remind`: the reminder of a pane's tab set for `when` (one of the
+    /// box's times, or one typed, read as the box reads it) with `note`,
+    /// or, with `None`, cleared, as the workspace's box sets and clears
+    /// one; refused with Settings' "Reminders" off, for a pane not running
+    /// Claude, and for a time that can't be read, in the box's words.
+    /// `from` names who asked, for the log.
+    pub(crate) fn phone_remind(
+        &mut self,
+        pane: PaneId,
+        when: Option<&str>,
+        note: &str,
+        from: Option<&str>,
+    ) -> Result<Reply, String> {
+        if !settings::is_on("reminders") {
+            return Err("reminders are off in Settings".into());
+        }
+        self.phone_claude_pane(pane)?;
+        let tab = self.panes[&pane].tab;
+        let name = format!(
+            "tab {} {}",
+            self.tab_number(tab),
+            self.tabs
+                .get(&tab)
+                .map(|t| t.display_name().to_string())
+                .unwrap_or_default()
+        );
+        let (said, what) = match when {
+            None => {
+                self.write_reminder(tab, None);
+                (
+                    format!("Cleared the reminder for {name}"),
+                    "Cleared its reminder".to_string(),
+                )
+            }
+            Some(text) => {
+                let text = text.trim();
+                let at = remind::when(text, &util::local_now())
+                    .ok_or_else(|| format!("\"{text}\" {}", remind::NOT_A_TIME))?;
+                self.write_reminder(tab, Some((at, note.trim())));
+                let at = remind::said(at);
+                (
+                    format!("Reminder for {name} at {at}"),
+                    format!("Reminder at {at}"),
+                )
+            }
+        };
+        if let Some(from) = from {
+            self.phone_did(from, tab, &what);
+        }
+        Ok(Reply::ok(format!("{said}\n")))
     }
 
     /// Something done from elsewhere (`from`, the phone), written in the
@@ -517,11 +571,35 @@ impl Server {
                         "at": turn.at,
                     })),
                     "prompt": prompt,
+                    // Its reminder, while Settings' "Reminders" is on: when
+                    // (seconds), what for, and whether it has come due.
+                    "remind": t.remind_at.filter(|_| r.reminders).map(|at| json!({
+                        "at": at,
+                        "note": t.remind_note.clone().unwrap_or_default(),
+                        "due": reminder_due(t, &r),
+                    })),
                 }))
             })
             .collect();
-        // Whether Close tab is offered, sent again as Settings changes it.
-        json!({ "tabs": tabs, "close": crate::settings::is_on("phone_close_tabs") })
+        // Whether Close tab and Remind me are offered, sent again as
+        // Settings changes them, and the reminder box's times with the
+        // clock time each means now, as the box shows them.
+        let now = util::local_now();
+        let times: Vec<Value> = remind::CHOICES
+            .iter()
+            .map(|label| {
+                let clock = remind::when(label, &now)
+                    .map(|at| remind::clock_of(at, &now))
+                    .unwrap_or_default();
+                json!({ "label": label, "clock": clock })
+            })
+            .collect();
+        json!({
+            "tabs": tabs,
+            "close": crate::settings::is_on("phone_close_tabs"),
+            "reminders": r.reminders,
+            "remind_times": times,
+        })
     }
 }
 

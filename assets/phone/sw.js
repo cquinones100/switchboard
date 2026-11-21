@@ -82,7 +82,7 @@ self.addEventListener("push", (event) => {
   const title = data.title || "A tab";
   event.waitUntil(
     self.registration.showNotification(title, {
-      body: "Waiting on you",
+      body: data.body || "Waiting on you",
       tag: "tab-" + (data.tab || ""),
       data: { tab: data.tab || "" },
       icon: "/icon-192.png",

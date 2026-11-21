@@ -247,7 +247,12 @@ fn test_push() -> Result<String, String> {
         return Err("no phone has turned on notifications: open the app from its home screen icon and allow them".into());
     }
     let key = push::key().map_err(|e| format!("no push key: {e:#}"))?;
-    let sent = util::block_on(push::send(&key, "Test notification from Switchboard", ""));
+    let sent = util::block_on(push::send(
+        &key,
+        "Test notification from Switchboard",
+        "",
+        "",
+    ));
     let words: Vec<String> = sent
         .iter()
         .map(|(device, outcome)| format!("{device}: {}", outcome.words()))

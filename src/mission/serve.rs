@@ -6004,34 +6004,45 @@ impl Server {
     /// A tab's reminder cleared, and said through the footer.
     pub(crate) fn clear_reminder(&mut self, client: ClientId, tab: TabId) {
         let name = self.remind_name(tab).unwrap_or_default();
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            for option in ["@remind_at", "@remind_note", "@remind_said"] {
-                t.opts.remove(option);
-            }
-        }
-        self.dirty_tab(tab);
-        self.mission_redraw();
+        self.write_reminder(tab, None);
         self.mission_note(client, format!("Reminder cleared for {name}."));
     }
 
     /// A tab's reminder set, and said through the footer.
     pub(crate) fn set_reminder(&mut self, client: ClientId, tab: TabId, at: i64, note: &str) {
         let name = self.remind_name(tab).unwrap_or_default();
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.insert("@remind_at".into(), at.to_string());
-            if note.is_empty() {
-                t.opts.remove("@remind_note");
-            } else {
-                t.opts.insert("@remind_note".into(), note.to_string());
-            }
-            t.opts.remove("@remind_said");
-        }
-        self.dirty_tab(tab);
-        self.mission_redraw();
+        self.write_reminder(tab, Some((at, note)));
         self.mission_note(
             client,
             format!("Reminder set for {name}, {}.", remind::said(at)),
         );
+    }
+
+    /// A tab's reminder set (its time, in seconds, and what for, empty for
+    /// nothing) or, with `None`, cleared: its `@remind_at` and
+    /// `@remind_note`, and `@remind_said` taken off so a new one is said
+    /// when it comes due. The workspace's box and the phone (src/phone)
+    /// both set one through it.
+    pub(crate) fn write_reminder(&mut self, tab: TabId, reminder: Option<(i64, &str)>) {
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.remove("@remind_said");
+            match reminder {
+                Some((at, note)) => {
+                    t.opts.insert("@remind_at".into(), at.to_string());
+                    if note.is_empty() {
+                        t.opts.remove("@remind_note");
+                    } else {
+                        t.opts.insert("@remind_note".into(), note.to_string());
+                    }
+                }
+                None => {
+                    t.opts.remove("@remind_at");
+                    t.opts.remove("@remind_note");
+                }
+            }
+        }
+        self.dirty_tab(tab);
+        self.mission_redraw();
     }
 
     /// A tab's number and name, as its reminder's words name it.

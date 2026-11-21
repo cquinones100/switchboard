@@ -70,6 +70,10 @@
 //!                                        control answers it, or with -m a
 //!                                        message typed to its Claude; never
 //!                                        typed in a pane (src/phone)
+//! remind [-t pane] [-s from] [-n note] (-c | when)
+//!                                        a Claude pane's tab's reminder set
+//!                                        for when (as the reminder box reads
+//!                                        it) or cleared (src/phone)
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up
@@ -125,6 +129,7 @@ pub const NAMES: &[&str] = &[
     "seen",
     "prompt",
     "answer",
+    "remind",
     "watch",
     "phone-pair",
     "ready",
@@ -231,6 +236,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "answer",
         "answer [-t pane] [-m] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; -s names who asked (phone), written in the server's log; refused for a pane not running Claude, and typed in a pane",
+    ),
+    (
+        "remind",
+        "remind [-t pane] [-s from] [-n note] (-c | <when>): the reminder of the tab of a pane running Claude set for <when> (one of the reminder box's times, or one typed: 45m, 3pm, tue 9am, nov 20) with -n's note, or cleared with -c, as the box sets it; refused with Settings' Reminders off, for a pane not running Claude, and for a time it can't read; -s names who asked (phone), written in the server's log",
     ),
     (
         "watch",
@@ -531,6 +540,22 @@ impl Server {
                 let pane = self.pane_from(&a, caller)?;
                 let reply = a.rest.join(" ");
                 self.phone_answer(pane, &reply, a.has('m'), a.value('h'), a.value('s'))
+            }),
+            "remind" => Args::parse(rest, "tsn").and_then(|a| {
+                let pane = self.pane_from(&a, caller)?;
+                let when = a.rest.join(" ");
+                let when = match (a.has('c'), when.trim().is_empty()) {
+                    (true, true) => None,
+                    (false, false) => Some(when),
+                    (true, false) => return Err("remind takes -c or a time, not both".into()),
+                    (false, true) => return Err("remind takes a time, or -c to clear it".into()),
+                };
+                self.phone_remind(
+                    pane,
+                    when.as_deref(),
+                    a.value('n').unwrap_or(""),
+                    a.value('s'),
+                )
             }),
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.

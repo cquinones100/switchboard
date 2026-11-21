@@ -248,11 +248,17 @@ impl Outcome {
     }
 }
 
-/// Sends `title` (and the tab it opens, `tab`, empty for none) to every
+/// Sends `title` (with `body` under it, empty for the app's own
+/// "Waiting on you", and the tab it opens, `tab`, empty for none) to every
 /// listed subscription, logs each outcome and forgets the gone; gives each
 /// device with what came of its push.
-pub async fn send(key: &EcdsaKeyPair, title: &str, tab: &str) -> Vec<(String, Outcome)> {
-    let payload = serde_json::json!({"title": title, "tab": tab}).to_string();
+pub async fn send(
+    key: &EcdsaKeyPair,
+    title: &str,
+    body: &str,
+    tab: &str,
+) -> Vec<(String, Outcome)> {
+    let payload = serde_json::json!({"title": title, "body": body, "tab": tab}).to_string();
     let sent = deliver(key, listed_subscriptions(), payload.as_bytes()).await;
     record(&config::state_dir(), &sent);
     for (sub, outcome) in &sent {
