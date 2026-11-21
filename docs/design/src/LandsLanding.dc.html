@@ -186,20 +186,20 @@ const TONE = { done: "g", run: "b", wait: "d", fail: "r", queue: "m", needs: "y"
 const step = (i, y, kind, text, sub) => cell(CX + i * CS, y, CW, text, TONE[kind], sub);
 const heads = (y, first, names) => { T(36, y, [first, "d"]); names.forEach((h, i) => { const n = [...h].length; put(CX + i * CS + Math.floor((CW - n) / 2), y, h, "d"); }); headRule(36, y + 1, 122); };
 const item = (y, name, sub, cells, sel) => { const bg = row(35, y, 125, 2, sel); T(37, y, [name, "t", "b", bg]); put(37, y + 1, sub, "d", "", bg); cells.forEach((c, i) => step(i, y, c[0], c[1], c[2])); };
-const repo = (y, name, how, done, right) => { T(36, y, [name, "t", "b"], ["   lands ", "d"], [how, "a"], ["  ·  done when " + done, "d"]); R(158, y, right, "d"); };
+const repo = (y, name, how, done, right) => { T(36, y, [name, "t", "b"], ["   lands ", "d"], [how, "a"], ["  ·  done when " + done + ", then cleaned up", "d"]); R(158, y, right, "d"); };
 
-repo(3, "switchboard", "by Switchboard's merge queue", "its PR merges on main", "a train of 2 testing");
+repo(3, "switchboard", "by Switchboard's merge queue", "its PR merges on main", "train 3 testing");
 heads(5, "pull request", ["review", "checks", "queued", "train", "landed", "cleaned up"]);
 item(7, "#2040 calendar RSVP", "tab 5 · 1st in train 3", [["done", "✓ 2 clean"], ["done", "✓ 9 of 9"], ["done", "✓ 1st"], ["run", "testing", "CI · 6m"], ["wait", "waiting"], ["wait", "waiting"]]);
 item(10, "#219 tab colors", "tab 6 · 2nd in train 3", [["done", "✓ 2 clean"], ["done", "✓ 9 of 9"], ["done", "✓ 2nd"], ["run", "testing", "CI · 6m"], ["wait", "waiting"], ["wait", "waiting"]], true);
 
 repo(14, "web-app", "by GitHub's merge queue", "GitHub merges its PR", "3rd of 4 in GitHub's queue");
 heads(16, "pull request", ["review", "checks", "approved", "queued", "landed", "cleaned up"]);
-item(18, "#2031 settings page", "tab 3 · WEB-131", [["done", "✓ 2 clean"], ["done", "✓ passed"], ["done", "✓ Priya"], ["queue", "3rd"], ["wait", "waiting"], ["wait", "waiting"]]);
+item(18, "#208 billing page", "tab 4 · WEB-131", [["done", "✓ 2 clean"], ["done", "✓ passed"], ["done", "✓ Priya"], ["queue", "3rd"], ["wait", "waiting"], ["wait", "waiting"]]);
 
 repo(22, "notes-sync", "straight on main", "its commit is pushed to main", "1 holds the lock");
 heads(24, "worktree", ["tests", "review", "leak check", "lock", "landed", "cleaned up"]);
-item(26, "note-stable-ids", "tab 2 · 3f2a91c", [["done", "✓ 412"], ["done", "✓ 2 clean"], ["done", "✓ none"], ["done", "✓ held"], ["needs", "● push?", "asks you · 4m"], ["wait", "waiting"]]);
+item(26, "sync-retry", "tab 9 · 3f2a91c", [["done", "✓ 412"], ["done", "✓ 2 clean"], ["done", "✓ none"], ["done", "✓ held"], ["needs", "● push?", "asks you · 4m"], ["wait", "waiting"]]);
 
 repo(30, "oncall-tools", "by mergebot, a merge service", "mergebot merges its PR", "1 handed over");
 heads(32, "pull request", ["review", "checks", "handed over", "its queue", "landed", "cleaned up"]);

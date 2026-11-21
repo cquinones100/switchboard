@@ -179,7 +179,7 @@ const navBar = (group, current, right) => {
 
 // PRS BY THE WAY EACH LANDS: Merge queue becomes Landing, every PR on its way to merging whatever the way, each card saying
 // where it is in its repository's way; the chosen PR's pane names that way.
-navBar('Code', 'PRs', '5 open · 2 landing');
+navBar('Code', 'PRs', '6 open · 3 landing');
 const clip = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join('').trimEnd() + '…' : s;
 const wrap2 = (s, n) => { const w = s.split(' '); let a = ''; let i = 0; while (i < w.length && (a + (a ? ' ' : '') + w[i]).length <= n) { a += (a ? ' ' : '') + w[i]; i++; } return [a, clip(w.slice(i).join(' '), n)]; };
 // A PR: the kit's card, its number on the edge and its checks' mark at the right; its title on two lines, then one line about it.
@@ -189,12 +189,13 @@ const pr = (x, y, num, check, title, meta, chosen) => {
   put(x + 2, y + 1, l1, 't', chosen ? 'b' : ''); if (l2) put(x + 2, y + 2, l2, 't', chosen ? 'b' : '');
   T(x + 2, y + (l2 ? 3 : 2), ...meta);
 };
-label(36, 3, 'In review', 'b', 1, 47); label(55, 3, 'Changes asked', 'r', 1, 70); label(74, 3, 'Approved', 'g', 1, 84); label(93, 3, 'Landing', 'm', 2, 102);
+label(36, 3, 'In review', 'b', 1, 47); label(55, 3, 'Changes asked', 'r', 1, 70); label(74, 3, 'Approved', 'g', 1, 84); label(93, 3, 'Landing', 'm', 3, 102);
 pr(36, 5, 2031, 'passed', 'settings page layout', [['tab 3 · ', 'd'], [MARK.needs[0], MARK.needs[1]], [' waits', 'd']], true);
 pr(93, 10, 2040, 'working', 'calendar RSVP from the menu', [['train 3 · CI 6m', 'd']]);
 pr(55, 5, 2027, 'failed', 'sidebar header on short screens', [['Ben', 'd']]);
 pr(74, 5, 2019, 'passed', 'image cache', [['Ana, Sam', 'd']]);
-pr(93, 5, 2012, 'passed', 'landing per repository', [["GitHub's · 3rd", 'd']]);
+pr(93, 5, 2012, 'passed', 'alert routing', [['in mergebot', 'd']]);
+pr(93, 16, 208, 'passed', 'billing page', [["GitHub's · 3rd", 'd']]);
 ruleV(112, 3, 40);
 // The chosen PR beside the board: the kit's pane.
 let py = pane(114, 3, 47, '#2031 Settings page layout', [["web-app · GitHub's merge queue · ", 'd'], [MARK.passed[0], MARK.passed[1]], [' checks', 'd']]);
