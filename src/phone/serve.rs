@@ -57,18 +57,20 @@ pub enum PhoneEvent {
     /// The app an older build ran has exited: its tab's pane starts it
     /// again on this one.
     OldExited { pane: PaneId, old: i64 },
-    /// Whether the app started again on this build is running yet, until
-    /// `until`.
+    /// Whether the app started again on this build still runs at `until`:
+    /// its lock is written before it fetches its certificate and binds its
+    /// port, so one that stops once it was `seen` failed to start too.
     Restarting {
-        pane: PaneId,
         old: i64,
+        seen: bool,
         until: std::time::Instant,
     },
 }
 
 /// How long the app an older build ran has to stop after it is asked
-/// before it is killed, and the one started in its place to write its lock
-/// before the screen says it didn't start.
+/// before it is killed, and how long the one started in its place has to
+/// be running (not stopped after writing its lock) before it counts as
+/// started; the screen says so when it isn't.
 const STOPPING: Duration = Duration::from_secs(10);
 const STARTING: Duration = Duration::from_secs(15);
 
@@ -388,8 +390,8 @@ impl Server {
                             "switchboard server: the phone app was restarted on the new build in pane {pane}"
                         );
                         self.phone_event(PhoneEvent::Restarting {
-                            pane,
                             old,
+                            seen: false,
                             until: std::time::Instant::now() + STARTING,
                         });
                     }
@@ -403,14 +405,18 @@ impl Server {
                     }
                 }
             }
-            PhoneEvent::Restarting { pane, old, until } => {
-                if cli::running_app().is_some_and(|app| app.pid != old) {
+            PhoneEvent::Restarting { old, seen, until } => {
+                let runs = cli::running_app().is_some_and(|app| app.pid != old);
+                let stopped_after_starting = seen && !runs;
+                let waited = std::time::Instant::now() >= until;
+                if waited && runs {
                     return;
                 }
-                if std::time::Instant::now() < until {
+                if !waited && !stopped_after_starting {
+                    let seen = seen || runs;
                     self.send_later(
                         Duration::from_millis(250),
-                        Event::Phone(PhoneEvent::Restarting { pane, old, until }),
+                        Event::Phone(PhoneEvent::Restarting { old, seen, until }),
                     );
                     return;
                 }
