@@ -28,17 +28,81 @@ use super::{config, pairing, tailnet};
 use crate::mux::socket;
 use crate::{platform, settings, util, worktree};
 
-const MARK: &str = "@phone_app";
+pub(crate) const MARK: &str = "@phone_app";
 
 fn lock_file() -> std::path::PathBuf {
     config::state_dir().join("lock")
 }
 
+/// The app running, as its lock names it: its pid on the first line, then
+/// the binary it runs from (`build_of_self`) and that build's version. A
+/// lock written before the build was kept in it has the pid alone, which
+/// reads as a build other than any.
+pub(crate) struct Running {
+    pub pid: i64,
+    pub build: String,
+    pub version: String,
+}
+
+/// The binary this process runs from, as `<path> <modified time in ns>`:
+/// a build installed over the same path reads as another, which its
+/// version alone wouldn't say of two builds of one commit.
+pub(crate) fn build_of_self() -> String {
+    let Ok(exe) = std::env::current_exe().and_then(|p| p.canonicalize()) else {
+        return String::new();
+    };
+    let modified = std::fs::metadata(&exe)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("{} {modified}", exe.to_string_lossy())
+}
+
+/// The app running, if one is.
+pub(crate) fn running_app() -> Option<Running> {
+    let text = util::read_text(lock_file())?;
+    let mut lines = text.lines();
+    let pid = lines.next()?.trim().parse::<i64>().ok()?;
+    util::is_alive(pid).then(|| Running {
+        pid,
+        build: lines.next().unwrap_or("").to_string(),
+        version: lines.next().unwrap_or("").to_string(),
+    })
+}
+
 /// The pid of the app running, if one is.
 fn running() -> Option<i64> {
-    util::read_text(lock_file())
-        .and_then(|t| t.trim().parse::<i64>().ok())
-        .filter(|pid| util::is_alive(*pid))
+    running_app().map(|r| r.pid)
+}
+
+/// What `status` says: whether it runs, and from which build.
+pub(crate) fn status_words() -> String {
+    match running_app() {
+        Some(r) if r.version.is_empty() => {
+            format!("The phone app is running (process {}).", r.pid)
+        }
+        Some(r) => {
+            let exe = r.build.rsplit_once(' ').map_or(&*r.build, |(exe, _)| exe);
+            format!(
+                "The phone app is running (process {}, {} from {exe}).",
+                r.pid, r.version
+            )
+        }
+        None => "The phone app is not running.".into(),
+    }
+}
+
+/// The command its tab runs: `phone run` from this binary, then the shell,
+/// so the tab stays once it ends, showing why.
+pub(crate) fn tab_command() -> Vec<String> {
+    let shell = worktree::work_shell();
+    let line = format!(
+        "{} ; exec {} -i",
+        worktree::self_command("phone run"),
+        worktree::shell_quote(&shell)
+    );
+    vec![shell, "-i".into(), "-c".into(), line]
 }
 
 /// What has to be so before it starts: the setting on, phone.json, and
@@ -79,26 +143,11 @@ fn start() -> Result<String, String> {
         return Ok(String::new());
     }
     ready()?;
-    let shell = worktree::work_shell();
-    let line = format!(
-        "{} ; exec {} -i",
-        worktree::self_command("phone run"),
-        worktree::shell_quote(&shell)
-    );
-    let home = crate::paths::home();
-    let out = socket::ask_ok(&[
-        "new-tab",
-        "-n",
-        "Phone app",
-        "-c",
-        &home.to_string_lossy(),
-        "--",
-        &shell,
-        "-i",
-        "-c",
-        &line,
-    ])
-    .map_err(|e| e.to_string())?;
+    let home = crate::paths::home().to_string_lossy().into_owned();
+    let command = tab_command();
+    let mut args = vec!["new-tab", "-n", "Phone app", "-c", &home, "--"];
+    args.extend(command.iter().map(String::as_str));
+    let out = socket::ask_ok(&args).map_err(|e| e.to_string())?;
     let mut ids = out.split_whitespace();
     let (tab, pane) = (ids.next().unwrap_or(""), ids.next().unwrap_or(""));
     let _ = socket::ask_ok(&["set", "-t", pane, MARK, "1"]);
@@ -126,9 +175,15 @@ fn run() -> ExitCode {
         super::log::line(&format!("already running (process {pid})"));
         return ExitCode::from(1);
     }
-    if let Err(e) = util::make_dirs(config::state_dir())
-        .and_then(|_| util::write_private(lock_file(), std::process::id().to_string(), false))
-    {
+    if let Err(e) = util::make_dirs(config::state_dir()).and_then(|_| {
+        let lock = format!(
+            "{}\n{}\n{}\n",
+            std::process::id(),
+            build_of_self(),
+            crate::update::version_line()
+        );
+        util::write_private(lock_file(), lock, false)
+    }) {
         super::log::line(&format!("couldn't start: {e}"));
         return ExitCode::from(1);
     }
@@ -243,10 +298,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         "stop" => outcome(stop()),
         "test" => outcome(test_push()),
         "status" => {
-            match running() {
-                Some(pid) => println!("The phone app is running (process {pid})."),
-                None => println!("The phone app is not running."),
-            }
+            println!("{}", status_words());
             ExitCode::SUCCESS
         }
         "run" => run(),

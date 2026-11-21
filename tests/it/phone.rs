@@ -564,3 +564,152 @@ for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"])
         "{stdout}"
     );
 }
+
+/// A stand-in for the phone app in a tab of its own, marked as the phone
+/// app's or not: a process that writes the app's lock with its pid and the
+/// build given, then waits, run by a shell that goes on once it ends, as
+/// `phone start`'s tab does. Gives its pane and the stand-in's pid.
+fn stand_in_app(server: &TestServer, marked: bool, build: &str) -> (String, i64) {
+    let lock = server.state.join("phone/lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let _ = std::fs::remove_file(&lock);
+    let app = server.dir.path().join("app.sh");
+    std::fs::write(
+        &app,
+        format!(
+            "printf '%s\\n%s\\n%s\\n' $$ '{build}' '0.0.0 (old)' > '{}'\nexec sleep 1000\n",
+            lock.display()
+        ),
+    )
+    .unwrap();
+    let script = format!("sh '{}'; exec sh", app.display());
+    let out = server.ok(&[
+        "new-tab",
+        "-d",
+        "-n",
+        "Phone app",
+        "--",
+        "sh",
+        "-c",
+        &script,
+    ]);
+    let pane = out.split_whitespace().nth(1).unwrap().to_string();
+    if marked {
+        server.ok(&["set", "-t", &pane, "@phone_app", "1"]);
+    }
+    wait_until(server, "the stand-in's lock", || {
+        std::fs::read_to_string(&lock).is_ok_and(|t| t.lines().count() == 3)
+    });
+    let pid = std::fs::read_to_string(&lock)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    (pane, pid)
+}
+
+/// The build `phone run` would name for the server's binary.
+fn build_of(bin: &std::path::Path) -> String {
+    let bin = bin.canonicalize().unwrap();
+    let modified = std::fs::metadata(&bin)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{} {modified}", bin.display())
+}
+
+fn alive(pid: i64) -> bool {
+    // SAFETY: signal 0 only asks whether the process is there.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+fn pane_pid(server: &TestServer, pane: &str) -> Option<u64> {
+    server.list()["sessions"]
+        .as_array()?
+        .iter()
+        .flat_map(|s| s["tabs"].as_array().into_iter().flatten())
+        .flat_map(|t| t["panes"].as_array().into_iter().flatten())
+        .find(|p| p["id"] == pane)?["pid"]
+        .as_u64()
+}
+
+fn upgrade(server: &TestServer) {
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
+}
+
+#[test]
+fn an_upgrade_restarts_the_phone_app_from_another_build_on_its_own() {
+    let (server, _bin) = TestServer::start_from_copy();
+    common::write_settings(&server.home, json!({"phone": true}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, old) = stand_in_app(&server, true, "/elsewhere/switchboard 1");
+    let shell = pane_pid(&server, &pane);
+
+    upgrade(&server);
+    wait_until(&server, "the old app stopped", || !alive(old));
+    wait_until(&server, "the pane started again", || {
+        pane_pid(&server, &pane).is_some_and(|p| Some(p) != shell)
+    });
+    assert_eq!(
+        server.ok(&["show", "-t", &pane, "@phone_app"]).trim(),
+        "1",
+        "still marked as the phone app's"
+    );
+    // `phone run` ran there, and with no phone.json didn't start, which
+    // its log and the screen say.
+    let log = server.state.join("phone/phone.log");
+    wait_until(&server, "phone run's log line", || {
+        std::fs::read_to_string(&log).is_ok_and(|t| t.contains("phone.json"))
+    });
+    assert!(
+        server
+            .log()
+            .contains("the phone app was restarted on the new build"),
+        "{}",
+        server.log()
+    );
+    let deadline = common::deadline(Duration::from_secs(30));
+    while !client
+        .screen()
+        .iter()
+        .any(|l| l.contains("didn't start again on the new build"))
+    {
+        assert!(Instant::now() < deadline, "no message: {}", server.log());
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn an_upgrade_leaves_the_phone_app_alone_on_its_build_outside_its_tab_or_with_it_off() {
+    let (server, bin) = TestServer::start_from_copy();
+    common::write_settings(&server.home, json!({"phone": true}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let left_alone = |what: &str, pane: &str, pid: i64| {
+        let shell = pane_pid(&server, pane);
+        upgrade(&server);
+        std::thread::sleep(Duration::from_secs(1) * common::patience());
+        assert!(alive(pid), "{what}: the app was stopped\n{}", server.log());
+        assert_eq!(pane_pid(&server, pane), shell, "{what}");
+    };
+
+    let (pane, pid) = stand_in_app(&server, true, &build_of(&bin));
+    left_alone("on the server's build", &pane, pid);
+    server.ok(&["kill-pane", "-t", &pane]);
+
+    let (pane, pid) = stand_in_app(&server, false, "/elsewhere/switchboard 1");
+    left_alone("in an unmarked tab", &pane, pid);
+    server.ok(&["kill-pane", "-t", &pane]);
+
+    common::write_settings(&server.home, json!({"phone": false}));
+    let (pane, pid) = stand_in_app(&server, true, "/elsewhere/switchboard 1");
+    left_alone("with the setting off", &pane, pid);
+    assert!(!server.log().contains("restarted on the new build"));
+}

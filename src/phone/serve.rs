@@ -4,7 +4,10 @@
 //! Claude pane) and `watch` (every Claude tab's state and last turn,
 //! streamed as a line of JSON each time they change), and the server's
 //! log's line for what your phone did, with no notification, since the tab
-//! itself shows it.
+//! itself shows it; and, after the server takes over from another build,
+//! the phone app started again in its tab on this one
+//! (`phone_after_upgrade`), since a program a pane runs keeps the build it
+//! started with.
 //!
 //! A prompt is read and answered with mission control's own reader and
 //! keys (`mission::answer`), the ones the Slack relay uses, so the phone
@@ -29,7 +32,9 @@ use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{Rules, by_need, needs_tab};
-use crate::util;
+use crate::{settings, util};
+
+use super::cli;
 
 /// How long after a change `watch` waits before it sends, so a burst of
 /// changes goes as one.
@@ -49,7 +54,23 @@ pub struct Phone {
 pub enum PhoneEvent {
     /// Send the watchers what changed.
     Publish,
+    /// The app an older build ran has exited: its tab's pane starts it
+    /// again on this one.
+    OldExited { pane: PaneId, old: i64 },
+    /// Whether the app started again on this build is running yet, until
+    /// `until`.
+    Restarting {
+        pane: PaneId,
+        old: i64,
+        until: std::time::Instant,
+    },
 }
+
+/// How long the app an older build ran has to stop after it is asked
+/// before it is killed, and the one started in its place to write its lock
+/// before the screen says it didn't start.
+const STOPPING: Duration = Duration::from_secs(10);
+const STARTING: Duration = Duration::from_secs(15);
 
 /// A prompt as the phone reads it.
 pub fn prompt_json(found: &Prompt) -> Value {
@@ -300,8 +321,107 @@ impl Server {
         self.send_later(SETTLE, Event::Phone(PhoneEvent::Publish));
     }
 
+    /// After taking over from another build (`upgrade::adopt`): the phone
+    /// app running in its own tab from a binary other than this server's
+    /// is asked to stop, and once it has exited (killed if it hasn't within
+    /// `STOPPING`, so its port and lock are free), its pane runs it again
+    /// from this one. One outside its tab, or with Settings' "Phone app"
+    /// off, is left as it is.
+    pub(crate) fn phone_after_upgrade(&mut self) {
+        if !settings::is_on("phone") {
+            return;
+        }
+        let Some(app) = cli::running_app() else {
+            return;
+        };
+        if app.build == cli::build_of_self() {
+            return;
+        }
+        let Some(pane) = self.phone_app_pane(app.pid) else {
+            return;
+        };
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let tx = self.tx.clone();
+        let old = app.pid;
+        tokio::spawn(async move {
+            let pid = old as libc::pid_t;
+            // SAFETY: a signal to the process the lock names, alive as
+            // just checked.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            let deadline = tokio::time::Instant::now() + STOPPING;
+            while util::is_alive(old) {
+                if tokio::time::Instant::now() >= deadline {
+                    // SAFETY: as above; it didn't stop when asked.
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let _ = tx.send(Event::Phone(PhoneEvent::OldExited { pane, old }));
+        });
+    }
+
+    /// The pane of a tab marked as the phone app's whose program, or one in
+    /// front in it, is `pid`.
+    fn phone_app_pane(&self, pid: i64) -> Option<PaneId> {
+        let pid = u32::try_from(pid).ok()?;
+        self.panes
+            .iter()
+            .filter(|(_, slot)| slot.opts.get(cli::MARK).is_some_and(|v| v == "1"))
+            .filter(|(_, slot)| self.tabs.contains_key(&slot.tab))
+            .find(|(_, slot)| {
+                slot.pane.pid() == Some(pid) || slot.pane.foreground_pids().contains(&pid)
+            })
+            .map(|(id, _)| *id)
+    }
+
     pub(crate) fn phone_event(&mut self, event: PhoneEvent) {
         match event {
+            PhoneEvent::OldExited { pane, old } => {
+                match self.replace_program(pane, Some(cli::tab_command())) {
+                    Ok(()) => {
+                        if let Some(slot) = self.panes.get_mut(&pane) {
+                            slot.opts.insert(cli::MARK.into(), "1".into());
+                        }
+                        eprintln!(
+                            "switchboard server: the phone app was restarted on the new build in pane {pane}"
+                        );
+                        self.phone_event(PhoneEvent::Restarting {
+                            pane,
+                            old,
+                            until: std::time::Instant::now() + STARTING,
+                        });
+                    }
+                    Err(e) => {
+                        let said = format!(
+                            "Phone app: couldn't start it again on the new build ({e:#}). {}",
+                            cli::status_words()
+                        );
+                        eprintln!("switchboard server: {said}");
+                        self.say(None, &said);
+                    }
+                }
+            }
+            PhoneEvent::Restarting { pane, old, until } => {
+                if cli::running_app().is_some_and(|app| app.pid != old) {
+                    return;
+                }
+                if std::time::Instant::now() < until {
+                    self.send_later(
+                        Duration::from_millis(250),
+                        Event::Phone(PhoneEvent::Restarting { pane, old, until }),
+                    );
+                    return;
+                }
+                let said = format!(
+                    "Phone app: it didn't start again on the new build. {} Its tab and {} say why.",
+                    cli::status_words(),
+                    super::log::file().display()
+                );
+                eprintln!("switchboard server: {said}");
+                self.say(None, &said);
+            }
             PhoneEvent::Publish => {
                 self.phone.due = false;
                 let line = self.phone_snapshot().to_string();
