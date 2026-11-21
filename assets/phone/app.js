@@ -1,8 +1,9 @@
-// The phone app (src/phone), boards 164 to 169 and 173: the drawer of Claude
+// The phone app (src/phone), boards 164 to 169, 173 and 174: the drawer of Claude
 // tabs, Needs you first, with its search; a tab's channel of recent turns
 // with the prompt it waits on as a card of buttons; the composer; pairing.
 // Everything shown comes from the computer's own answers and is put on the
-// page as text, never as HTML.
+// page as text, never as HTML. Images from the photo library (board 174)
+// wait over the composer and go with the message, kept on the computer first.
 "use strict";
 
 const app = document.getElementById("app");
@@ -17,6 +18,8 @@ const state = {
   draft: "", // what is typed in the composer, kept across the page's redraws
   search: "", // what is typed in the drawer's search, kept while a tab is open
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
+  chosen: [], // { file, url }: the images chosen from the photo library, waiting over the composer
+  full: null, // the name of the image shown whole, or null
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
 };
@@ -286,12 +289,19 @@ function drawer() {
 
 const current = () => state.tabs.find((t) => number(t) === state.open);
 
+function drop(i) {
+  URL.revokeObjectURL(state.chosen[i].url);
+  state.chosen.splice(i, 1);
+}
+
 async function openTab(n) {
   state.open = n;
   state.messages = [];
   state.answered = null;
   state.error = "";
   state.draft = "";
+  while (state.chosen.length) drop(0);
+  state.full = null;
   history.replaceState(null, "", "#" + n);
   render();
   await loadTurns();
@@ -318,7 +328,20 @@ function message(m, i, all) {
   const same = prev && prev.who === m.who && prev.who !== "tool";
   const who = m.who === "you" ? "You" : "Claude";
   const long = m.text.split("\n").length > 10 || m.text.length > 700;
-  const body = el("div", { class: "body" + (long ? " folded" : "") }, m.text);
+  const body = m.text ? el("div", { class: "body" + (long ? " folded" : "") }, m.text) : null;
+  const images = (m.images || []).length
+    ? el(
+        "div",
+        { class: "shots" },
+        m.images.map((name) =>
+          el(
+            "button",
+            { class: "shot", "aria-label": "Show the image", onclick: () => { state.full = name; render(); } },
+            el("img", { src: imageUrl(name), alt: "An image you sent", loading: "lazy" }),
+          ),
+        ),
+      )
+    : null;
   const more = long
     ? el("button", { class: "more", onclick: (e) => { body.classList.remove("folded"); e.target.remove(); } }, "Show all")
     : null;
@@ -329,7 +352,45 @@ function message(m, i, all) {
     same ? null : el("div", {}, el("span", { class: "who" }, who), el("span", { class: "when" }, ago(m.at))),
     body,
     more,
+    images,
   );
+}
+
+const imageUrl = (name) => "/api/images/" + encodeURIComponent(name);
+
+// An image shown whole, over the channel, until its × or a tap.
+function full() {
+  if (!state.full) return null;
+  const close = () => { state.full = null; render(); };
+  return el(
+    "div",
+    { class: "full", onclick: close },
+    el("button", { class: "close", "aria-label": "Close" }, "×"),
+    el("img", { src: imageUrl(state.full), alt: "An image you sent" }),
+  );
+}
+
+// One chosen image kept on the computer for the tab; its name.
+async function upload(n, file) {
+  const res = await fetch("/api/tabs/" + n + "/image", {
+    method: "POST",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+    credentials: "same-origin",
+  });
+  if (res.status === 403) {
+    await start();
+    throw new Error("refused");
+  }
+  if (res.status === 413) throw new Error("an image can't be over 20 MB");
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!res.ok) throw new Error((data && data.error) || res.statusText);
+  return data.id;
 }
 
 function card(tab) {
@@ -422,36 +483,78 @@ function composer(tab) {
     disabled: blocked,
   });
   const send = el("button", { class: "send", "aria-label": "Send" }, "➤");
+  // The photo library alone: images, several at once, no camera.
+  const picker = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp", multiple: true, hidden: true });
+  picker.addEventListener("change", () => {
+    for (const file of picker.files) state.chosen.push({ file, url: URL.createObjectURL(file) });
+    picker.value = "";
+    render();
+  });
+  const plus = el(
+    "button",
+    { class: "plus", "aria-label": "Add images from your photos", disabled: !!p, onclick: () => picker.click() },
+    "+",
+  );
+  const tray = state.chosen.length
+    ? el(
+        "div",
+        { class: "tray" },
+        state.chosen.map((c, i) =>
+          el(
+            "div",
+            { class: "shot" },
+            el("img", { src: c.url, alt: "An image to send" }),
+            el("button", { class: "drop", "aria-label": "Drop this image", onclick: () => { drop(i); render(); } }, "×"),
+          ),
+        ),
+      )
+    : null;
+  const ready = () => field.value.trim() !== "" || (!free && state.chosen.length > 0);
+  send.classList.toggle("lit", ready());
   field.addEventListener("input", () => {
     state.draft = field.value;
-    send.classList.toggle("lit", field.value.trim() !== "");
+    send.classList.toggle("lit", ready());
     field.style.height = "auto";
     field.style.height = field.scrollHeight + "px";
   });
   send.addEventListener("click", async () => {
     const text = field.value.trim();
-    if (!text) return;
+    if (!ready()) return;
     send.disabled = true;
+    state.error = "";
     // Taken out of the composer as it is sent, so no redraw puts it back
     // for a second tap to send again; given back if it fails.
+    const chosen = free ? [] : state.chosen;
     state.draft = "";
     field.value = "";
+    if (!free) state.chosen = [];
+    const n = state.open;
     try {
       if (free) await answer(text);
       else {
-        await api("/api/tabs/" + state.open + "/message", { text });
-        state.messages.push({ who: "you", text, at: Date.now() });
+        const images = [];
+        for (const c of chosen) images.push(await upload(n, c.file));
+        await api("/api/tabs/" + n + "/message", { text, images });
+        for (const c of chosen) URL.revokeObjectURL(c.url);
+        state.messages.push({ who: "you", text, images, at: Date.now() });
         render(true);
       }
     } catch (e) {
       state.error = String(e.message || e);
       state.draft = text;
+      if (state.open === n) state.chosen = chosen.concat(state.chosen);
       render();
     } finally {
       send.disabled = false;
     }
   });
-  return el("div", { class: "composer" }, el("span", { class: "plus", "aria-hidden": "true" }, "+"), field, send);
+  return el(
+    "div",
+    { class: "composing" },
+    tray,
+    state.error && !p ? el("div", { class: "error" }, state.error) : null,
+    el("div", { class: "composer" }, plus, picker, field, send),
+  );
 }
 
 function channel(stick) {
@@ -487,6 +590,7 @@ function channel(stick) {
       ),
       list,
       composer(tab),
+      full(),
     ),
   );
   const field = app.querySelector(".composer textarea");

@@ -2,7 +2,9 @@
 //! typed, what Claude said, and each tool it ran as one dim line, read
 //! from the end of its transcript, as the sidebar reads a turn
 //! (`sidebar::claude`). A subagent's messages and Claude Code's own are
-//! left out. Read by `switchboard phone`'s own process, never the server.
+//! left out. A line of what you typed that is the path of an image the
+//! phone sent (`images`) is the image, not words (board 174). Read by
+//! `switchboard phone`'s own process, never the server.
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -11,6 +13,7 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::images;
 use crate::sidebar::claude::{prompt_text, timestamp_ms, tool_text};
 
 /// How much of a transcript's end is read.
@@ -23,12 +26,16 @@ pub struct Message {
     /// `you`, `claude` or `tool`.
     pub who: &'static str,
     pub text: String,
+    /// The names of the images in `images::dir()` a message you sent
+    /// carries, in order.
+    pub images: Vec<String>,
     /// When, in ms; 0 where the transcript doesn't say.
     pub at: i64,
 }
 
-/// The last `most` messages in a transcript's text (or its end).
-pub fn parse(text: &str, most: usize) -> Vec<Message> {
+/// The last `most` messages in a transcript's text (or its end), the
+/// phone's images found in `images_dir`.
+pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
     let flag = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
     let mut out: Vec<Message> = Vec::new();
     for line in text.split('\n').filter(|l| l.starts_with('{')) {
@@ -42,9 +49,11 @@ pub fn parse(text: &str, most: usize) -> Vec<Message> {
         match entry.get("type").and_then(Value::as_str) {
             Some("user") => {
                 if let Some(text) = prompt_text(&entry) {
+                    let (text, images) = images::split(&text, images_dir);
                     out.push(Message {
                         who: "you",
                         text,
+                        images,
                         at,
                     });
                 }
@@ -66,6 +75,7 @@ pub fn parse(text: &str, most: usize) -> Vec<Message> {
                                 out.push(Message {
                                     who: "claude",
                                     text: t.to_string(),
+                                    images: Vec::new(),
                                     at,
                                 });
                             }
@@ -73,6 +83,7 @@ pub fn parse(text: &str, most: usize) -> Vec<Message> {
                         Some("tool_use") => out.push(Message {
                             who: "tool",
                             text: tool_text(&part),
+                            images: Vec::new(),
                             at,
                         }),
                         _ => {}
@@ -100,7 +111,7 @@ pub fn recent(file: &Path) -> Vec<Message> {
     if f.take(take).read_to_end(&mut buf).is_err() {
         return Vec::new();
     }
-    parse(&String::from_utf8_lossy(&buf), MOST)
+    parse(&String::from_utf8_lossy(&buf), MOST, &images::dir())
 }
 
 #[cfg(test)]
@@ -117,7 +128,7 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed."}]}}"#,
         ]
         .join("\n");
-        let messages = parse(&text, MOST);
+        let messages = parse(&text, MOST, Path::new("/i"));
         let said: Vec<(&str, &str)> = messages.iter().map(|m| (m.who, m.text.as_str())).collect();
         assert_eq!(
             said,
@@ -129,6 +140,18 @@ mod tests {
             ]
         );
         assert!(messages[0].at > 0);
-        assert_eq!(parse(&text, 1).len(), 1);
+        assert_eq!(parse(&text, 1, Path::new("/i")).len(), 1);
+    }
+
+    #[test]
+    fn the_images_you_sent_read_as_images() {
+        let a = "0123456789abcdef0123456789abcdef.png";
+        let line = serde_json::json!({
+            "type": "user",
+            "message": {"content": format!("Wraps on my phone too\n/i/{a}")},
+        });
+        let messages = parse(&line.to_string(), MOST, Path::new("/i"));
+        assert_eq!(messages[0].text, "Wraps on my phone too");
+        assert_eq!(messages[0].images, [a]);
     }
 }
