@@ -838,6 +838,12 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let server = start(json!({"view_calendar": true}));
     let now = jiff::Zoned::now();
     let date = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
+    // Two hours from the hour it is now, which the day starts near once it
+    // is longer than the screen, so the event shows whatever the time of
+    // day. The line marking now takes the label of the hour it is on, so
+    // one of the event's two hours shows its label.
+    let hour = now.hour().min(21);
+    let label = |h: i8| format!(" {}:00 ", if h % 12 == 0 { 12 } else { h % 12 });
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("calendar.json"),
@@ -845,7 +851,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
             "date": date,
             "updated": now.timestamp().as_millisecond(),
             "events": [
-                { "title": "Planning", "start": format!("{date}T09:00:00"), "end": format!("{date}T10:00:00"), "you": "going", "link": "https://calendar.example/1" },
+                { "title": "Planning", "start": format!("{date}T{hour:02}:00:00"), "end": format!("{date}T{:02}:00:00", hour + 2), "you": "going", "link": "https://calendar.example/1" },
                 { "title": "Offsite", "allDay": true, "you": "going" },
             ],
         })
@@ -860,7 +866,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let has = |text: &str| screen.iter().any(|l| l.contains(text));
     assert!(has("all day   Offsite"), "{}", screen.join("\n"));
     assert!(
-        has("   9:00 "),
+        has(&label(hour)) || has(&label(hour + 1)),
         "the hours down the side: {}",
         screen.join("\n")
     );
