@@ -68,7 +68,10 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         name: "diff",
-        keys: &["M-2", "M-d"],
+        // M-d sent with M-2 can reach the Notes tab the step before left
+        // in front, before the switch has landed: wait for tab 2's Claude,
+        // whose statusline the Notes tab doesn't have.
+        keys: &["M-2", "@wait:Demo model", "M-d"],
         wait: "feature.ts",
         leave: &["q"],
     },
