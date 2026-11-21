@@ -17,6 +17,7 @@
 use super::super::model::{self, Rules, Stage};
 use super::super::render::{self, Owner};
 use crate::extras::Command as Extra;
+use crate::mission::TabMenuFrom;
 use crate::mux::TabId;
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Server};
@@ -50,14 +51,15 @@ impl Server {
             }
             return;
         }
-        self.sidebar_menu(client, session, owner);
+        self.sidebar_menu(client, session, owner, TabMenuFrom::SidebarPeek);
     }
 
-    /// `m` or the context-menu key with the focus in the sidebar: the menu
-    /// a right click on the cursor's row would open, beside that row. A
+    /// `m`, the context-menu key, Space or Enter with the focus in the
+    /// sidebar: the menu a right click on the cursor's row would open,
+    /// beside that row, a tab's with `from` choosing its first row. A
     /// cursor on a tab the sidebar doesn't list (filtered out, or under a
     /// folded group) is on no row, so the sidebar's own menu opens.
-    pub(super) fn sidebar_menu_key(&mut self, client: ClientId, session: &str) {
+    pub(super) fn sidebar_menu_key(&mut self, client: ClientId, session: &str, from: TabMenuFrom) {
         let Some(here) = self.session(session).map(|s| s.current) else {
             return;
         };
@@ -95,15 +97,21 @@ impl Server {
             return;
         };
         let before = std::mem::replace(pressed, row);
-        self.sidebar_menu(client, session, owner);
+        self.sidebar_menu(client, session, owner, from);
         if let Some(c) = self.clients.get_mut(&client) {
             c.pressed_at = before;
         }
     }
 
-    fn sidebar_menu(&mut self, client: ClientId, session: &str, owner: Option<Owner>) {
+    fn sidebar_menu(
+        &mut self,
+        client: ClientId,
+        session: &str,
+        owner: Option<Owner>,
+        from: TabMenuFrom,
+    ) {
         match owner {
-            Some(Owner::Tab(t)) => self.sidebar_tab_menu(client, t),
+            Some(Owner::Tab(t)) => self.sidebar_tab_menu(client, t, from),
             Some(notice @ Owner::Notice { .. }) => self.sidebar_notice_menu(client, &notice),
             Some(Owner::Back | Owner::Forward) => self.sidebar_trail_menu(client, session),
             Some(Owner::Mission) => self.sidebar_views_menu(client),
@@ -111,11 +119,11 @@ impl Server {
         }
     }
 
-    fn sidebar_tab_menu(&mut self, client: ClientId, tab: TabId) {
+    fn sidebar_tab_menu(&mut self, client: ClientId, tab: TabId, from: TabMenuFrom) {
         let Some(model) = self.sidebar_all_tabs().into_iter().find(|t| t.id == tab) else {
             return;
         };
-        self.tab_menu(client, &model, None, true);
+        self.tab_menu(client, &model, None, from);
     }
 
     /// A notification's menu, the one the Notifications window and mission

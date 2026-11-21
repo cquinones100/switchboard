@@ -200,13 +200,15 @@ impl Plugin for Diff {
     /// directory `--session-dir` names; each `--resize-key` names a key
     /// bound to moving a pane's divider and the columns it moves it by (to
     /// the left when negative), which set the file list's width while the
-    /// list has the keys (the workspace's default keys with none named).
+    /// list has the keys (the workspace's default keys with none named);
+    /// `--several` says the workspace's tab follows several PRs, which puts
+    /// "Show another of this tab's PRs" in the menu.
     fn run(&self, program: &str, args: Vec<String>, host: Arc<dyn Host>) -> ExitCode {
         host::install(host);
         host::share_with_ui();
         let usage = || {
             eprintln!(
-                "Usage: {program} [--base <ref> | --working] [--session <id> --session-dir <dir>] [--resize-key <key> <columns>]... [dir]"
+                "Usage: {program} [--base <ref> | --working] [--session <id> --session-dir <dir>] [--resize-key <key> <columns>]... [--several] [dir]"
             );
             ExitCode::from(2)
         };
@@ -215,6 +217,7 @@ impl Plugin for Diff {
         let mut dir = None;
         let (mut session, mut session_dir) = (None, None);
         let mut resize_keys = Vec::new();
+        let mut several = false;
         let mut rest = args.into_iter();
         while let Some(arg) = rest.next() {
             match arg.as_str() {
@@ -239,6 +242,7 @@ impl Plugin for Diff {
                     _ => return usage(),
                 },
                 "--working" => working = true,
+                "--several" => several = true,
                 "-h" | "--help" => {
                     usage();
                     return ExitCode::SUCCESS;
@@ -261,7 +265,7 @@ impl Plugin for Diff {
             },
             _ => return usage(),
         };
-        app::run(dir, base, working, session, resize_keys)
+        app::run(dir, base, working, session, resize_keys, several)
     }
 
     /// A tab's new commit: its story told and kept, with nothing drawn, so

@@ -531,11 +531,33 @@ pub fn view_main(args: Vec<String>) -> ExitCode {
     pager::run_local(content)
 }
 
-/// `switchboard pr-view [dir]`, and `pr-view --checks [dir]` for the PR's
-/// failing checks, as the PR view's "See the failing checks" shows them.
-pub fn pr_view_main(args: Vec<String>) -> ExitCode {
+/// `switchboard pr-view [dir]`, `pr-view --checks [dir]` for the PR's
+/// failing checks, as the PR view's "See the failing checks" shows them,
+/// and `pr-view --pr <owner>/<name>#<n>` for one PR by its number (a tab's
+/// current PR from another branch, src/tabs/prs.rs); `--several` first
+/// says the tab follows several PRs, for the menu's "Show another of this
+/// tab's PRs".
+pub fn pr_view_main(mut args: Vec<String>) -> ExitCode {
+    if args.first().is_some_and(|a| a == "--several") {
+        args.remove(0);
+        pr::SEVERAL.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if args.first().is_some_and(|a| a == "--checks") {
         return ready::checks_main(dir_arg(args.get(1)));
+    }
+    if args.first().is_some_and(|a| a == "--pr") {
+        let pr = args.get(1).and_then(|a| crate::tabs::prs::TabPr::parse(a));
+        let Some(crate::tabs::prs::TabPr {
+            number,
+            repo: Some(repo),
+        }) = pr
+        else {
+            eprintln!(
+                "Usage: switchboard pr-view [dir] | --checks [dir] | --pr <owner>/<name>#<n>"
+            );
+            return ExitCode::from(2);
+        };
+        return pr::main_numbered(repo, number);
     }
     pr::main(dir_arg(args.first()))
 }

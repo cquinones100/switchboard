@@ -701,10 +701,8 @@ pub fn notes(dir: &Path, query: &str) -> Vec<Found> {
 /// Linear's issue search.
 pub async fn linear(query: &str) -> Result<Vec<Found>, String> {
     let data = linear::graphql(
-        &format!(
-            "query($q: String!) {{ searchIssues(term: $q, first: {LIMIT}) {{ nodes {{ identifier title description url state {{ name }} }} }} }}"
-        ),
-        json!({ "q": query }),
+        "query($q: String!, $first: Int!) { searchIssues(term: $q, first: $first) { nodes { identifier title description url state { name } } } }",
+        json!({ "q": query, "first": LIMIT }),
         SOURCE,
     )
     .await

@@ -107,7 +107,7 @@ impl Server {
     }
 
     /// The diff's pane for the pane a client is in.
-    fn diff_here(&self, client: ClientId) -> Option<PaneId> {
+    pub(crate) fn diff_here(&self, client: ClientId) -> Option<PaneId> {
         self.tool_here(client, TOOL)
     }
 
@@ -228,7 +228,17 @@ impl Server {
         let Some(pane) = self.current_pane(client) else {
             return;
         };
-        let dir = self.pane_dir(pane).unwrap_or_else(paths::home);
+        let mut dir = self.pane_dir(pane).unwrap_or_else(paths::home);
+        // A PR you picked among the tab's (src/tabs/prs.rs) opens where its
+        // branch is checked out; where it isn't, the tab's own work opens,
+        // and a box says why.
+        let tab = self.panes.get(&pane).map(|slot| slot.tab);
+        if let Some(pr) = tab.and_then(|t| self.tab_picked_pr_elsewhere(t)) {
+            match self.checkout_of_pr(&pr) {
+                Ok(there) => dir = there,
+                Err(why) => self.say(Some(client), &format!("{why}; this tab's own diff instead")),
+            }
+        }
         if crate::tabs::git::locate(&dir).is_none() {
             self.say(
                 Some(client),
@@ -259,6 +269,9 @@ impl Server {
         // The keys bound to moving a pane's divider left or right, which
         // set its file list's width while the list has the keys.
         command.extend(self.diff_resize_flags());
+        if tab.is_some_and(|t| self.tab_prs(t).len() > 1) {
+            command.push("--several".into());
+        }
         command.push(dir.to_string_lossy().into_owned());
         if let Err(e) = self.open_in_place(pane, TOOL, command, Some(client)) {
             self.say(Some(client), &format!("Couldn't open the diff: {e}"));

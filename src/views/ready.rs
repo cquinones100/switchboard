@@ -59,7 +59,7 @@ pub const CHECKS_QUERY: &str = "query($owner: String!, $name: String!, $number: 
     nodes { __typename \
       ... on CheckRun { name status conclusion detailsUrl title isRequired(pullRequestNumber: $number) } \
       ... on StatusContext { context state targetUrl description isRequired(pullRequestNumber: $number) } \
-    } } } } } } } }";
+    } } } } } } } } }";
 
 /// Whether a PR can merge, asked again while GitHub is still working it out.
 const MERGE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { \
@@ -958,5 +958,123 @@ mod tests {
             text.ends_with("_And more checks GitHub didn't send._\n"),
             "{text}"
         );
+    }
+
+    /// Every GraphQL query in `src/views/` (any string literal Rust parses
+    /// there whose text starts with `query` or `mutation`) closes each brace
+    /// it opens outside its own string arguments, so a query left open fails
+    /// here rather than in the view, as `CHECKS_QUERY` once did in the failing
+    /// checks and in M-v on a PR with checks past the first page. The files
+    /// are parsed with syn, so each literal is read as Rust decodes it. syn
+    /// leaves a macro's arguments as tokens, whose strings it can't put
+    /// together as the macro would, so a string in a macro (`format!`,
+    /// `concat!`) that decodes to a query fails the test too: each query stays
+    /// a plain literal this test can check.
+    #[test]
+    fn every_views_query_closes_its_braces() {
+        struct Queries {
+            literals: Vec<String>,
+            in_macros: Vec<String>,
+        }
+        impl<'ast> syn::visit::Visit<'ast> for Queries {
+            fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+                let text = literal.value();
+                let start = text.trim_start();
+                if start.starts_with("query") || start.starts_with("mutation") {
+                    self.literals.push(text);
+                }
+            }
+            fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+                fn strings_in(tokens: proc_macro2::TokenStream, found: &mut Vec<String>) {
+                    for token in tokens {
+                        match token {
+                            proc_macro2::TokenTree::Group(group) => {
+                                strings_in(group.stream(), found)
+                            }
+                            proc_macro2::TokenTree::Literal(literal) => {
+                                if let Ok(string) =
+                                    syn::parse_str::<syn::LitStr>(&literal.to_string())
+                                {
+                                    found.push(string.value());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let mut strings = Vec::new();
+                strings_in(mac.tokens.clone(), &mut strings);
+                for text in strings {
+                    let start = text.trim_start();
+                    let rest = ["query", "mutation"]
+                        .iter()
+                        .find_map(|keyword| start.strip_prefix(keyword));
+                    let is_query = rest.is_some_and(|rest| {
+                        rest.chars()
+                            .next()
+                            .is_some_and(|c| !c.is_alphanumeric() && c != '_')
+                    });
+                    if is_query {
+                        self.in_macros.push(text);
+                    }
+                }
+            }
+        }
+        fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rust_files(&path, found);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+        let views = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/views");
+        let mut files = Vec::new();
+        rust_files(&views, &mut files);
+        let graphql_string = Regex::new(r#"(?s)"(?:[^"\\]|\\.)*""#).unwrap();
+        let mut found = Vec::new();
+        for file in files {
+            let source = std::fs::read_to_string(&file).unwrap();
+            let parsed = syn::parse_file(&source).unwrap();
+            let mut queries = Queries {
+                literals: Vec::new(),
+                in_macros: Vec::new(),
+            };
+            syn::visit::Visit::visit_file(&mut queries, &parsed);
+            assert!(
+                queries.in_macros.is_empty(),
+                "a query in {} is inside a macro, where this test can't read it: {:?}",
+                file.display(),
+                queries.in_macros
+            );
+            for text in queries.literals {
+                let outside_strings = graphql_string.replace_all(&text, "\"\"");
+                let mut depth = 0usize;
+                for brace in outside_strings.chars().filter(|c| matches!(c, '{' | '}')) {
+                    if brace == '{' {
+                        depth += 1;
+                    } else {
+                        depth = depth.checked_sub(1).unwrap_or_else(|| {
+                            panic!(
+                                "a query in {} closes a brace it never opened: {text}",
+                                file.display()
+                            )
+                        });
+                    }
+                }
+                assert_eq!(
+                    depth,
+                    0,
+                    "a query in {} leaves {depth} braces open: {text}",
+                    file.display()
+                );
+                found.push(text);
+            }
+        }
+        for expected in [CHECKS_QUERY, super::super::ticket::YOUR_TICKETS] {
+            assert!(found.iter().any(|text| text == expected), "{expected}");
+        }
     }
 }

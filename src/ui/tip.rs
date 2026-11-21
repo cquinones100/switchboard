@@ -96,6 +96,12 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
             "M-v  the PR, and whether it can merge".into(),
             "M-d  its diff, as GitHub shows it".into(),
         ],
+        "sidebar" if crate::settings::is_on("sidebar_enter_menu") => vec![
+            "The sidebar.".into(),
+            String::new(),
+            "Enter  its menu        a  answer it".into(),
+            "l      go to a tab     ?  every key".into(),
+        ],
         "sidebar" => vec![
             "The sidebar.".into(),
             String::new(),

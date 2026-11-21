@@ -477,6 +477,38 @@ fn has_failed(check_run: &Value) -> bool {
         )
 }
 
+/// `look` judged by the checks named `required` alone (a base branch's
+/// required checks), the others left out: one not there yet is still to
+/// run.
+pub async fn look_required(
+    repo: &str,
+    at: &str,
+    required: &[String],
+    source: &str,
+) -> anyhow::Result<Seen> {
+    let (_, all) = check_runs(repo, at, source).await?;
+    Ok(seen_required(&all, required))
+}
+
+fn seen_required(check_runs: &[Value], required: &[String]) -> Seen {
+    let named: Vec<Value> = check_runs
+        .iter()
+        .filter(|c| required.iter().any(|r| r == text(c, "name")))
+        .cloned()
+        .collect();
+    let all_there = required
+        .iter()
+        .all(|r| named.iter().any(|c| text(c, "name") == r));
+    // None of them there is no CI yet; some there and some not, the rest
+    // still to come.
+    match seen(&named) {
+        failed @ Seen::Failed { .. } => failed,
+        _ if named.is_empty() => Seen::Nothing,
+        _ if !all_there => Seen::Running,
+        seen => seen,
+    }
+}
+
 fn seen(check_runs: &[Value]) -> Seen {
     let failed: Vec<&Value> = check_runs.iter().filter(|c| has_failed(c)).collect();
     if let Some(first) = failed.first() {
@@ -841,6 +873,32 @@ pub fn poll() -> Duration {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn required_checks_alone_judge_and_one_missing_is_still_to_run() {
+        let run = |name: &str, conclusion: &str| serde_json::json!({ "name": name, "status": "completed", "conclusion": conclusion });
+        let required = vec!["Tests".to_string(), "Formatting".to_string()];
+        let all = [
+            run("Tests", "success"),
+            run("Formatting", "success"),
+            run("Coverage", "failure"),
+        ];
+        assert_eq!(super::seen_required(&all, &required), super::Seen::Passed);
+        assert_eq!(
+            super::seen_required(&all[..1], &required),
+            super::Seen::Running,
+            "a required check not there yet"
+        );
+        assert_eq!(
+            super::seen_required(&all[2..], &required),
+            super::Seen::Nothing,
+            "none of them there yet is no CI yet"
+        );
+        assert!(matches!(
+            super::seen_required(&[run("Tests", "failure")], &required),
+            super::Seen::Failed { .. }
+        ));
+    }
+
     use super::*;
     use serde_json::json;
 

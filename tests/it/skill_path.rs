@@ -1077,7 +1077,8 @@ fn diff_artifact_tells_no_story_of_its_own_and_publishes_only_after_a_yes() {
 
 // main requires a PR's branch to be up to date, and auto-merge waits on one
 // that is behind without updating it, so both of queue-and-clean's waits end
-// on `BEHIND` (after conflicts) and the skill merges the base in.
+// on `BEHIND` (after conflicts) and the skill rebases onto the base, as
+// /resolve-conflicts does.
 #[test]
 fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
     let all = skills();
@@ -1094,7 +1095,7 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
     assert!(watch.contains("mergeStateStatus"), "{watch}");
     let conflicts = watch.find("echo conflicts").unwrap();
     let behind = watch.find("echo behind").expect("behind ends the watch");
-    assert!(conflicts < behind, "conflicts still go to Fixing");
+    assert!(conflicts < behind, "conflicts are read before behind");
     let wait = queue
         .split("### Waiting until the PR is ready")
         .nth(1)
@@ -1112,10 +1113,63 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
         .split("## Bringing it up to date")
         .nth(1)
         .expect("the section behind goes to");
+    let section = section.split("\n## ").next().unwrap();
     assert!(
-        section.contains("git merge --no-edit origin/<baseRefName>")
-            && section.contains("plain `git push`")
-            && !section.contains("rebase "),
+        section.contains("`switchboard skill-path resolve-conflicts`")
+            && section.contains("`[always ask]`")
+            && !section.contains("git merge"),
         "{section}"
     );
+    for exit in ["- `behind`: ", "- `conflicts`: "] {
+        for line in queue.lines().filter(|l| l.starts_with(exit)) {
+            assert!(line.contains("\"Bringing it up to date\""), "{line}");
+        }
+    }
+}
+
+// A branch behind its base or in conflict with it is rebased and pushed with a
+// lease by /resolve-conflicts, read through skill-path, never merged into.
+#[test]
+fn ci_loop_hands_a_branch_behind_or_in_conflict_to_resolve_conflicts() {
+    let all = skills();
+    let ci = &all.iter().find(|(name, _)| name == "ci-loop").unwrap().1;
+    let part = ci
+        .split("**Merge conflicts, or a branch that has to be up to date.**")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("the paragraph on conflicts");
+    assert!(
+        part.contains("`switchboard skill-path resolve-conflicts`")
+            && part.contains("`[always ask]`")
+            && !part.contains("git merge"),
+        "{part}"
+    );
+}
+
+#[test]
+fn queue_and_clean_uses_switchboard_s_merge_queue_only_with_its_setting_on() {
+    let text = fs::read_to_string(skills_dir().join("queue-and-clean/SKILL.md")).unwrap();
+    let queuing = section(&text, "Queuing");
+    assert!(
+        queuing.contains(
+            "`switchboard setting pr_merge_queue` and `switchboard setting github` both print `on`"
+        ) && queuing.contains("`queue=false`"),
+        "Switchboard's queue only with the setting on and no queue of GitHub's"
+    );
+    assert!(
+        queuing.contains("the setting off among them")
+            && queuing.contains("`gh pr merge <number> --auto --match-head-commit <headRefOid>`"),
+        "with the setting off it turns on auto-merge as before"
+    );
+    let ours = &queuing[queuing.find("### Switchboard's merge queue").unwrap()..];
+    let ours = &ours[..ours.find("### Waiting").unwrap()];
+    assert!(ours.contains("switchboard land-lock queue-pr <number>"));
+    assert!(
+        !ours.contains("--auto"),
+        "a PR in the queue never gets auto-merge"
+    );
+    let watching = section(&text, "Watching");
+    let watch = &watching[watching.find("### Watching Switchboard's queue").unwrap()..];
+    assert!(watch.contains("switchboard land-lock pr-status <number>"));
+    assert!(watch.contains("Go to \"Fixing\""), "a dropped PR is fixed");
 }

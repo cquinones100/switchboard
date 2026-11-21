@@ -692,6 +692,14 @@
     "PhoneRefused.dc.html": {
       "title": "169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; naming neither the computer nor what it checks, the first two alike, why kept for the log and the Notifications view",
       "page": "design"
+    },
+    "PhoneDrawerSearch.dc.html": {
+      "title": "173. The phone's drawer searched as you type: a search box under the header keeps the tabs whose number, name, repository, branch or what they are doing hold every word, the matches lit, in their groups, an empty group dropped; × clears it, and No tab matches when none do",
+      "page": "design"
+    },
+    "PhonePromptInfo.dc.html": {
+      "title": "172. The phone's prompt card with each choice's explainer behind an info button: an i beside every choice that has one, its own tap target; a tap shows the explainer under the choice and a second hides it, while a tap on the choice still answers",
+      "page": "design"
     }
   }
 }

@@ -36,7 +36,7 @@ Only when no rebase, merge or cherry-pick is in progress (`git status` says so).
    git fetch origin
    ```
 
-   Then record where the branch's own remote copy is, for the push at the end: `git rev-parse --verify --quiet origin/<branch>`, with `<branch>` from `git branch --show-current`. Nothing printed means the branch has never been pushed.
+   Then record where the branch's own remote copy is, for the push at the end: `git rev-parse --verify --quiet origin/<branch>`, with `<branch>` from `git branch --show-current`. Nothing printed means the branch has never been pushed. When it printed a tip that the branch doesn't hold (`git merge-base --is-ancestor origin/<branch> HEAD` fails), the remote copy has commits this checkout lacks (pushed from another clone, or made on GitHub), which the push at the end would drop, since the lease only refuses a push made after the fetch: stop and ask before rebasing.
 
 - **Stop if it is current.** If the branch already contains `<base>` (`git merge-base --is-ancestor <base> HEAD` succeeds), it is up to date: say so and stop, unless there are conflicts to resolve for some other reason.
 - **Rebase.** Record the tip before rebasing (`git rev-parse HEAD`), then rebase onto `<base>` with the editor disabled:
