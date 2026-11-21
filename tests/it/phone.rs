@@ -713,3 +713,50 @@ fn an_upgrade_leaves_the_phone_app_alone_on_its_build_outside_its_tab_or_with_it
     left_alone("with the setting off", &pane, pid);
     assert!(!server.log().contains("restarted on the new build"));
 }
+
+/// The composer's field (assets/phone/app.js's `composer`), built in Node
+/// over a stand-in document and synced for a message and for "your own
+/// answer": plain message text that AutoFill leaves alone, with the
+/// keyboard's corrections kept; skipped without Node.
+#[test]
+fn the_composer_is_message_text_autofill_leaves_alone() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+class Node {
+  constructor(tag) { this.tag = tag; this.attrs = {}; this.kids = []; this.style = {}; this.value = ""; this.classList = { toggle() {} }; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  addEventListener() {}
+  append(kid) { this.kids.push(kid); }
+  replaceWith() {}
+}
+const ctx = vm.createContext({
+  Node,
+  document: { getElementById: () => null, addEventListener: () => {}, createElement: (tag) => new Node(tag), createTextNode: (t) => new Node("text") },
+  window: { addEventListener: () => {} },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const box = vm.runInContext("composer()", ctx);
+const find = (n) => n.tag === "textarea" ? n : n.kids.map(find).find(Boolean);
+for (const prompt of [null, { free: true }]) {
+  box.sync({ index: 2, name: "notes", prompt });
+  console.log(JSON.stringify(find(box).attrs));
+}
+"#;
+    let Some(stdout) = run_app_js(script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    // A message to the tab, and "your own answer" to its question.
+    assert_eq!(lines.len(), 2, "{stdout}");
+    for line in lines {
+        let attrs: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(attrs["autocomplete"], "off", "{line}");
+        assert_eq!(attrs["name"], "message", "{line}");
+        assert_eq!(attrs["autocorrect"], "on", "{line}");
+        assert_eq!(attrs["autocapitalize"], "sentences", "{line}");
+        assert_eq!(attrs["spellcheck"], "true", "{line}");
+    }
+}
