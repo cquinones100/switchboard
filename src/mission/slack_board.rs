@@ -1900,7 +1900,7 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
         let linear = Ticket::Linear(id.clone());
         let tab = look.tabs.iter().find(|t| {
             t.ticket.as_ref() == Some(&linear)
-                || crate::views::ticket::id_in_name(&t.name).as_deref() == Some(id.as_str())
+                || crate::views::ticket::id_in_name(&t.ticket_name).as_deref() == Some(id.as_str())
         });
         rows.push((id, title, state, tab));
     }

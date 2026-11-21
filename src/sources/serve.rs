@@ -640,6 +640,7 @@ impl Server {
                     id: *id,
                     index: self.tab_number(*id),
                     name: self.tab_label(*id),
+                    ticket_name: self.tab_label_without_pr_title(*id),
                     path,
                     pr: self.tab_pr(*id),
                     pr_in: self.tab_pr_repo(*id),
@@ -669,7 +670,7 @@ impl Server {
             tab.repo = here.origin;
             tab.upstream = here.upstream;
             tab.keys = repo::keys_of(
-                &tab.name,
+                &tab.ticket_name,
                 tab.path.as_deref(),
                 tab.pr,
                 tab.pr_repo(),

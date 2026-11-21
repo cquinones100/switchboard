@@ -861,7 +861,7 @@ pub struct Ctx<'a> {
 /// number only starts the same (AB-3 isn't AB-30).
 fn names(tab: &TabModel, pattern: &str) -> bool {
     Regex::new(&format!("(?i)(^|[^A-Za-z0-9]){pattern}([^0-9]|$)"))
-        .is_ok_and(|re| re.is_match(&tab.name))
+        .is_ok_and(|re| re.is_match(&tab.ticket_name))
 }
 
 /// The tab working on a ticket: the first whose name names it.
@@ -2017,6 +2017,15 @@ mod tests {
         t.claude_pane = Some(PaneId(n * 10));
         t.path = Some(format!("/r{n}").into());
         t
+    }
+
+    #[test]
+    fn a_pr_s_title_naming_a_ticket_is_not_the_tab_working_on_it() {
+        let mut titled = tab(1, "Follow up on AB-3");
+        titled.ticket_name = "app:follow-up".into();
+        let working = tab(2, "AB-3: Work on it");
+        let tabs = [titled, working];
+        assert_eq!(tab_naming(&tabs, "AB-3").map(|t| t.index), Some(2));
     }
 
     fn keys(choices: &[Choice]) -> String {

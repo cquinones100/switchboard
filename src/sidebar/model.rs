@@ -171,6 +171,10 @@ pub struct TabModel {
     pub zoomed: bool,
     /// Its label without the PR in front (`@tab_label` after `#12 `).
     pub name: String,
+    /// `name` as what finds a ticket's tab reads it: with the directory's
+    /// name in place of a PR's title (`@tab_label_without_pr_title`),
+    /// someone's words, never the ticket the tab is on.
+    pub ticket_name: String,
     /// The name it was given, by hand or by a skill.
     pub own_name: Option<String>,
     pub pr: Option<u64>,
@@ -311,6 +315,7 @@ impl TabModel {
             current: false,
             zoomed: false,
             name: name.to_string(),
+            ticket_name: name.to_string(),
             own_name: None,
             pr: None,
             pr_repo: None,

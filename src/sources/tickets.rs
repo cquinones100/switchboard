@@ -67,7 +67,7 @@ pub fn item_of(issue: &Value, tabs: &[TabInfo]) -> Option<Item> {
     let identifier = issue.get("identifier").and_then(Value::as_str)?;
     issue.get("state").filter(|s| s.is_object())?;
     let priority = issue.get("priority").and_then(Value::as_u64).unwrap_or(0);
-    let tab = tabs.iter().find(|t| names(&t.name, identifier));
+    let tab = tabs.iter().find(|t| names(&t.ticket_name, identifier));
     let marks: Vec<String> = [
         text(issue, "/state/name").to_string(),
         if priority > 0 {
@@ -246,16 +246,26 @@ mod tests {
         // lib/sidebar's "the ticket board puts your Linear issues in columns
         // by state, urgent first in Todo, with the tab working on each".
         let tabs = vec![
+            // A PR's title naming a ticket isn't the tab working on it.
+            TabInfo {
+                id: TabId(6),
+                index: 6,
+                name: "Follow up on AB-3".into(),
+                ticket_name: "app:follow-up".into(),
+                ..TabInfo::default()
+            },
             TabInfo {
                 id: TabId(4),
                 index: 4,
                 name: "AB-3: Work on AB-3".into(),
+                ticket_name: "AB-3: Work on AB-3".into(),
                 ..TabInfo::default()
             },
             TabInfo {
                 id: TabId(5),
                 index: 5,
                 name: "AB-30: something else".into(),
+                ticket_name: "AB-30: something else".into(),
                 ..TabInfo::default()
             },
         ];

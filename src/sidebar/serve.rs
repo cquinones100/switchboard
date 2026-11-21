@@ -855,6 +855,7 @@ impl Server {
             leader.map(|(_, _, since)| since).filter(|s| *s > 0)
         };
         let mut t = TabModel::new(id, index, &name);
+        t.ticket_name = split_pr(&self.tab_label_without_pr_title(id)).1;
         t.session = s.name.clone();
         t.attached = attached;
         t.current = s.current == id;
