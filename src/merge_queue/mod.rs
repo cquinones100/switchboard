@@ -18,7 +18,9 @@
 //! (`/queue-and-clean`, through `land-lock queue-pr`); the train under test,
 //! its base and each PR's head as tested; the groups a red train was split
 //! into, tested ahead of the rest; the PRs dropped and why, and the last
-//! ones merged, which `land-lock pr-status` tells the PR's tab; and what
+//! ones merged, which `land-lock pr-status` tells the PR's tab; whether the
+//! train's failed jobs were run again, which a red train is once before it
+//! is dropped or split; and what
 //! holds the queue when it can't go on by itself (no CI on a train, a merge
 //! GitHub refused), cleared by any change to the queue.
 //!
@@ -116,6 +118,21 @@ pub struct Train {
     /// merge tried again after one failed goes on from there.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_base: Option<String>,
+    /// Its CI failed once and its failed jobs were run again, which a train
+    /// is at most once: a second failure drops or splits it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rerun: Option<Rerun>,
+}
+
+/// A red train's failed jobs run again: their names, and the first one's
+/// GitHub Actions job, whose failure is the first attempt's until the
+/// rerun's own check runs replace it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rerun {
+    pub names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

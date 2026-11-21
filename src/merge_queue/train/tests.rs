@@ -28,6 +28,15 @@ struct Fake {
     unmergeable: Mutex<Vec<u64>>,
     /// PRs GitHub answers 404 for.
     not_found: Mutex<Vec<u64>>,
+    /// A train fails its first attempt whatever it holds, as a flaky test
+    /// does, and passes once its failed jobs run again.
+    flaky: Mutex<bool>,
+    /// The runs whose failed jobs were run again.
+    reruns: Mutex<Vec<String>>,
+    /// Refuse to run failed jobs again.
+    rerun_refused: Mutex<bool>,
+    /// How many looks after a rerun still show the first attempt's failure.
+    stale: Mutex<u32>,
 }
 
 impl Forge for Fake {
@@ -61,15 +70,34 @@ impl Forge for Fake {
             &self.origin,
             &["cat-file", "-e", &format!("{sha}:fail.txt")],
         );
-        Ok(if fails && !a_head {
+        // Each commit's CI is a run of its own.
+        let run = format!("77-{}", &sha[..7]);
+        let rerun = self.reruns.lock().unwrap().contains(&run);
+        let flaky = *self.flaky.lock().unwrap() && !rerun;
+        let stale = {
+            let mut stale = self.stale.lock().unwrap();
+            let left = rerun && *stale > 0;
+            *stale = stale.saturating_sub(u32::from(left));
+            left
+        };
+        Ok(if (fails || flaky || stale) && !a_head {
             Seen::Failed {
-                run: "77".into(),
+                // The rerun's job is a new one.
+                job: Some(format!("{run}-{}", u8::from(rerun && !stale))),
+                run,
                 names: vec!["Tests".into()],
-                job: None,
             }
         } else {
             Seen::Passed
         })
+    }
+
+    async fn rerun(&self, run: &str) -> Result<()> {
+        if *self.rerun_refused.lock().unwrap() {
+            return Err(anyhow!("GitHub answered 403"));
+        }
+        self.reruns.lock().unwrap().push(run.to_string());
+        Ok(())
     }
 
     async fn merge(&self, number: u64, head: &str) -> Result<(), MergeError> {
@@ -198,6 +226,10 @@ impl World {
                 not_found: Mutex::new(Vec::new()),
                 unmergeable: Mutex::new(Vec::new()),
                 required: Mutex::new(None),
+                flaky: Mutex::new(false),
+                reruns: Mutex::new(Vec::new()),
+                rerun_refused: Mutex::new(false),
+                stale: Mutex::new(0),
             },
             work,
             _scratch: scratch,
@@ -329,6 +361,9 @@ fn a_red_train_of_four_splits_and_drops_only_the_failing_pr() {
     w.pr(5, "five.txt", "5\n");
     w.step();
     assert_eq!(w.in_train(), [1, 2, 3, 4], "four at most");
+    let told = w.step();
+    assert_eq!(w.in_train(), [1, 2, 3, 4], "run again before it is split");
+    assert_eq!(told.len(), 4, "each tab is told of the rerun");
     w.step();
     assert_eq!(w.queue().splits, [vec![1, 2], vec![3, 4]]);
     let mut told = Vec::new();
@@ -348,8 +383,11 @@ fn a_red_train_of_four_splits_and_drops_only_the_failing_pr() {
         "{}",
         queue.status(3)
     );
-    assert!(queue.status(3).ends_with("Tests (https://ci/77)"));
-    let dropped: Vec<&Told> = told.iter().filter(|t| t.number == 3).collect();
+    assert!(queue.status(3).contains("Tests (https://ci/77-"));
+    let dropped: Vec<&Told> = told
+        .iter()
+        .filter(|t| t.number == 3 && t.words.starts_with("dropped"))
+        .collect();
     assert_eq!(dropped.len(), 1);
     assert!(dropped[0].words.starts_with("dropped from the merge queue"));
     assert_eq!(w.branches(), "");
@@ -647,4 +685,83 @@ fn a_405_or_422_is_a_refusal_but_a_base_just_modified_is_not() {
         e("GitHub answered 405: Head branch is out of date. Review and try the merge again."),
         MergeError::Strict(_)
     ));
+}
+
+#[test]
+fn a_train_that_fails_once_and_passes_on_its_rerun_merges() {
+    let Some(w) = World::new("flaky") else {
+        return;
+    };
+    *w.fake.flaky.lock().unwrap() = true;
+    *w.fake.stale.lock().unwrap() = 1;
+    w.pr(1, "one.txt", "1\n");
+    w.pr(2, "two.txt", "2\n");
+    w.step();
+    let told = w.step();
+    let train = w.queue().train.unwrap();
+    assert_eq!(w.fake.reruns.lock().unwrap().len(), 1);
+    assert_eq!(train.rerun.as_ref().unwrap().names, ["Tests"]);
+    assert_eq!(
+        told[0].words,
+        format!(
+            "{} failed Tests (https://ci/77-{}): running its failed jobs again",
+            train.branch,
+            &train.commit[..7]
+        )
+    );
+    w.step();
+    assert_eq!(
+        w.queue().train.unwrap().rerun,
+        train.rerun,
+        "the first attempt's failure, still showing, is no second failure"
+    );
+    for _ in 0..4 {
+        w.step();
+    }
+    assert_eq!(w.merged(), [1, 2]);
+    let queue = w.queue();
+    assert!(queue.splits.is_empty() && queue.dropped.is_empty());
+}
+
+#[test]
+fn a_train_of_one_red_on_both_attempts_drops_its_pr_and_is_run_again_once() {
+    let Some(w) = World::new("twice") else {
+        return;
+    };
+    w.pr(1, "fail.txt", "1\n");
+    w.step();
+    w.step();
+    assert!(w.queue().train.unwrap().rerun.is_some());
+    w.step();
+    assert!(w.queue().train.is_none());
+    assert!(w.queue().status(1).starts_with("dropped CI failed"));
+    assert_eq!(w.fake.reruns.lock().unwrap().len(), 1, "run again once");
+}
+
+#[test]
+fn a_train_of_two_red_on_both_attempts_splits() {
+    let Some(w) = World::new("twice-two") else {
+        return;
+    };
+    w.pr(1, "one.txt", "1\n");
+    w.pr(2, "fail.txt", "2\n");
+    w.step();
+    w.step();
+    assert!(w.queue().splits.is_empty());
+    w.step();
+    assert_eq!(w.queue().splits, [vec![1], vec![2]]);
+    assert_eq!(w.fake.reruns.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_rerun_github_refuses_drops_as_before() {
+    let Some(w) = World::new("refused-rerun") else {
+        return;
+    };
+    *w.fake.rerun_refused.lock().unwrap() = true;
+    w.pr(1, "fail.txt", "1\n");
+    w.step();
+    w.step();
+    assert!(w.queue().train.is_none());
+    assert!(w.queue().status(1).starts_with("dropped CI failed"));
 }
