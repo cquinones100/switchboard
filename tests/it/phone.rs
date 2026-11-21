@@ -348,11 +348,152 @@ fn the_tabs_the_phone_reads_carry_their_repository_and_branch() {
     assert_eq!(tab["repo"], *home_name, "{seen}");
 }
 
+/// Runs `script` in Node with assets/phone/app.js's path as its argument,
+/// returning what it printed, or None without Node.
+fn run_app_js(script: &str) -> Option<String> {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipped: no node");
+            return None;
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(stdout)
+}
+
+/// An open tab's channel (assets/phone/app.js's `channel`), run in Node over
+/// a page of its own: an update from the stream, and new turns, leave the
+/// composer's field in place, focused and with what was typed, and a message
+/// opened with Show all open; skipped without Node.
+#[test]
+fn an_update_keeps_the_composer_and_the_messages_opened() {
+    let script = r##"
+const vm = require("vm");
+const fs = require("fs");
+class Node {
+  constructor(tag) {
+    this.tagName = tag; this.children = []; this.parentNode = null; this.className = "";
+    this.listeners = {}; this.style = {}; this.value = ""; this.text = "";
+    this.scrollTop = 0; this.scrollHeight = 1000; this.clientHeight = 100;
+    const node = this;
+    this.classList = {
+      has: (c) => node.className.split(" ").includes(c),
+      contains: (c) => node.classList.has(c),
+      add: (c) => { if (!node.classList.has(c)) node.className = (node.className + " " + c).trim(); },
+      remove: (c) => { node.className = node.className.split(" ").filter((x) => x && x !== c).join(" "); },
+      toggle: (c, on) => (on ? node.classList.add(c) : node.classList.remove(c)),
+    };
+  }
+  get textContent() { return this.text + this.children.map((c) => c.textContent).join(""); }
+  set textContent(text) { this.replaceChildren(); this.text = text; }
+  setAttribute(k, v) { this[k] = v; }
+  addEventListener(k, f) { (this.listeners[k] = this.listeners[k] || []).push(f); }
+  dispatchEvent(e) { for (const f of this.listeners[e.type] || []) f({ ...e, target: this }); }
+  click() { this.dispatchEvent(new Event("click")); }
+  focus() { document.activeElement = this; }
+  append(...kids) { for (const k of kids) { if (k.parentNode) k.remove(); k.parentNode = this; this.children.push(k); } }
+  remove() { const p = this.parentNode; if (p) { p.children = p.children.filter((c) => c !== this); this.parentNode = null; } }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  replaceWith(n) { const p = this.parentNode; const i = p.children.indexOf(this); if (n.parentNode) n.remove(); p.children[i] = n; n.parentNode = p; this.parentNode = null; }
+  contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
+  all() { return this.children.flatMap((c) => [c, ...c.all()]); }
+  // Selectors of "tag.class" parts, each part a descendant of the one before.
+  querySelectorAll(sel) {
+    let found = [this];
+    for (const part of sel.split(" ")) {
+      const [tag, ...classes] = part.split(".");
+      found = [...new Set(found.flatMap((n) => n.all()))].filter(
+        (n) => (!tag || n.tagName === tag) && classes.every((c) => n.classList.has(c)),
+      );
+    }
+    return found;
+  }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+}
+class Event { constructor(type) { this.type = type; } }
+const app = new Node("div");
+const document = {
+  activeElement: null,
+  getElementById: () => app,
+  addEventListener: () => {},
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node("#text"), { text }),
+};
+let source = null;
+const ctx = vm.createContext({
+  document, Node, Event, console,
+  EventSource: class { constructor() { source = this; } },
+  history: { replaceState: () => {} },
+  window: { addEventListener: () => {} },
+  location: { hash: "" },
+  fetch: () => new Promise(() => {}),
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const tab = (state, wait) => ({ pane: "%5", index: 2, name: "phone", state, wait, turn: { prompt: "go" } });
+const long = { who: "claude", text: "line\n".repeat(20), at: 1 };
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac" };
+  listen();
+  state.open = "5";
+`, ctx);
+const update = (t) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [t] }) });
+update(tab("working", "Edit app.js"));
+vm.runInContext("state.messages = " + JSON.stringify([long, { who: "you", text: "hi", at: 2 }]) + "; render(true);", ctx);
+const field = app.querySelector(".composer textarea");
+field.value = "half a thought";
+field.focus();
+app.querySelector("button.more").click();
+update(tab("working", "Bash: cargo test"));
+console.log("doing=" + app.querySelector(".doing").textContent);
+console.log("same field=" + (app.querySelector(".composer textarea") === field));
+console.log("typed=" + field.value);
+console.log("focused=" + (document.activeElement === field && app.contains(field)));
+console.log("opened=" + !app.querySelector(".body.folded"));
+// New turns arriving, as loadTurns draws them.
+vm.runInContext("state.messages = " + JSON.stringify([long, { who: "you", text: "hi", at: 2 }, { who: "claude", text: "done", at: 3 }]) + "; render(true);", ctx);
+console.log("messages=" + app.querySelectorAll(".msg").length);
+console.log("after turns=" + (app.querySelector(".composer textarea") === field) + " " + !app.querySelector(".body.folded"));
+console.log("at end=" + (app.querySelector(".channel").scrollTop === 1000));
+update(tab("waiting", ""));
+console.log("chip=" + app.querySelector(".head .chip").textContent);
+"##;
+    let Some(stdout) = run_app_js(script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "doing=⠹ Bash: cargo test",
+            "same field=true",
+            "typed=half a thought",
+            "focused=true",
+            "opened=true",
+            "messages=3",
+            "after turns=true true",
+            "at end=true",
+            "chip=waiting",
+        ],
+        "{stdout}"
+    );
+}
+
 /// The drawer's search (assets/phone/app.js's `groups`), run in Node over
 /// tabs as the phone reads them; skipped without Node.
 #[test]
 fn the_drawers_search_keeps_the_tabs_matching_in_their_groups() {
-    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
     // The page's own globals stood in for, its start left waiting on a
     // fetch that never answers, so only its functions run.
     let script = r#"
@@ -375,23 +516,9 @@ const run = (q) => vm.runInContext(`
 `, ctx);
 for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"]) console.log(q + "=" + run(q));
 "#;
-    let out = match std::process::Command::new("node")
-        .arg("-e")
-        .arg(script)
-        .arg(&app)
-        .output()
-    {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return eprintln!("skipped: no node");
-        }
-        result => result.unwrap(),
+    let Some(stdout) = run_app_js(script) else {
+        return;
     };
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success(),
-        "{stdout}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
         lines,
