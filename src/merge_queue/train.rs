@@ -28,9 +28,14 @@
 //! ends on the tree the train tested; a PR whose head moved stops the
 //! merging there, it waiting to be queued again and those after it staying
 //! queued for the next train, since what follows was tested with it. The default branch having
-//! moved, the train is tested again. Red, a train of one drops its PR, and a
-//! longer one is split into halves tested first, until the PR at fault is
-//! the only one dropped. A PR taken out of the queue ends its train. A
+//! moved, the train is tested again. Red the first time, its failed jobs
+//! are run again once the run has ended (GitHub's "Re-run failed jobs"), since a test that fails
+//! now and then on a busy runner shouldn't drop a PR that is fine, and the
+//! train waits on that attempt as on the first; a failure showing before
+//! that run has ended again is the first attempt's, until the rerun's own
+//! check runs replace it. Red again, or with no rerun to be had, a train of
+//! one drops its PR, and a longer one is split into halves tested first,
+//! until the PR at fault is the only one dropped. A PR taken out of the queue ends its train. A
 //! train with no CI after `GRACE`, or none finished after `TIMEOUT`, holds
 //! the queue until something in it changes, and so do a push of a train or
 //! a merge failing `TRIES` times in a row, tried again on each step until
@@ -41,7 +46,7 @@ use std::process::Command;
 
 use anyhow::{Result, anyhow};
 
-use super::{Queue, TRAIN_MAX, Tested, Train};
+use super::{Queue, Rerun, TRAIN_MAX, Tested, Train};
 use crate::cmd::wait_ci::Seen;
 use crate::util;
 
@@ -88,6 +93,10 @@ pub trait Forge {
     async fn checks(&self, sha: &str, required: Option<&[String]>) -> Result<Seen>;
     /// Squash-merges a PR, refused unless its head is still `head`.
     async fn merge(&self, number: u64, head: &str) -> Result<(), MergeError>;
+    /// Whether a GitHub Actions run has ended, every job of it.
+    async fn run_finished(&self, run: &str) -> Result<bool>;
+    /// Runs a GitHub Actions run's failed jobs again.
+    async fn rerun(&self, run: &str) -> Result<()>;
     /// A link to a GitHub Actions run, for what is said of a red train.
     fn run_url(&self, run: &str) -> String;
 }
@@ -156,6 +165,20 @@ impl Forge for GitHub {
         github::rest("PUT", &path, Some(&body), SOURCE)
             .await
             .map_err(merge_error)?;
+        Ok(())
+    }
+
+    async fn run_finished(&self, run: &str) -> Result<bool> {
+        use crate::integrations::github;
+        let path = format!("repos/{}/actions/runs/{run}", self.repo);
+        let answer = github::rest("GET", &path, None, SOURCE).await?;
+        Ok(answer.get("status").and_then(|s| s.as_str()) == Some("completed"))
+    }
+
+    async fn rerun(&self, run: &str) -> Result<()> {
+        use crate::integrations::github;
+        let path = format!("repos/{}/actions/runs/{run}/rerun-failed-jobs", self.repo);
+        github::rest("POST", &path, None, SOURCE).await?;
         Ok(())
     }
 
@@ -461,7 +484,17 @@ async fn ride(
         return Ok(tell);
     }
     let required = forge.required(&at.branch).await?;
-    let seen = forge.checks(&train.commit, required.as_deref()).await?;
+    let mut seen = forge.checks(&train.commit, required.as_deref()).await?;
+    // A failure while the run run again hasn't ended is the first
+    // attempt's, still showing until GitHub makes the rerun's check runs
+    // (the job that failed, known without asking, or another that failed
+    // beside it), or one the rerun's run will end on anyway.
+    if let (Seen::Failed { job, .. }, Some(rerun)) = (&seen, &train.rerun) {
+        let same_job = job.is_some() && *job == rerun.job;
+        if same_job || !forge.run_finished(&rerun.run).await? {
+            seen = Seen::Running;
+        }
+    }
     if train.passed && seen != Seen::Passed {
         super::change(&at.common, |q| {
             if let Some(t) = q.train.as_mut() {
@@ -492,21 +525,53 @@ async fn ride(
             )))?;
         }
         Seen::Nothing | Seen::Running => {}
-        Seen::Failed { run, names, .. } => {
-            delete(&at.common, &train.branch);
+        Seen::Failed { run, names, job } => {
             let requeued = |t: &Tested| queue.queued(t.number).is_some_and(|q| q.head != t.head);
-            if let [only] = train.prs.as_slice()
-                && requeued(only)
-            {
+            let requeued_alone = matches!(train.prs.as_slice(), [only] if requeued(only));
+            let link = match run.as_str() {
+                "-" => String::new(),
+                run => format!(" ({})", forge.run_url(run)),
+            };
+            // Once, and only for a GitHub Actions run, which can be run
+            // again; a request that fails drops or splits as below.
+            let can_rerun = train.rerun.is_none() && !requeued_alone && run != "-";
+            // GitHub runs a run's failed jobs again only once the run has
+            // ended, so the train waits for its other jobs first, up to
+            // `TIMEOUT` as any run does.
+            if can_rerun && now - train.since <= TIMEOUT && !forge.run_finished(&run).await? {
+                return Ok(tell);
+            }
+            if can_rerun && forge.rerun(&run).await.is_ok() {
+                let rerun = Rerun {
+                    run: run.clone(),
+                    names: names.clone(),
+                    job,
+                };
+                super::change(&at.common, |q| {
+                    if let Some(t) = q.train.as_mut() {
+                        t.rerun = Some(rerun);
+                        t.passed = false;
+                        // The rerun has `TIMEOUT` of its own.
+                        t.since = now;
+                    }
+                })?;
+                for tested in &train.prs {
+                    let words = format!(
+                        "{} failed {}{link}: running its failed jobs again",
+                        train.branch,
+                        names.join(", ")
+                    );
+                    tell.push(told(queue, tested.number, words));
+                }
+                return Ok(tell);
+            }
+            delete(&at.common, &train.branch);
+            if requeued_alone {
                 // Queued again at a new head while its train ran: the
                 // failure is the old head's, so it waits for a train of
                 // its own.
                 super::change(&at.common, |q| q.train = None)?;
             } else if let [only] = train.prs.as_slice() {
-                let link = match run.as_str() {
-                    "-" => String::new(),
-                    run => format!(" ({})", forge.run_url(run)),
-                };
                 let why = format!(
                     "CI failed on its train {}: {}{link}",
                     train.branch,

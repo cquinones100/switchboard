@@ -50,6 +50,9 @@ pub struct Shown {
     /// The linked worktree the directory it is named from is in, by its top
     /// directory; `None` in a main clone or outside git.
     pub worktree: Option<PathBuf>,
+    /// The branch checked out there, as git's own files say it; `None` on
+    /// no branch or outside git.
+    pub branch: Option<String>,
     /// Whether the directory it was named from was removed under its pane
     /// (a worktree cleaned up), its name kept from before.
     pub gone: bool,
@@ -139,6 +142,10 @@ impl Server {
                     .as_ref()
                     .map_or_else(|| dir.clone(), git::GitPlace::main_clone),
             ),
+            branch: place
+                .as_ref()
+                .filter(|p| p.on_branch())
+                .map(|p| p.branch.clone()),
             worktree: place
                 .filter(|p| p.worktree().is_some())
                 .and_then(|_| git::top_level(&dir)),

@@ -680,7 +680,10 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
         };
         let testing = q.testing(p.number);
         let step = match train.filter(|_| testing) {
-            Some(t) => format!("testing on {}", t.branch),
+            Some(t) => match &t.rerun {
+                Some(rerun) => format!("running {} again on {}", rerun.names.join(", "), t.branch),
+                None => format!("testing on {}", t.branch),
+            },
             None => "waiting".into(),
         };
         let place = tab.map_or("no tab".to_string(), |t| format!("tab {}", t.index));
@@ -1345,5 +1348,47 @@ mod tests {
             (&json!(true), &json!(false), &json!(false))
         );
         assert_eq!(items[3].data["prqueue"]["last"], json!(true));
+    }
+
+    #[test]
+    fn a_train_running_its_failed_jobs_again_says_so_naming_them() {
+        use crate::merge_queue::{Queue, Queued, Rerun, Tested, Train};
+        let repo = RepoLanding {
+            common: PathBuf::from("/r/.git"),
+            repo: Some("me/r".into()),
+            name: "me/r".into(),
+            branch: Some("main".into()),
+            target: None,
+            holder: None,
+            waiting: Vec::new(),
+            method: Some("pr".into()),
+            prs: Queue {
+                prs: vec![Queued {
+                    number: 6,
+                    path: "/w/6".into(),
+                    ..Queued::default()
+                }],
+                train: Some(Train {
+                    branch: "ci/train-abc".into(),
+                    prs: vec![Tested {
+                        number: 6,
+                        head: "h".into(),
+                    }],
+                    rerun: Some(Rerun {
+                        run: "77".into(),
+                        names: vec!["Tests (macOS arm64, 1 of 2)".into()],
+                        job: Some("9".into()),
+                    }),
+                    ..Train::default()
+                }),
+                ..Queue::default()
+            },
+            pr_tabs: HashMap::new(),
+        };
+        let items = view_items(&[repo], &|_| Vec::new(), &[]);
+        assert_eq!(
+            items[1].detail,
+            "running Tests (macOS arm64, 1 of 2) again on ci/train-abc · no tab"
+        );
     }
 }

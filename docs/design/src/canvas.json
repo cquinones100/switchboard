@@ -693,6 +693,10 @@
       "title": "169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; naming neither the computer nor what it checks, the first two alike, why kept for the log and the Notifications view",
       "page": "design"
     },
+    "PhoneDrawerSearch.dc.html": {
+      "title": "173. The phone's drawer searched as you type: a search box under the header keeps the tabs whose number, name, repository, branch or what they are doing hold every word, the matches lit, in their groups, an empty group dropped; × clears it, and No tab matches when none do",
+      "page": "design"
+    },
     "PhoneImages.dc.html": {
       "title": "174. Images from the phone's photo library sent to a tab's Claude: + opens the library, several chosen at once; they wait as thumbnails over the field, each with an × to drop it; a message is images, words or both; in the channel a sent message shows its images as thumbnails, and a tap shows one whole",
       "page": "design"
