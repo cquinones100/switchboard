@@ -111,6 +111,10 @@ impl Kept {
         self.repos.get(dir)?.0.origin.as_ref()
     }
 
+    pub(super) fn remotes_kept(&self, dir: &Path) -> Option<&repo::Remotes> {
+        self.repos.get(dir).map(|(r, _)| r)
+    }
+
     // A directory's repositories, as last read unless that was `REPO_KEPT`
     // ago.
     fn remotes(&mut self, dir: &Path) -> repo::Remotes {
