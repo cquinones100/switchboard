@@ -262,7 +262,7 @@ fn the_drawers_search_keeps_the_tabs_matching_in_their_groups() {
 const vm = require("vm");
 const fs = require("fs");
 const ctx = vm.createContext({
-  document: { getElementById: () => null },
+  document: { getElementById: () => null, addEventListener: () => {} },
   fetch: () => new Promise(() => {}),
   console,
 });
