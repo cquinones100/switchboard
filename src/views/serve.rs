@@ -113,6 +113,24 @@ fn rows(found: &[Shown]) -> Vec<PickItem> {
         .collect()
 }
 
+/// The service whose list M-i's picker offers, by the repository's ticket
+/// provider (repos.json's `tickets`): GitHub's issues with `github`,
+/// Linear's tickets and projects with `linear` or none set.
+/// What M-i and "Choose this tab's ticket or project…" say in a
+/// repository whose tickets are GitHub's while GitHub is off: said each
+/// time, not once as a tip, since the key still works for Linear's
+/// tickets elsewhere and would otherwise do nothing without a word.
+const ISSUES_OFF: &str =
+    "This repository keeps its tickets as GitHub issues, and GitHub is off in Settings.";
+
+fn picker_service(provider: Option<&str>) -> &'static str {
+    if provider == Some("github") {
+        "github"
+    } else {
+        "linear"
+    }
+}
+
 impl Server {
     /// A view's command, from its key or the palette.
     pub fn view_command(&mut self, client: ClientId, command: Command) {
@@ -555,15 +573,20 @@ impl Server {
             self.close_ticket_view(open);
             return;
         }
-        // One of a service turned off counts as none when Linear can offer
-        // a choice.
-        let picks = settings::is_on("linear") && settings::is_on("ticket_picker");
+        // The picker lists the repository's ticket provider's: GitHub's
+        // issues with `github`, Linear's tickets otherwise. One of a service
+        // turned off counts as none when that provider can offer a choice.
+        let service = picker_service(crate::repos::tickets_known(&dir).as_deref());
+        let picker_on = settings::is_on("ticket_picker");
+        let picks = settings::is_on(service) && picker_on;
         let found = self
             .tab_ticket_at(tab, &dir)
             .filter(|f| settings::is_on(f.service()) || !picks);
         let Some(found) = found else {
-            if settings::is_on("linear") && settings::is_on("ticket_picker") {
+            if picks {
                 self.choose_ticket(client, tab, true);
+            } else if picker_on && service == "github" {
+                self.say(Some(client), ISSUES_OFF);
             } else {
                 let words = ticket::none_words(&dir, "No ticket or GitHub issue for this tab");
                 self.say(Some(client), &words);
@@ -595,18 +618,35 @@ impl Server {
     }
 
     /// "Choose this tab's ticket or project…": your Linear tickets and
-    /// projects, most recently created first, read off the task while it
-    /// says so; the one chosen kept on the tab (`@tab_ticket`, saved with
-    /// the layout), and with `open` its view opened. Esc changes nothing.
+    /// projects, most recently created first, or, in a repository whose
+    /// `tickets` is `github`, its open GitHub issues, those assigned to you
+    /// first, read off the task while it says so; the one chosen kept on the
+    /// tab (`@tab_ticket`, saved with the layout), and with `open` its view
+    /// opened. Esc changes nothing.
     pub(crate) fn choose_ticket(&mut self, client: ClientId, tab: TabId, open: bool) {
         if !self.tabs.contains_key(&tab) {
             return;
         }
-        // The work the tab is on as it is asked: a tab handed to other work
-        // meanwhile (its directory changed) takes no ticket chosen for the old.
-        let work = self.tab_path(tab).map(std::path::Path::to_path_buf);
+        // The work the tab is on as it is asked, its work pane's directory
+        // as it is now (the tab's name may not have caught up with a `cd`
+        // yet): a tab handed to other work meanwhile (its directory changed)
+        // takes no ticket chosen for the old.
+        let live = move |server: &Server| {
+            server
+                .tabs
+                .get(&tab)
+                .and_then(|t| server.pane_dir(server.work_pane(tab, t.active)))
+                .or_else(|| server.tab_path(tab).map(std::path::Path::to_path_buf))
+        };
+        let work = live(self);
+        let service = picker_service(
+            work.as_deref()
+                .and_then(crate::repos::tickets_known)
+                .as_deref(),
+        );
+        let dir = work.clone();
         let moved_on = move |server: &mut Server, client: ClientId| {
-            let now = server.tab_path(tab).map(std::path::Path::to_path_buf);
+            let now = live(server);
             let moved = now != work;
             if moved {
                 let n = server.tab_number(tab);
@@ -618,23 +658,31 @@ impl Server {
             moved
         };
         let moved_on_again = moved_on.clone();
-        // With Linear off, Linear isn't asked: only a choice made before
-        // can be let go.
-        let ask_linear = settings::is_on("linear");
-        if ask_linear {
-            self.say(Some(client), "Getting your tickets…");
+        let issues = service == "github";
+        // With its service off, the provider isn't asked: only a choice
+        // made before can be let go.
+        let ask = settings::is_on(service);
+        if ask {
+            let getting = if issues {
+                "Getting the repository's open issues…"
+            } else {
+                "Getting your tickets…"
+            };
+            self.say(Some(client), getting);
         } else if self.chosen_ticket_kept(tab).is_none() {
-            self.service_off(client, "linear");
+            if issues {
+                self.say(Some(client), ISSUES_OFF);
+            } else {
+                self.service_off(client, service);
+            }
             return;
         }
         self.off_task(
             client,
-            move || {
-                if ask_linear {
-                    util::block_on(ticket::yours())
-                } else {
-                    Ok(ticket::Lists::default())
-                }
+            move || match (ask, dir) {
+                (true, Some(dir)) if issues => util::block_on(ticket::open_issues_at(&dir)),
+                (true, _) if !issues => util::block_on(ticket::yours()),
+                _ => Ok(ticket::Lists::default()),
             },
             move |server, client, found| {
                 server.unsay(client);
@@ -656,7 +704,12 @@ impl Server {
                         lists.found
                     }
                     Ok(_) => {
-                        server.say(Some(client), "Linear has no tickets or projects of yours.");
+                        let none = if issues {
+                            "GitHub has no open issues in this repository."
+                        } else {
+                            "Linear has no tickets or projects of yours."
+                        };
+                        server.say(Some(client), none);
                         return;
                     }
                     // Said at the top of the picker, which still lets the
@@ -666,7 +719,12 @@ impl Server {
                         Vec::new()
                     }
                     Err(e) => {
-                        server.say(Some(client), &format!("Couldn't get your tickets.\n\n{e}"));
+                        let what = if issues {
+                            "the open issues"
+                        } else {
+                            "your tickets"
+                        };
+                        server.say(Some(client), &format!("Couldn't get {what}.\n\n{e}"));
                         return;
                     }
                 };
@@ -681,7 +739,8 @@ impl Server {
                     .collect();
                 // Named by the tab's number, since Linear may answer after
                 // you've gone to another tab.
-                let title = format!("Tab {}'s ticket or project", server.tab_number(tab));
+                let what = if issues { "issue" } else { "ticket or project" };
+                let title = format!("Tab {}'s {what}", server.tab_number(tab));
                 let mut picker = Picker::new(title, items).keep_order();
                 if let Some(why) = why_empty {
                     picker = picker.header(why);

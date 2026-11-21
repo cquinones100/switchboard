@@ -26,7 +26,8 @@
 # documentation (docs/, ARCHITECTURE.md, CLAUDE.md, the READMEs) or a skill
 # (assets/skills/, .claude/skills/), which the code compiles in or the
 # tests read, so the Linux jobs run on them still; full, for anything else,
-# and every push to main, which adds the three macOS jobs. A macOS job skips
+# and every push to main or to a merge queue's ci/train-* branch, which adds
+# the three macOS jobs. A macOS job skips
 # itself by its own `if:`, never by a path filter on `on:`, so each of the
 # six checks main requires still reports, skipped counting as passing; the
 # macOS tests are two jobs rather than a matrix, since a matrix job skipped
@@ -37,7 +38,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # A train of Switchboard's merge queue (src/merge_queue) runs every job
+    # on the PRs it tests together, merged onto main.
+    branches: [main, "ci/train-*"]
   pull_request:
 
 permissions:

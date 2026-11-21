@@ -25,6 +25,11 @@ allowed-tools:
   - Bash(switchboard land-lock holder)
   - Bash(switchboard land-lock queue)
   - Bash(switchboard land-lock move *)
+  - Bash(switchboard land-lock dequeue-pr *)
+  - Bash(switchboard land-lock pr-status *)
+  - Bash(switchboard land-lock pr-queue)
+  - Bash(switchboard setting pr_merge_queue)
+  - Bash(switchboard setting github)
   - Bash(switchboard land-lock phase)
   - Bash(switchboard land-lock phase *)
   - Bash(switchboard land-lock record *)
@@ -194,7 +199,7 @@ gh api graphql -F owner=<owner> -F repo=<repo> -F base=<baseRefName> \
   --jq '.data.repository | "auto-merge=\(.autoMergeAllowed) queue=\(.mergeQueue != null)"'
 ```
 
-(`baseRefName` comes from `gh pr view <number> --json baseRefName`.) Then:
+(`baseRefName` comes from `gh pr view <number> --json baseRefName`.) Then, when it prints `queue=false`, the PR's base is the default branch, `switchboard landing <worktree>` prints `pr`, `switchboard setting pr_merge_queue` and `switchboard setting github` both print `on` (the workspace runs the queue only with GitHub on), and the repository's CI runs on a push to a train's branch (after `git fetch origin`, `git grep -q 'ci/train-' origin/<baseRefName> -- .github/workflows` succeeds: a repository opts in by naming `ci/train-*` among its workflows' push branches, and turning off its base branch's "Require branches to be up to date"), the PR lands through Switchboard's own merge queue, whatever `auto-merge` says: follow "Switchboard's merge queue" below in place of the list that follows, which is how the PR lands otherwise, the setting off among them:
 
 - **Auto-merge allowed** (`auto-merge=true`): `gh pr merge <number> --auto --match-head-commit <headRefOid>`. GitHub queues or merges the PR itself once its checks pass. Then start watching.
 - **Auto-merge off, with a merge queue** (`auto-merge=false queue=true`): wait until the PR is ready (below), then add it to the queue directly. Don't use `gh pr merge` here. gh chooses between queuing and auto-merge from GitHub's `mergeStateStatus`, which GitHub works out lazily and often reports as `UNKNOWN` or `BLOCKED` for a PR that can be queued, so gh asks for auto-merge and the repo refuses.
@@ -207,6 +212,16 @@ gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed
 ```
 
 and if exactly one is allowed, pass its flag (`--squash`, `--merge`, or `--rebase`). If more than one is, ask the user which to use, except in a tab that lands without asking (`switchboard show @land` prints `1`), which takes `--squash` when it is allowed, else `--merge`, without asking. Keep that flag for any later `gh pr merge` in this run. Never pass `--admin`, which skips the queue and the required checks, and never pass `--delete-branch`.
+
+### Switchboard's merge queue
+
+Switchboard's queue (`src/merge_queue`, run by the workspace's server) holds every merge in the repository: it tests the next few PRs together on a `ci/train-<id>` branch and squash-merges them in order once that run passes, so a PR in it is never brought up to date with its base and never gets auto-merge. Wait until the PR is ready, as "Waiting until the PR is ready" says, with the line that ends on `behind` left out of the loop, since a PR behind its base waits in the queue as it is. On `ready`, add it:
+
+```
+switchboard land-lock queue-pr <number>
+```
+
+It queues the PR at the worktree's `HEAD`, the only commit of it the queue tests, so run it from the worktree once its push is done; a push after it leaves the PR waiting until it is queued again, which "Fixing" does by coming back here. It prints its place (`queued 2 of 3`), or that it is in the queue already at this head (exit 3), which is as good. Then watch it, as "Watching Switchboard's queue" says. The wait's other answers go where they go after that wait.
 
 ### Waiting until the PR is ready
 
@@ -304,6 +319,33 @@ When it exits:
   ```
 
   If the reason is about checks failing or a conflict, go to "Fixing". If someone removed it by hand, or the reason is anything else, leave the worktree alone and reply `queue-and-clean: fail: PR left the queue: <reason>`.
+
+### Watching Switchboard's queue
+
+In place of the watch above, for a PR in Switchboard's merge queue, start this with the Bash tool's `run_in_background`, from the worktree, as above:
+
+```
+queued=$(git rev-parse HEAD)
+while :; do
+  info=$(gh pr view <number> --json state,headRefOid --jq '[.state, .headRefOid] | @tsv') || { sleep 60; continue; }
+  IFS=$'\t' read -r state head <<<"$info"
+  case "$state" in MERGED) echo merged; exit 0 ;; CLOSED) echo closed; exit 0 ;; esac
+  status=$(switchboard land-lock pr-status <number>) || { sleep 60; continue; }
+  case "$status" in merged) ;; dropped*|held*) echo "$status"; exit 0 ;; none) echo dequeued; exit 0 ;; esac
+  [ "$head" != "$queued" ] && { echo moved; exit 0; }
+  sleep 60
+done
+```
+
+`land-lock pr-status` says where the PR is (`queued <place> of <count>`, `testing ci/train-<id>`, `merged`, `dropped <why>`, or `held <why> · queued <place> of <count>` while something stops the whole queue), and the queue says on the tab's phase what happens to it. When it exits:
+
+- `merged`: the queue merged it. Go to "Deploy and test".
+- `closed`: leave the worktree alone and reply `queue-and-clean: fail: PR closed without merging`.
+- `dropped GitHub won't merge it: <reason>`: GitHub refuses to merge the PR as it is (a review it requires, a draft), which no fix of the branch settles. Leave the worktree alone and reply `queue-and-clean: fail: GitHub won't merge it: <reason>`.
+- `dropped <why>` otherwise: the queue dropped it: its train's CI failed with it alone, its own checks failed, or it doesn't merge onto the default branch with the PRs ahead of it. Go to "Fixing" with the words after `dropped`, which name the train's branch and its failed run; ci-loop reads the run's logs with `gh run view <run id> --log-failed`. Its fix comes back to "Queuing", which queues it again.
+- `moved`: the PR was pushed to since it was queued, so the queue passes over it until it is queued again at its new head, which `land-lock queue-pr` takes from this worktree's `HEAD`. When `git rev-parse HEAD` equals the PR's `headRefOid` (`gh pr view <number> --json headRefOid --jq .headRefOid`), the push came from here: go back to "Queuing" with it, which waits until its checks pass and queues it again, keeping its place. Otherwise it came from elsewhere (someone else's push, GitHub's "Update branch"), whose commit this worktree doesn't have and the queue would never test: leave the worktree alone and reply `queue-and-clean: fail: the PR was pushed to from outside this worktree; bring it up to <headRefOid> and run /queue-and-clean again`.
+- `held <why> · …`: the queue stopped for every PR (no CI on a train, CI running too long, a push or merge that kept failing, a base branch that still requires PRs to be up to date) and waits until something in it changes. Leave the worktree alone and reply `queue-and-clean: fail: Switchboard's merge queue is held: <why>`; queuing any PR again, or the Landing view's menu, starts it again.
+- `dequeued`: someone took it out of the queue by hand (`land-lock dequeue-pr`, or the Landing view's menu). Leave the worktree alone and reply `queue-and-clean: fail: PR taken out of Switchboard's merge queue`.
 
 ## Bringing it up to date
 

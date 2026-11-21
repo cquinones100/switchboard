@@ -928,7 +928,8 @@ impl Server {
     // under way; with neither the landing_queue setting nor the Landing
     // view on, forgets them.
     fn start_landing(&mut self, tabs: &[TabInfo]) {
-        if !settings::is_on("landing_queue") && !enabled(LANDING) {
+        let merge_queue = settings::is_on(crate::merge_queue::SETTING);
+        if !settings::is_on("landing_queue") && !enabled(LANDING) && !merge_queue {
             self.sources.landing = Read::default();
             return;
         }
@@ -994,6 +995,10 @@ impl Server {
                 .get(&tab.id)
                 .map(|p| p.landing)
                 .or_else(|| pr.as_ref().and_then(|p| merging(p, &self.sources.queues)))
+                .or_else(|| {
+                    pr.as_ref()
+                        .and_then(|p| our_queue(p, &self.sources.landing))
+                })
                 .filter(|_| landing_queue);
             if pr.is_some() || landing.is_some() {
                 facts.insert(tab.id, TabFacts { pr, landing });
@@ -1142,6 +1147,30 @@ fn merging(pr: &PrFacts, queues: &queues::Queues) -> Option<Landing> {
     })?;
     (line > 0).then_some(Landing {
         holding: line == 1,
+        line,
+        method: Method::Pr,
+    })
+}
+
+/// A PR's place in Switchboard's merge queue (src/merge_queue), as landing
+/// there: each in the train under test holding it, the rest in line; none
+/// once GitHub has said it merged.
+fn our_queue(pr: &PrFacts, read: &Read) -> Option<Landing> {
+    if pr.state == PrState::Merged || pr.merge == Some(Merge::Merged) {
+        return None;
+    }
+    let (line, holding) = read
+        .repos
+        .iter()
+        .filter(|r| r.target.is_none())
+        .filter(|r| {
+            r.repo
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&pr.repo))
+        })
+        .find_map(|r| Some((r.prs.line(pr.number)?, r.prs.testing(pr.number))))?;
+    Some(Landing {
+        holding,
         line,
         method: Method::Pr,
     })

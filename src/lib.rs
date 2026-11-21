@@ -80,6 +80,9 @@
 //!   tabs open, or until you say.
 //! - `routines`: a prompt of yours run on a schedule, each run in a Claude
 //!   tab of its own.
+//! - `merge_queue`: Switchboard's own merge queue for a repository landing
+//!   through PRs with no queue of GitHub's: PRs tested together in trains
+//!   on a `ci/train-<id>` branch and merged in order once it passes.
 //! - `worktree_sweep`: a worktree removed on its own once its work has
 //!   landed and no tab has it open, its branch kept.
 //!
@@ -107,6 +110,7 @@ pub mod history;
 pub mod integrations;
 pub mod items;
 pub mod links;
+pub mod merge_queue;
 pub mod mission;
 pub mod mux;
 pub mod net;
