@@ -128,11 +128,21 @@ fn the_relay_reads_and_types_into_tabs_through_the_server() {
     mux.send_keys(&pane, &["Enter"]).unwrap();
     // Each line of the paste on a line of its own, waited for whole: cat
     // prints the first line while the terminal still echoes the second, so
-    // "worldhello" is on the way there.
-    wait("each line of the paste on a line of its own", || {
-        mux.capture(&pane, 60)
-            .filter(|s| s.lines().any(|l| l == "hello") && s.lines().any(|l| l == "world"))
-    });
+    // "worldhello" is on the way there. The terminal's echo alone puts both
+    // on lines of their own, so the wait is also for cat to have printed
+    // each back (each word twice), or its output could land after the "2"
+    // typed next, on that line ("2hello").
+    wait(
+        "each line of the paste on a line of its own, and cat's copy",
+        || {
+            mux.capture(&pane, 60).filter(|s| {
+                s.lines().any(|l| l == "hello")
+                    && s.lines().any(|l| l == "world")
+                    && s.matches("hello").count() >= 2
+                    && s.matches("world").count() >= 2
+            })
+        },
+    );
     mux.type_text(&pane, "2").unwrap();
     wait("a number typed", || {
         mux.capture(&pane, 60)
