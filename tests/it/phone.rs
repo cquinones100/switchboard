@@ -397,6 +397,7 @@ class Node {
     };
   }
   get textContent() { return this.text + this.children.map((c) => c.textContent).join(""); }
+  set textContent(text) { this.replaceChildren(); this.text = text; }
   setAttribute(k, v) { this[k] = v; }
   addEventListener(k, f) { (this.listeners[k] = this.listeners[k] || []).push(f); }
   dispatchEvent(e) { for (const f of this.listeners[e.type] || []) f({ ...e, target: this }); }

@@ -337,6 +337,8 @@ function message(m, i, all) {
   const prev = all[i - 1];
   const same = prev && prev.who === m.who && prev.who !== "tool";
   const who = m.who === "you" ? "You" : "Claude";
+  const when = el("span", { class: "when" }, ago(m.at));
+  when.at = m.at;
   const key = messageKey(m);
   const folded = (m.text.split("\n").length > 10 || m.text.length > 700) && !state.unfolded.has(key);
   const body = m.text ? el("div", { class: "body" + (folded ? " folded" : "") }, m.text) : null;
@@ -367,7 +369,7 @@ function message(m, i, all) {
     "div",
     { class: "msg" },
     same ? el("span") : el("span", { class: "avatar " + m.who }, who[0]),
-    same ? null : el("div", {}, el("span", { class: "who" }, who), el("span", { class: "when" }, ago(m.at))),
+    same ? null : el("div", {}, el("span", { class: "who" }, who), when),
     body,
     more,
     images,
@@ -627,6 +629,9 @@ function channel(stick) {
     shown.messages.replaceChildren(...state.messages.map(message));
     shown.drawn = state.messages;
     shown.count = state.messages.length;
+  } else {
+    // Kept, so their times ("now", "3m ago") are worked out again in place.
+    for (const when of shown.messages.querySelectorAll(".when")) when.textContent = ago(when.at);
   }
   const working = tab.state === "working" || tab.state === "background";
   shown.now.replaceChildren(...[card(tab), working ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null].filter(Boolean));
