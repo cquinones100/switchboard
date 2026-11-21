@@ -16,7 +16,8 @@
 //! only commit of it a train tests) and the worktree, Claude session and
 //! pane that queued it
 //! (`/queue-and-clean`, through `land-lock queue-pr`); the train under test,
-//! its base and each PR's head as tested; the groups a red train was split
+//! its base and each PR's head as tested; the train ahead, built on the
+//! train under test's commit and tested beside it; the groups a red train was split
 //! into, tested ahead of the rest; the PRs dropped and why, and the last
 //! ones merged, which `land-lock pr-status` tells the PR's tab; whether the
 //! train's failed jobs were run again, which a red train is once before it
@@ -61,6 +62,10 @@ const MUTEX_TRIES: u32 = 500;
 pub struct Queue {
     pub prs: Vec<Queued>,
     pub train: Option<Train>,
+    /// The train ahead: the next PRs merged onto the train under test's
+    /// commit, its CI running beside that one's, which becomes the train
+    /// under test once that one merges.
+    pub ahead: Option<Train>,
     /// The halves of red trains, each tested as a train of its own before
     /// anything else, so the PR at fault is found and the rest go on.
     pub splits: Vec<Vec<u64>>,
@@ -122,6 +127,9 @@ pub struct Train {
     /// is at most once: a second failure drops or splits it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rerun: Option<Rerun>,
+    /// Built from a red train's split, which a train ahead ended before it
+    /// is tested gives back to the splits.
+    pub split: bool,
 }
 
 /// A red train's failed jobs run again: the GitHub Actions run, their
@@ -162,7 +170,7 @@ pub struct Merged {
 impl Queue {
     /// Whether the queue has anything to do.
     pub fn busy(&self) -> bool {
-        self.train.is_some() || !self.prs.is_empty()
+        self.train.is_some() || self.ahead.is_some() || !self.prs.is_empty()
     }
 
     pub fn queued(&self, number: u64) -> Option<&Queued> {
@@ -170,20 +178,31 @@ impl Queue {
     }
 
     /// Whether the train under test holds `number`.
-    pub fn testing(&self, number: u64) -> bool {
-        self.train
-            .as_ref()
-            .is_some_and(|t| t.prs.iter().any(|p| p.number == number))
+    pub fn in_train(&self, number: u64) -> bool {
+        holds(self.train.as_ref(), number)
     }
 
-    /// A PR's place in line: 1 for each one in the train, the rest after it
-    /// in their order.
+    /// Whether the train ahead holds `number`.
+    pub fn in_ahead(&self, number: u64) -> bool {
+        holds(self.ahead.as_ref(), number)
+    }
+
+    /// Whether either train tests `number`.
+    pub fn testing(&self, number: u64) -> bool {
+        self.in_train(number) || self.in_ahead(number)
+    }
+
+    /// A PR's place in line: 1 for each one in the train under test, 2 for
+    /// each in the train ahead, the rest after them in their order.
     pub fn line(&self, number: u64) -> Option<u32> {
         self.queued(number)?;
-        if self.testing(number) {
+        if self.in_train(number) {
             return Some(1);
         }
-        let ahead = u32::from(self.train.is_some());
+        if self.in_ahead(number) {
+            return Some(1 + u32::from(self.train.is_some()));
+        }
+        let ahead = u32::from(self.train.is_some()) + u32::from(self.ahead.is_some());
         let at = self
             .prs
             .iter()
@@ -226,8 +245,11 @@ impl Queue {
 
     /// What `land-lock pr-status` says of a PR.
     pub fn status(&self, number: u64) -> String {
-        if let Some(t) = self.train.as_ref().filter(|_| self.testing(number)) {
+        if let Some(t) = self.train.as_ref().filter(|_| self.in_train(number)) {
             return format!("testing {}", t.branch);
+        }
+        if let Some(t) = self.ahead.as_ref().filter(|_| self.in_ahead(number)) {
+            return format!("testing next {}", t.branch);
         }
         if let Some(line) = self.line(number) {
             return match &self.held {
@@ -248,8 +270,11 @@ impl Queue {
     /// the queue, `why` saying why: a PR waiting or under test is held,
     /// since nothing will move it until the queue runs again.
     pub fn status_stopped(&self, number: u64, why: &str) -> String {
-        if let Some(t) = self.train.as_ref().filter(|_| self.testing(number)) {
+        if let Some(t) = self.train.as_ref().filter(|_| self.in_train(number)) {
             return format!("held {why} · testing {}", t.branch);
+        }
+        if let Some(t) = self.ahead.as_ref().filter(|_| self.in_ahead(number)) {
+            return format!("held {why} · testing next {}", t.branch);
         }
         match self.line(number) {
             Some(line) => format!("held {why} · queued {line} of {}", self.prs.len()),
@@ -268,6 +293,10 @@ pub fn stopped() -> Option<&'static str> {
         return Some("Settings' github is off");
     }
     None
+}
+
+fn holds(train: Option<&Train>, number: u64) -> bool {
+    train.is_some_and(|t| t.prs.iter().any(|p| p.number == number))
 }
 
 fn keep_last<T>(list: &mut Vec<T>) {
@@ -423,9 +452,12 @@ pub fn command(command: &str, args: &[String], common: &Path, here: &Path) -> Op
                 println!("held\t{held}");
             }
             for p in &queue.prs {
-                let place = match queue.testing(p.number) {
-                    true => "testing".to_string(),
-                    false => queue.line(p.number).unwrap_or(0).to_string(),
+                let place = if queue.in_train(p.number) {
+                    "testing".to_string()
+                } else if queue.in_ahead(p.number) {
+                    "next".to_string()
+                } else {
+                    queue.line(p.number).unwrap_or(0).to_string()
                 };
                 println!("{place}\t#{}\t{}\t{}", p.number, p.path, p.since);
             }
@@ -469,7 +501,8 @@ pub fn queue_pr(queue: &mut Queue, queued: Queued) -> Result<String, String> {
 }
 
 /// A PR taken out by hand: whether it was there. One in the train under
-/// test ends the train, which `train::step` sees.
+/// test ends that train and the train ahead, and one in the train ahead
+/// ends that one, which `train::step` sees.
 pub fn dequeue_pr(queue: &mut Queue, number: u64) -> bool {
     let there = queue.remove(number).is_some();
     if there {
@@ -498,6 +531,9 @@ pub fn move_pr(queue: &mut Queue, number: u64, way: &str) -> bool {
     queue.prs.insert(waiting[to].min(queue.prs.len()), entry);
     // A PR moved is tested in the order chosen, not the split's.
     queue.splits.clear();
+    if let Some(ahead) = queue.ahead.as_mut() {
+        ahead.split = false;
+    }
     queue.held = None;
     true
 }
@@ -613,5 +649,41 @@ mod tests {
         q.merged_pr(1, 9);
         assert_eq!(q.status_stopped(1, why), "merged");
         assert_eq!(q.status_stopped(5, why), "none");
+    }
+
+    #[test]
+    fn the_train_ahead_is_second_in_line_and_an_older_file_has_none() {
+        let mut q = Queue::default();
+        for n in [1, 2, 3, 4] {
+            queue_pr(&mut q, pr(n)).unwrap();
+        }
+        let train = |branch: &str, number: u64| Train {
+            branch: branch.into(),
+            prs: vec![Tested {
+                number,
+                head: "h".into(),
+            }],
+            ..Train::default()
+        };
+        q.train = Some(train("ci/train-a", 1));
+        q.ahead = Some(train("ci/train-b", 3));
+        assert_eq!(
+            [1, 2, 3, 4].map(|n| q.line(n)),
+            [Some(1), Some(3), Some(2), Some(4)]
+        );
+        assert_eq!(q.status(3), "testing next ci/train-b");
+        assert_eq!(q.status_stopped(3, "x"), "held x · testing next ci/train-b");
+        assert!(
+            !move_pr(&mut q, 3, "first"),
+            "a PR in the train ahead stays"
+        );
+        q.ahead.as_mut().unwrap().split = true;
+        assert!(move_pr(&mut q, 4, "first"));
+        assert!(
+            !q.ahead.as_ref().unwrap().split,
+            "a move leaves no split to go back to"
+        );
+        let older: Queue = serde_json::from_str(r#"{"prs":[],"train":null}"#).unwrap();
+        assert!(older.ahead.is_none());
     }
 }

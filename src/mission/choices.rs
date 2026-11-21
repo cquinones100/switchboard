@@ -1276,7 +1276,11 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     way,
                 };
                 if !flag("first") {
-                    out.push(choice('n', "Test it in the next train", moved("first")));
+                    out.push(choice(
+                        'n',
+                        "Test it once the trains running are done",
+                        moved("first"),
+                    ));
                     out.push(choice('u', "Move it up in the merge queue", moved("up")));
                 }
                 if !flag("last") {

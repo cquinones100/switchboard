@@ -641,21 +641,29 @@ pub fn view_items(
 }
 
 /// The section of Switchboard's merge queue (src/merge_queue): the PRs in
-/// the train under test first, then those waiting, in order.
+/// the train under test first, then those in the train ahead, then those
+/// waiting, in order.
 fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
     let q = &r.prs;
     let train = q.train.as_ref();
+    let ahead = q.ahead.as_ref();
     let right = match (&q.held, train) {
         (Some(held), _) => format!("held: {held}"),
         (None, _) if q.failed.is_some() => {
             format!("last look failed: {}", q.failed.as_deref().unwrap_or(""))
         }
-        (None, Some(t)) => format!(
-            "{} queued · {} testing on {}",
-            q.prs.len(),
-            t.prs.len(),
-            t.branch
-        ),
+        (None, Some(t)) => {
+            let mut words = format!(
+                "{} queued · {} testing on {}",
+                q.prs.len(),
+                t.prs.len(),
+                t.branch
+            );
+            if let Some(a) = ahead {
+                words.push_str(&format!(" · {} next on {}", a.prs.len(), a.branch));
+            }
+            words
+        }
         (None, None) => format!("{} queued", q.prs.len()),
     };
     let mut items = vec![header(
@@ -665,7 +673,8 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
         &right,
     )];
     let mut ordered: Vec<&crate::merge_queue::Queued> =
-        q.prs.iter().filter(|p| q.testing(p.number)).collect();
+        q.prs.iter().filter(|p| q.in_train(p.number)).collect();
+    ordered.extend(q.prs.iter().filter(|p| q.in_ahead(p.number)));
     let waiting: Vec<&crate::merge_queue::Queued> =
         q.prs.iter().filter(|p| !q.testing(p.number)).collect();
     ordered.extend(&waiting);
@@ -679,12 +688,22 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
             None => format!("#{} {}", p.number, folder_of(Path::new(&p.path))),
         };
         let testing = q.testing(p.number);
-        let step = match train.filter(|_| testing) {
-            Some(t) => match &t.rerun {
+        let step = match (train.filter(|_| q.in_train(p.number)), ahead) {
+            (Some(t), _) => match &t.rerun {
                 Some(rerun) => format!("running {} again on {}", rerun.names.join(", "), t.branch),
                 None => format!("testing on {}", t.branch),
             },
-            None => "waiting".into(),
+            (None, Some(a)) if q.in_ahead(p.number) => {
+                let under: Vec<String> = train
+                    .map(|t| t.prs.iter().map(|t| format!("#{}", t.number)).collect())
+                    .unwrap_or_default();
+                format!(
+                    "testing next on {}, on top of {}",
+                    a.branch,
+                    under.join(", ")
+                )
+            }
+            _ => "waiting".into(),
         };
         let place = tab.map_or("no tab".to_string(), |t| format!("tab {}", t.index));
         let at = waiting.iter().position(|w| w.number == p.number);
@@ -1348,6 +1367,60 @@ mod tests {
             (&json!(true), &json!(false), &json!(false))
         );
         assert_eq!(items[3].data["prqueue"]["last"], json!(true));
+    }
+
+    #[test]
+    fn the_train_ahead_shows_after_the_train_under_test() {
+        use crate::merge_queue::{Queue, Queued, Tested, Train};
+        let queued = |number: u64| Queued {
+            number,
+            path: format!("/w/{number}"),
+            ..Queued::default()
+        };
+        let train = |branch: &str, numbers: &[u64]| Train {
+            branch: branch.into(),
+            prs: numbers
+                .iter()
+                .map(|n| Tested {
+                    number: *n,
+                    head: "h".into(),
+                })
+                .collect(),
+            ..Train::default()
+        };
+        let repo = RepoLanding {
+            common: PathBuf::from("/r/.git"),
+            repo: Some("me/r".into()),
+            name: "me/r".into(),
+            branch: Some("main".into()),
+            target: None,
+            holder: None,
+            waiting: Vec::new(),
+            method: Some("pr".into()),
+            prs: Queue {
+                prs: [5, 6, 7, 8, 9].map(queued).to_vec(),
+                train: Some(train("ci/train-abc", &[5, 6])),
+                ahead: Some(train("ci/train-def", &[8])),
+                ..Queue::default()
+            },
+            pr_tabs: HashMap::new(),
+        };
+        let items = view_items(&[repo], &|_| Vec::new(), &[]);
+        let titles: Vec<&str> = items[1..].iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["1. #5 5", "2. #6 6", "3. #8 8", "4. #7 7", "5. #9 9"]
+        );
+        assert_eq!(
+            items[0].data["right"],
+            "5 queued · 2 testing on ci/train-abc · 1 next on ci/train-def"
+        );
+        assert_eq!(
+            items[3].detail,
+            "testing next on ci/train-def, on top of #5, #6 · no tab"
+        );
+        assert_eq!(items[3].data["prqueue"]["testing"], json!(true));
+        assert_eq!(items[4].data["prqueue"]["first"], json!(true));
     }
 
     #[test]
