@@ -319,11 +319,12 @@ pub fn tailscale_status() -> Result<serde_json::Value> {
 }
 
 /// `tailscale cert`: the certificate for `domain` (this computer's
-/// `*.ts.net` name) and its key, written to the files given.
-pub fn tailscale_cert(domain: &str, cert: &std::path::Path, key: &std::path::Path) -> Result<()> {
-    let cert = format!("--cert-file={}", cert.display());
-    let key = format!("--key-file={}", key.display());
-    tailscale(&["cert", &cert, &key, domain]).map(|_| ())
+/// `*.ts.net` name), its chain and its key, as PEM printed to stdout
+/// (`-` for both files). Printed rather than written to a file of ours,
+/// since the App Store's Tailscale is sandboxed and can't write outside
+/// its own container.
+pub fn tailscale_cert(domain: &str) -> Result<String> {
+    tailscale(&["cert", "--cert-file=-", "--key-file=-", domain])
 }
 
 /// `tailscale whois --json <ip>`: the device at a tailnet address and who
