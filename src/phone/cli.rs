@@ -1,4 +1,4 @@
-//! `switchboard phone [start|stop|status|test|run|pair <code>|devices|revoke <device>]`.
+//! `switchboard phone [start|stop|status|test|run|pair <code>|devices|revoke <device>|preview]`.
 //!
 //! ```text
 //! phone                  open the phone app in a tab of its own, or go to
@@ -15,6 +15,11 @@
 //!                        the workspace's box does
 //! phone devices          the phones paired
 //! phone revoke <device>  a phone's pairing taken away
+//! phone preview [--port N] [--no-open]
+//!                        the app from Switchboard's clone on 127.0.0.1
+//!                        over made-up tabs, framed at a phone's size and
+//!                        reloaded as its files are saved (`preview`), for
+//!                        developing it; only in Switchboard's clone
 //! ```
 //!
 //! `start`, `stop` and `test` take `--say`, for the palette: what goes wrong goes
@@ -260,6 +265,84 @@ fn test_push() -> Result<String, String> {
     Err("this build has no network support".into())
 }
 
+/// `phone preview`: the app's files in the clone this runs in, served on
+/// 127.0.0.1 over made-up tabs until Ctrl-C, the frame opened in the
+/// browser unless `--no-open`.
+#[cfg(feature = "net")]
+fn preview(args: &[String]) -> ExitCode {
+    let fail = |why: String, code: u8| {
+        eprintln!("switchboard phone preview: {why}");
+        ExitCode::from(code)
+    };
+    let mut port = None;
+    let mut open = true;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--no-open" => open = false,
+            "--port" => match args.next().and_then(|p| p.parse::<u16>().ok()) {
+                Some(p) => port = Some(p),
+                None => return fail("--port takes a port's number".into(), 2),
+            },
+            other => {
+                return fail(
+                    format!("unknown option \"{other}\"; use --port N or --no-open"),
+                    2,
+                );
+            }
+        }
+    }
+    let here = std::env::current_dir().unwrap_or_default();
+    let dir = match super::preview::assets_dir(&here) {
+        Ok(dir) => dir,
+        Err(why) => return fail(why, 1),
+    };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => return fail(format!("couldn't start: {e}"), 1),
+    };
+    let code = runtime.block_on(async {
+        let listener = match super::preview::bind(port).await {
+            Ok(l) => l,
+            Err(e) => return fail(format!("{e:#}"), 1),
+        };
+        let url = match listener.local_addr() {
+            Ok(at) => format!("http://{at}/preview"),
+            Err(e) => return fail(e.to_string(), 1),
+        };
+        println!(
+            "The phone preview of {} is at {url}; Ctrl-C stops it.",
+            dir.display()
+        );
+        if open {
+            println!("{}", crate::links::opening_words(&url));
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = crate::links::open_url_watched(&url) {
+                    eprintln!("switchboard phone preview: couldn't open it: {e:#}");
+                }
+            });
+        }
+        tokio::select! {
+            served = super::preview::serve(listener, dir) => match served {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(format!("{e:#}"), 1),
+            },
+            _ = tokio::signal::ctrl_c() => ExitCode::SUCCESS,
+        }
+    });
+    runtime.shutdown_background();
+    code
+}
+
+#[cfg(not(feature = "net"))]
+fn preview(_: &[String]) -> ExitCode {
+    eprintln!("switchboard phone preview: this build has no network support");
+    ExitCode::from(1)
+}
+
 #[cfg(not(feature = "net"))]
 fn run() -> ExitCode {
     eprintln!("switchboard phone: this build has no network support");
@@ -302,6 +385,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             ExitCode::SUCCESS
         }
         "run" => run(),
+        "preview" => preview(&args[1..]),
         "pair" => match args.get(1) {
             Some(code) => match pairing::approve(code, util::now_ms()) {
                 pairing::Approval::Paired(device) => outcome(Ok(format!(
@@ -332,12 +416,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
         },
         "-h" | "--help" | "help" => {
             println!(
-                "Usage: switchboard phone [start|stop|status|test|run|pair <code>|devices|revoke <device>]"
+                "Usage: switchboard phone [start|stop|status|test|run|pair <code>|devices|revoke <device>|preview [--port N] [--no-open]]"
             );
             ExitCode::SUCCESS
         }
         other => outcome(Err(format!(
-            "unknown command \"{other}\"; use start, stop, status, test, run, pair, devices or revoke"
+            "unknown command \"{other}\"; use start, stop, status, test, run, pair, devices, revoke or preview"
         ))),
     }
 }
