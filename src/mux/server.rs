@@ -1325,7 +1325,10 @@ impl Server {
             } => {
                 // Answered once the build it restarts on has taken over.
                 if super::upgrade::asks_upgrade(&args) {
-                    self.upgrade_asked(Some(reply), None, None);
+                    match super::upgrade::asks_latest(&args) {
+                        true => self.latest_command(reply),
+                        false => self.upgrade_asked(Some(reply), None, None),
+                    }
                     return;
                 }
                 // Never answered: its connection is kept for what changes

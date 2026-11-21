@@ -331,6 +331,9 @@ pub struct Upgrade {
     handing: bool,
     /// M-p's restart is building first (src/mux/latest.rs).
     building: bool,
+    /// The `switchboard upgrade --latest` waiting on that build, answered
+    /// as it ends: by the new build once it has taken over, else here.
+    latest_asker: Option<oneshot::Sender<Answer>>,
     /// What the build row shows (src/mux/build_row.rs): the build under
     /// way, how it failed, or the restart just made.
     pub shown: Option<Shown>,
@@ -370,7 +373,7 @@ pub enum UpgradeEvent {
     Tick,
     /// M-p's build for the terminal that asked: the binary to restart on,
     /// `None` when there is nothing new, or why the build failed.
-    Built(ClientId, Result<super::latest::Brought, String>),
+    Built(Option<ClientId>, Result<super::latest::Brought, String>),
     /// The commits main has that this build lacks, and main's commit
     /// (src/mux/behind.rs).
     Behind(Option<(usize, String)>),
@@ -384,6 +387,15 @@ pub fn asks_upgrade(args: &[String]) -> bool {
     args.first().is_some_and(|a| a == "upgrade")
         && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
 }
+
+/// Whether an upgrade's arguments ask for M-p's build first
+/// (`switchboard upgrade --latest`).
+pub fn asks_latest(args: &[String]) -> bool {
+    args.get(1).is_some_and(|a| a == "--latest")
+}
+
+/// What `switchboard upgrade --latest` says outside Switchboard's clone.
+pub const LATEST_ONLY_IN_CLONE: &str = "switchboard upgrade --latest is for developing Switchboard: it builds Switchboard's own clone, and this build wasn't made from one.";
 
 impl Server {
     /// An upgrade asked for, by `switchboard upgrade` (answered on `asker`)
@@ -428,7 +440,38 @@ impl Server {
     /// restarts as `switchboard upgrade` does, only when the binary on disk
     /// is a new one.
     pub fn latest_asked(&mut self, client: ClientId) {
+        self.latest_build(Some(client), None);
+    }
+
+    /// `switchboard upgrade --latest`: M-p's restart, for a command that
+    /// waits on it, only where M-p offers it (a build made from
+    /// Switchboard's clone). It is answered with the line the new build
+    /// says once it has taken over, or here with why nothing restarted.
+    pub fn latest_command(&mut self, asker: oneshot::Sender<Answer>) {
+        if !crate::dev::build_is_from_clone() {
+            let _ = asker.send(Answer::Reply(Reply::fail(LATEST_ONLY_IN_CLONE.to_string())));
+            return;
+        }
+        self.latest_build(None, Some(asker));
+    }
+
+    fn latest_build(&mut self, client: Option<ClientId>, asker: Option<oneshot::Sender<Answer>>) {
+        let refuse =
+            |server: &mut Server, asker: Option<oneshot::Sender<Answer>>, text: &str| match asker {
+                Some(asker) => {
+                    let _ = asker.send(Answer::Reply(Reply::fail(text.to_string())));
+                }
+                None => server.say(client, text),
+            };
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
+            let Some(client) = client.filter(|_| asker.is_none()) else {
+                refuse(
+                    self,
+                    asker,
+                    "Switchboard is building or restarting already.",
+                );
+                return;
+            };
             // A second press shows the build's steps, where they can show,
             // and a third takes them away again.
             if matches!(self.upgrade.shown, Some(Shown::Building(_))) {
@@ -446,8 +489,9 @@ impl Server {
             return;
         }
         let Some(binary) = binary() else {
-            self.say(
-                Some(client),
+            refuse(
+                self,
+                asker,
                 "Switchboard can't restart on the new build: the binary it was started from isn't known.",
             );
             return;
@@ -461,9 +505,9 @@ impl Server {
                 Instant::now(),
             )));
             self.build_changed();
-            if self.build_row_shows(client) {
+            if let Some(client) = client.filter(|c| self.build_row_shows(*c)) {
                 self.tip("build-row", Some(client));
-            } else {
+            } else if let Some(client) = client {
                 let text = if checkout.main_clone {
                     format!("Updating {}…", paths::tilde(&checkout.dir))
                 } else {
@@ -476,6 +520,7 @@ impl Server {
             return;
         }
         self.upgrade.building = true;
+        self.upgrade.latest_asker = asker;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
             let report = |report: super::latest::Report| {
@@ -485,6 +530,22 @@ impl Server {
                 super::latest::bring_up_to_date(&paths::home(), &binary, build_first, &report);
             let _ = tx.send(Event::Upgrade(UpgradeEvent::Built(client, result)));
         });
+    }
+
+    /// Answers the `switchboard upgrade --latest` waiting on the build, if
+    /// one is, with `text` (exiting 1 unless `ok`); otherwise
+    /// `otherwise` runs.
+    fn latest_answered(&mut self, text: String, ok: bool, otherwise: impl FnOnce(&mut Server)) {
+        match self.upgrade.latest_asker.take() {
+            Some(asker) => {
+                let reply = match ok {
+                    true => Reply::ok(format!("{text}\n")),
+                    false => Reply::fail(text),
+                };
+                let _ = asker.send(Answer::Reply(reply));
+            }
+            None => otherwise(self),
+        }
     }
 
     /// Whether the build row shows on a client's screen: in the sidebar.
@@ -626,7 +687,8 @@ impl Server {
                     Ok(super::latest::Brought {
                         on: Some(on), note, ..
                     }) => {
-                        self.upgrade_asked(None, Some(client), Some(on));
+                        let asker = self.upgrade.latest_asker.take();
+                        self.upgrade_asked(asker, client, Some(on));
                         if let Some(pending) = self.upgrade.pending.as_mut() {
                             pending.note = note;
                             // Restarting, until the new build takes over.
@@ -645,19 +707,30 @@ impl Server {
                             true => note,
                             false => format!("Already on the latest build. {note}"),
                         };
-                        self.say(Some(client), text.trim_end())
+                        let text = text.trim_end().to_string();
+                        self.latest_answered(text.clone(), true, |s| s.say(client, &text));
                     }
-                    Err(why) => match build.filter(|_| self.build_row_shows(client)) {
-                        // The row says it failed until it is clicked, and
-                        // its steps say why.
-                        Some(build) => {
-                            self.upgrade.shown = Some(Shown::Failed { build, why, lines })
+                    Err(why) if self.upgrade.latest_asker.is_some() => {
+                        let mut text =
+                            format!("Switchboard didn't build: {why}. It goes on as it was.");
+                        for line in &lines {
+                            text.push_str(&format!("\n{line}"));
                         }
-                        None => self.say(
-                            Some(client),
-                            &format!("The build failed: {why}. Switchboard goes on as it was."),
-                        ),
-                    },
+                        self.latest_answered(text, false, |_| {});
+                    }
+                    Err(why) => {
+                        match build.filter(|_| client.is_some_and(|c| self.build_row_shows(c))) {
+                            // The row says it failed until it is clicked, and
+                            // its steps say why.
+                            Some(build) => {
+                                self.upgrade.shown = Some(Shown::Failed { build, why, lines })
+                            }
+                            None => self.say(
+                                client,
+                                &format!("The build failed: {why}. Switchboard goes on as it was."),
+                            ),
+                        }
+                    }
                 }
                 self.build_changed();
                 return;

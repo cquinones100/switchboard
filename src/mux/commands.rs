@@ -43,9 +43,12 @@
 //! display [-t pane] pane|tab|session|cwd|command|title
 //! list-keys | detach [-s session] | kill-server
 //! save                                   the layout now; prints its file
-//! upgrade                                the server restarted on the build
+//! upgrade [--latest]                     the server restarted on the build
 //!                                        installed now, keeping every pane
-//!                                        (src/mux/upgrade.rs)
+//!                                        (src/mux/upgrade.rs); --latest
+//!                                        builds the latest main first, as
+//!                                        M-p's restart does, and waits
+//!                                        for it
 //! say [-t seconds] text...               a message in a box (src/ui)
 //! picture [-t pane] <file>               the picture shown full size over
 //!                                        the pane, Esc going back; fails
@@ -206,7 +209,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "upgrade",
-        "upgrade: restarts the server on the build installed now, keeping every pane and its program running",
+        "upgrade [--latest]: restarts the server on the build installed now, keeping every pane and its program running; --latest first does what M-p's \"Restart Switchboard on the latest main\" does (brings the main clone up to date, builds it and puts the build in place), waits for it and prints what happened, exiting 1 when it didn't build or restart; only on a build made from Switchboard's clone",
     ),
     ("say", "say [-t seconds] text...: a message in a box"),
     (
