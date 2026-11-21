@@ -136,3 +136,90 @@ fn with_the_setting_off_a_landed_worktree_stays() {
     std::thread::sleep(Duration::from_secs(2) * common::patience());
     assert!(tree.exists());
 }
+
+/// A stand-in for GitHub saying every PR asked about by number is merged.
+fn github_says_merged() -> common::http::Fake {
+    common::http::Fake::github("test-token", |request| {
+        if request.path() != "/graphql" {
+            return None;
+        }
+        let answer = if request.text().contains("pullRequest(number:") {
+            serde_json::json!({"data": {"repository": {"pullRequest": {
+                "number": 12345, "url": "https://github.com/o/r/pull/12345", "title": "t",
+                "state": "MERGED", "isDraft": false, "baseRefName": "main", "headRefName": "x"
+            }}}})
+        } else {
+            serde_json::json!({"data": {}})
+        };
+        Some(common::http::Reply::json(200, answer))
+    })
+}
+
+/// A clone of `o/r` on GitHub, and PR 12345 checked out in the review
+/// folder of the server's home, as `wtpr --untrusted` lays it out.
+fn review_checkout(server: &TestServer) -> (PathBuf, PathBuf) {
+    let repo = server.dir.path().join("r");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:o/r.git"],
+    );
+    let tree = server.home.join(".cache/switchboard/pr-review/o-r/12345");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "pr-review/12345",
+            tree.to_str().unwrap(),
+        ],
+    );
+    (repo, tree)
+}
+
+fn start_reviewing(settings: &str) -> (TestServer, common::http::Fake) {
+    let fake = github_says_merged();
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
+        ],
+        settings,
+    );
+    (server, fake)
+}
+
+#[test]
+fn a_tab_closed_in_a_merged_prs_review_checkout_takes_it_and_its_branch() {
+    let (server, _fake) = start_reviewing(r#"{ "pause_when_away": false }"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (repo, tree) = review_checkout(&server);
+    open_and_close(&server, &tree);
+    let deadline = common::deadline(Duration::from_secs(20));
+    while tree.exists() {
+        assert!(Instant::now() < deadline, "the review checkout removed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!git(&repo, &["branch", "--list", "pr-review/*"]).contains("12345"));
+    client.wait_text("Removed the review checkout of 1 finished PR");
+}
+
+#[test]
+fn with_the_setting_off_a_merged_prs_review_checkout_stays() {
+    let (server, _fake) =
+        start_reviewing(r#"{ "pause_when_away": false, "sweep_pr_reviews": false }"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (repo, tree) = review_checkout(&server);
+    open_and_close(&server, &tree);
+    // Nothing to wait on: as long as the sweep takes when it is on.
+    std::thread::sleep(Duration::from_secs(3) * common::patience());
+    assert!(tree.exists());
+    assert!(git(&repo, &["branch", "--list", "pr-review/*"]).contains("12345"));
+}
