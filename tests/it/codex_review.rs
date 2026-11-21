@@ -1005,3 +1005,187 @@ fn a_low_on_a_file_linked_from_outside_is_triaged() {
     assert_eq!(round(clean, &["--round", "start"])["next"], "confirm");
     assert_eq!(round(linked, &["--round", "next"])["next"], "triage");
 }
+
+// A ticket is read against the repository at the base, not the checkout,
+// which may be on another branch with changes of its own, and each finding
+// names the ticket's line.
+#[test]
+fn a_ticket_is_read_against_the_base_and_its_findings_name_its_lines() {
+    let tmp = TempDir::new("cr-ticket");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    // Left out of an archive of the repository, never out of the review.
+    fs::write(work.join(".gitattributes"), "kept/ export-ignore\n").unwrap();
+    fs::create_dir(work.join("kept")).unwrap();
+    fs::write(work.join("kept/k.txt"), "k\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "On main"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    git(home, &work, &["checkout", "-q", "-b", "elsewhere"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Only on the branch"]);
+    fs::write(work.join("dirty.txt"), "not committed\n").unwrap();
+    let ticket = home.join("ticket.md");
+    fs::write(
+        &ticket,
+        "# FEAT: Count the a's\n\n## Today\n\n`a.txt` holds one a.\n",
+    )
+    .unwrap();
+    let ticket_arg = ticket.to_string_lossy().into_owned();
+
+    let dry = review(
+        home,
+        &work,
+        &[
+            "--ticket",
+            &ticket_arg,
+            "--dry-run",
+            "--reviewer",
+            "claude",
+            "--no-rules",
+        ],
+    );
+    assert!(dry.status.success(), "{}", text(&dry.stderr));
+    let prompt = text(&dry.stdout);
+    assert!(
+        prompt.contains("<contributor-text source=\"ticket\">\n   1| # FEAT: Count the a's\n"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("   5| `a.txt` holds one a."), "{prompt}");
+    assert!(
+        prompt.contains("The repository as origin/main has it"),
+        "{prompt}"
+    );
+
+    // A stand-in Claude that lists the files it was started among.
+    let answer = home.join("answer.json");
+    let listing = home.join("listing.txt");
+    fs::write(
+        &answer,
+        r#"{"structured_output":{"summary":"one","findings":[{"title":"Wrong count","severity":"high","category":"today","file":"","line":5,"detail":"a.txt"}]}}"#,
+    )
+    .unwrap();
+    let bin = home.join("bin");
+    Claude::new()
+        .answer(&format!(
+            "cat >/dev/null\nfind . -type f > {}\ncat {}",
+            sh_quote(&listing.to_string_lossy()),
+            sh_quote(&answer.to_string_lossy())
+        ))
+        .install(&bin);
+    let mut cmd = Command::new(BIN);
+    cmd.args([
+        "codex-review",
+        "--ticket",
+        &ticket_arg,
+        "--reviewer",
+        "claude",
+        "--no-rules",
+    ])
+    .current_dir(&work)
+    .stdin(Stdio::null());
+    env(&mut cmd, home);
+    let path = std::env::var("PATH").unwrap_or_default();
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let out = cmd.output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["findings"][0]["file"], ticket_arg.as_str());
+    assert_eq!(json["findings"][0]["line"], 5);
+    assert_eq!(json["ticket"], ticket_arg.as_str());
+    assert_eq!(json["base"], "origin/main");
+    assert_eq!(json["reviewer"], "claude");
+    let files = fs::read_to_string(&listing).unwrap();
+    assert!(files.lines().any(|l| l == "./a.txt"), "{files}");
+    assert!(
+        files.lines().any(|l| l == "./kept/k.txt"),
+        "export-ignore keeps nothing from the reviewer: {files}"
+    );
+    assert!(
+        !files.contains("b.txt") && !files.contains("dirty.txt"),
+        "the base's files, not the checkout's: {files}"
+    );
+
+    // Neither -C nor --pr.
+    let refused = review(home, &work, &["--ticket", &ticket_arg, "--pr", "3"]);
+    assert_eq!(refused.status.code(), Some(1));
+}
+
+// A ticket's rounds count to two clean ones as a branch's do, on the same
+// text, and keep apart from the branch's loop and its record.
+#[test]
+fn a_ticket_s_rounds_count_to_two_clean_ones_on_the_same_text() {
+    let tmp = TempDir::new("cr-ticket-rounds");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "On main"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    let ticket = home.join("ticket.md");
+    fs::write(&ticket, "# FEAT: One\n").unwrap();
+    let ticket_arg = ticket.to_string_lossy().into_owned();
+    let answer = home.join("answer.json");
+    let clean = r#"{"structured_output":{"summary":"ok","findings":[]}}"#;
+    let found = r#"{"structured_output":{"summary":"no","findings":[{"title":"t","severity":"medium","category":"steps","file":"","line":1,"detail":"d"}]}}"#;
+    let round = |said: &str, step: &str| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(
+            home,
+            &work,
+            &answer,
+            &["--ticket", &ticket_arg, "--round", step],
+        );
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    let first = round(found, "start");
+    assert_eq!(first["next"], "triage");
+    assert_eq!(first["findings"][0]["action"], "ask");
+    assert_eq!(round(clean, "next")["next"], "confirm");
+    // The ticket edited between the clean round and its confirmation.
+    fs::write(&ticket, "# FEAT: One, edited\n").unwrap();
+    assert_eq!(round(clean, "next")["next"], "confirm");
+    let done = round(clean, "next");
+    assert_eq!(done["next"], "done");
+    assert_eq!(done["cleanRounds"], 2);
+    assert_eq!(
+        review(home, &work, &["--recorded"]).status.code(),
+        Some(1),
+        "a clean ticket records no review of the branch"
+    );
+    assert!(
+        !work.join(".git/review-loop-round").exists(),
+        "nor starts the branch's loop"
+    );
+    let left: Vec<String> = fs::read_dir(work.join(".git"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("ticket-review-round"))
+        .collect();
+    assert!(
+        left.is_empty(),
+        "and its own place goes once it is done: {left:?}"
+    );
+
+    // Two tickets' loops at once in one clone keep their own places.
+    let other = home.join("other.md");
+    fs::write(&other, "# FEAT: Two\n").unwrap();
+    let other_arg = other.to_string_lossy().into_owned();
+    let on = |ticket: &str, said: &str, step: &str| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(home, &work, &answer, &["--ticket", ticket, "--round", step]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    assert_eq!(on(&ticket_arg, clean, "start")["next"], "confirm");
+    assert_eq!(on(&other_arg, found, "start")["round"], 1);
+    assert_eq!(on(&ticket_arg, clean, "next")["next"], "done");
+    let second = on(&other_arg, clean, "next");
+    assert_eq!(second["round"], 2, "the other's place kept");
+    assert_eq!(second["next"], "confirm");
+}

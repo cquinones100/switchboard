@@ -15,6 +15,9 @@ pub const NAME: &str = "macOS";
 /// Where Homebrew puts rustup's `cargo`, which it leaves off the PATH: Apple
 /// silicon's prefix, then Intel's.
 pub const RUSTUP_DIRS: [&str; 2] = ["/opt/homebrew/opt/rustup/bin", "/usr/local/opt/rustup/bin"];
+/// Where Tailscale's command line is when it isn't on the PATH: the app's
+/// own binary, from the App Store or the standalone download.
+pub const TAILSCALE_PATHS: [&str; 1] = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
 
 pub fn secret(service: &str, account: Option<&str>) -> Option<String> {
     let mut args = vec!["find-generic-password"];

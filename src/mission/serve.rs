@@ -4483,6 +4483,7 @@ impl Server {
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "routines" => self.routines_dismiss(item),
             crate::agent::READY_SOURCE => self.ready_dismiss(item),
+            crate::phone::serve::SOURCE => self.phone_dismiss(item),
 
             "habits" => {}
             crate::mux::behind::SOURCE => self.behind_dismiss(item),
@@ -6343,11 +6344,42 @@ impl Server {
             "profile" => own::Kind::Profile,
             "file" => own::Kind::File,
             "rules" => own::Kind::Rules,
+            "phones" => own::Kind::Phones,
             _ => own::Kind::Text,
         };
         let dir = own::dir_of(&file);
         match kind {
             own::Kind::Rules => self.change_rules(client, dir),
+            own::Kind::Phones => {
+                let devices: Vec<String> = crate::phone::pairing::devices()
+                    .into_iter()
+                    .map(|d| d.device)
+                    .collect();
+                if devices.is_empty() {
+                    m.note = Some("No phone is paired.".into());
+                    return;
+                }
+                let options = devices
+                    .iter()
+                    .map(|d| MenuOption::new(format!("Unpair {d}")))
+                    .collect();
+                self.choose(
+                    client,
+                    Menu::new(label, options),
+                    move |server, client, chose| {
+                        let Some(device) = chose.and_then(|i| devices.get(i)) else {
+                            return;
+                        };
+                        let said = match crate::phone::pairing::revoke(device) {
+                            Ok(true) => format!("{device} is no longer paired."),
+                            Ok(false) => format!("{device} wasn't paired."),
+                            Err(e) => format!("Couldn't unpair {device}: {e}"),
+                        };
+                        server.mission.own = None;
+                        server.mission_note(client, said);
+                    },
+                );
+            }
             own::Kind::Profile => {
                 let Some(profiles) = own::chrome_profiles() else {
                     m.note = Some(
@@ -6438,15 +6470,38 @@ impl Server {
         let field = r["field"].as_str().unwrap_or("").to_string();
         let now = r["value"].clone();
         let save = move |server: &mut Server, client: ClientId, value: Value| {
-            let said = match crate::repos::set_repo(&repo, &field, value) {
-                Ok(()) => format!(
-                    "Saved {repo}'s {field} in {}",
-                    crate::files::shown("repos.json")
-                ),
-                Err(e) => format!("Not saved: {e}"),
+            let ask_first = server.autopilot_would_close_unasked(&repo, &field, &value);
+            let write = move |server: &mut Server, client: ClientId| {
+                let said = match crate::repos::set_repo(&repo, &field, value) {
+                    Ok(()) => format!(
+                        "Saved {repo}'s {field} in {}",
+                        crate::files::shown("repos.json")
+                    ),
+                    Err(e) => format!("Not saved: {e}"),
+                };
+                server.mission.own = None;
+                server.mission_note(client, said);
             };
-            server.mission.own = None;
-            server.mission_note(client, said);
+            // Autopilot landing there without asking would start taking
+            // its issues, closing each it lands unasked: asked first, as
+            // starting it on them is.
+            if ask_first {
+                let (question, list) = crate::autopilot::line::issues_question();
+                server.ask(
+                    client,
+                    crate::ui::Confirm::new(question).list(list),
+                    move |server, client, yes| {
+                        if yes {
+                            write(server, client);
+                        } else {
+                            server.mission.own = None;
+                            server.mission_note(client, "Not saved".to_string());
+                        }
+                    },
+                );
+            } else {
+                write(server, client);
+            }
         };
         let name = r["repo"].as_str().unwrap_or("").to_string();
         match r["field"].as_str().unwrap_or("") {
@@ -6461,7 +6516,7 @@ impl Server {
                     "tickets" => vec![
                         (
                             "unset",
-                            "Not set: /shape files in Linear, wt takes a note's item or --issue",
+                            "Not set: /shape, wt <number>, M-i and autopilot refuse",
                         ),
                         ("github", "GitHub issues"),
                         ("linear", "Linear"),
@@ -6512,16 +6567,19 @@ impl Server {
             }
             field => {
                 let title = match field {
+                    "issueLabel" => format!("{name}: the label autopilot takes issues by"),
                     "test" => format!("{name}: the tests"),
                     "afterRebase" => format!("{name}: the check after a clean rebase"),
                     _ => format!("{name}: the command before the push"),
                 };
-                let ask = Ask::new(
-                    title,
-                    "A shell command run in the worktree; empty for none.",
-                )
-                .text(now.as_str().unwrap_or("").to_string())
-                .empty_ok();
+                let about = if field == "issueLabel" {
+                    "One GitHub label, with no quotes; empty for none, so autopilot takes no issues."
+                } else {
+                    "A shell command run in the worktree; empty for none."
+                };
+                let ask = Ask::new(title, about)
+                    .text(now.as_str().unwrap_or("").to_string())
+                    .empty_ok();
                 self.open(
                     client,
                     Box::new(ask),

@@ -33,6 +33,7 @@ mod mission_nav;
 mod mux;
 mod notes_workspace;
 mod persist;
+mod phone;
 mod pr_risk;
 mod routines;
 mod setup;

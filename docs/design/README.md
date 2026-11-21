@@ -274,6 +274,14 @@ The relay's DM, threads and Home tab.
 
 - [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
 
+## Proposal: the diff as a talk, read outside in
+
+- [159. The diff's story as a talk, its opening slide at the Gist zoom: the change in a sentence, one example from its tests before and after, and the flow it takes through the change, each step it passes lit with the example's value on the way](https://cquinones100.github.io/switchboard/design/159.html)
+- [160. Zoomed in to Flow: the same flow over each step's How and Why, the example's value at each, the step to read closely flagged, and what needs no reading (a rename, formatting, generated types) folded to a line](https://cquinones100.github.io/switchboard/design/160.html)
+- [161. Zoomed in to Steps, step 2's slide: its claim, event 42 going in and coming out, where it sits in the flow, and its hunk with a note in the margin on the line that turns 10003's 3 into Other; the notes folded under it](https://cquinones100.github.io/switchboard/design/161.html)
+- [162. Zoomed in to Code on step 2: its notes open (decided, instead of what, what to watch), every hunk of the step with its margin notes, and the test the example comes from, its case lit](https://cquinones100.github.io/switchboard/design/162.html)
+- [163. The opening slide when no test in the change gives an example: it says so rather than make one up, and the flow shows its steps without values](https://cquinones100.github.io/switchboard/design/163.html)
+
 ## Proposal: a tab's status set by hand
 
 - [158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes](https://cquinones100.github.io/switchboard/design/158.html)
@@ -287,3 +295,12 @@ The relay's DM, threads and Home tab.
 - [154. m on board 150's PR: the view's menu gains See the failing checks and, while it has conflicts, Type /resolve-conflicts into this tab's Claude; M-m is gone](https://cquinones100.github.io/switchboard/design/154.html)
 - [155. Before M-v beside a narrow lone pane: the ticket (M-i) in the spare columns, Claude's pane capped at its width](https://cquinones100.github.io/switchboard/design/155.html)
 - [156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty](https://cquinones100.github.io/switchboard/design/156.html)
+
+## Proposal: the phone app
+
+- [164. The phone app's drawer: every Claude tab in the sidebar's groups, Needs you first, swiped in from the left as Discord's channels are; a Web Push naming the tab alone when it starts waiting; dimmed with the last states when the computer can't be reached](https://cquinones100.github.io/switchboard/design/164.html)
+- [165. A tab's channel on the phone: its recent turns as messages, the newest at the bottom over the composer, a tool run as one dim line, what Claude is doing over the composer, a NEW rule over what you haven't seen, long turns folded](https://cquinones100.github.io/switchboard/design/165.html)
+- [166. The prompt card on the phone: the question under Claude's newest turn, each option a button with its words; a permission with Claude Code's three answers; several questions at once, a chip each; folded to what you answered](https://cquinones100.github.io/switchboard/design/166.html)
+- [167. The phone's composer: + kept dim for what comes later, the field naming the tab; typing, sent and marked from the phone; while a question waits, what you type goes as your own answer](https://cquinones100.github.io/switchboard/design/167.html)
+- [168. Pairing a phone: its first visit shows a code, typed in the workspace's box (or switchboard phone pair) naming the device, so a stray Enter can't pair it; once it matches, the phone opens on the drawer](https://cquinones100.github.io/switchboard/design/168.html)
+- [169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; naming neither the computer nor what it checks, the first two alike, why kept for the log and the Notifications view](https://cquinones100.github.io/switchboard/design/169.html)

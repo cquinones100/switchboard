@@ -164,6 +164,10 @@ pub enum Action {
     SlackRelay,
     /// Stop the Slack relay.
     StopSlackRelay,
+    /// The phone app in a tab of its own, or its tab (src/phone).
+    PhoneApp,
+    /// Stop the phone app.
+    StopPhoneApp,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
     /// M-p's "Sync your Switchboard files now" (src/files).
@@ -284,6 +288,8 @@ impl Action {
             "toggle-theme" => Action::ToggleTheme,
             "slack-relay" => Action::SlackRelay,
             "stop-slack-relay" => Action::StopSlackRelay,
+            "phone-app" => Action::PhoneApp,
+            "stop-phone-app" => Action::StopPhoneApp,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
             "new-claude-tab" => Action::NewClaudeTab,
@@ -395,6 +401,8 @@ impl Action {
             Action::Diff(command) => command.name().into(),
             Action::SlackRelay => "slack-relay".into(),
             Action::StopSlackRelay => "stop-slack-relay".into(),
+            Action::PhoneApp => "phone-app".into(),
+            Action::StopPhoneApp => "stop-phone-app".into(),
             Action::Update(command) => command.name().into(),
             Action::Files(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
@@ -506,6 +514,8 @@ impl Action {
             Action::Diff(command) => command.about().into(),
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
+            Action::PhoneApp => "Open the phone app in its own tab".into(),
+            Action::StopPhoneApp => "Stop the phone app".into(),
             Action::Update(command) => command.about().into(),
             Action::Files(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest main".into(),
@@ -689,6 +699,12 @@ impl Action {
             Action::StopSlackRelay => {
                 "Runs switchboard slack-relay stop, which says when it has stopped; Slack hears nothing more from the tabs until it starts again.".into()
             }
+            Action::PhoneApp => {
+                "Serves the phone app on your tailnet alone, for answering and messaging your Claude tabs from the phones phone.json lists; needs Tailscale and Settings' Phone app on.".into()
+            }
+            Action::StopPhoneApp => {
+                "Runs switchboard phone stop: your phone reaches nothing until it starts again.".into()
+            }
             Action::Update(command) => command.detail().into(),
             Action::Files(command) => command.detail().into(),
             Action::Upgrade => {
@@ -772,6 +788,7 @@ impl Action {
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
+            Action::PhoneApp | Action::StopPhoneApp => &["phone", "remote", "tailscale"],
             Action::Update(command) => command.tags(),
             Action::Files(command) => command.tags(),
             // "build" and "disk" from its old name, "on the latest build on disk".
@@ -910,6 +927,8 @@ impl Action {
             Action::TabTitle,
             Action::TabPrs,
             Action::StopSlackRelay,
+            Action::PhoneApp,
+            Action::StopPhoneApp,
             Action::Upgrade,
             Action::HideBuildRow,
             Action::RestoreLayout,
