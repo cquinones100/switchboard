@@ -146,7 +146,7 @@ pub struct Sources {
     /// Each tab's place in the landing queue, and where its worktree is
     /// when it waits, for moving it; each repository the tabs are in, with
     /// what lands there straight on its default branch.
-    landing: landing::Read,
+    pub(crate) landing: landing::Read,
     board: prboard::Board,
     queues: queues::Queues,
     /// The watched default branches failing at their last look
