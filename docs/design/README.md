@@ -308,3 +308,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: searching the phone's drawer
 
 - [173. The phone's drawer searched as you type: a search box under the header keeps the tabs whose number, name, repository, branch or what they are doing hold every word, the matches lit, in their groups, an empty group dropped; × clears it, and No tab matches when none do](https://cquinones100.github.io/switchboard/design/173.html)
+
+## Proposal: the phone's prompt choices explained
+
+- [172. The phone's prompt card with each choice's explainer behind an info button: an i beside every choice that has one, its own tap target; a tap shows the explainer under the choice and a second hides it, while a tap on the choice still answers](https://cquinones100.github.io/switchboard/design/172.html)

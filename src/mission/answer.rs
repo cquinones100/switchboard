@@ -51,12 +51,15 @@ static QUESTION_TABS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[☐☒]")
 static LABEL_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}.*$").expect("a regex"));
 
 /// One numbered option of a prompt; `checked` for one that takes several
-/// answers, ticked or not.
+/// answers, ticked or not; `detail` the lines under its label (a question's
+/// explainer of the choice, or the rest of a wrapped label), joined, empty
+/// when it has none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptOption {
     pub n: u32,
     pub label: String,
     pub checked: Option<bool>,
+    pub detail: String,
 }
 
 /// Where the ❯ is in a question Claude asked: on an option, or on Submit.
@@ -152,19 +155,29 @@ pub fn options_in(text: &str) -> Option<Prompt> {
     // starting further out.
     let number_at = |l: &str| l.find(|c: char| c.is_ascii_digit()).unwrap_or(0);
     let indent = |l: &str| l.len() - l.trim_start().len();
-    let more: Vec<u32> = options
+    let under: Vec<Vec<&str>> = options
         .iter()
         .enumerate()
-        .filter(|(at, o)| {
-            o.cut
-                || match options.get(at + 1) {
-                    Some(next) => next.line > o.line + 1,
-                    None => lines
-                        .get(o.line + 1)
-                        .is_some_and(|l| indent(l) > number_at(lines[o.line])),
-                }
+        .map(|(at, o)| match options.get(at + 1) {
+            Some(next) => lines
+                .get(o.line + 1..next.line)
+                .unwrap_or_default()
+                .iter()
+                .filter(|l| !RULE.is_match(l) && !SUBMIT_ROW.is_match(l))
+                .copied()
+                .collect(),
+            None => lines[o.line + 1..]
+                .iter()
+                .take_while(|l| indent(l) > number_at(lines[o.line]))
+                .copied()
+                .collect(),
         })
-        .map(|(_, o)| o.n)
+        .collect();
+    let more: Vec<u32> = options
+        .iter()
+        .zip(&under)
+        .filter(|(o, under)| o.cut || !under.is_empty())
+        .map(|(o, _)| o.n)
         .collect();
     let between = |re: &Regex| (first + 1..last).find(|&i| re.is_match(lines[i]));
     let rule = between(&RULE);
@@ -201,10 +214,12 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         question: above.join(if named { "\n" } else { " " }),
         options: options
             .into_iter()
-            .map(|o| PromptOption {
+            .zip(under)
+            .map(|(o, under)| PromptOption {
                 n: o.n,
                 label: o.label,
                 checked: o.checked,
+                detail: under.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" "),
             })
             .collect(),
         multi,
@@ -912,6 +927,38 @@ mod tests {
    2. No, and tell Claude what
       to do differently";
         assert_eq!(options_in(last_wrapped).expect("a prompt").more, vec![2]);
+    }
+
+    #[test]
+    fn each_choice_keeps_the_explainer_under_it_and_the_hints_belong_to_none() {
+        let screen = "\
+ Which database should the tests use?
+
+ ❯ 1. Postgres
+      The same database production runs
+   2. SQLite
+      Quicker to start, in a file of its own
+   3. In memory
+      Nothing written to disk
+   4. Type something
+ ──────────────────
+   5. Chat about this
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel";
+        let found = options_in(screen).expect("a prompt");
+        let details: Vec<&str> = found.options.iter().map(|o| o.detail.as_str()).collect();
+        assert_eq!(
+            details,
+            [
+                "The same database production runs",
+                "Quicker to start, in a file of its own",
+                "Nothing written to disk",
+                "",
+                ""
+            ],
+            "the rule isn't 4's, and the hints aren't 5's"
+        );
+        assert_eq!(found.more, vec![1, 2, 3]);
     }
 
     #[test]

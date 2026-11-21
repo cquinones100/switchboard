@@ -177,6 +177,28 @@ button {
 .option .n { color: var(--dim); margin-right: 8px; }
 .option.lit .n { color: var(--ink); }
 .option.ticked .n::after { content: " ✓"; color: var(--green); }
+.choice .row { display: flex; gap: 8px; align-items: stretch; }
+.choice .row .option { flex: 1; min-width: 0; }
+.info {
+  flex: none;
+  width: 44px;
+  min-height: 44px;
+  margin: 6px 0 0;
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--accent);
+  font-weight: 700;
+}
+.info.lit { background: var(--accent); color: var(--ink); }
+.explainer {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--raised);
+  border-radius: 0 8px 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .card .answered { color: var(--dim); }
 .card .error { color: var(--red); margin-top: 8px; }
 

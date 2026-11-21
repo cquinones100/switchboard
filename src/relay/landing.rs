@@ -324,6 +324,7 @@ mod tests {
                     n: i as u32 + 1,
                     label: l.to_string(),
                     checked: None,
+                    detail: String::new(),
                 })
                 .collect(),
             multi: false,
