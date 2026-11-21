@@ -67,9 +67,8 @@ pub fn lone_moved(width: i32, spread: u16) -> Option<u16> {
 /// by a drag of its edge or the pane resize keys: columns, or `full`.
 pub const OWN_WIDTH: &str = "@lone_width";
 
-/// A width of its own as kept (`OWN_WIDTH`'s value, or a session's for
-/// mission control): `Some(None)` to fill the width, none when it has
-/// none and takes Settings' `lone_pane_width`.
+/// A width of its own as kept (`OWN_WIDTH`'s value): `Some(None)` to fill
+/// the width, none when it has none and takes Settings' `lone_pane_width`.
 pub fn own_width(value: Option<&str>) -> Option<Option<u16>> {
     match value? {
         "full" => Some(None),

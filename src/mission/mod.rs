@@ -432,15 +432,6 @@ pub struct Mission {
     pub nav_scrolled: bool,
     /// The columns that list was last drawn in, on the whole screen.
     pub nav_area: Option<ratatui::layout::Rect>,
-    /// The widest one view is drawn (Settings' `lone_pane_width`), as a
-    /// lone pane is; none to fill the width. Several views at once fill it.
-    pub lone: Option<u16>,
-    /// The view's width as last drawn while `lone` capped it, against the
-    /// sidebar, the columns at its right taking no clicks; none uncapped.
-    pub capped_at: Option<u16>,
-    /// The columns right of the sidebar as last drawn, which a lone view
-    /// is capped in.
-    pub spread_cols: u16,
     /// The view last brought to the front, by its title ("Tabs" for the
     /// cards), for what going to one does.
     pub(crate) came: Option<String>,
@@ -620,9 +611,6 @@ impl Mission {
             nav_top: 0,
             nav_scrolled: false,
             nav_area: None,
-            lone: None,
-            capped_at: None,
-            spread_cols: 0,
             came: None,
             spun_at: 0,
             keep_landing: false,
@@ -685,10 +673,9 @@ impl Mission {
     }
 
     /// A column of the screen in the view's own columns; none left of it
-    /// (the sidebar's) or right of a capped view (its spare columns).
+    /// (the sidebar's).
     pub fn col_in(&self, col: u16) -> Option<u16> {
-        let col = col.checked_sub(self.view_left())?;
-        self.capped_at.is_none_or(|w| col < w).then_some(col)
+        col.checked_sub(self.view_left())
     }
 
     /// The columns and rows the view in front is laid out in: the screen,
@@ -1373,27 +1360,6 @@ impl Mission {
     }
 
     /// The chosen item of a view after the tabs.
-    /// Where the view in front is drawn out of `spread`, the area right of
-    /// the sidebar: all of it for several views at once or a view with a
-    /// pane beside its list (`views::has_side`), else at most `lone` wide,
-    /// as a lone pane is.
-    pub fn view_area(&self, spread: ratatui::layout::Rect) -> ratatui::layout::Rect {
-        if self.lone_view() {
-            crate::mux::layout::capped(spread, self.lone)
-        } else {
-            spread
-        }
-    }
-
-    /// Whether one view is in front with no pane beside its list, drawn as
-    /// a lone pane is.
-    pub fn lone_view(&self) -> bool {
-        let has_side = self
-            .current()
-            .is_some_and(|v| views::has_side(v, self.chosen_item().is_some()));
-        self.grid.is_none() && !has_side
-    }
-
     pub fn chosen_item(&self) -> Option<&Item> {
         let at = usize::try_from(self.cursor).ok()?;
         let view = self.current()?;
@@ -1545,14 +1511,8 @@ impl Overlay for Mission {
             self.nav_area = Some(at);
         }
         let left = left + nav;
-        let spread =
+        let area =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
-        let area = self.view_area(spread);
-        if area != spread {
-            crate::mux::compose::draw_spare(buf, spread, area, &look.theme);
-        }
-        self.capped_at = (area != spread).then_some(area.width);
-        self.spread_cols = spread.width;
         self.size = (area.width, area.height);
         self.forget_side_elsewhere();
         let (lines, hits, images, pictures) = if self.grid.is_some() {

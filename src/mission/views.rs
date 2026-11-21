@@ -132,33 +132,6 @@ impl View {
     }
 }
 
-/// Whether `view` draws a pane beside its board or list (the chosen PR's,
-/// ticket's or plan's description, a message's thread while Settings'
-/// `slack_threads` is on, a closed tab's turns, a check's step, a
-/// landing's output, a day's reminders, the Calendar day's event) with
-/// an item `chosen`: such a view
-/// is two panes, so it is never capped at a lone pane's width
-/// (`Mission::view_area`), and the pane has the room to sit beside it.
-pub fn has_side(view: &View, chosen: bool) -> bool {
-    let calendar_day = view.id == ViewId::Calendar && super::calendar::is_day(view);
-    let slack_threads = view.id == ViewId::Slack && crate::settings::is_on("slack_threads");
-    chosen
-        && (calendar_day
-            || slack_threads
-            || matches!(
-                view.id,
-                ViewId::Prs
-                    | ViewId::Tickets
-                    | ViewId::Autopilot
-                    | ViewId::Inbox
-                    | ViewId::Reopen
-                    | ViewId::Ci
-                    | ViewId::Landing
-                    | ViewId::Reminders
-                    | ViewId::Routines
-            ))
-}
-
 /// Whether mission control shows the view `slug` names (`ViewId::slug`):
 /// the Tabs view always, a built-in one while `shows` says so, and a
 /// plugin's, whose slug follows what it answers, always (opening one gone

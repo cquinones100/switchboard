@@ -144,9 +144,6 @@ pub struct SavedSession {
     pub sidebar_folded: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sidebar_notices_folded: bool,
-    /// Mission control's own width for one view (`Session::mission_width`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mission_width: Option<String>,
     /// The sidebar's own width, from a drag of its edge or the pane resize
     /// keys (`Session::sidebar_width`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -820,7 +817,6 @@ impl Persist {
                 sidebar_repo_recent: side.map(|x| x.repo_recent.clone()).unwrap_or_default(),
                 sidebar_folded: folds_of(side).0,
                 sidebar_notices_folded: folds_of(side).1,
-                mission_width: s.mission_width.clone(),
                 sidebar_width: s.sidebar_width,
             });
         }
@@ -1266,7 +1262,6 @@ impl Persist {
                 cols,
                 rows,
                 sidebar,
-                mission_width: ss.mission_width,
                 sidebar_width: ss.sidebar_width,
             });
             for t in tabs {
@@ -1438,7 +1433,6 @@ pub fn layout_now(server: &Server) -> Saved {
                 .unwrap_or_default(),
             sidebar_folded: folds_of(server.sidebar.sides.get(&s.name)).0,
             sidebar_notices_folded: folds_of(server.sidebar.sides.get(&s.name)).1,
-            mission_width: s.mission_width.clone(),
             sidebar_width: s.sidebar_width,
             tabs: s
                 .tabs
@@ -1582,7 +1576,6 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
             cols,
             rows,
             sidebar,
-            mission_width: ss.mission_width,
             sidebar_width: ss.sidebar_width,
         });
     }
@@ -1605,7 +1598,6 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
                 cols: 80,
                 rows: 24,
                 sidebar: server.sidebar_columns(80, None),
-                mission_width: None,
                 sidebar_width: None,
             });
         }
@@ -1657,7 +1649,6 @@ mod tests {
                 sidebar_repo_recent: Vec::new(),
                 sidebar_folded: Vec::new(),
                 sidebar_notices_folded: false,
-                mission_width: None,
                 sidebar_width: None,
                 tabs: vec![
                     SavedTab {

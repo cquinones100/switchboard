@@ -838,6 +838,14 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let server = start(json!({"view_calendar": true}));
     let now = jiff::Zoned::now();
     let date = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
+    // In the hour now falls in, which a day longer than the screen shows
+    // whatever the time the test runs at.
+    let hour = now.hour();
+    let (start, end) = (
+        format!("{date}T{hour:02}:00:00"),
+        format!("{date}T{hour:02}:59:00"),
+    );
+    let label = format!("{:>4}:00 ", (hour + 11) % 12 + 1);
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("calendar.json"),
@@ -845,7 +853,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
             "date": date,
             "updated": now.timestamp().as_millisecond(),
             "events": [
-                { "title": "Planning", "start": format!("{date}T09:00:00"), "end": format!("{date}T10:00:00"), "you": "going", "link": "https://calendar.example/1" },
+                { "title": "Planning", "start": start, "end": end, "you": "going", "link": "https://calendar.example/1" },
                 { "title": "Offsite", "allDay": true, "you": "going" },
             ],
         })
@@ -860,7 +868,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let has = |text: &str| screen.iter().any(|l| l.contains(text));
     assert!(has("all day   Offsite"), "{}", screen.join("\n"));
     assert!(
-        has("   9:00 "),
+        has(&label),
         "the hours down the side: {}",
         screen.join("\n")
     );
@@ -3129,66 +3137,60 @@ fn the_pane_beside_the_tickets_board_resizes_with_the_pane_keys_and_keeps_its_wi
     });
 }
 
-#[test]
-fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no_clicks() {
-    let server = start(json!({ "lone_pane_width": "165" }));
-    let mut client = server.attach(365, 40);
-    client.wait_text("$");
-    wait_list(&server, "the settings read", |l| {
-        l["sessions"][0]["sidebar"]["columns"] == 0
-    });
-    let edge = view_left(&open(&mut client)) + 165;
-    // 165 columns from the list of views, a rule at its right, nothing
-    // beyond.
-    let screen = client.wait_for("the view against its rule", |screen| {
-        screen.iter().all(|row| {
-            let cells: Vec<char> = row.chars().collect();
-            cells.get(edge) == Some(&'│') && cells[edge + 1..].iter().all(|c| *c == ' ')
-        })
-    });
-    assert!(screen.iter().any(|l| l.contains("MISSION CONTROL")));
-    // A click in the spare columns leaves mission control as it was, once
-    // what the tab's card learns late (its program, read on a tick) has
-    // drawn.
-    let before = steady(&mut client).join("\n");
-    client.send(b"\x1b[<0;200;10M\x1b[<0;200;10m");
-    client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
-    std::thread::sleep(Duration::from_millis(300) * common::patience());
-    assert_eq!(client.screen().join("\n"), before);
+/// Whether mission control's bar, its first row, and its footer, its
+/// last, both reach the screen's last column.
+fn fills_the_width(screen: &[String]) -> bool {
+    let reaches = |row: &String| row.trim_end().chars().count() == row.chars().count();
+    screen.iter().any(|l| l.contains("MISSION CONTROL"))
+        && screen.first().is_some_and(reaches)
+        && screen.last().is_some_and(reaches)
 }
 
 #[test]
-fn the_resize_keys_move_a_lone_views_right_edge_leaving_the_lone_width() {
-    let server = start(json!({ "lone_pane_width": "165" }));
-    let mut client = server.attach(365, 40);
+fn one_view_fills_the_width_whatever_the_lone_pane_width_and_the_resize_keys_leave_it() {
+    let server = start(json!({ "lone_pane_width": "120" }));
+    let mut client = server.attach(230, 40);
     client.wait_text("$");
     wait_list(&server, "the settings read", |l| {
         l["sessions"][0]["sidebar"]["columns"] == 0
     });
-    let left = view_left(&open(&mut client));
-    let rule_at = |screen: &[String], col: usize| {
-        screen
-            .iter()
-            .any(|row| row.chars().nth(left + col) == Some('│'))
-    };
-    client.wait_for("the view against its rule", |s| rule_at(s, 165));
-    // C-M-S-l, with no pane beside the list, moves the view's edge.
-    client.send(b"\x1b[108;8u");
-    client.wait_for("the rule 5 columns further", |s| rule_at(s, 170));
-    // Mission control's own width, the setting left as it was.
-    wait_saved(&server, "the lone width", |saved| {
-        saved["lone_pane_width"] == "165"
-    });
-    // Closed and opened again, it keeps its width.
-    client.send(b"\x1b");
-    client.wait_for("closed", closed);
     open(&mut client);
-    client.wait_for("the view at its own width again", |s| rule_at(s, 170));
+    client.wait_for("the view across the width", fills_the_width);
+    let before = steady(&mut client);
+    // C-M-S-l moves no edge of mission control's.
+    client.send(b"\x1b[108;8u");
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    assert_eq!(client.screen(), before);
+    assert!(fills_the_width(&before), "{}", before.join("\n"));
 }
 
-/// The column the views start at: after the list of views and its rule.
-fn view_left(screen: &[String]) -> usize {
-    screen[0].chars().position(|c| c == '│').unwrap() + 1
+#[test]
+fn a_layout_saved_with_a_width_of_mission_controls_own_loads_and_fills_the_width() {
+    let mut server = start(json!({ "lone_pane_width": "120" }));
+    let mut client = server.attach(230, 40);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "kept"]);
+    server.ok(&["save"]);
+    let file = server.state.join("layout.json");
+    let mut saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    saved["sessions"][0]["mission_width"] = json!("120");
+    // Every tab closed first, so the server ending saves nothing over the
+    // file written here, which a layout that loses its panes waits to save.
+    for tab in tabs(&server.list()) {
+        server.ok(&["kill-tab", "-t", tab["id"].as_str().unwrap()]);
+    }
+    drop(client);
+    std::fs::write(&file, saved.to_string()).unwrap();
+    server.restart();
+    wait_list(&server, "the saved layout restored", |l| {
+        l["sessions"][0]["tabs"]
+            .as_array()
+            .is_some_and(|t| t.iter().any(|t| t["name"] == "kept"))
+    });
+    let mut client = server.attach(230, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.wait_for("the view across the width", fills_the_width);
 }
 
 /// The settings file as written, once `pred` holds of it.
