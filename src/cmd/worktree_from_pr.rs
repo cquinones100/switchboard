@@ -919,7 +919,7 @@ fn untrusted_worktree(
         // Its own config, read after the clone's, so every git command in
         // it runs no hook, whoever runs it. A worktree left without it is
         // taken away again rather than kept.
-        let marked = worktree::git_ok(root, &["config", "extensions.worktreeConfig", "true"])
+        let marked = worktree::git_config(root, &["extensions.worktreeConfig", "true"])
             && worktree::git_ok(
                 &dir,
                 &["config", "--worktree", "core.hooksPath", "/dev/null"],
