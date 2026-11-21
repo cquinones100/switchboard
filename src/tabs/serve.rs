@@ -439,9 +439,16 @@ impl Server {
             return false;
         }
         let shown = self.tab_names.shown.get(&tab);
-        let origin = self.tab_path(tab).and_then(|p| self.sources.origin_kept(p));
-        let same_repo = match (origin, &pr.repo) {
-            (Some(origin), Some(repo)) => origin.eq_ignore_ascii_case(&repo.to_string()),
+        // Origin's, or in a fork's clone upstream's too, where its PRs open.
+        let repos = self
+            .tab_path(tab)
+            .and_then(|p| self.sources.repos_kept(p))
+            .filter(|r| !r.is_empty());
+        let same_repo = match (repos, &pr.repo) {
+            (Some(repos), Some(repo)) => {
+                let repo = repo.to_string();
+                repos.iter().any(|r| r.eq_ignore_ascii_case(&repo))
+            }
             _ => true,
         };
         let another_open = all.iter().any(|p| {
