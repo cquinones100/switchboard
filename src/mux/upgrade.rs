@@ -115,6 +115,11 @@ pub struct Handover {
     /// built, a fetch that failed), else empty.
     #[serde(default)]
     pub note: String,
+    /// The message after the restart is said on the screen as well as to
+    /// the asker: `upgrade --latest`'s command may have gone (a Bash call
+    /// timed out during the build), which its connection can't tell.
+    #[serde(default)]
+    pub say_too: bool,
     /// The listening socket's descriptor.
     pub listener: RawFd,
     /// The server lock's descriptor.
@@ -936,6 +941,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         version: VERSION,
         from: crate::update::version_line(),
         note: pending_note,
+        say_too,
         listener: listener.as_raw_fd(),
         lock: super::socket::lock_fd(),
         layout: super::persist::layout_now(server),
@@ -1229,8 +1235,9 @@ pub fn adopt(server: &mut Server, handover: Handover) {
                 }
             };
             tokio::spawn(answer(stream, reply));
-            // What was lost is said on the screen too, whoever asked.
-            if !lost.is_empty() {
+            // What was lost is said on the screen too, whoever asked, and
+            // everything for `upgrade --latest`, whose command may have gone.
+            if !lost.is_empty() || handover.say_too {
                 server.say(client, &text);
             }
         }
@@ -1283,6 +1290,7 @@ mod tests {
             version: VERSION,
             from: "0.1.0 (abc)".into(),
             note: String::new(),
+            say_too: false,
             listener: 7,
             lock: Some(3),
             layout: Saved {
