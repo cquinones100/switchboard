@@ -25,8 +25,9 @@ use crate::ui::kit::Mark;
 /// by spaces, oldest first.
 pub const LIST: &str = "@tab_prs";
 /// The ones of `LIST` the session made with `gh pr create`, written as it
-/// is: each may stay current once merged, until it leaves the list, where a
-/// PR only looked at is current only while open.
+/// is: each may stay current once merged, while the tab is on its branch or
+/// its repository's default branch (`merged_stays_current`), where a PR
+/// only looked at is current only while open.
 pub const MADE: &str = "@tab_prs_made";
 /// The one picked as current, `<owner>/<name>#<n>`.
 pub const CURRENT: &str = "@tab_pr_current";
@@ -135,6 +136,16 @@ pub fn current(
         .and_then(listed)
         .or_else(|| branch.and_then(listed))
         .or_else(|| all.iter().rev().find(|p| eligible(p)).cloned())
+}
+
+/// Whether a merged PR the session made, `head` its branch, may still be
+/// the tab's current PR: while the tab is on that branch (before the
+/// landing's cleanup) or on its repository's default branch (the worktree
+/// removed, the tab back in the main clone), so the tab stays under Merged
+/// with the PR leading its label until it takes up other work on another
+/// branch.
+pub fn merged_stays_current(head: &str, branch: Option<&str>, on_default: bool) -> bool {
+    on_default || branch.is_some_and(|b| !head.is_empty() && b == head)
 }
 
 /// `all` with the current one first, the rest in the order opened, as the
@@ -338,6 +349,24 @@ mod tests {
         assert_eq!(current(&opened, None, None, open), Some(pr("acme/a#1")));
         assert_eq!(current(&opened, None, None, |_| false), None);
         assert_eq!(current(&[], None, None, |_| true), None);
+    }
+
+    #[test]
+    fn a_made_pr_stays_current_after_the_tab_moves_to_the_main_clone() {
+        let opened = read("acme/web-app#2024");
+        let made = pr("acme/web-app#2024");
+        let current_on = |branch: Option<&str>, on_default: bool| {
+            current(&opened, None, None, |p| {
+                p.same(&made) && merged_stays_current("fix-login", branch, on_default)
+            })
+        };
+        // In the worktree on its head branch, then back in the main clone on
+        // the default branch, with no branch PR there.
+        assert_eq!(current_on(Some("fix-login"), false), Some(made.clone()));
+        assert_eq!(current_on(Some("main"), true), Some(made.clone()));
+        // On a new branch for other work, it gives way.
+        assert_eq!(current_on(Some("next-thing"), false), None);
+        assert_eq!(current_on(None, false), None);
     }
 
     #[test]
