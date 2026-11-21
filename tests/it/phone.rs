@@ -620,6 +620,11 @@ for (const [who, text] of cases) console.log(html(body(who, text)));
 // Folded by the text shown: a long address alone doesn't fold a reply.
 console.log("long link folded=" + body("claude", "[x](https://example.com/" + "a".repeat(800) + ")").className.includes("folded"));
 console.log("long text folded=" + body("claude", "word ".repeat(150)).className.includes("folded"));
+// Folded by the lines shown: a table's separator and the blank lines
+// between blocks aren't lines, a code block's lines are.
+console.log("short table folded=" + body("claude", "| a |\n| - |\n" + "| x |\n".repeat(9)).className.includes("folded"));
+console.log("loose list folded=" + body("claude", "- x\n\n".repeat(6)).className.includes("folded"));
+console.log("long code folded=" + body("claude", "```\n" + "x\n".repeat(12) + "```").className.includes("folded"));
 "##;
     let Some(stdout) = run_app_js(script) else {
         return;
@@ -636,6 +641,9 @@ console.log("long text folded=" + body("claude", "word ".repeat(150)).className.
             r#"<div class="body">make it **bold** &lt;b&gt;</div>"#,
             "long link folded=false",
             "long text folded=true",
+            "short table folded=false",
+            "loose list folded=false",
+            "long code folded=true",
         ],
         "{stdout}"
     );

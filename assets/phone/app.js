@@ -523,9 +523,13 @@ const md = typeof markdownit === "function" ? markdownit({ html: false, linkify:
 // The page's elements for a reply's Markdown, built from markdown-it's
 // tokens with `el`, every piece of text a text node: a table in a box that
 // scrolls sideways, and a link only for http and https, opening in the
-// browser and shown by its text; any other link is its text alone.
+// browser and shown by its text; any other link is its text alone. Its
+// `lines` are the lines it shows (a paragraph, a heading, a list item, a
+// table row, a line of code), for the fold.
 function markdown(text) {
   const root = el("div", { class: "body md" });
+  root.lines = 0;
+  const LINE = ["paragraph_open", "heading_open", "tr_open", "hr", "hardbreak"];
   const stack = [root];
   const top = () => stack[stack.length - 1];
   const opened = (t) => {
@@ -556,6 +560,8 @@ function markdown(text) {
   };
   const walk = (tokens) => {
     for (const t of tokens) {
+      if (LINE.includes(t.type)) root.lines += 1;
+      if (t.type === "fence" || t.type === "code_block") root.lines += t.content.replace(/\n$/, "").split("\n").length;
       if (t.type === "inline") walk(t.children || []);
       else if (t.nesting === 1) {
         const [outer, inner] = opened(t);
@@ -581,9 +587,11 @@ function message(m, i, all) {
   when.at = m.at;
   const key = messageKey(m);
   const body = !m.text ? null : m.who !== "you" && md ? markdown(m.text) : el("div", { class: "body" }, m.text);
-  // Rendered, a link's address and the Markdown's marks aren't counted.
+  // Rendered, a link's address, the Markdown's marks and the blank lines
+  // between its blocks aren't counted.
   const shown = body ? body.textContent : "";
-  const folded = (m.text.split("\n").length > 10 || shown.length > 700) && !state.unfolded.has(key);
+  const lines = body && body.lines !== undefined ? body.lines : m.text.split("\n").length;
+  const folded = (lines > 10 || shown.length > 700) && !state.unfolded.has(key);
   if (folded) body.classList.add("folded");
   const images = (m.images || []).length
     ? el(
