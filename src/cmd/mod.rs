@@ -475,7 +475,7 @@ pub const SUBCOMMANDS: &[(&str, &[&str])] = &[
     (
         "phone",
         &[
-            "start", "stop", "status", "run", "pair", "devices", "revoke", "help",
+            "start", "stop", "status", "run", "pair", "devices", "revoke", "preview", "help",
         ],
     ),
 ];

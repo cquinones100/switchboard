@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Phone preview</title>
+<link rel="stylesheet" href="/preview/frame.css">
+<script src="/preview/frame.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <label>Phone <select id="size" aria-label="Phone size"></select></label>
+  <label class="check"><input type="checkbox" id="keyboard"> Keyboard open</label>
+  <span class="gap"></span>
+  <button type="button" data-do="wait">A tab starts waiting</button>
+  <button type="button" data-do="reply">A reply arrives</button>
+  <button type="button" data-do="offline">Server goes offline</button>
+  <button type="button" data-do="online">Server comes back</button>
+  <button type="button" data-do="reset">Reset the tabs</button>
+  <span id="said" class="said" role="status"></span>
+</header>
+<main>
+  <div id="phone" class="phone">
+    <iframe id="app" src="/" title="The phone app"></iframe>
+    <div class="island" aria-hidden="true"></div>
+    <div class="indicator" aria-hidden="true"></div>
+    <div id="keys" class="keys" aria-hidden="true"><span>keyboard</span></div>
+  </div>
+</main>
+</body>
+</html>

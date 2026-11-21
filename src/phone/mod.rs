@@ -9,6 +9,8 @@ pub mod images;
 pub mod log;
 pub mod pairing;
 #[cfg(feature = "net")]
+pub mod preview;
+#[cfg(feature = "net")]
 pub mod push;
 pub mod serve;
 pub mod tailnet;
