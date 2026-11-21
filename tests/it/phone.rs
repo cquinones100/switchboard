@@ -336,3 +336,70 @@ for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"])
         "{stdout}"
     );
 }
+
+/// The drawer's folds (assets/phone/app.js's `fold` and `isOpen`), run in
+/// Node with a localStorage of its own, the page loaded a second time over it
+/// as a reload would; skipped without Node.
+#[test]
+fn the_drawers_groups_fold_and_stay_folded_across_a_reload() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const kept = new Map();
+const localStorage = { getItem: (k) => (kept.has(k) ? kept.get(k) : null), setItem: (k, v) => kept.set(k, String(v)) };
+const load = () => {
+  const ctx = vm.createContext({
+    document: { getElementById: () => null, addEventListener: () => {} },
+    fetch: () => new Promise(() => {}),
+    localStorage,
+    console,
+  });
+  vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+  return ctx;
+};
+const open = (ctx, q) => JSON.stringify(["Needs you", "Working", "Idle"].filter((n) => vm.runInContext(`isOpen(${JSON.stringify(n)}, wordsOf(${JSON.stringify(q)}))`, ctx)));
+let page = load();
+console.log("start=" + open(page, ""));
+vm.runInContext(`fold("Working"); fold("Idle")`, page);
+console.log("folded=" + open(page, ""));
+vm.runInContext(`fold("Working")`, page);
+console.log("unfolded=" + open(page, ""));
+page = load();
+console.log("reloaded=" + open(page, ""));
+console.log("searching=" + open(page, "handoff"));
+console.log("cleared=" + open(page, ""));
+"#;
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            r#"start=["Needs you","Working","Idle"]"#,
+            r#"folded=["Needs you"]"#,
+            r#"unfolded=["Needs you","Working"]"#,
+            // The fold kept in the phone's storage.
+            r#"reloaded=["Needs you","Working"]"#,
+            // A search opens every group, Idle's fold kept for after it.
+            r#"searching=["Needs you","Working","Idle"]"#,
+            r#"cleared=["Needs you","Working"]"#,
+        ],
+        "{stdout}"
+    );
+}

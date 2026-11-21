@@ -165,6 +165,34 @@ function groups(words) {
   ].filter(([, , tabs]) => tabs.length);
 }
 
+// The groups folded on this phone, by name: a view setting of the phone's
+// own, kept in localStorage across reloads and never sent to the computer.
+// A group that empties keeps its fold, so it comes back as it was.
+const FOLDS = "switchboard.drawer.folded";
+function foldsKept() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(FOLDS) || "[]");
+    return new Set(Array.isArray(kept) ? kept : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+const folded = foldsKept();
+
+function fold(name) {
+  if (folded.has(name)) folded.delete(name);
+  else folded.add(name);
+  try {
+    localStorage.setItem(FOLDS, JSON.stringify([...folded]));
+  } catch (_) {
+    // Storage refused (a private window): the fold lasts until a reload.
+  }
+}
+
+// A search shows every group with a match open, whatever its fold, and the
+// folds come back as it is cleared.
+const isOpen = (name, words) => words.length > 0 || !folded.has(name);
+
 function header(...rest) {
   return el(
     "div",
@@ -241,8 +269,24 @@ function drawerList() {
     );
   }
   for (const [name, tone, tabs] of all) {
-    const g = el("div", { class: "group" }, el("div", { class: "label " + tone }, el("span", {}, name), el("span", {}, tabs.length)));
-    for (const t of tabs) {
+    const open = isOpen(name, words);
+    // While a search is on every group with a match shows open, so a tap
+    // there leaves the fold as it is rather than change one out of sight.
+    const toggle = () => {
+      if (words.length) return;
+      fold(name);
+      drawer();
+      const again = [...app.querySelectorAll(".drawer .label")].find((b) => b.dataset.group === name);
+      if (again) again.focus();
+    };
+    const label = el(
+      "button",
+      { class: "label " + tone, "data-group": name, "aria-expanded": String(open), onclick: toggle },
+      el("span", {}, el("span", { class: "fold" }, open ? "▾" : "▸"), name),
+      el("span", {}, tabs.length),
+    );
+    const g = el("div", { class: "group" }, label);
+    for (const t of open ? tabs : []) {
       const [m, kind] = markOf(t);
       g.append(
         el(
