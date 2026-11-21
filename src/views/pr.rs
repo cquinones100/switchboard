@@ -520,20 +520,37 @@ fn actions(url: &str, verdict: Option<&ready::Verdict>) -> Vec<(String, Do)> {
     if !url.is_empty() {
         out.push(("Open it on GitHub".to_string(), Do::Open(url.into())));
     }
-    if verdict.is_some_and(|v| v.conflicts) {
+    // A PR opened by its number (another branch's, `--pr`) is no PR of the
+    // tab's own checkout, which these two would act on.
+    let own = !NUMBERED.load(std::sync::atomic::Ordering::Relaxed);
+    if own && verdict.is_some_and(|v| v.conflicts) {
         out.push((
             RESOLVE.to_string(),
             Do::Press(super::Command::ResolveConflicts.name().into()),
         ));
     }
-    if verdict.is_some_and(|v| v.failing) {
+    if own && verdict.is_some_and(|v| v.failing) {
         out.push((
             FAILING.to_string(),
             Do::Press(super::Command::FailingChecks.name().into()),
         ));
     }
+    if SEVERAL.load(std::sync::atomic::Ordering::Relaxed) {
+        out.push((
+            crate::mux::keys::Action::TabPrs.about(),
+            Do::Press(crate::mux::keys::Action::TabPrs.name()),
+        ));
+    }
     out
 }
+
+/// Whether the view's tab followed several PRs as it opened (`pr-view
+/// --several`), which puts "Show another of this tab's PRs" in its menu.
+pub static SEVERAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the view shows a PR by its number (`main_numbered`), another
+/// branch's than the tab's own checkout.
+static NUMBERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The menu's words for the two things M-m's box offered.
 pub const RESOLVE: &str = "Type /resolve-conflicts into this tab's Claude";
@@ -747,6 +764,27 @@ pub fn main(dir: PathBuf) -> ExitCode {
         }
         read
     };
+    pager::run_following(initial, follow::start(cached, file, read, content))
+}
+
+/// The PR view on one PR by its number, whatever the directory's branch:
+/// a tab's current PR when its session opened it from another branch or
+/// repository (src/tabs/prs.rs), its copy kept under its repository and
+/// number.
+pub fn main_numbered(repo: github::Repo, number: u64) -> ExitCode {
+    NUMBERED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let cache = Some(
+        paths::cache_dir()
+            .join("pr-view")
+            .join(format!("{}%{}#{number}.json", repo.owner, repo.name)),
+    );
+    let cached = cache.as_ref().and_then(util::read_json);
+    let initial = match &cached {
+        Some(pr) => content(pr),
+        None => Content::Loading("Reading the PR...".into()),
+    };
+    let file = move || cache.clone();
+    let read = move || util::block_on(by_number(&repo, number, SOURCE)).map_err(|e| e.to_string());
     pager::run_following(initial, follow::start(cached, file, read, content))
 }
 

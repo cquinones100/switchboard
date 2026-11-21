@@ -459,6 +459,11 @@ pub const SUBCOMMANDS: &[(&str, &[&str])] = &[
             "settle",
             "landed",
             "autolanded",
+            "queue-pr",
+            "dequeue-pr",
+            "move-pr",
+            "pr-status",
+            "pr-queue",
         ],
     ),
     (

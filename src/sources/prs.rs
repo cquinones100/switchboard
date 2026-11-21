@@ -25,7 +25,7 @@ use crate::integrations::github;
 /// What is asked of each PR: where it stands, and for the cards its checks
 /// counted by outcome (one count each, however many checks), its review and
 /// its size.
-pub const PR_FIELDS: &str = "number url state reviewDecision additions deletions mergeQueueEntry { position } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
+pub const PR_FIELDS: &str = "number url title headRefName isDraft state reviewDecision additions deletions mergeQueueEntry { position } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
 
 /// One PR's place in the query: its repository's alias (`r0`), its own
 /// (`a0`), and what it was asked for (by a branch, whose answer is a list,
@@ -129,6 +129,14 @@ pub fn checks_of(pr: &Value) -> Option<Checks> {
     })
 }
 
+// A string field of a PR, empty when missing.
+fn text(pr: &Value, key: &str) -> String {
+    pr.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 /// What GitHub said of one PR, as the tab keeps it.
 pub fn facts_from(pr: &Value, key: &PrKey) -> Option<PrFacts> {
     let number = pr.get("number").and_then(Value::as_u64)?;
@@ -150,6 +158,9 @@ pub fn facts_from(pr: &Value, key: &PrKey) -> Option<PrFacts> {
     let repo = key.repo().to_string();
     Some(PrFacts {
         number,
+        title: text(pr, "title"),
+        head: text(pr, "headRefName"),
+        draft: pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false),
         url: pr
             .get("url")
             .and_then(Value::as_str)

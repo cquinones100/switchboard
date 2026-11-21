@@ -1013,6 +1013,43 @@ pub fn yours_in(tickets: &Value, projects: &Value) -> Vec<Yours> {
     out
 }
 
+/// The open issues of the repository at `dir`, those assigned to you
+/// first, for the picker that chooses the tab's ticket in a repository
+/// whose `tickets` is `github`: its origin's, the repository that
+/// setting is kept for (`repos::tickets_known`). Asks GitHub, so off the
+/// server's task.
+pub async fn open_issues_at(dir: &Path) -> Result<Lists, String> {
+    const SOURCE: &str = "choose a tab's ticket";
+    let repo = crate::sources::repo::origin_of(dir)
+        .ok_or_else(|| "This repository's origin isn't on GitHub.".to_string())?;
+    let issues = github::open_issues(&repo, SOURCE)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Lists {
+        found: open_issue_rows(&repo, issues),
+        missing: Vec::new(),
+    })
+}
+
+/// `open_issues_at`'s rows, in GitHub's order.
+pub fn open_issue_rows(repo: &github::Repo, issues: Vec<github::OpenIssue>) -> Vec<Yours> {
+    issues
+        .into_iter()
+        .map(|i| {
+            let title: String = i.title.chars().filter(|c| !c.is_control()).collect();
+            let yours = if i.yours { " · assigned to you" } else { "" };
+            Yours {
+                row: format!("#{}  {title}{yours}", i.number),
+                ticket: Ticket::Issue {
+                    repo: repo.clone(),
+                    number: i.number,
+                },
+                created: String::new(),
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn cache_file(id: &str) -> std::path::PathBuf {
     paths::cache_dir()
         .join("ticket-view")

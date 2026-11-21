@@ -107,20 +107,11 @@ pub async fn bind(status: &Status, port: u16) -> Result<Vec<tokio::net::TcpListe
 }
 
 /// The certificate Tailscale issues for `name`, fetched (or renewed) now
-/// into the phone app's state.
+/// and kept in memory alone, never written to a file.
 fn tls(name: &str) -> Result<TlsAcceptor> {
-    let dir = super::config::state_dir();
-    util::make_dirs(&dir)?;
-    let (cert, key): (PathBuf, PathBuf) = (dir.join("cert.pem"), dir.join("key.pem"));
-    platform::tailscale_cert(name, &cert, &key)
-        .context("tailscale cert couldn't issue a certificate")?;
-    use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cert)
-        .context("reading the certificate")?
-        .collect::<Result<_, _>>()
-        .context("reading the certificate")?;
-    let key = PrivateKeyDer::from_pem_file(&key).context("reading the certificate's key")?;
+    let pem =
+        platform::tailscale_cert(name).context("tailscale cert couldn't issue a certificate")?;
+    let (chain, key) = cert_and_key(pem.as_bytes())?;
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let mut config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
@@ -138,6 +129,26 @@ pub fn origin(name: &str, port: u16) -> String {
     } else {
         format!("https://{name}:{port}")
     }
+}
+
+/// The certificate chain and the key in what `tailscale cert` printed,
+/// both in one PEM stream.
+fn cert_and_key(
+    pem: &[u8],
+) -> Result<(
+    Vec<rustls::pki_types::CertificateDer<'static>>,
+    rustls::pki_types::PrivateKeyDer<'static>,
+)> {
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem)
+        .collect::<Result<_, _>>()
+        .context("reading the certificate")?;
+    if chain.is_empty() {
+        return Err(anyhow!("tailscale cert printed no certificate"));
+    }
+    let key = PrivateKeyDer::from_pem_slice(pem).context("reading the certificate's key")?;
+    Ok((chain, key))
 }
 
 /// Serves until the process is stopped.
@@ -840,6 +851,27 @@ mod tests {
         let bound = util::block_on(bind(&status, port));
         assert!(bound.is_err(), "nothing to listen on");
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+    }
+
+    #[test]
+    fn the_certificate_and_key_are_read_from_one_stream() {
+        let pem = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nBAUG\n-----END CERTIFICATE-----\n-----BEGIN EC PRIVATE KEY-----\nBwgJ\n-----END EC PRIVATE KEY-----\n";
+        let (chain, key) = cert_and_key(pem.as_bytes()).unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(key.secret_der(), &[7, 8, 9]);
+        assert!(cert_and_key(b"").is_err());
+    }
+
+    /// Zooming would throw the channel out of its layout (issue 187).
+    #[test]
+    fn the_page_viewport_turns_zooming_off() {
+        let page = include_str!("../../assets/phone/index.html");
+        let viewport = page
+            .lines()
+            .find(|line| line.contains("name=\"viewport\""))
+            .expect("a viewport meta tag");
+        assert!(viewport.contains("maximum-scale=1"), "{viewport}");
+        assert!(viewport.contains("user-scalable=no"), "{viewport}");
     }
 
     #[test]

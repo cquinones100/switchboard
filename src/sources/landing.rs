@@ -98,6 +98,11 @@ pub struct RepoLanding {
     /// How it lands, `pr` or `direct`, as repos.json or the last answer
     /// worked out says (`repos::landing_by_key`), `None` when neither does.
     pub method: Option<String>,
+    /// Switchboard's merge queue of PRs onto the default branch
+    /// (src/merge_queue), empty for a target branch's.
+    pub prs: crate::merge_queue::Queue,
+    /// The tab each of its PRs was queued from (`tab_of`).
+    pub pr_tabs: HashMap<u64, TabId>,
 }
 
 /// What one read of the landing queues found: each tab's place, and each
@@ -330,6 +335,11 @@ fn repo_landing(
         holder,
         waiting,
         method,
+        prs: match target {
+            None => crate::merge_queue::read(common),
+            Some(_) => crate::merge_queue::Queue::default(),
+        },
+        pr_tabs: HashMap::new(),
     }
 }
 
@@ -392,6 +402,24 @@ pub fn landing_of(tabs: &[TabPlace], running: &[RunningSession]) -> Read {
     }
     let mut places = HashMap::new();
     for r in &mut repos {
+        r.pr_tabs = r
+            .prs
+            .prs
+            .iter()
+            .filter_map(|q| {
+                let entry = Entry {
+                    path: PathBuf::from(&q.path),
+                    since: q.since,
+                    session: q.session.clone(),
+                    pane: q.pane.clone(),
+                    pid: None,
+                    tab: None,
+                    reviewing: false,
+                    record: None,
+                };
+                Some((q.number, tab_of(&entry, tabs, &roots)?))
+            })
+            .collect();
         if let Some(holder) = &mut r.holder {
             holder.tab = tab_of(holder, tabs, &roots);
             if let Some(tab) = holder.tab {
@@ -605,6 +633,90 @@ pub fn view_items(
             ));
             items.extend(queue);
         }
+        if r.target.is_none() && (r.prs.busy() || r.prs.held.is_some()) {
+            items.extend(our_queue_items(r, tabs));
+        }
+    }
+    items
+}
+
+/// The section of Switchboard's merge queue (src/merge_queue): the PRs in
+/// the train under test first, then those waiting, in order.
+fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
+    let q = &r.prs;
+    let train = q.train.as_ref();
+    let right = match (&q.held, train) {
+        (Some(held), _) => format!("held: {held}"),
+        (None, _) if q.failed.is_some() => {
+            format!("last look failed: {}", q.failed.as_deref().unwrap_or(""))
+        }
+        (None, Some(t)) => format!(
+            "{} queued · {} testing on {}",
+            q.prs.len(),
+            t.prs.len(),
+            t.branch
+        ),
+        (None, None) => format!("{} queued", q.prs.len()),
+    };
+    let mut items = vec![header(
+        &format!("{}:prqueue", r.common.display()),
+        &format!("{} · Switchboard's merge queue", r.name),
+        q.prs.len(),
+        &right,
+    )];
+    let mut ordered: Vec<&crate::merge_queue::Queued> =
+        q.prs.iter().filter(|p| q.testing(p.number)).collect();
+    let waiting: Vec<&crate::merge_queue::Queued> =
+        q.prs.iter().filter(|p| !q.testing(p.number)).collect();
+    ordered.extend(&waiting);
+    for (i, p) in ordered.iter().enumerate() {
+        let tab = r
+            .pr_tabs
+            .get(&p.number)
+            .and_then(|id| tabs.iter().find(|t| t.id == *id));
+        let name = match tab {
+            Some(t) => format!("#{} {}", p.number, t.name),
+            None => format!("#{} {}", p.number, folder_of(Path::new(&p.path))),
+        };
+        let testing = q.testing(p.number);
+        let step = match train.filter(|_| testing) {
+            Some(t) => match &t.rerun {
+                Some(rerun) => format!("running {} again on {}", rerun.names.join(", "), t.branch),
+                None => format!("testing on {}", t.branch),
+            },
+            None => "waiting".into(),
+        };
+        let place = tab.map_or("no tab".to_string(), |t| format!("tab {}", t.index));
+        let at = waiting.iter().position(|w| w.number == p.number);
+        let mut item = Item::new(
+            format!("prqueue:{}:{}", r.common.display(), p.number),
+            format!("{}. {name}", i + 1),
+        )
+        .detail(format!("{step} · {place}"))
+        .state(if tab.is_some_and(|t| t.waiting) {
+            State::Attention
+        } else if testing {
+            State::Active
+        } else {
+            State::Idle
+        })
+        .data(serde_json::json!({
+            "prqueue": {
+                "common": r.common,
+                "number": p.number,
+                "tab": tab.map(|t| t.id.to_string()),
+                "testing": testing,
+                "first": at == Some(0),
+                "last": at.is_some_and(|a| a + 1 == waiting.len()),
+                "url": r.repo.as_ref().map(|n| format!("https://github.com/{n}/pull/{}", p.number)),
+            },
+            "search": format!("{} #{} {}", r.name, p.number, p.path),
+        }));
+        if let Some(t) = tab {
+            item = item.target(Target::Tab(t.id));
+        }
+        item.time = (p.since > 0).then_some(p.since);
+        items.push(item);
     }
     items
 }
@@ -667,6 +779,8 @@ mod tests {
                 holder: Some(entry("/a", 5, 1)),
                 waiting: vec![entry("/b", 6, 2), entry("/c", 7, 3)],
                 method: None,
+                prs: Default::default(),
+                pr_tabs: HashMap::new(),
             }],
         };
         let held = tab_landing(&read, TabId(1)).unwrap();
@@ -1119,6 +1233,8 @@ mod tests {
             )),
             waiting: vec![entry("/w/two", 2, None)],
             method: Some(method.into()),
+            prs: Default::default(),
+            pr_tabs: HashMap::new(),
         };
         let tabs: Vec<ViewTab> = [(1, "one", true), (2, "two", false)]
             .map(|(id, name, autoland)| ViewTab {
@@ -1168,5 +1284,111 @@ mod tests {
         assert_eq!(words(2), "2nd in line to land");
         assert_eq!(words(11), "11th in line to land");
         assert_eq!(words(21), "21st in line to land");
+    }
+
+    #[test]
+    fn switchboard_s_merge_queue_is_a_section_the_train_first() {
+        use crate::merge_queue::{Queue, Queued, Tested, Train};
+        let queued = |number: u64| Queued {
+            number,
+            since: 1,
+            path: format!("/w/{number}"),
+            ..Queued::default()
+        };
+        let repo = RepoLanding {
+            common: PathBuf::from("/r/.git"),
+            repo: Some("me/r".into()),
+            name: "me/r".into(),
+            branch: Some("main".into()),
+            target: None,
+            holder: None,
+            waiting: Vec::new(),
+            method: Some("pr".into()),
+            prs: Queue {
+                prs: vec![queued(5), queued(6), queued(7)],
+                train: Some(Train {
+                    branch: "ci/train-abc".into(),
+                    prs: vec![Tested {
+                        number: 6,
+                        head: "h".into(),
+                    }],
+                    ..Train::default()
+                }),
+                ..Queue::default()
+            },
+            pr_tabs: HashMap::from([(6, TabId(2))]),
+        };
+        let tabs = vec![ViewTab {
+            id: TabId(2),
+            index: 2,
+            name: "six".into(),
+            phase: None,
+            waiting: false,
+            autoland: false,
+        }];
+        let items = view_items(&[repo], &|_| Vec::new(), &tabs);
+        let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "me/r · Switchboard's merge queue",
+                "1. #6 six",
+                "2. #5 5",
+                "3. #7 7"
+            ]
+        );
+        assert_eq!(
+            items[0].data["right"],
+            "3 queued · 1 testing on ci/train-abc"
+        );
+        assert_eq!(items[1].detail, "testing on ci/train-abc · tab 2");
+        let q = &items[2].data["prqueue"];
+        assert_eq!(
+            (&q["first"], &q["last"], &q["testing"]),
+            (&json!(true), &json!(false), &json!(false))
+        );
+        assert_eq!(items[3].data["prqueue"]["last"], json!(true));
+    }
+
+    #[test]
+    fn a_train_running_its_failed_jobs_again_says_so_naming_them() {
+        use crate::merge_queue::{Queue, Queued, Rerun, Tested, Train};
+        let repo = RepoLanding {
+            common: PathBuf::from("/r/.git"),
+            repo: Some("me/r".into()),
+            name: "me/r".into(),
+            branch: Some("main".into()),
+            target: None,
+            holder: None,
+            waiting: Vec::new(),
+            method: Some("pr".into()),
+            prs: Queue {
+                prs: vec![Queued {
+                    number: 6,
+                    path: "/w/6".into(),
+                    ..Queued::default()
+                }],
+                train: Some(Train {
+                    branch: "ci/train-abc".into(),
+                    prs: vec![Tested {
+                        number: 6,
+                        head: "h".into(),
+                    }],
+                    rerun: Some(Rerun {
+                        run: "77".into(),
+                        names: vec!["Tests (macOS arm64, 1 of 2)".into()],
+                        job: Some("9".into()),
+                    }),
+                    ..Train::default()
+                }),
+                ..Queue::default()
+            },
+            pr_tabs: HashMap::new(),
+        };
+        let items = view_items(&[repo], &|_| Vec::new(), &[]);
+        assert_eq!(
+            items[1].detail,
+            "running Tests (macOS arm64, 1 of 2) again on ci/train-abc · no tab"
+        );
     }
 }

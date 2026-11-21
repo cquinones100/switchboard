@@ -954,6 +954,33 @@ pub async fn branch_pr_by_branch(dir: &Path, source: &str) -> Result<Option<(Rep
     let owner = pushed_to(dir, &branch)
         .await
         .map_or_else(|| repo.owner.clone(), |r| r.owner);
+    if head == branch {
+        return head_pr(repo, upstream, &owner, &head, source).await;
+    }
+    // A branch tracking one of another name: its own name's PR first, as
+    // one started from another's remote branch (`git switch -c revert
+    // origin/feature`) tracks that branch until it is pushed, and the
+    // tracked one's PR only while it is open, so a branch made from one
+    // whose PR merged never shows that PR as its own. A PR checked out
+    // under a name of its own (a fork's `<owner>-<branch>`) has none by its
+    // own name and is found by the branch it tracks.
+    if let Some(found) = head_pr(repo.clone(), upstream.clone(), &owner, &branch, source).await? {
+        return Ok(Some(found));
+    }
+    Ok(head_pr(repo, upstream, &owner, &head, source)
+        .await?
+        .filter(|(_, pr)| pr.state == "OPEN"))
+}
+
+// The PR from `head` (its name where it is pushed) by `owner`, in `repo`,
+// else in `upstream`.
+async fn head_pr(
+    repo: Repo,
+    upstream: Option<Repo>,
+    owner: &str,
+    head: &str,
+    source: &str,
+) -> Result<Option<(Repo, PullRequest)>> {
     let prs = format!(
         "pullRequests(headRefName: $head, first: 20, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
          nodes {{ {FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }}"
@@ -1017,14 +1044,14 @@ pub async fn branch_pr_by_branch(dir: &Path, source: &str) -> Result<Option<(Rep
             })
             .unwrap_or_default()
     };
-    if let Some(pr) = choose(nodes("repository"), &owner, &repo.owner) {
+    if let Some(pr) = choose(nodes("repository"), owner, &repo.owner) {
         return Ok(Some((repo, pr)));
     }
     if let Some(failed) = upstream_failed {
         return Err(failed.into());
     }
     Ok(upstream.and_then(|up| {
-        let pr = choose(nodes("upstream"), &owner, &up.owner)?;
+        let pr = choose(nodes("upstream"), owner, &up.owner)?;
         Some((up, pr))
     }))
 }

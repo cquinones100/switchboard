@@ -26,18 +26,34 @@
 # documentation (docs/, ARCHITECTURE.md, CLAUDE.md, the READMEs) or a skill
 # (assets/skills/, .claude/skills/), which the code compiles in or the
 # tests read, so the Linux jobs run on them still; full, for anything else,
-# and every push to main, which adds the three macOS jobs. A macOS job skips
+# and every push to a merge queue's ci/train-* branch, which adds the three
+# macOS jobs. A push to main is tested when a train's run of this workflow
+# that passed in the last day ran on the pushed commit's tree (the queue
+# squash-merges a train's PRs with the heads it tested, so its last merge
+# leaves main on the tree of the train's head), and skips all six jobs, its
+# log naming the train's run. Any other push to main is full: an admin's
+# own, a merge made outside the queue, main moved under a train, a look
+# that fails, and a train's earlier merges, whose trees no run built alone
+# (the train's commits before its head were never tested, and the next
+# merge's push cancels their run), so a train the queue stops merging
+# partway leaves main tested; and a train that changes what the caches
+# are keyed on (Cargo.lock, rust-toolchain.toml, a Cargo.toml, this file),
+# since only main's runs save the caches pull requests and trains restore,
+# and a train's earlier merges' runs are cancelled. A job skips
 # itself by its own `if:`, never by a path filter on `on:`, so each of the
 # six checks main requires still reports, skipped counting as passing; the
 # macOS tests are two jobs rather than a matrix, since a matrix job skipped
 # reports under its name unexpanded. The formatting job fails when the sort
-# does, so a broken sort can't skip the macOS checks into a merge.
+# does, so a broken sort can't skip the checks into a merge, and the Linux
+# jobs run whether the sort passed or not.
 
 name: CI
 
 on:
   push:
-    branches: [main]
+    # A train of Switchboard's merge queue (src/merge_queue) runs every job
+    # on the PRs it tests together, merged onto main.
+    branches: [main, "ci/train-*"]
   pull_request:
 
 permissions:
@@ -56,6 +72,10 @@ jobs:
   changes:
     name: Sort the changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To list the trains' runs of this workflow.
+      actions: read
     outputs:
       kind: ${{ steps.sort.outputs.kind }}
     steps:
@@ -63,13 +83,70 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
-      - name: Sort the run into light or full
+      - name: Look for a train that tested this tree
+        id: train
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # A look that fails leaves no train found, so every job runs.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ github.event.head_commit.tree_id }}
+        run: |
+          test -n "$TREE"
+          since=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          # Each run names its head commit's tree, so the train's branch,
+          # deleted once it ends, needn't be fetched.
+          runs=$(gh api --paginate -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f event=push -f status=success -f "created=>=$since" -f per_page=100 \
+            --jq ".workflow_runs[] | select((.head_branch | startswith(\"ci/train-\")) and .head_commit.tree_id == \"$TREE\") | \"\(.html_url) \(.head_sha)\"")
+          run=${runs%%$'\n'*}
+          if [ -z "$run" ]; then
+            echo "No train that passed in the last day tested this tree"
+            exit 0
+          fi
+          read -r url head <<< "$run"
+          # The train's base, where main was as it was built: the first
+          # commit back from its head, by first parents, the queue didn't make.
+          base=$head
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$base" \
+              --jq '"\(.commit.author.email) \(.parents[0].sha)"')
+            read -r author parent <<< "$commit"
+            [ "$author" = merge-queue@switchboard.invalid ] || break
+            base=$parent
+          done
+          test "$base" != "$head"
+          # main saves the dependencies' caches that pull requests and trains
+          # restore, and only a run that builds saves one, so a train that
+          # changes what they are keyed on runs every job on main.
+          compare=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
+            --jq '(.files | length | tostring), .files[].filename')
+          count=${compare%%$'\n'*}
+          if [ "$count" -ge 300 ]; then
+            echo "The train $url tested this tree, but changes too many files to tell whether the caches' keys changed"
+            exit 0
+          fi
+          keyed=$(grep -E '^(Cargo\.lock|rust-toolchain\.toml|(.*/)?Cargo\.toml|\.github/workflows/ci\.yml)$' <<< "${compare#*$'\n'}" || true)
+          if [ -n "$keyed" ]; then
+            echo "The train $url tested this tree, but changes $(echo $keyed), so every job runs to save main's caches"
+            exit 0
+          fi
+          echo "This tree is the head of a train whose run passed: $url"
+          echo "tested=$url" >> "$GITHUB_OUTPUT"
+      - name: Sort the run into light, full or tested
         id: sort
+        env:
+          TESTED: ${{ steps.train.outputs.tested }}
         # A rename is listed as the file it removes and the one it adds, so a
         # file moved out of src/ still counts as touching src/.
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            echo "kind=full" >> "$GITHUB_OUTPUT"
+            if [ -n "$TESTED" ]; then
+              echo "Tested by the train's run $TESTED, so every job skips"
+              echo "kind=tested" >> "$GITHUB_OUTPUT"
+            else
+              echo "kind=full" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
           files=$(git diff --name-only --no-renames HEAD^1 HEAD)
@@ -90,7 +167,7 @@ jobs:
   fmt:
     name: Formatting
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.outputs.kind != 'tested' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check that the changes were sorted
@@ -105,6 +182,8 @@ jobs:
 
   clippy:
     name: Clippy (Linux x86_64)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.kind != 'tested' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -120,6 +199,8 @@ jobs:
 
   test-linux:
     name: Tests (Linux x86_64)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.kind != 'tested' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

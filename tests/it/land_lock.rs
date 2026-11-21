@@ -1886,3 +1886,52 @@ fn squash_folds_the_branch_into_one_commit_and_moves_the_review_only_when_safe()
         String::from_utf8_lossy(&left.stdout)
     );
 }
+
+#[test]
+fn queue_pr_keeps_order_across_worktrees_and_refuses_a_pr_twice() {
+    let tmp = TempDir::new("land-lock-prs");
+    let home = tmp.path();
+    let repo = repo(home);
+    let one = worktree(home, &repo, home, "one");
+    let two = worktree(home, &repo, home, "two");
+
+    let first = lock(home, &one, &["queue-pr", "12"]);
+    assert_eq!(
+        (code(&first), stdout(&first)),
+        (0, "queued 1 of 1\n".into())
+    );
+    let second = lock(home, &two, &["queue-pr", "#7"]);
+    assert_eq!(
+        (code(&second), stdout(&second)),
+        (0, "queued 2 of 2\n".into())
+    );
+    let again = lock(home, &two, &["queue-pr", "12"]);
+    assert_eq!(code(&again), 3, "a PR is queued once");
+    assert!(
+        stdout(&again).contains("queued 1 of 2"),
+        "{}",
+        stdout(&again)
+    );
+
+    let queue = stdout(&lock(home, &repo, &["pr-queue"]));
+    let numbers: Vec<&str> = queue
+        .lines()
+        .map(|l| l.split('\t').nth(1).unwrap())
+        .collect();
+    assert_eq!(numbers, ["#12", "#7"], "shared by every worktree, in order");
+    assert!(queue.contains(&one.display().to_string()));
+
+    assert_eq!(code(&lock(home, &one, &["move-pr", "7", "first"])), 0);
+    assert_eq!(
+        stdout(&lock(home, &one, &["pr-status", "7"])),
+        "queued 1 of 2\n"
+    );
+    assert_eq!(code(&lock(home, &one, &["dequeue-pr", "7"])), 0);
+    assert_eq!(code(&lock(home, &one, &["dequeue-pr", "7"])), 3);
+    assert_eq!(stdout(&lock(home, &one, &["pr-status", "7"])), "none\n");
+    assert_eq!(
+        code(&lock(home, &one, &["queue-pr"])),
+        2,
+        "a number is needed"
+    );
+}

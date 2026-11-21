@@ -10,6 +10,7 @@
 //! - `sessions`: Claude Code's session files, which say which process is
 //!   Claude, which session is headless and where a background job came from.
 //! - `hook`: `switchboard hook`, the side Claude Code runs.
+//! - `prs`: the PRs a session opens or looks at, from its tool calls.
 //! - `hands_free`: what the server answers a hook with in a tab of
 //!   autopilot's hands-free mode, which `hook` prints.
 //! - `serve`: the server's side: hooks, focus, the keys, one Claude per tab.
@@ -25,6 +26,7 @@
 
 pub mod hands_free;
 pub mod hook;
+pub mod prs;
 mod serve;
 pub mod sessions;
 mod state;

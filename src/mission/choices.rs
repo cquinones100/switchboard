@@ -42,6 +42,8 @@ pub enum Do {
     Peek(TabId),
     /// Its whole title in a box, as M-T shows it.
     TabTitle(TabId),
+    /// The picker of the PRs it follows, the one chosen made current.
+    TabPrs(TabId),
     /// The tab, and its diff in its pane's place (M-d).
     Diff(TabId),
     /// The tab, and lazygit in its pane's place.
@@ -76,6 +78,18 @@ pub enum Do {
     /// A worktree taken out of the landing queue (`land-lock leave`, which
     /// stops its wait), asked first.
     LeaveQueue(PathBuf),
+    /// A PR moved in Switchboard's merge queue (src/merge_queue), in the
+    /// repository whose shared git directory is `common`.
+    PrMove {
+        common: PathBuf,
+        number: u64,
+        way: &'static str,
+    },
+    /// A PR taken out of Switchboard's merge queue, asked first.
+    PrLeave {
+        common: PathBuf,
+        number: u64,
+    },
     /// The tab closed, asked first.
     CloseTab(TabId),
     /// Every merged tab closed and its worktree removed, asked first.
@@ -730,6 +744,14 @@ pub fn tab_choices(
     if title {
         out.push(choice('i', "Show its full title", Do::TabTitle(tab.id)));
     }
+    // A tab following several PRs: which one M-v and M-d show (board 129).
+    if tab.prs.len() > 1 {
+        out.push(choice(
+            'P',
+            "Show another of this tab's PRs",
+            Do::TabPrs(tab.id),
+        ));
+    }
     out.push(choice('d', "Its diff (M-d)", Do::Diff(tab.id)));
     out.push(choice('L', "lazygit", Do::Lazygit(tab.id)));
     out.push(choice('p', "Actions (M-p) in the tab", Do::Palette(tab.id)));
@@ -1229,6 +1251,55 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
         ViewId::Autopilot => {
             out = pilot_choices(item, ctx);
             add_hand_offs(&mut out, handoff("autopilot", item, ctx), ctx);
+        }
+        ViewId::Landing if item.data.get("prqueue").is_some_and(Value::is_object) => {
+            // A PR in Switchboard's merge queue.
+            let q = &item.data["prqueue"];
+            let common = PathBuf::from(text(q, "/common"));
+            let number = q.get("number").and_then(Value::as_u64).unwrap_or(0);
+            let flag = |k: &str| q.get(k).and_then(Value::as_bool).unwrap_or(false);
+            if let Some(t) = ctx
+                .tabs
+                .iter()
+                .find(|t| Some(t.id.to_string().as_str()) == q.get("tab").and_then(Value::as_str))
+            {
+                out.push(choice(
+                    'g',
+                    format!("Go to tab {}", t.index),
+                    Do::GoTo(t.id),
+                ));
+            }
+            if !flag("testing") {
+                let moved = |way| Do::PrMove {
+                    common: common.clone(),
+                    number,
+                    way,
+                };
+                if !flag("first") {
+                    out.push(choice('n', "Test it in the next train", moved("first")));
+                    out.push(choice('u', "Move it up in the merge queue", moved("up")));
+                }
+                if !flag("last") {
+                    out.push(choice(
+                        'b',
+                        "Move it down in the merge queue",
+                        moved("down"),
+                    ));
+                }
+            }
+            out.push(choice(
+                'x',
+                "Take it out of the merge queue",
+                Do::PrLeave {
+                    common: common.clone(),
+                    number,
+                },
+            ));
+            let url = text(q, "/url").to_string();
+            if !url.is_empty() {
+                out.push(choice('o', "Open the PR", Do::Open(url.clone())));
+                out.push(choice('y', "Copy its link", Do::Copy(url)));
+            }
         }
         ViewId::Landing if item.data.get("landing").is_some_and(Value::is_object) => {
             // A worktree landing on its default branch, or waiting to.

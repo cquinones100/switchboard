@@ -1087,6 +1087,7 @@ pub fn dialog_in(text: &str) -> Option<Dialog> {
             n: i as u32 + 1,
             label: joined(l).replacen('❯', "", 1).trim().to_string(),
             checked: None,
+            detail: String::new(),
         })
         .collect();
     if options.len() < 2 {
@@ -1216,11 +1217,13 @@ mod tests {
                 n: 1,
                 label: "Yes".into(),
                 checked: None,
+                detail: String::new(),
             },
             PromptOption {
                 n: 2,
                 label: "No".into(),
                 checked: None,
+                detail: String::new(),
             },
         ];
         let asking = |rest: &str| {

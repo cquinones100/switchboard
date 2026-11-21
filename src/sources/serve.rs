@@ -164,7 +164,7 @@ impl Server {
             && settings::is_on("github")
             && tabs
                 .iter()
-                .flat_map(|t| &t.keys)
+                .flat_map(|t| t.keys.iter().chain(&t.listed))
                 .chain(self.sources.untabbed.values().flatten())
                 .any(|k| !self.sources.asked.contains(k))
             && self.sources.schedule.ask("merges", now)
@@ -194,7 +194,10 @@ impl Server {
             Answer::Merges(result) => {
                 self.sources.schedule.done("merges");
                 match result {
-                    Ok(found) => self.sources.known.extend(found),
+                    Ok(found) => {
+                        self.sources.known.extend(found);
+                        self.drop_finished_prs();
+                    }
                     Err(e) => eprintln!("merge states: {e}"),
                 }
             }
@@ -639,10 +642,20 @@ impl Server {
                     name: self.tab_label(*id),
                     path,
                     pr: self.tab_pr(*id),
-                    pr_in: self.tab_pr_repo(*id).cloned(),
+                    pr_in: self.tab_pr_repo(*id),
                     repo: None,
                     upstream: None,
                     keys: Vec::new(),
+                    listed: self
+                        .tab_prs(*id)
+                        .into_iter()
+                        .filter_map(|p| {
+                            Some(PrKey::Number {
+                                repo: p.repo?,
+                                number: p.number,
+                            })
+                        })
+                        .collect(),
                     dirs,
                     panes: with_parked,
                     sessions,
@@ -763,7 +776,7 @@ impl Server {
                 let mut keys: Vec<PrKey> = Vec::new();
                 for key in tabs
                     .iter()
-                    .flat_map(|t| &t.keys)
+                    .flat_map(|t| t.keys.iter().chain(&t.listed))
                     .chain(self.sources.untabbed.values().flatten())
                 {
                     if !keys.contains(key) {
@@ -915,7 +928,8 @@ impl Server {
     // under way; with neither the landing_queue setting nor the Landing
     // view on, forgets them.
     fn start_landing(&mut self, tabs: &[TabInfo]) {
-        if !settings::is_on("landing_queue") && !enabled(LANDING) {
+        let merge_queue = settings::is_on(crate::merge_queue::SETTING);
+        if !settings::is_on("landing_queue") && !enabled(LANDING) && !merge_queue {
             self.sources.landing = Read::default();
             return;
         }
@@ -981,6 +995,10 @@ impl Server {
                 .get(&tab.id)
                 .map(|p| p.landing)
                 .or_else(|| pr.as_ref().and_then(|p| merging(p, &self.sources.queues)))
+                .or_else(|| {
+                    pr.as_ref()
+                        .and_then(|p| our_queue(p, &self.sources.landing))
+                })
                 .filter(|_| landing_queue);
             if pr.is_some() || landing.is_some() {
                 facts.insert(tab.id, TabFacts { pr, landing });
@@ -992,7 +1010,7 @@ impl Server {
         }
         let keys: HashSet<&PrKey> = tabs
             .iter()
-            .flat_map(|t| &t.keys)
+            .flat_map(|t| t.keys.iter().chain(&t.listed))
             .chain(self.sources.untabbed.values().flatten())
             .collect();
         if self.sources.known.len() > 4 * keys.len() + 64 {
@@ -1006,7 +1024,80 @@ impl Server {
         std::fs::metadata(github_file()).is_ok_and(|m| m.len() > 0)
     }
 
-    fn redraw_everywhere(&mut self) {
+    /// What the lookups last said of one of a tab's PRs, with Settings'
+    /// `github` on.
+    pub fn tab_pr_facts(&self, pr: &crate::tabs::prs::TabPr) -> Option<&crate::facts::PrFacts> {
+        let key = PrKey::Number {
+            repo: pr.repo.clone()?,
+            number: pr.number,
+        };
+        settings::is_on("github")
+            .then(|| self.sources.known.get(&key))
+            .flatten()
+    }
+
+    /// The PRs a tab follows as its sidebar row, card and picker show them,
+    /// the current one first, when it follows several; `origin` is its
+    /// directory's repository, `owner/name`.
+    pub fn tab_pr_lines(
+        &self,
+        tab: TabId,
+        origin: Option<&str>,
+    ) -> Vec<crate::sidebar::model::PrLine> {
+        use crate::tabs::prs;
+        let all = self.tab_prs(tab);
+        if all.len() < 2 {
+            return Vec::new();
+        }
+        let current = self.tab_current_pr(tab);
+        prs::current_first(&all, current.as_ref())
+            .into_iter()
+            .map(|pr| {
+                let facts = self.tab_pr_facts(&pr);
+                let repo = pr
+                    .repo
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                crate::sidebar::model::PrLine {
+                    number: pr.number,
+                    elsewhere: !repo.is_empty()
+                        && origin.is_some_and(|o| !o.eq_ignore_ascii_case(&repo)),
+                    repo,
+                    title: facts.map(|f| f.title.clone()).unwrap_or_default(),
+                    mark: prs::mark_of(facts),
+                    standing: facts.map(prs::standing).unwrap_or_default(),
+                    standing_long: facts.map(prs::standing_long).unwrap_or_default(),
+                    current: current.as_ref().is_some_and(|c| c.same(&pr)),
+                }
+            })
+            .collect()
+    }
+
+    // Takes the merged and closed PRs a tab's session opened off its list,
+    // once the tab is in front of someone (`tabs::prs`).
+    fn drop_finished_prs(&mut self) {
+        let finished: Vec<PrKey> = self
+            .sources
+            .known
+            .iter()
+            .filter(|(_, f)| f.state != crate::facts::PrState::Open)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if finished.is_empty() {
+            return;
+        }
+        self.drop_finished_tab_prs(|pr| {
+            pr.repo.as_ref().is_some_and(|repo| {
+                finished.contains(&PrKey::Number {
+                    repo: repo.clone(),
+                    number: pr.number,
+                })
+            })
+        });
+    }
+
+    pub(crate) fn redraw_everywhere(&mut self) {
         for client in self.clients.values_mut() {
             client.dirty = true;
         }
@@ -1056,6 +1147,30 @@ fn merging(pr: &PrFacts, queues: &queues::Queues) -> Option<Landing> {
     })?;
     (line > 0).then_some(Landing {
         holding: line == 1,
+        line,
+        method: Method::Pr,
+    })
+}
+
+/// A PR's place in Switchboard's merge queue (src/merge_queue), as landing
+/// there: each in the train under test holding it, the rest in line; none
+/// once GitHub has said it merged.
+fn our_queue(pr: &PrFacts, read: &Read) -> Option<Landing> {
+    if pr.state == PrState::Merged || pr.merge == Some(Merge::Merged) {
+        return None;
+    }
+    let (line, holding) = read
+        .repos
+        .iter()
+        .filter(|r| r.target.is_none())
+        .filter(|r| {
+            r.repo
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&pr.repo))
+        })
+        .find_map(|r| Some((r.prs.line(pr.number)?, r.prs.testing(pr.number))))?;
+    Some(Landing {
+        holding,
         line,
         method: Method::Pr,
     })
