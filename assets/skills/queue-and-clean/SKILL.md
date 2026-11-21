@@ -127,7 +127,7 @@ When no argument was given and `gh pr view` finds no PR for the branch (nor a cl
    - **I'll merge it myself**: reply `queue-and-clean: fail: no PR, and <default> lacks <n> commits`, changing nothing; merging into the default branch is the user's to do.
    - **Leave it**: the same reply, changing nothing.
 
-   **At the round cap.** When a review loop this skill runs (here or in "Land on the default branch") ends at its round cap, it asks its cap question itself; wait on that answer, never starting another loop to get past the cap. **Run 10 more rounds** carries the same loop on, as the loop says. **Land as it is**, offered only for a PR landing, counts as the answer **Open a PR** (or, once the PR is open, the yes to push its commit); `leak-check` still runs as above. **Stop here** ends the landing with `queue-and-clean: fail: review stopped at its round cap with <the findings still open>`.
+   **At the round cap.** When a review loop this skill runs (here or in "Land on the default branch") ends at its round cap, it asks its cap question itself; wait on that answer, never starting another loop to get past the cap. **Run 10 more rounds** carries the same loop on, as the loop says. **Land as it is**, offered only for a PR landing, counts as the answer **Open a PR** (or, once the PR is open, the yes to push its commit). **Stop here** ends the landing with `queue-and-clean: fail: review stopped at its round cap with <the findings still open>`.
 
 ### Land on the default branch
 
