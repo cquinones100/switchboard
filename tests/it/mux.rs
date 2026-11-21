@@ -1436,7 +1436,9 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     });
     // Shown while a box is up, they go under it: the box keeps its keys.
     server.ok(&["press", "palette"]);
-    client.wait_for("the palette", |s| cell_of(s, "SIDE PANEL").is_some());
+    client.wait_for("the palette with its list", |s| {
+        cell_of(s, "action>").is_some() && s.iter().any(|l| l.contains("› "))
+    });
     server.ok(&["look", &shot]);
     client.wait_text("shot.png   tab 1 · ");
     client.type_text("zzqq");
