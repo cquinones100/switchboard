@@ -768,8 +768,22 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
         "`#<n> <severity> <file>:<line> <title>: <what triage did with it>`",
         "The question is one sentence naming the findings still open by number and severity",
         "`reported` (a low left for the report, or a finding for someone else's PR)",
+        "carrying on from the last round's list and never starting again, so no number names two findings",
     ] {
         assert!(report.contains(said), "{said}");
+    }
+    let listing = text
+        .split("## Listing findings\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the listing rule");
+    assert!(listing.contains("one finding a line, never as a paragraph"));
+    assert!(listing.contains("`#<n> <severity> <file>:<line> <title>`"));
+    for said in [
+        "a question per finding, each about that finding alone, never naming or listing another in its text",
+        "the rest in further calls of up to four, one after another, numbered across them (`#5`, `#6`)",
+    ] {
+        assert!(text.contains(said), "{said}");
     }
     assert!(
         regex::Regex::new(r"cap ended the loop with findings still open.*in every tab, with `AskUserQuestion` headed `\[always ask\]`, so hands-free mode")
