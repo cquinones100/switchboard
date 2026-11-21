@@ -1281,15 +1281,22 @@ pub(crate) fn run(
         return Err(refusal);
     }
     let target = target_of(given, &root)?;
+    let making = worktree::Making::before(&root, &path, &branch);
     let start = make_worktree(&root, &path, &branch, "item", target)?;
     *made = true;
-    crate::cmd::clone_build::start(&path);
-    // Without it the item looks unclaimed, and would be offered again.
-    if !worktree::git_ok(&root, &["config", &key, &identity]) {
-        return Err(format!("could not record the item in git config ({key})"));
+    let recorded = (|| {
+        // Without it the item looks unclaimed, and would be offered again.
+        if !worktree::git_config(&root, &[&key, &identity]) {
+            return Err(format!("could not record the item in git config ({key})"));
+        }
+        after_claim(&root, &path, &branch, target)
+    })();
+    if let Err(e) = recorded {
+        making.undo();
+        return Err(e);
     }
     claim(&note_id, &first);
-    after_claim(&root, &path, &branch, target)?;
+    crate::cmd::clone_build::start(&path);
 
     let hands_free = in_hands_free_tab();
     let plan_words = match (&plan, &plan_name) {
@@ -1401,16 +1408,13 @@ pub(crate) fn after_claim(
         .unwrap_or_default()
         .is_empty()
     {
-        worktree::git_ok(
-            root,
-            &["config", &started_key, &crate::util::now_secs().to_string()],
-        );
+        worktree::git_config(root, &[&started_key, &crate::util::now_secs().to_string()]);
     }
     let target_key = format!("branch.{branch}.wtnTarget");
     let recorded_target = match target {
-        Some(t) => worktree::git_ok(root, &["config", &target_key, t]),
+        Some(t) => worktree::git_config(root, &[&target_key, t]),
         None => {
-            worktree::git_ok(root, &["config", "--unset", &target_key]);
+            worktree::git_config(root, &["--unset", &target_key]);
             true
         }
     };

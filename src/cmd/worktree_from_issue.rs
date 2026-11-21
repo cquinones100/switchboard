@@ -250,23 +250,30 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
             &format!("refs/heads/{branch}"),
         ],
     );
+    let making = worktree::Making::before(&root, &path, &branch);
     let start = make_worktree_at(&path, &branch, "issue", start_at)?;
     *made = true;
-    // A branch of that name made before, holding someone else's commits,
-    // would have Claude load what they put there; one cut now has only what
-    // its start has.
-    if reused && let Err(why) = crate::trust::branch_yours_or_listed(&paths::home(), &path) {
-        refused_in_autopilot(&format!("{branch} holds someone else's commits"));
-        return Err(why);
-    }
-    if !worktree::git_ok(&root, &["config", &key, &issue.reference()]) {
-        return Err(format!("could not record the issue in git config ({key})"));
+    let recorded = (|| {
+        // A branch of that name made before, holding someone else's
+        // commits, would have Claude load what they put there; one cut now
+        // has only what its start has.
+        if reused && let Err(why) = crate::trust::branch_yours_or_listed(&paths::home(), &path) {
+            refused_in_autopilot(&format!("{branch} holds someone else's commits"));
+            return Err(why);
+        }
+        if !worktree::git_config(&root, &[&key, &issue.reference()]) {
+            return Err(format!("could not record the issue in git config ({key})"));
+        }
+        after_claim(&root, &path, &branch, target)
+    })();
+    if let Err(e) = recorded {
+        making.undo();
+        return Err(e);
     }
     claim(
         &issues::claim_note(&issue.repo),
         &format!("#{}", issue.number),
     );
-    after_claim(&root, &path, &branch, target)?;
     let in_autopilot = by_autopilot;
     if in_autopilot {
         let _ = crate::mux::socket::ask(&["set", crate::autopilot::ISSUE, &issue.reference()]);
