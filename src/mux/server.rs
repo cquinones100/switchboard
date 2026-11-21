@@ -251,10 +251,6 @@ pub struct Session {
     /// The columns the sidebar takes on the left, its line beside the panes
     /// included; 0 with none (src/sidebar).
     pub sidebar: u16,
-    /// Mission control's own widest width for one view, set by the pane
-    /// resize keys there, kept as a tab's `@lone_width` is (columns, or
-    /// `full`); none to take Settings' `lone_pane_width`.
-    pub mission_width: Option<String>,
     /// The sidebar's own width in columns, its line beside the panes apart,
     /// from a drag of its edge or the pane resize keys while it has the
     /// keys; none to take sidebar.json's. Mission control's list of views
@@ -1835,7 +1831,6 @@ impl Server {
             cols,
             rows,
             sidebar: self.sidebar_columns(cols, None),
-            mission_width: None,
             sidebar_width: None,
         };
         let area = super::layout::capped(session.main_area(), super::layout::lone_width());

@@ -1369,15 +1369,7 @@ impl Server {
         // Its groups and views in a column of its own, beside the tabs
         // sidebar, or where there is no sidebar to list them in.
         m.own_column = settings::is_on("mission_keep_tabs_sidebar") || left <= 1;
-        // Mission control's own width (the resize keys'), else the setting's.
-        m.lone = crate::mux::layout::width_of(
-            self.clients
-                .get(&client)
-                .and_then(|c| self.session(&c.session))
-                .and_then(|s| s.mission_width.as_deref()),
-        );
-        let spread = ratatui::layout::Rect::new(0, 0, cols.saturating_sub(m.view_left()), rows);
-        m.size = (m.view_area(spread).width, rows);
+        m.size = (cols.saturating_sub(m.view_left()), rows);
         if m.view > m.snap.views.len() {
             m.view = 0;
         }
@@ -1399,9 +1391,6 @@ impl Server {
         if reminder_chosen {
             follow_reminder(&mut m);
         }
-        // Laid out again with its item chosen, which a view with a pane
-        // beside its list fills the width for.
-        m.size = (m.view_area(spread).width, rows);
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
         self.slack_board_extras(&mut m);
@@ -2631,20 +2620,6 @@ impl Server {
         // The pane resize keys, once a C-w waiting for its direction has
         // had it.
         if resize_key(&self.bindings, m, k) || resize_key(&self.bindings, m, key) {
-            return;
-        }
-        if let Some(cap) =
-            lone_key(&self.bindings, m, k).or_else(|| lone_key(&self.bindings, m, key))
-        {
-            m.lone = cap;
-            let session = self.clients.get(&client).map(|c| c.session.clone());
-            if let Some(s) = session.and_then(|name| self.session_mut(&name)) {
-                s.mission_width = Some(crate::mux::layout::own_value(cap));
-            }
-            m.note = Some(match cap {
-                Some(n) => format!("Mission control is now {n} columns"),
-                None => "Mission control now fills the width".to_string(),
-            });
             return;
         }
         let mut k = k;
@@ -7017,26 +6992,6 @@ fn nav_resize_key(bindings: &crate::mux::keys::Bindings, m: &Mission, key: Key) 
         return None;
     }
     Some(i32::from(*cells) * if *dir == Direction::Right { 1 } else { -1 })
-}
-
-/// The widest width a pane resize key left or right gives a lone view
-/// (`Mission::lone_view`), whose right edge it moves as it moves a lone
-/// pane's; none when `key` is no such key or the view isn't lone.
-fn lone_key(bindings: &crate::mux::keys::Bindings, m: &Mission, key: Key) -> Option<Option<u16>> {
-    use crate::mux::Direction;
-    let Some(crate::mux::keys::Action::Resize(dir @ (Direction::Left | Direction::Right), cells)) =
-        bindings.root.get(&key)
-    else {
-        return None;
-    };
-    if !m.lone_view() || m.spread_cols == 0 {
-        return None;
-    }
-    let by = i32::from(*cells) * if *dir == Direction::Right { 1 } else { -1 };
-    Some(crate::mux::layout::lone_moved(
-        i32::from(m.size.0) + by,
-        m.spread_cols,
-    ))
 }
 
 /// The pane beside a board's width kept in its file once it was resized and
