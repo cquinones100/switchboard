@@ -1,7 +1,8 @@
-// The phone app (src/phone), boards 164 to 169: the drawer of Claude tabs,
-// Needs you first; a tab's channel of recent turns with the prompt it waits
-// on as a card of buttons; the composer; pairing. Everything shown comes from
-// the computer's own answers and is put on the page as text, never as HTML.
+// The phone app (src/phone), boards 164 to 169 and 173: the drawer of Claude
+// tabs, Needs you first, with its search; a tab's channel of recent turns
+// with the prompt it waits on as a card of buttons; the composer; pairing.
+// Everything shown comes from the computer's own answers and is put on the
+// page as text, never as HTML.
 "use strict";
 
 const app = document.getElementById("app");
@@ -14,6 +15,7 @@ const state = {
   messages: [],
   answered: null, // what was answered last, for the folded card
   draft: "", // what is typed in the composer, kept across the page's redraws
+  search: "", // what is typed in the drawer's search, kept while a tab is open
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   error: "",
 };
@@ -138,11 +140,19 @@ function toast(text) {
   setTimeout(() => t.remove(), 3000);
 }
 
-// ── The drawer (board 164) ──
+// ── The drawer (board 164) and its search (board 173) ──
 
-function groups() {
+// The words typed in the search, case aside.
+const wordsOf = (q) => q.toLowerCase().split(/\s+/).filter(Boolean);
+const holds = (text, words) => words.every((w) => String(text || "").toLowerCase().includes(w));
+// Whether a tab's number, name, repository, branch or what it is doing hold
+// every word typed, as the sidebar's / matches.
+const matches = (tab, words) => holds([tab.index, tab.name, tab.repo, tab.branch, doing(tab)].join(" "), words);
+
+function groups(words) {
   const needs = [], working = [], idle = [];
   for (const t of state.tabs) {
+    if (!matches(t, words || [])) continue;
     if (t.needs) needs.push(t);
     else if (t.state === "working" || t.state === "background") working.push(t);
     else idle.push(t);
@@ -163,10 +173,72 @@ function header(...rest) {
   );
 }
 
-function drawer() {
+// Text with every place a word typed appears lit.
+function lit(text, words) {
+  const on = [...text].map(() => false);
+  const lower = text.toLowerCase();
+  for (const w of words) {
+    for (let i = lower.indexOf(w); i >= 0; i = lower.indexOf(w, i + 1)) {
+      for (let j = i; j < i + w.length; j++) on[j] = true;
+    }
+  }
+  const parts = [];
+  [...text].forEach((c, i) => {
+    const last = parts[parts.length - 1];
+    if (last && last[0] === on[i]) last[1] += c;
+    else parts.push([on[i], c]);
+  });
+  return parts.map(([hit, part]) => (hit ? el("span", { class: "hit" }, part) : part));
+}
+
+// A tab matched by its repository or branch alone says which, under what
+// it is doing.
+function where(tab, words) {
+  if (!words.length || holds([tab.index, tab.name, doing(tab)].join(" "), words)) return null;
+  const by = [["repository ", tab.repo], ["branch ", tab.branch]].filter(([, v]) => v && words.some((w) => v.toLowerCase().includes(w)));
+  return el("span", { class: "sub where-line" }, by.flatMap(([what, v], i) => [i ? " · " : "", el("span", { class: "faint" }, what), ...lit(v, words)]));
+}
+
+// The search box, made once and kept across the drawer's redraws, so what
+// is typed and the keyboard stay while the server's updates come in.
+let searchBox = null;
+function search() {
+  if (searchBox) return searchBox;
+  const field = el("input", { type: "search", placeholder: "Search tabs", autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": "Search tabs" });
+  const clear = el("button", { class: "clear", "aria-label": "Clear the search" }, "×");
+  const sync = () => clear.classList.toggle("shown", state.search !== "");
+  field.addEventListener("input", () => {
+    state.search = field.value;
+    sync();
+    drawer();
+  });
+  clear.addEventListener("click", () => clearSearch());
+  searchBox = el("div", { class: "search" }, el("span", { class: "prompt" }, "›"), field, clear);
+  searchBox.show = () => {
+    if (field.value !== state.search) field.value = state.search;
+    sync();
+  };
+  searchBox.focusField = () => field.focus();
+  return searchBox;
+}
+
+function clearSearch() {
+  state.search = "";
+  drawer();
+  search().focusField();
+}
+
+function drawerList() {
+  const words = wordsOf(state.search);
   const list = el("div", { class: "drawer" + (state.live ? "" : " off") });
-  const all = groups();
-  if (!all.length) list.append(el("div", { class: "empty" }, "No tab is running Claude."));
+  const all = groups(words);
+  if (!state.tabs.length) list.append(el("div", { class: "empty" }, "No tab is running Claude."));
+  else if (!all.length) {
+    list.append(
+      el("div", { class: "empty" }, "No tab matches ", el("b", {}, state.search.trim())),
+      el("button", { class: "big again", onclick: () => clearSearch() }, "Clear the search"),
+    );
+  }
   for (const [name, tone, tabs] of all) {
     const g = el("div", { class: "group" }, el("div", { class: "label " + tone }, el("span", {}, name), el("span", {}, tabs.length)));
     for (const t of tabs) {
@@ -176,22 +248,37 @@ function drawer() {
           "button",
           { class: "row", onclick: () => openTab(number(t)) },
           el("span", { class: "mark " + kind }, m),
-          el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, t.index), t.name),
-          el("span", { class: "sub" }, doing(t)),
+          el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
+          el("span", { class: "sub" }, lit(doing(t), words)),
+          where(t, words),
         ),
       );
     }
     list.append(g);
   }
-  app.replaceChildren(
-    el(
-      "div",
-      { class: "screen" },
-      header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer))),
-      state.live ? null : el("div", { class: "offline-line" }, "Last heard " + ago(state.lastHeard) + " · trying again"),
-      list,
-    ),
-  );
+  return list;
+}
+
+function drawer() {
+  const box = search();
+  box.show();
+  const head = header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)));
+  const offline = el("div", { class: "offline-slot" }, state.live ? null : el("div", { class: "offline-line" }, "Last heard " + ago(state.lastHeard) + " · trying again"));
+  const list = drawerList();
+  const screen = app.querySelector(".screen.drawer-screen");
+  // The drawer already showing: everything but the search box drawn again,
+  // since taking a focused field out of the page closes the keyboard.
+  if (screen && screen.contains(box)) {
+    const old = screen.querySelector(".drawer");
+    const kept = old ? old.scrollTop : 0;
+    screen.querySelector(".head").replaceWith(head);
+    screen.querySelector(".offline-slot").replaceWith(offline);
+    if (old) old.replaceWith(list);
+    else screen.append(list);
+    list.scrollTop = kept;
+    return;
+  }
+  app.replaceChildren(el("div", { class: "screen drawer-screen" }, head, box, offline, list));
 }
 
 // ── A tab's channel (board 165), its prompt card (166) and composer (167) ──
@@ -447,7 +534,7 @@ async function offerPush() {
     if (d && !d.contains(ask)) d.append(ask);
   };
   drawerEnd();
-  new MutationObserver(drawerEnd).observe(app, { childList: true });
+  new MutationObserver(drawerEnd).observe(app, { childList: true, subtree: true });
 }
 
 async function start() {
