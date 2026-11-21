@@ -62,6 +62,9 @@ button {
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
 }
+/* The keyboard covers the home indicator, so its inset would only stand
+   between the composer and the keyboard; iOS keeps the inset either way. */
+.keyboard .screen { padding-bottom: 0; }
 
 /* ── Header ── */
 .head {
@@ -216,7 +219,7 @@ button {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 0 12px;
   border-top: 1px solid var(--line);
   background: var(--bg);
 }
