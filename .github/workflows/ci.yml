@@ -3,8 +3,9 @@
 # the few macOS runners the account has) and main still runs after each
 # merge. The jobs run side by side so a run takes as long as its slowest:
 # the formatting checked; on x86_64 Linux clippy with its warnings as
-# errors (with the net feature and without it, the build that type-checks
-# macOS's paths from Linux) and the tests, in jobs of their own;
+# errors (with the net feature and without it, and without it for Apple
+# silicon, which checks macOS's paths from Linux, below) and the tests, in
+# jobs of their own;
 # and on an Apple silicon Mac a job running the same clippy and building the
 # tests into an archive, whose tests two jobs then run half each: three
 # macOS jobs a run, since the account runs few at once, while the whole
@@ -25,9 +26,18 @@
 # (the merge commit's first parent): light, when every file is
 # documentation (docs/, ARCHITECTURE.md, CLAUDE.md, the READMEs) or a skill
 # (assets/skills/, .claude/skills/), which the code compiles in or the
-# tests read, so the Linux jobs run on them still; full, for anything else,
-# and every push to a merge queue's ci/train-* branch, which adds the three
-# macOS jobs. A push to main is tested when a train's run of this workflow
+# tests read, so the Linux jobs run on them still; full, when a file is one
+# only a Mac checks or one the caches are keyed on (src/platform/, the
+# workflows, Cargo.lock, rust-toolchain.toml, a Cargo.toml, a build.rs,
+# install.sh), which adds the three macOS jobs; and linux for anything else,
+# whose clippy job also runs clippy for macOS's paths from Linux, so a
+# macOS-only compile error or warning still fails the PR, while the macOS tests wait
+# for its train. Every push to a merge queue's ci/train-* branch is full, so
+# nothing the queue merges goes in without the macOS tests having passed on
+# its train, and the macOS runners, of which the account runs few at once,
+# go to trains rather than to every PR's commit. A linux PR merged some
+# other way (GitHub's auto-merge, with the queue off, or its merge button)
+# gets its macOS tests only from the push to main after it. A push to main is tested when a train's run of this workflow
 # that passed in the last day ran on the pushed commit's tree (the queue
 # squash-merges a train's PRs with the heads it tested, so its last merge
 # leaves main on the tree of the train's head), and skips all six jobs, its
@@ -133,7 +143,7 @@ jobs:
           fi
           echo "This tree is the head of a train whose run passed: $url"
           echo "tested=$url" >> "$GITHUB_OUTPUT"
-      - name: Sort the run into light, full or tested
+      - name: Sort the run into light, linux, full or tested
         id: sort
         env:
           TESTED: ${{ steps.train.outputs.tested }}
@@ -153,12 +163,19 @@ jobs:
           kind=light
           while IFS= read -r file; do
             [ -n "$file" ] || continue
-            if ! [[ "$file" == docs/* || "$file" == ARCHITECTURE.md || "$file" == CLAUDE.md \
-              || "$file" == assets/skills/* || "$file" == .claude/skills/* \
-              || "$file" == README.md || "$file" =~ ^crates/[^/]+/README\.md$ ]]; then
+            if [[ "$file" == src/platform/* || "$file" == .github/workflows/* \
+              || "$file" == Cargo.lock || "$file" == rust-toolchain.toml \
+              || "$file" =~ (^|/)Cargo\.toml$ || "$file" =~ (^|/)build\.rs$ \
+              || "$file" == install.sh ]]; then
               echo "$file needs every job"
               kind=full
               break
+            fi
+            if ! [[ "$file" == docs/* || "$file" == ARCHITECTURE.md || "$file" == CLAUDE.md \
+              || "$file" == assets/skills/* || "$file" == .claude/skills/* \
+              || "$file" == README.md || "$file" =~ ^crates/[^/]+/README\.md$ ]]; then
+              [ "$kind" = linux ] || echo "$file needs the Linux jobs"
+              kind=linux
             fi
           done <<< "$files"
           echo "Kind: $kind"
@@ -191,11 +208,25 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: clippy
+          # Named for the Apple target its runs check too, so main's first
+          # run with it saves a cache of its own rather than restoring one
+          # without that target and keeping it.
+          key: clippy-apple
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy without the net feature
         run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
+      - name: Clippy for macOS's paths
+        # A run whose macOS jobs wait for its train still fails on code, or a
+        # warning, that the train's macOS clippy would reject. Without the net
+        # feature, which holds the build's only C, nothing needs a macOS
+        # linker or SDK. main runs it too, so the cache its runs save holds
+        # the Apple target's dependencies for the pull requests that restore
+        # it.
+        if: needs.changes.outputs.kind == 'linux' || github.ref == 'refs/heads/main'
+        run: |
+          rustup target add aarch64-apple-darwin
+          cargo clippy --locked --all-targets --no-default-features --target aarch64-apple-darwin -- -D warnings
 
   test-linux:
     name: Tests (Linux x86_64)
