@@ -21,6 +21,8 @@
 //! - `integrations`: GitHub and Linear over their APIs.
 //! - `trust`: whose code a directory holds: trusted-dirs, your own code,
 //!   and someone else's PR checked out untrusted.
+//! - `dev`: whether a directory, or the running build, is Switchboard's own
+//!   clone, which alone gets what serves developing Switchboard.
 //!
 //! - `facts`: what GitHub and the landing queue say of each tab.
 //! - `items`: what mission control's views list, in one shape for every source.
@@ -102,6 +104,7 @@ pub mod cmd;
 pub mod connector;
 pub mod day;
 pub mod demo;
+pub mod dev;
 pub mod diff;
 pub mod extras;
 pub mod facts;

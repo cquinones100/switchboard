@@ -196,6 +196,17 @@ pub fn entries(
     by_action
 }
 
+/// Leaves out what serves developing Switchboard (M-p's "Restart
+/// Switchboard on the latest main") unless `from_clone`, the running build
+/// having been made from Switchboard's clone (`dev::build_is_from_clone`):
+/// a release build has no clone to build, `switchboard update` offering its
+/// own restart.
+pub fn for_this_build(entries: &mut Vec<Entry>, from_clone: bool) {
+    if !from_clone {
+        entries.retain(|e| e.action != Action::Upgrade);
+    }
+}
+
 /// While autopilot works `note` (its path), its command's words say what
 /// picking it does then: show the mode's board, whose `m` changes or stops
 /// it, after the command's name, so typing the name still finds it. Its
@@ -407,6 +418,21 @@ mod tests {
         assert_eq!(shown_key("M-b W"), "M-b S-W");
         assert_eq!(shown_key("M-["), "M-[");
         assert_eq!(shown_key("M-S-Left"), "M-S-Left");
+    }
+
+    #[test]
+    fn the_restart_is_listed_only_on_a_build_from_switchboard_s_clone() {
+        let restart = |from_clone: bool| {
+            let mut all = entries(&Bindings::default(), true, true, &[]);
+            let before = all.len();
+            for_this_build(&mut all, from_clone);
+            (
+                all.iter().any(|e| e.action == Action::Upgrade),
+                before - all.len(),
+            )
+        };
+        assert_eq!(restart(true), (true, 0));
+        assert_eq!(restart(false), (false, 1));
     }
 
     #[test]

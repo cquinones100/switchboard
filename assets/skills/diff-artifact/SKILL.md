@@ -33,7 +33,6 @@ Read everything the page holds before publishing it: its words are the story's M
 
 1. **The plan note's words.** Run `switchboard show @tab_plan_note`, and `switchboard show @tab_note` for the tab's note. When either names a note, read it (in `~/Notes/`, or `$NOTES_DIR`) and find the page's sentences that carry its words (the story may have been told from the plan, with Settings' `diff_story_plan` on). A note is the user's: quote each such sentence.
 2. **Secrets and tokens in the hunks**: keys, tokens, passwords, connection strings, private keys, `.env` values.
-3. **What `switchboard leak-check` would flag**: run `switchboard leak-check <merge-base>..HEAD` of the branch against its base (`git merge-base HEAD <base>`, the base its PR has, else the default branch), and read the page itself for the same kinds the check finds (the words in `~/.config/switchboard/leak-check.txt`, ticket IDs, PR numbers, home paths like `/Users/<name>`, email addresses, token shapes).
 
 Show the user what was found, numbered, one line each with where it is in the page, or say that nothing was, and wait for their word. Publish only after their yes; take out or change what they ask first. A question unanswered is a no.
 

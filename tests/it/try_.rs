@@ -53,6 +53,17 @@ impl Setup {
         write(&wt.join("assets/skills/wt/SKILL.md"), "the worktree's wt\n");
         write(&wt.join("src/mux/mod.rs"), "\n");
         git(&wt, &["init", "-q"]);
+        // Switchboard's clone has GitHub's switchboard as its origin
+        // (src/dev.rs).
+        git(
+            &wt,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/o/switchboard.git",
+            ],
+        );
         git(&wt, &["config", "user.email", "me@example.com"]);
         git(&wt, &["config", "user.name", "Me"]);
         git(&wt, &["add", "."]);

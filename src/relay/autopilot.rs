@@ -312,11 +312,18 @@ pub fn form(shown: &Shown) -> Value {
             switch(
                 "land",
                 "Land without asking",
-                if mode.source() == Ok(crate::autopilot::mode::Sources::Issues) {
-                    // Slack's option descriptions hold 75 characters.
-                    "Pushes after tests, reviews and leak-check; closes landed issues."
-                } else {
-                    "Pushes once tests, two clean reviews and leak-check pass."
+                // Slack's option descriptions hold 75 characters; leak-check
+                // runs in Switchboard's clone alone (src/dev.rs).
+                match (
+                    mode.source() == Ok(crate::autopilot::mode::Sources::Issues),
+                    crate::dev::is_switchboard_clone(&mode.repo),
+                ) {
+                    (true, true) => {
+                        "Pushes after tests, reviews and leak-check; closes landed issues."
+                    }
+                    (true, false) => "Pushes after tests and reviews; closes landed issues.",
+                    (false, true) => "Pushes once tests, two clean reviews and leak-check pass.",
+                    (false, false) => "Pushes once tests and two clean reviews pass.",
                 },
             ),
         ),

@@ -401,17 +401,11 @@ fn shape_files_where_the_repository_keeps_its_work_and_only_you_start_it() {
         assert!(source.contains(rule), "Where it goes: {rule}");
     }
     let github = section(text, "GitHub issues");
-    let leak = github
-        .find("switchboard leak-check --file")
-        .expect("the issue is checked as a file");
     let asked = github
         .find("**Create it on <owner/name>** or **Not yet**")
-        .expect("and asked about, since it is public");
+        .expect("asked about, since it is public");
     let created = github.find("gh issue create").expect("then created");
-    assert!(
-        leak < asked && asked < created,
-        "checked, asked, then created"
-    );
+    assert!(asked < created, "asked, then created");
     assert!(github.contains("--assignee @me [--label '<label>']"));
     assert!(github.contains("closed in the last 90 days"));
 }
@@ -491,12 +485,10 @@ fn shape_hands_what_it_files_to_the_review_loop_s_ticket_mode() {
             "{name}: a ticket's review needs no clean tree"
         );
     }
-    // Nothing is written to the ticket before a yes, and a public issue is
-    // checked first.
-    let leak = mode.find("switchboard leak-check --file").unwrap();
+    // Nothing is written to the ticket before a yes.
     let asked = mode.find("**Save it to the issue**").unwrap();
     let edited = mode.find("gh issue edit").unwrap();
-    assert!(leak < asked && asked < edited, "checked, asked, then saved");
+    assert!(asked < edited, "asked, then saved");
     assert!(mode.contains("switchboard codex-review --ticket <file> --round start"));
 }
 
@@ -578,9 +570,9 @@ fn no_skill_names_the_skill_wt_took_the_place_of() {
 
 // test/skills.test.js's "a tab of autopilot lands without asking
 // only once leak-check finds nothing, and its review loop fixes mediums
-// without asking".
+// without asking", leak-check now Switchboard's own repository's alone.
 #[test]
-fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds_nothing() {
+fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_reviewed_clean() {
     let all = skills();
     let text = |name: &str| {
         all.iter()
@@ -598,13 +590,9 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
     };
     let check = "switchboard show @land";
     let step7 = step("7. **Ask before pushing**");
-    let leak = step7
-        .find("switchboard leak-check <base>..HEAD")
-        .expect("step 7 runs leak-check");
-    let reads = step7.find(check).expect("step 7 reads the tab's switch");
-    assert!(leak < reads, "leak-check runs first");
+    assert!(step7.contains(check), "step 7 reads the tab's switch");
     assert!(
-        regex::Regex::new(r"`leak-check` exited 0, the landing ran both the tests and the review loop .*two clean rounds of this very change .*take the answer as \*\*Push to <name>\*\* without asking")
+        regex::Regex::new(r"the landing ran both the tests and the review loop .*two clean rounds of this very change .*take the answer as \*\*Push to <name>\*\* without asking")
             .unwrap()
             .is_match(&step7),
         "{step7}"
@@ -683,7 +671,6 @@ fn a_landing_runs_its_tests_through_land_lock_test_which_pushes_and_deletes_its_
         "`canceled in CI …` (exit 8)",
         "- `canceled in CI <sha> <run id> <job names>`: nothing failed, but the run was canceled",
         "it prints `passed in CI before, run <id>` above `passed`",
-        "`switchboard leak-check <base>..HEAD` first",
         "deletes the branch again on every way out, an interrupt included",
         "**Push to ci/land-<id>**, which runs it again with `--leak-ok`",
         "**Run them here**, which runs it again with `--here`",
@@ -888,6 +875,56 @@ fn review_pr_runs_none_of_the_prs_code_outside_the_sealed_try() {
     }
 }
 
+// leak-check is a rule of Switchboard's own repository: no shipped skill
+// runs it, and its project skill says where they used to.
+#[test]
+fn only_switchboard_s_own_project_skill_runs_leak_check() {
+    let shipped = skills();
+    for name in [
+        "queue-and-clean",
+        "review-loop",
+        "shape",
+        "diff-artifact",
+        "ci-loop",
+    ] {
+        let (_, text) = shipped.iter().find(|(n, _)| n == name).unwrap();
+        assert!(
+            !text.contains("switchboard leak-check"),
+            "{name} runs leak-check"
+        );
+    }
+    let mode =
+        fs::read_to_string(skills_dir().join("review-loop/references/ticket-mode.md")).unwrap();
+    assert!(!mode.contains("leak-check"), "ticket mode runs leak-check");
+    let own = project_skills();
+    let (_, text) = own.iter().find(|(n, _)| n == "leak-check").unwrap();
+    for said in [
+        "`switchboard leak-check <base>..HEAD`",
+        "`switchboard leak-check --file <file>`",
+        "`[always ask]`",
+    ] {
+        assert!(text.contains(said), "{said}");
+    }
+}
+
+// /shape is shipped to every repository, so it names no file of
+// Switchboard's; this repository's CLAUDE.md holds its rules.
+#[test]
+fn shape_names_no_file_of_switchboard_s() {
+    let shipped = skills();
+    let (_, text) = shipped.iter().find(|(n, _)| n == "shape").unwrap();
+    for file in [
+        "assets/settings.json",
+        "src/mux/keys.rs",
+        "docs/guide.md",
+        "ARCHITECTURE.md",
+        "Switchboard's own repository",
+    ] {
+        assert!(!text.contains(file), "shape names {file}");
+    }
+    assert!(text.contains("The plan follows the repository's `CLAUDE.md` and the user's."));
+}
+
 #[test]
 fn push_unreviewed_only_puts_the_push_on_your_clipboard() {
     let all = project_skills();
@@ -1068,7 +1105,6 @@ fn diff_artifact_tells_no_story_of_its_own_and_publishes_only_after_a_yes() {
     assert!(text.contains("No story told for this change yet"));
     assert!(text.contains("never tell a story of your own"));
     assert!(text.contains("`switchboard show @tab_plan_note`"));
-    assert!(text.contains("`switchboard leak-check"));
     assert!(text.contains("Publish only after their yes"));
     assert!(text.contains("never share it further"));
     assert!(text.contains("Never a link to GitHub or the PR in place of a hunk"));

@@ -13,7 +13,8 @@
 //! the change needs nothing. queue-and-clean runs it after a landing and
 //! offers what it lists (the `apply_after_landing` setting).
 //!
-//! In Switchboard (`~/switchboard`, by its real path), its own list: a
+//! In your own clone of Switchboard (`dev::is_switchboard_clone`, at
+//! `~/switchboard` by its real path), its own list: a
 //! change to the code (`src/`, `assets/`, the build's files) is built and
 //! put in place of the running binary (`switchboard apply install`), then
 //! the Slack relay restarted while it runs (`switchboard apply relay`),
@@ -76,7 +77,7 @@ pub struct Context {
     /// The files the range changed, and those it added, as git names them.
     pub changed: Vec<String>,
     pub added: Vec<String>,
-    /// Whether `repo` is your own clone of Switchboard, `~/switchboard`.
+    /// Whether `repo` is your own clone of Switchboard (`is_own_switchboard`).
     pub switchboard: bool,
     /// Whether the running binary is a release's.
     pub release: bool,
@@ -395,13 +396,6 @@ pub fn actions(cx: &Context) -> Vec<Action> {
     list.0
 }
 
-/// Whether `dir` is your own clone of Switchboard: `~/switchboard`, by its
-/// real path, so another repository shaped like it never counts.
-pub fn is_switchboard(dir: &Path) -> bool {
-    let own = paths::home_join("switchboard").canonicalize();
-    matches!((dir.canonicalize(), own), (Ok(a), Ok(b)) if a == b)
-}
-
 fn names(repo: &Path, from: &str, to: &str, added: bool) -> Result<Vec<String>, String> {
     let from = commit_of(repo, from)?;
     let to = commit_of(repo, to)?;
@@ -466,6 +460,16 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
+/// Whether `repo` is your own clone of Switchboard: Switchboard's clone
+/// (`dev::is_switchboard_clone`) at `~/switchboard`, by its real path. Only
+/// it gets Switchboard's list and is built, or has its scripts offered,
+/// without trusted-dirs: a fork's clone elsewhere looks the same to `dev`,
+/// and its origin's branches would pass as yours.
+fn is_own_switchboard(repo: &Path) -> bool {
+    let own = paths::home_join("switchboard").canonicalize().ok();
+    own.is_some() && repo.canonicalize().ok() == own && crate::dev::is_switchboard_clone(repo)
+}
+
 /// What the range `<from>..<to>` of the clone `repo` needs to take effect,
 /// as `switchboard apply-actions` lists it, which `land-lock autolanded
 /// --apply-range` reads too.
@@ -474,7 +478,7 @@ pub fn for_range(repo: &Path, from: &str, to: &str) -> Result<Vec<Action>, Strin
     let changed = names(&repo, from, to, false)?;
     let added = names(&repo, from, to, true)?;
     let cx = Context {
-        switchboard: is_switchboard(&repo),
+        switchboard: is_own_switchboard(&repo),
         release: update::is_release_build(),
         relay: crate::relay::cli::running(&crate::relay::Paths::current()),
         trusted: crate::trust::trusted(&paths::home(), &repo),
@@ -518,7 +522,8 @@ pub fn apply_main(args: Vec<String>) -> ExitCode {
 }
 
 /// Builds the clone, puts the build in place of the running binary and runs
-/// its setup's refresh. Only your own clone (`~/switchboard`, holding
+/// its setup's refresh. Only Switchboard's clone at `~/switchboard` (by its real path, and
+/// `dev::is_switchboard_clone`), holding
 /// only your own commits, as `switchboard try` asks, and no change no
 /// commit holds), or one in
 /// trusted-dirs, since a build runs the clone's code, and never someone
@@ -535,7 +540,7 @@ fn install(repo: &Path) -> Result<String, String> {
             paths::tilde(&repo)
         ));
     }
-    if is_switchboard(&repo) {
+    if is_own_switchboard(&repo) {
         crate::trust::yours_or_listed(&paths::home(), &repo)
             .map_err(|why| format!("{why}; so its code isn't built"))?;
         // A teammate's branch fetched from origin passes that check, which
@@ -571,7 +576,7 @@ fn install(repo: &Path) -> Result<String, String> {
         }
     } else if !crate::trust::trusted(&paths::home(), &repo) {
         return Err(format!(
-            "{} is neither ~/switchboard nor in ~/.config/switchboard/trusted-dirs, so its code isn't built",
+            "{} is neither Switchboard's clone at ~/switchboard nor in ~/.config/switchboard/trusted-dirs, so its code isn't built",
             paths::tilde(&repo)
         ));
     }

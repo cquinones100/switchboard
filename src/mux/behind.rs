@@ -7,7 +7,8 @@
 //! The binary knows the commit it was built from (build.rs's
 //! `SWITCHBOARD_COMMIT`) and the main clone it belongs to (`latest::checkout`,
 //! only a main clone: a release build, or one told to build a checkout as it
-//! is, has no main to fall behind). The commits on the clone's
+//! is, has no main to fall behind; nor does one whose clone isn't
+//! Switchboard's, `dev::build_is_from_clone`). The commits on the clone's
 //! `origin/<default>` (else its local default branch) that the build lacks
 //! are counted with git, off the server's task: as the server starts, once
 //! an hour on its tick, and whenever a tab says it landed (`land-lock
@@ -137,10 +138,10 @@ impl Server {
     pub fn behind_check(&mut self) {
         self.upgrade.behind.asked = Some(Instant::now());
         let clone = super::latest::checkout()
-            .filter(|c| c.main_clone)
+            .filter(|c| c.main_clone && crate::dev::build_is_from_clone())
             .map(|c| c.dir);
-        // Nothing to count (the setting off, a release build, no commit
-        // known) is an answer too: none, so a notification an earlier build
+        // Nothing to count (the setting off, a release build or one made
+        // from a clone that isn't Switchboard's, no commit known) is an answer too: none, so a notification an earlier build
         // gave goes.
         let (Some(clone), Some(commit), true) = (clone, built_from(), settings::is_on(SETTING))
         else {

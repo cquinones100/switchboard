@@ -25,7 +25,8 @@
 //! every tick. A stage nothing says
 //! anything of yet is a dim "waiting" cell: the tests and the review while
 //! the tab works and no phase names them, the leak check until the lock is
-//! asked for, and closing while the tab is open. The next items are the
+//! asked for ("not run" outside Switchboard's clone, where none runs,
+//! src/dev.rs), and closing while the tab is open. The next items are the
 //! queue the mode last read for its line (`Pilot::next`), off the server's
 //! task, never read here; the plan each item links was read with them, and
 //! goes on its card for the side panel to show under its stages. Each row
@@ -132,6 +133,9 @@ pub struct Row {
     pub phases: Vec<(String, i64)>,
     /// Now, in seconds, for the time of a stage still running.
     pub now: i64,
+    /// Whether its repository is Switchboard's clone (src/dev.rs), the one
+    /// place a landing runs leak-check; elsewhere the stage reads "not run".
+    pub leak_checked: bool,
 }
 
 /// An option's time in seconds, none when unset or zero.
@@ -238,8 +242,17 @@ fn timed(mut cells: [Cell; 8], r: &Row) -> [Cell; 8] {
     cells
 }
 
-/// A tab's eight stages' cells, without their times.
+/// A tab's eight stages' cells, without their times: the leak check's
+/// "not run" outside Switchboard's clone, whatever stage the tab is at.
 fn cells(r: &Row) -> [Cell; 8] {
+    let mut out = stage_cells(r);
+    if !r.leak_checked {
+        out[4] = ("waiting", "not run".into());
+    }
+    out
+}
+
+fn stage_cells(r: &Row) -> [Cell; 8] {
     let mut out: [Cell; 8] = std::array::from_fn(|_| waiting());
     let phase = r.phase.as_deref().unwrap_or("");
     out[0] = if r.was_in || r.left {
@@ -276,7 +289,11 @@ fn cells(r: &Row) -> [Cell; 8] {
         let holding = l.get("holding").and_then(Value::as_bool) == Some(true);
         out[2] = done("passed");
         out[3] = done("clean");
-        out[4] = done("none");
+        out[4] = if l["record"]["leak"]["skipped"] == true {
+            ("waiting", "not run".into())
+        } else {
+            done("none")
+        };
         if !holding {
             let place = l.get("place").and_then(Value::as_u64).unwrap_or(1);
             out[5] = ("queued", format!("{place} in line"));
@@ -356,7 +373,10 @@ pub fn column(r: &Row, stages: &[Cell; 8]) -> usize {
 
 /// How many of a tab's stages are done.
 pub fn progress(stages: &[Cell; 8]) -> usize {
-    stages.iter().filter(|c| c.0 == "done").count()
+    // A leak check not run (outside Switchboard's clone) counts once the
+    // lock after it is done, so a landed card's meter fills.
+    let skipped = stages[4].1 == "not run" && stages[5].0 == "done";
+    stages.iter().filter(|c| c.0 == "done").count() + usize::from(skipped)
 }
 
 /// The dim note under a tab's item: its tab, and where it is in words.
@@ -766,6 +786,7 @@ mod tests {
             ended: None,
             phases: Vec::new(),
             now: 0,
+            leak_checked: true,
         }
     }
 
@@ -803,6 +824,21 @@ mod tests {
         assert_eq!(s[1], done("done"));
         assert_eq!(s[4], done("none"));
         assert_eq!(s[5], done("held"));
+        // Outside Switchboard's clone no leak-check runs.
+        r.landing = Some(json!({
+            "holding": true,
+            "phase": "pushing",
+            "record": { "leak": { "skipped": true } },
+        }));
+        assert_eq!(stages(&r)[4], ("waiting", "not run".to_string()));
+        // Nor for a tab that landed there, or hasn't reached the lock.
+        let mut landed = r.clone();
+        landed.landing = None;
+        landed.left = true;
+        landed.leak_checked = false;
+        assert_eq!(stages(&landed)[4], ("waiting", "not run".to_string()));
+        assert_eq!(progress(&stages(&landed)), 7, "every stage but closing");
+        r.landing = Some(json!({ "holding": true, "phase": "pushing" }));
         assert_eq!(s[6], ("running", "pushing…".to_string()));
         r.landing = Some(json!({ "holding": false, "place": 2 }));
         assert_eq!(stages(&r)[5], ("queued", "2 in line".to_string()));

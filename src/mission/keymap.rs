@@ -192,6 +192,7 @@ fn shared_keys(bindings: &Bindings, e: &palette::Entry) -> Vec<String> {
 /// key is bound to, under "Through M-p".
 fn workspace(bindings: &Bindings, shown: Shown, counts: &HashMap<String, u64>) -> Vec<Item> {
     let mut entries = palette::entries(bindings, shown.github, shown.linear, &[]);
+    palette::for_this_build(&mut entries, crate::dev::build_is_from_clone());
     // M-p itself, which the palette leaves out of its own list.
     if let Some((words, tags)) = Action::Palette.palette_note() {
         entries.push(palette::Entry {

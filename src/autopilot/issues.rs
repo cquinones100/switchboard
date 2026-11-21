@@ -1255,17 +1255,23 @@ pub fn leaks_in(lines: &[String], words: &[String]) -> Vec<String> {
 /// body gets the lines under `## Decided hands-free`, and one comment names
 /// them; nothing when the body has them all already, the issue is closed,
 /// or `still` (the source turned off meanwhile) is false. Claude wrote the
-/// lines, so they are checked as a push is (`leaks_in`) and refused, nothing
-/// written, when they hold anything that may identify you.
+/// lines, so in Switchboard's clone (`scan`, src/dev.rs) they are checked as
+/// a push is (`leaks_in`) and refused, nothing written, when they hold
+/// anything that may identify you.
 pub async fn write_decided(
     repo: &Repo,
     number: u64,
     lines: &[String],
+    scan: bool,
     still: impl Fn() -> bool,
 ) -> Result<()> {
-    let words = crate::cmd::leak_check::read_words(&crate::cmd::leak_check::words_file())
-        .map_err(|e| anyhow!(e))?;
-    let leaks = leaks_in(lines, &words);
+    let leaks = if scan {
+        let words = crate::cmd::leak_check::read_words(&crate::cmd::leak_check::words_file())
+            .map_err(|e| anyhow!(e))?;
+        leaks_in(lines, &words)
+    } else {
+        Vec::new()
+    };
     if !leaks.is_empty() {
         return Err(anyhow!(
             "left a hands-free decision off it, since leak-check found {}",

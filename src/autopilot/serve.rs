@@ -1432,7 +1432,10 @@ impl Server {
         let question = if fields.hands_free && !was.hands_free {
             Some((line::hands_free_question(), Part::HandsFree))
         } else if lands(&fields) && !lands(&was) {
-            Some((line::land_question(), Part::Land))
+            Some((
+                line::land_question(crate::dev::is_switchboard_clone(&fields.repo_path())),
+                Part::Land,
+            ))
         } else if lands(&fields)
             && (!self.autopilot.mode.on || fields.repo.trim() != was.repo.trim())
             && mode::source_of(&fields.repo_path()) == Ok(Sources::Issues)
@@ -1780,7 +1783,9 @@ impl Server {
             }
             // Asked first, naming what it skips and keeps; no is no.
             Act::LandWithoutAsking => {
-                let (question, list) = line::land_question();
+                let (question, list) = line::land_question(crate::dev::is_switchboard_clone(
+                    &self.autopilot.mode.repo,
+                ));
                 self.ask(
                     client,
                     crate::ui::Confirm::new(question).list(list),
@@ -1953,6 +1958,7 @@ impl Server {
             opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
         };
         let mut rows = Vec::new();
+        let leak_checked = crate::dev::is_switchboard_clone_remembered(&self.autopilot.mode.repo);
         let mut open = std::collections::HashSet::new();
         for model in self.sidebar_all_tabs() {
             let Some(tab) = self.tabs.get(&model.id) else {
@@ -2007,6 +2013,7 @@ impl Server {
                     .map(|a| a.phases.clone())
                     .unwrap_or_default(),
                 now: util::now_secs(),
+                leak_checked,
             });
         }
         let now = util::now_ms();
@@ -2036,6 +2043,7 @@ impl Server {
                 ended,
                 phases: Vec::new(),
                 now: util::now_secs(),
+                leak_checked,
             });
         }
         rows
@@ -2714,7 +2722,9 @@ impl Server {
     /// `issue` names (`<owner>/<repo>#<n>`), as `Decided hands-free` lines,
     /// written to it off the task without asking (`issues::write_decided`),
     /// only while autopilot takes issues, checked again before each write.
-    /// A failure is said in the notifications.
+    /// A failure is said in the notifications. The lines are leak-checked
+    /// first when the mode's repository, whose issues these are, is
+    /// Switchboard's clone (src/dev.rs), never by where Claude's shell is.
     pub(crate) fn autopilot_write_decided(&mut self, issue: &str, lines: Vec<String>) {
         let Some((repo, number)) = super::issues::parse_reference(issue) else {
             return;
@@ -2726,8 +2736,10 @@ impl Server {
             return;
         }
         let issue = issue.to_string();
+        let repo_dir = self.autopilot.mode.repo.clone();
         tokio::spawn(async move {
-            let done = super::issues::write_decided(&repo, number, &lines, || {
+            let scan = crate::dev::is_switchboard_clone(&repo_dir);
+            let done = super::issues::write_decided(&repo, number, &lines, scan, || {
                 Mode::read(&paths::state_dir()).takes_issues()
             })
             .await;

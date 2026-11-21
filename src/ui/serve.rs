@@ -1089,6 +1089,7 @@ impl Server {
             on("linear"),
             &self.plugin_views(),
         );
+        palette::for_this_build(&mut entries, crate::dev::build_is_from_clone());
         let listed = self.diff_palette(client);
         entries.retain(|e| listed(&e.action));
         // Reviewing a contributor's PR only in a repository with the skill.

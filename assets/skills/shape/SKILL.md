@@ -100,7 +100,7 @@ Then run the steps for the item and for each sub-item together: step 2 checks ea
 
 ## GitHub issues
 
-The issue goes on `origin`'s repository, which is public for an open-source project, so nothing is posted before the user's yes and a clean check for what identifies them. Read GitHub with `gh`, from the repository.
+The issue goes on `origin`'s repository, which is public for an open-source project, so nothing is posted before the user's yes. Read GitHub with `gh`, from the repository.
 
 1. **Check whether an issue already covers it.** Before reading any code, search the repository's open issues, and those closed in the last 90 days, by the description's key words (`gh issue list --state open --search '<words>' --json number,title,state,url`, then `--state closed` with `closed:>=<the date 90 days ago>` added to the search). An issue covers it when it is about the same change, not merely the same area. If one or more do, show each (its number, title, state and link, and a line on why it matches) and ask with `AskUserQuestion` whether one of them is it, with an option per issue, up to three, and **Shape a new issue** last. Choosing one ends here: offer `/wt #<number>` to start it. If nothing covers it, say so in a line and go on.
 
@@ -110,7 +110,7 @@ The issue goes on `origin`'s repository, which is public for an open-source proj
 
 4. **Draft.** Show the full issue as the Linear step 7 drafts a ticket: its title, `BUG: ` and what is broken or `FEAT: ` and what to build when the repository's issues are titled so, and its body, which autopilot and `/wt` build from as its plan. Link the related issues by their URLs. Then wait for the user's approval or edits. Revise until they approve.
 
-5. **Check it before it is public.** Once approved, write the body to `issue.md` and the title to `title.txt` in your scratchpad directory, and run `switchboard leak-check --file <file>` on each: it prints anything that may identify the user or their employer (the words in `~/.config/switchboard/leak-check.txt`, ticket IDs, PR numbers, home paths, email addresses, tokens), exits 1 when it finds any and 2 when it can't look. Then read both by eye for the same, and for organization or company names, internal hosts and usernames. Fix what you agree with in the files and run it again; show anything left, or that it couldn't look, and wait for the user to say what to do.
+5. **Write it out.** Once approved, write the body to `issue.md` and the title to `title.txt` in your scratchpad directory.
 
 6. **Create it.** Ask with `AskUserQuestion`, the issue's title in the question, **Create it on <owner/name>** or **Not yet**, since it is public. When `switchboard tickets` named autopilot's label, check first that the repository has it (`gh label list --search '<label>' --json name`, an exact name in the answer); when it hasn't, ask in the same question instead: **Create the label and the issue** (`gh label create '<label>'` first), **Create the issue without the label** (autopilot won't take it), or **Not yet**. On a yes, create it on `origin`, assigned to the user, with autopilot's label when it is there, so autopilot takes it:
 
@@ -172,7 +172,7 @@ The work is one item in the tab's note, as a checklist line, with a plan note be
    - A choice that waits on the user's review of a design board names its boards by number in its option (`build it as boards 69 and 70 draw it, once they are reviewed`): autopilot holds such an item, hands-free or not, until the choice is ticked.
    - When the options differ in how something looks, indent under each a fenced block opened with ```` ```mock ````: a few lines of what it would look like drawn in text, which Notes draws inside the option's card beside the note.
    - The steps are numbered and concrete, naming files and functions. The last ones are always the docs and the tests the change needs (which files, and what each test checks), and whatever else the repository's `CLAUDE.md` asks every change to have.
-   - The plan follows the repository's `CLAUDE.md` and the user's. In Switchboard's own repository that means: a new feature gets a setting (in `assets/settings.json`, on by default unless it sends something of yours somewhere, or "No setting" and why), a new key an `Action` in `src/mux/keys.rs` or a part's `Command` with `about()` and its tags (so `M-p` lists it), anything that takes a choice a click and a Tab stop, what it says goes through `Server::say`, nothing on the drawing path starts a process or waits on the network, and the docs are `README.md`, `docs/guide.md`, `ARCHITECTURE.md` and `CLAUDE.md`, whichever the change reaches.
+   - The plan follows the repository's `CLAUDE.md` and the user's.
    - Write it as the user's rules say: changes as instructions, current behavior only under `## Today`, no rejected alternatives, no future notes, and no self-corrections or thinking aloud. Write each step as decided.
 
 6. **The item**, only once its plan note is written, since autopilot can take an item as soon as it is in the note. One `- [ ]` line, its first line the item's title, a bug or a feature, in one sentence under 90 characters, in the user's words where they fit:

@@ -278,16 +278,6 @@ pub fn socket_of(home: &Path) -> PathBuf {
     home.join(".local/state/switchboard/sock")
 }
 
-/// Whether a directory is a clone of Switchboard's Rust version: its
-/// Cargo.toml names the package, and the skills and server are beside it.
-pub fn is_switchboard(dir: &Path) -> bool {
-    let named = util::read_text(dir.join("Cargo.toml")).is_some_and(|toml| {
-        toml.lines()
-            .any(|l| l.replace(' ', "") == "name=\"switchboard\"")
-    });
-    named && dir.join("assets/skills").is_dir() && dir.join("src/mux").is_dir()
-}
-
 // ── Starting a try ──────────────────────────────────────────────────────────
 
 fn start(mode: Mode, target: Option<&Path>) -> Result<ExitCode> {
@@ -301,7 +291,7 @@ fn start(mode: Mode, target: Option<&Path>) -> Result<ExitCode> {
     let wt = PathBuf::from(top)
         .canonicalize()
         .context("the worktree can't be read")?;
-    if !is_switchboard(&wt) {
+    if !crate::dev::is_switchboard_clone(&wt) {
         bail!("{} isn't a Switchboard clone", wt.display());
     }
     // Refused before anything is built: attached inside one of
