@@ -2,8 +2,9 @@
 //! phone` asks of it over the socket, `prompt` (a Claude pane's waiting
 //! prompt as JSON), `answer` (an option pressed, or a message typed, in a
 //! Claude pane) and `watch` (every Claude tab's state and last turn,
-//! streamed as a line of JSON each time they change), and the
-//! notifications that say what your phone did.
+//! streamed as a line of JSON each time they change), and the server's
+//! log's line for what your phone did, with no notification, since the tab
+//! itself shows it.
 //!
 //! A prompt is read and answered with mission control's own reader and
 //! keys (`mission::answer`), the ones the Slack relay uses, so the phone
@@ -23,7 +24,6 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::items::{Item, Target};
 use crate::mission::answer::{self, Prompt};
 use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
@@ -31,14 +31,10 @@ use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{Rules, by_need, needs_tab};
 use crate::util;
 
-/// The notifications' source: what your phone did.
-pub const SOURCE: &str = "phone";
-/// How many of them are kept.
-const KEEP: usize = 20;
 /// How long after a change `watch` waits before it sends, so a burst of
 /// changes goes as one.
 const SETTLE: Duration = Duration::from_millis(250);
-/// The longest a message's words run in a notification.
+/// The longest a message's words run in the log's line.
 const SAID_WIDTH: usize = 80;
 
 /// The phone's watchers and what they were last sent.
@@ -70,7 +66,7 @@ pub fn prompt_json(found: &Prompt) -> Value {
     })
 }
 
-/// What a message said, cut to fit a notification.
+/// What a message said, cut to fit the log's line.
 fn short(text: &str) -> String {
     let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if line.chars().count() <= SAID_WIDTH {
@@ -137,8 +133,7 @@ impl Server {
     /// a Claude that shows none. `expect`, the prompt's id as `prompt` gave
     /// it (the relay's hash of its question and options), refuses an answer
     /// meant for a prompt no longer showing, so a tap on a card a moment old
-    /// never answers the next question. `from` names who asked, for the log
-    /// and the notifications.
+    /// never answers the next question. `from` names who asked, for the log.
     pub(crate) fn phone_answer(
         &mut self,
         pane: PaneId,
@@ -200,8 +195,9 @@ impl Server {
     }
 
     /// Something done from elsewhere (`from`, the phone), written in the
-    /// server's log and kept as a notification, newest first.
-    pub(crate) fn phone_did(&mut self, from: &str, tab: TabId, what: &str) {
+    /// server's log alone: no notification, since the tab shows what was
+    /// done there.
+    pub(crate) fn phone_did(&self, from: &str, tab: TabId, what: &str) {
         let n = self.tab_number(tab);
         let name = self
             .tabs
@@ -209,21 +205,6 @@ impl Server {
             .map(|t| t.display_name().to_string())
             .unwrap_or_default();
         eprintln!("switchboard server: from your {from}: tab {n} ({name}): {what}");
-        let now = util::now_ms();
-        let mut items = self.notices.get(SOURCE).cloned().unwrap_or_default();
-        items.insert(
-            0,
-            Item {
-                id: format!("phone:{now}:{tab}"),
-                title: format!("Phone: {what}"),
-                detail: format!("Tab {n} · {name}"),
-                time: Some(now),
-                target: Target::Tab(tab),
-                ..Default::default()
-            },
-        );
-        items.truncate(KEEP);
-        self.set_notices(SOURCE, items);
     }
 
     /// `phone-pair`: a box asking you to type the code `device` shows
@@ -283,13 +264,6 @@ impl Server {
                 let _ = child.wait().await;
             });
         }
-    }
-
-    /// A phone notification put away.
-    pub(crate) fn phone_dismiss(&mut self, item: &Item) {
-        let mut items = self.notices.get(SOURCE).cloned().unwrap_or_default();
-        items.retain(|i| i.id != item.id);
-        self.set_notices(SOURCE, items);
     }
 
     /// `watch`: the connection kept, sent the Claude tabs now and each time

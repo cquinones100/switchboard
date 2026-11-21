@@ -41,9 +41,9 @@ pub const MARK: &str = "@notices_window";
 /// for you, the Linear inbox, your PRs' news, a default branch whose CI fails, the landings its tabs made without asking,
 /// what autopilot has to say, the landed tabs it closed
 /// without your seeing them, the tabs whose diff finished loading while
-/// you were elsewhere, what your phone did, and suggestions. A source not named here goes
+/// you were elsewhere, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 15] = [
+pub const ORDER: [&str; 14] = [
     "meeting",
     "slack",
     "calendar",
@@ -55,7 +55,6 @@ pub const ORDER: [&str; 15] = [
     "autopilot",
     "landed",
     "ready",
-    "phone",
     "routines",
     "habits",
     "behind",
@@ -86,17 +85,15 @@ pub fn view_of(source: &str) -> Option<ViewId> {
 /// Calendar lists the day's events, not what changed), a note written for
 /// you, what autopilot said and the landings it tells of (its view's rows
 /// are its tabs), a tab whose diff finished loading, which leads to the
-/// tab, what your phone did (src/phone), which leads to its tab, a
-/// suggestion, and main ahead of the running build
+/// tab, a suggestion, and main ahead of the running build
 /// (src/mux/behind.rs), which leads to the restart.
-pub const NO_VIEW: [&str; 9] = [
+pub const NO_VIEW: [&str; 8] = [
     "calendar",
     "new-notes",
     "autolanded",
     "autopilot",
     "landed",
     "ready",
-    "phone",
     "habits",
     "behind",
 ];
@@ -139,7 +136,7 @@ pub fn mark_of(source: &str, id: &str) -> Mark {
         "meeting" | "calendar" => Mark::Reminder,
         "slack" | "inbox" => Mark::Mention,
         "new-notes" => Mark::Note,
-        "autolanded" | "landed" | "ready" | "phone" => Mark::Passed,
+        "autolanded" | "landed" | "ready" => Mark::Passed,
         "prs" if id.starts_with("failing:") => Mark::Failed,
         "prs" => Mark::Passed,
         "ci" | "routines" => Mark::Failed,
@@ -211,11 +208,6 @@ pub fn summary(source: &str, items: &[Item]) -> (String, String) {
         ),
         "ready" if one => (first.title.clone(), first.detail.clone()),
         "ready" => (format!("{n} tabs ready"), first.title.clone()),
-        "phone" if one => (first.title.clone(), first.detail.clone()),
-        "phone" => (
-            format!("{n} things done from your phone"),
-            first.title.clone(),
-        ),
         "habits" if one => (format!("Suggestion: {}", first.title), String::new()),
         "habits" => (format!("{n} suggestions"), first.title.clone()),
         // The next meeting and the mode's word are one each, as they are.
