@@ -121,6 +121,7 @@ Instead of fixing, ask the user when:
   ```
 
   Fix what it shows as above. If it shows a failure the branch didn't cause, there is nothing to rerun on the PR: tell queue-and-clean so, and it queues the PR again unchanged.
+- When Switchboard's merge queue dropped the PR (`src/merge_queue`; its reason `CI failed on its train ci/train-<id>: <jobs> (<run link>)`), the failure is in the train's run, a push to `ci/train-<id>`, which tested the branch merged onto the default branch alone, the PRs that shared a red train having been split off until this one failed by itself. Start from the run the link names, `gh run view <run id> --log-failed`; its branch is already deleted, so never rerun it. Fix what it shows as above. If it shows a failure the branch didn't cause (a flaky test, the default branch's own failure), tell queue-and-clean so, and it queues the PR again unchanged, a new train testing it again.
 - Don't send your own final line. Hand back what you fixed or reran, or why you stopped, and queue-and-clean ends with its own.
 
 Never push anywhere but this branch, never force-push, and never merge the PR: queuing and merging belong to `/queue-and-clean` or the user.
