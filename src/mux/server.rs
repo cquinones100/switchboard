@@ -192,6 +192,8 @@ pub enum Event {
     /// A repository's landed worktrees swept, off the task
     /// (src/worktree_sweep).
     Sweep(crate::worktree_sweep::serve::SweepEvent),
+    /// The phone app's watchers due what changed (src/phone).
+    Phone(crate::phone::serve::PhoneEvent),
     Tick,
     Quit,
 }
@@ -617,6 +619,8 @@ pub struct Server {
     pub awake: crate::awake::Awake,
     /// The landed worktrees swept (src/worktree_sweep).
     pub sweep: crate::worktree_sweep::serve::Sweep,
+    /// The phone app's watchers (src/phone).
+    pub phone: crate::phone::serve::Phone,
     /// The routines and their runs (src/routines).
     pub routines: crate::routines::Routines,
     /// What the terminal attached last says of itself: its cell's size
@@ -1263,6 +1267,7 @@ impl Server {
             autopilot: Default::default(),
             awake: Default::default(),
             sweep: Default::default(),
+            phone: Default::default(),
             routines: Default::default(),
             history: Default::default(),
             upgrade: Default::default(),
@@ -1280,6 +1285,14 @@ impl Server {
                 | Event::Mission(crate::mission::MissionEvent::Spin)
         ) {
             self.mission_changed();
+        }
+        // The phone's watchers are sent what changed after anything but a
+        // key, and their own sending.
+        if !matches!(
+            event,
+            Event::Input(..) | Event::FlushInput(_) | Event::Phone(_)
+        ) {
+            self.phone_changed();
         }
         match event {
             Event::Attach {
@@ -1311,6 +1324,12 @@ impl Server {
                 // Answered once the build it restarts on has taken over.
                 if super::upgrade::asks_upgrade(&args) {
                     self.upgrade_asked(Some(reply), None, None);
+                    return;
+                }
+                // Never answered: its connection is kept for what changes
+                // (src/phone).
+                if args.first().is_some_and(|a| a == "watch") && args.len() == 1 {
+                    self.phone_watch(reply);
                     return;
                 }
                 // Answered once its file is read, off this task.
@@ -1368,6 +1387,7 @@ impl Server {
             Event::Sixel(event) => self.sixel_event(event),
             Event::Awake(event) => self.awake_event(event),
             Event::Sweep(event) => self.sweep_event(event),
+            Event::Phone(event) => self.phone_event(event),
             Event::Routines(event) => self.routines_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
@@ -3509,6 +3529,8 @@ impl Server {
             Action::Diff(command) => self.diff_command(id, command),
             Action::SlackRelay => self.slack_relay(true),
             Action::StopSlackRelay => self.slack_relay(false),
+            Action::PhoneApp => self.phone_app(true),
+            Action::StopPhoneApp => self.phone_app(false),
             Action::Update(command) => self.update_command(id, command),
             Action::Files(command) => self.files_command(id, command),
             Action::Upgrade => self.latest_asked(id),

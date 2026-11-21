@@ -90,6 +90,7 @@ pub const LOCAL: &[&str] = &[
     "oncall-rules.md",
     "slack-updates.json",
     "autopilot-claim.json",
+    "phone.json",
 ];
 
 /// git's setting for the clone that checks a link the repository holds out
