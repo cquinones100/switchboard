@@ -137,7 +137,7 @@ pub enum Going {
     View(String),
 }
 
-/// The workspace's own buttons on the top line, (boards 57
+/// The workspace's own buttons on the top line (boards 57
 /// to 60): ← and → while back and forward step through the tabs visited
 /// (tab_back_forward), with the place each goes to, and ⊞ mission control.
 #[derive(Clone, Debug, Default)]
@@ -191,7 +191,7 @@ pub struct View<'a> {
     /// Select mode: the tabs selected, each drawn with the selected mark, and how
     /// many on the top line's chip.
     pub selected: Option<&'a std::collections::BTreeSet<TabId>>,
-    /// The workspace's own buttons first on the top line,.
+    /// The workspace's own buttons, first on the top line.
     pub buttons: Option<&'a Buttons>,
 }
 
@@ -751,7 +751,7 @@ pub fn sidebar_lines(
             if chosen {
                 cursor_at = lines.len();
             }
-            // UX 2.0: two lines a tab, each the kit's row (the cursor's
+            // Two lines a tab, each the kit's row (the cursor's
             // shaded, with an accent bar at its left). Its state's mark,
             // its number in its project's color, its name on one line;
             // under it, what it is doing.

@@ -95,7 +95,7 @@ A tab with one pane, or a pane zoomed with `M-=`, fills the width. On a wide scr
 
 A new tab opens with something beside its pane when its lone pane leaves room in the side panel (at least 80 columns spare, with "Open views in the side panel" on): the first it has of its PR, in the PR view as `M-v` opens it; its ticket, a Linear ticket or a GitHub issue, in the ticket view as `M-i` opens it; and what `M-e` opens for it, an autopilot tab's plan note, the note you linked to it or its own note, in Notes (only with Settings' "Notes in each tab" on, since a shared Notes would leave another tab). With none of them the side panel stays empty. The keys stay in the tab's pane, Claude's or the shell's, the view greyed as any pane without them. A tab's PR and ticket are known a moment after it opens, once its name is looked up, so one found later takes the place of what comes after it in that order: a PR replaces the ticket or the note, a ticket the note. Once you close what opened, or open another pane in the tab, it is left as you set it. A tab brought back after a restart has its view again and opens nothing new. Settings' "Open a tab's ticket, PR or note beside it" (`tab_opens_beside`) off opens every tab with the side panel empty.
 
-Every tab has a number, which the tab bar, the sidebar, mission control, the Slack relay and `switchboard tabs` show and `M-1`…`M-9` and `M-0` go to: the smallest no other open tab has when it opens, in any session, kept while the tab is open, through a restart and `switchboard upgrade` (its `@tab_number` option, saved with the layout). Closing a tab renumbers no other, and the next tab opened takes the number it freed. The tabs keep their places in the tab bar and the sidebar, which their numbers needn't follow, so moving a tab changes its place, not its number. The Notifications window takes none.
+Every tab has a number, which the header, the sidebar, mission control, the Slack relay and `switchboard tabs` show and `M-1`…`M-9` and `M-0` go to: the smallest no other open tab has when it opens, in any session, kept while the tab is open, through a restart and `switchboard upgrade` (its `@tab_number` option, saved with the layout). Closing a tab renumbers no other, and the next tab opened takes the number it freed. The tabs keep their places in the sidebar, which their numbers needn't follow, so moving a tab changes its place, not its number. The Notifications window takes none.
 
 A tab something you did opens (a key, a palette command, a menu's choice, a card's action, `switchboard new-tab` without `-d`) comes to the front, so it is what you see; when one choice opens several, the first comes to the front. A tab the workspace opens on its own stays behind the one in front: autopilot's tabs, the Calendar and Slack loop tabs a view opens when it is out of date, the Notifications window, and the Slack relay's.
 
@@ -500,7 +500,7 @@ A tab's row starts with a bar in its project's color (thicker on the chosen tab)
 | `◷` orange | a reminder come due |
 | `○` faint | idle |
 
-The states are the ones the tab bar's marks show, recorded by Switchboard's hooks for Claude Code.
+The states are the ones the sidebar's marks show, recorded by Switchboard's hooks for Claude Code.
 
 ### Notifications
 

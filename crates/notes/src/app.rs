@@ -2614,8 +2614,8 @@ impl App {
 
     // ── UX 2.0's item keys ────────────────────────────────────────────────
 
-    /// A parked section (`## Defered`, `## Later`) folded, as a note opens
-    ///, to one line with its count of items.
+    /// A parked section (`## Defered`, `## Later`) folded, as a note opens,
+    /// to one line with its count of items.
     fn fold_parked(&mut self) {
         let lines = self.editor.doc.text.lines();
         let kinds = render::kinds(&lines);

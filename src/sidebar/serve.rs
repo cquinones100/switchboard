@@ -350,8 +350,9 @@ impl Server {
     /// Asks Haiku for a sentence on each pane's last turn that has ended
     /// (a reply, no call waiting, its Claude neither working nor waiting),
     /// once a turn, in a task of its own, with Settings' `turn_summaries`
-    /// on, for the cards that show it (src/mission/summary.rs). A turn begun over a day ago is left as
-    /// it is, so a server starting doesn't send every old tab's.
+    /// on, for the cards that show it (src/mission/summary.rs). A turn begun
+    /// over a day ago is left as it is, so a server starting doesn't send
+    /// every old tab's.
     fn summarize_turns(&mut self, reads: &std::collections::HashMap<PaneId, PaneRead>) {
         if !settings::is_on("turn_summaries") {
             return;

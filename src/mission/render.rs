@@ -788,8 +788,8 @@ pub fn ask_fits(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
 }
 
 /// Whether what a waiting tab asks is known whole, whatever a card has
-/// room for: what a menu opened away from a UX 2.0 card answers from (the
-/// sidebar's, a reminder's, the cards' off), which shows the
+/// room for: what a menu opened away from a card answers from (the
+/// sidebar's, a reminder's), which shows the
 /// request itself.
 pub fn ask_whole(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
     ask_sized(tab, screen, false)
@@ -4127,8 +4127,8 @@ pub fn slack_board_shown(v: &View) -> bool {
     v.id == ViewId::Slack && v.loaded && v.data.at.is_some()
 }
 
-/// Whether the Settings view is drawn as its board: and the
-/// screen wide enough.
+/// Whether the Settings view is drawn as its board: with the screen
+/// wide enough.
 pub fn settings_board_shown(m: &Mission) -> bool {
     m.laid().0 as usize >= super::settings_board::BOARD_AT
 }
@@ -5397,7 +5397,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
     }
 }
 
-/// The Notifications view as a history by day, (`history`):
+/// The Notifications view as a history by day (`history`):
 /// a keycap for each kind with its week's count, the one shown lit, and
 /// the week's count and the sidebar's at the right; the column heads over
 /// a dashed rule; then each day's label and its notifications, a row each:
@@ -5629,9 +5629,9 @@ fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
     crate::mux::input::Key::parse(name)
 }
 
-/// The footer, whose keys take a click and a Tab stop: the kit's hints
-///, dim words without, each key that names one a spot (`Spot::Key`) at row `y`, lit
-/// under the mouse.
+/// The footer, whose keys take a click and a Tab stop: the kit's hints,
+/// each key that names one a spot (`Spot::Key`) at row `y`, lit under the
+/// mouse.
 fn key_footer(
     pairs: &[(String, String)],
     m: &Mission,

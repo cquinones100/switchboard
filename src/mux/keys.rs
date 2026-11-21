@@ -547,7 +547,7 @@ impl Action {
                 "Past the edge it comes round to the far side; from the leftmost pane it goes into the sidebar. In the diff and Notes it moves between the app's own windows first.".into()
             }
             Action::PrevTab | Action::NextTab => {
-                "Tabs go in the order the tab bar shows them, coming round past either end.".into()
+                "Tabs go in the order the sidebar shows them, coming round past either end.".into()
             }
             Action::TabBack | Action::TabForward => {
                 "Through the tabs you visited, as a browser's back and forward do; with nothing that way it does nothing. Off in Settings (tab_back_forward), they go to the tab on the left and right.".into()
@@ -556,7 +556,7 @@ impl Action {
                 "Pressed again, it goes back the other way, so two tabs can be swapped between with one key.".into()
             }
             Action::SelectTab(_) => {
-                "M-1 to M-9 go to the tab with that number, the one the tab bar and the sidebar show, in whichever session it is; a tab keeps its number while it is open, so with no tab numbered that, nothing happens. M-0 asks for a number, for the tabs past 9.".into()
+                "M-1 to M-9 go to the tab with that number, the one the header and the sidebar show, in whichever session it is; a tab keeps its number while it is open, so with no tab numbered that, nothing happens. M-0 asks for a number, for the tabs past 9.".into()
             }
             Action::NewTab => {
                 "The tab runs your shell in the current pane's directory and goes right after the current one.".into()

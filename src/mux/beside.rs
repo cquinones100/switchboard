@@ -2,8 +2,8 @@
 //! with Settings' `lone_pane_width` capping a tab's one pane, the columns
 //! at its right list what the pane can open, centered in them, each a row
 //! with its key as the kit's keycap and what it does: the tab's note, a
-//! split to the right, the PR, the ticket (in Claude's place
-//! on, as their keys show them), a link read beside the pane, and under
+//! split to the right, the PR, the ticket (in Claude's place, as their
+//! keys show them), a link read beside the pane, and under
 //! them how to widen the pane. New with the lone pane's cap,
 //! with no tmux-version file behind it.
 //!

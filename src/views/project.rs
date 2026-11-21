@@ -2,7 +2,7 @@
 //! gives a project's ID (`Shaping P-ABC-4: ...`) or one chosen for it
 //! (`views::ticket::Ticket::Project`): its name, its description, and its
 //! tickets with their states, with its status, lead and target date beside
-//! them, as UX 2.0's board for a ticket, off too.
+//! them, as the board for a ticket.
 //!
 //! As a ticket's view does, it shows the copy last read at once
 //! (`~/.cache/switchboard/ticket-view/`) and reads it again through

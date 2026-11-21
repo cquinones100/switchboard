@@ -59,7 +59,7 @@ pub enum ViewId {
     Prs,
     Ci,
     Landing,
-    /// Autopilot's own view, (src/autopilot/view.rs).
+    /// Autopilot's own view (src/autopilot/view.rs).
     Autopilot,
     /// Your prompts run on a schedule (src/routines/view.rs).
     Routines,
@@ -311,7 +311,7 @@ impl ViewId {
                 "Whether the relay runs and what it sent today, then each kind of message it sends (prompts, finished turns, stuck tabs, commits and pushes, failures, full context, notices) with where it goes: Notify, Thread only or Off, three presets, autopilot's tabs and quiet hours. Settings' \"Slack relay\" (view_relay)."
             }
             ViewId::Reopen => {
-                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and, the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
+                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
             }
             ViewId::Prs => {
                 "Columns Draft, In review, Changes asked, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."

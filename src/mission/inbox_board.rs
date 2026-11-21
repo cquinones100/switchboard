@@ -1,5 +1,5 @@
 //! The Inbox view as a board (board 22 of the canvas, new with
-//! the port; the tmux version, and this view off, list the
+//! the port; the tmux version listed the
 //! notifications as `render::list` does): the notifications grouped by day
 //! with their counts, each two rows beside the Large avatar of who acted
 //! (`kit::avatar`, their Linear photo drawn over their initial), its kind's

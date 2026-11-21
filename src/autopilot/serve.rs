@@ -4,15 +4,12 @@
 //! in the server task.
 //!
 //! M-p's "Autopilot: work a note" opens mission control on its tabs,
-//! then, with the mode off, asks which note (those holding an unticked
-//! item, the one last worked first, then the newest, the rest behind "More
-//! notes…"), how many of its tabs work at once, the most open and a
-//! spend limit, each typed in a box with what it was before, Enter keeping
-//! it; the repository is the main clone of the pane it was asked from. With
-//! the mode on, it opens mission control on the mode and nothing over it, its
-//! menu (`m`) a key away. Setting it up is its settings box
-//! instead (src/autopilot/settings_box.rs), which the view's menu opens while
-//! it is on, checked and written here (`autopilot_box_write`).
+//! then, with the mode off, its settings box (src/autopilot/settings_box.rs)
+//! on the note last worked, the counts as they were, and the main clone of
+//! the pane it was asked from. With the mode on, it opens mission control on
+//! the mode and nothing over it, its menu (`m`) a key away, which opens the
+//! same box. What the box sets is checked and written here
+//! (`autopilot_box_write`).
 //!
 //! Every tick reads `autopilot.json`, gathers the tabs it opened (their
 //! directories from what the server holds and git's files, their state from
@@ -598,8 +595,7 @@ impl Server {
     /// M-p's command, pressed with `pane` current: mission control on the
     /// Autopilot view, which shows the mode while it is on (its menu and
     /// settings box a key or a click away there, nothing opened over it),
-    /// else the mode set up: its settings box, its questions
-    /// without.
+    /// else its settings box to set the mode up.
     pub fn autopilot_command(&mut self, client: ClientId, command: Command, pane: Option<PaneId>) {
         match command {
             Command::WorkNote => {

@@ -3070,7 +3070,7 @@ impl Server {
 
     /// Counts, in the background, the branch of Reopen's chosen worktree
     /// against its default branch and its upstream, for its commits' chip
-    /// and its pane: only and Reopen in front, once
+    /// and its pane: only with Reopen in front, once
     /// for each commit it is at (read from git's files, so moving back to
     /// a row counted starts nothing), one count at a time, so the cursor
     /// running down the rows counts the one it settles on.
@@ -3681,7 +3681,7 @@ impl Server {
         // From a UX 2.0 card, the request as the card lays it out, the
         // screen's own options (an answer of your own) among them, so the
         // menu answers only what the card shows whole; from anywhere else
-        // (the sidebar, a reminder, a card off), where the
+        // (the sidebar, a reminder), where the
         // menu shows the request itself, one known whole.
         let whole = if on_card {
             let shown = super::Screen {
@@ -9810,7 +9810,7 @@ mod tests {
         assert!(m.filter.as_ref().is_some_and(|f| !f.typing));
     }
 
-    /// The Tickets board a screen 160 wide, its one ticket
+    /// The Tickets board on a screen 160 wide, its one ticket
     /// chosen, its description beside it.
     fn tickets_board() -> Mission {
         let ticket = Item::new("1", "Fix it")

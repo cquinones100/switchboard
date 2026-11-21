@@ -82,7 +82,7 @@
 //!   which starts it while it is off and saves what changed while it is on.
 //! - `landed`: the landings its tabs made without asking, for the
 //!   notifications.
-//! - `view`: its own view in mission control,.
+//! - `view`: its own view in mission control.
 //! - `serve`: the server's side: setting it up, the check on every tick,
 //!   opening the tabs, the notifications.
 

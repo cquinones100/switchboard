@@ -395,7 +395,7 @@ enum ListRow {
     /// A page's number and title, a section's label in its
     /// tone with its count, and the blank row between pages.
     Page(usize),
-    /// In a story told in chapters,: a chapter's number and name
+    /// In a story told in chapters: a chapter's number and name
     /// over its pages, as board 136 lists them.
     Chapter(usize),
     Label(String, Tone, Option<usize>),
@@ -8785,7 +8785,7 @@ mod tests {
       "runs": [{"step": "page()", "page": "c4"}, {"step": "count_signups", "page": "c2"}, {"step": "store_outline", "page": "c1"}]}"#;
 
     /// A change of six files told in chapters (`MAP_ANSWER`), on a screen
-    /// large enough for the Story view,.
+    /// large enough for the Story view.
     fn map_app_with(opts: Options) -> App {
         map_app_told(opts, MAP_ANSWER)
     }

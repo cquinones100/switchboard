@@ -1,4 +1,4 @@
-//! Autopilot's own view in mission control, (the
+//! Autopilot's own view in mission control (the
 //! view_autopilot setting): a heading saying which note it works, its tabs
 //! working and open against its slots and cap, whether its tabs land
 //! without asking, today's spend against its limit, and whether it is
