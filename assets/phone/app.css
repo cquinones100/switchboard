@@ -109,6 +109,9 @@ button {
 .label {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
   padding: 0 16px 4px;
   font-weight: 700;
   font-size: 12px;
@@ -118,6 +121,8 @@ button {
 .label.y { color: var(--yellow); }
 .label.b { color: var(--blue); }
 .label.d { color: var(--dim); }
+.label:focus-visible { background: var(--chosen); outline: none; }
+.label .fold { display: inline-block; width: 1.5ch; margin-right: 8px; }
 .row {
   display: grid;
   grid-template-columns: 1.5ch 1fr;
