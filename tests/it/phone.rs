@@ -1297,177 +1297,188 @@ const backOn = (open) => openIn(open, () => page.cameBack());
 
 // ── `switchboard phone preview` (src/phone/preview.rs) ──
 
-/// A preview serving `dir`, in a runtime of its own; where it listens.
-fn preview(dir: &std::path::Path) -> std::net::SocketAddr {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let dir = dir.to_path_buf();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let listener = switchboard::phone::preview::bind(Some(0)).await.unwrap();
-            tx.send(listener.local_addr().unwrap()).unwrap();
-            let _ = switchboard::phone::preview::serve(listener, dir).await;
+/// Behind the `net` feature, as the preview is.
+#[cfg(feature = "net")]
+mod preview_server {
+    use super::*;
+
+    /// A preview serving `dir`, in a runtime of its own; where it listens.
+    fn preview(dir: &std::path::Path) -> std::net::SocketAddr {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let listener = switchboard::phone::preview::bind(Some(0)).await.unwrap();
+                tx.send(listener.local_addr().unwrap()).unwrap();
+                let _ = switchboard::phone::preview::serve(listener, dir).await;
+            });
         });
-    });
-    rx.recv().unwrap()
-}
+        rx.recv().unwrap()
+    }
 
-/// A request to the preview: its status and body.
-fn http(at: std::net::SocketAddr, method: &str, path: &str, body: Option<Value>) -> (u16, String) {
-    use std::io::Read;
-    let mut stream = std::net::TcpStream::connect(at).unwrap();
-    let body = body.map(|b| b.to_string()).unwrap_or_default();
-    write!(
-        stream,
-        "{method} {path} HTTP/1.1\r\nHost: {at}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-        body.len()
-    )
-    .unwrap();
-    let mut out = String::new();
-    stream.read_to_string(&mut out).unwrap();
-    let status = out[9..12].parse().unwrap();
-    let body = out
-        .split_once("\r\n\r\n")
-        .map_or("", |(_, b)| b)
-        .to_string();
-    (status, body)
-}
+    /// A request to the preview: its status and body.
+    fn http(
+        at: std::net::SocketAddr,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> (u16, String) {
+        use std::io::Read;
+        let mut stream = std::net::TcpStream::connect(at).unwrap();
+        let body = body.map(|b| b.to_string()).unwrap_or_default();
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: {at}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut out = String::new();
+        stream.read_to_string(&mut out).unwrap();
+        let status = out[9..12].parse().unwrap();
+        let body = out
+            .split_once("\r\n\r\n")
+            .map_or("", |(_, b)| b)
+            .to_string();
+        (status, body)
+    }
 
-fn json_of(at: std::net::SocketAddr, path: &str) -> Value {
-    let (status, body) = http(at, "GET", path, None);
-    assert_eq!(status, 200, "{path}: {body}");
-    serde_json::from_str(&body).unwrap()
-}
+    fn json_of(at: std::net::SocketAddr, path: &str) -> Value {
+        let (status, body) = http(at, "GET", path, None);
+        assert_eq!(status, 200, "{path}: {body}");
+        serde_json::from_str(&body).unwrap()
+    }
 
-fn assets() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone")
-}
+    fn assets() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone")
+    }
 
-#[test]
-fn the_preview_serves_the_app_and_made_up_tabs_on_loopback_alone() {
-    let at = preview(&assets());
-    assert_eq!(at.ip(), std::net::Ipv4Addr::LOCALHOST);
-    let (status, page) = http(at, "GET", "/", None);
-    assert_eq!(status, 200);
-    assert!(page.contains("/app.js"), "{page}");
-    let (_, css) = http(at, "GET", "/app.css", None);
-    assert!(css.contains("var(--safe-area-inset-top, 0px)"));
-    assert!(!css.contains("env(safe-area-inset"));
-    let (_, frame) = http(at, "GET", "/preview", None);
-    assert!(frame.contains("<iframe"), "{frame}");
-    assert_eq!(http(at, "GET", "/sw.js", None).0, 404, "no service worker");
-    assert_eq!(json_of(at, "/api/me")["paired"], true);
-    let tabs = json_of(at, "/api/tabs");
-    assert_eq!(tabs["live"], true);
-    assert_eq!(tabs["tabs"].as_array().unwrap().len(), 12);
-    let turns = json_of(at, "/api/tabs/13/turns");
-    assert!(!turns["messages"].as_array().unwrap().is_empty());
-}
+    #[test]
+    fn the_preview_serves_the_app_and_made_up_tabs_on_loopback_alone() {
+        let at = preview(&assets());
+        assert_eq!(at.ip(), std::net::Ipv4Addr::LOCALHOST);
+        let (status, page) = http(at, "GET", "/", None);
+        assert_eq!(status, 200);
+        assert!(page.contains("/app.js"), "{page}");
+        let (_, css) = http(at, "GET", "/app.css", None);
+        assert!(css.contains("var(--safe-area-inset-top, 0px)"));
+        assert!(!css.contains("env(safe-area-inset"));
+        let (_, frame) = http(at, "GET", "/preview", None);
+        assert!(frame.contains("<iframe"), "{frame}");
+        assert_eq!(http(at, "GET", "/sw.js", None).0, 404, "no service worker");
+        assert_eq!(json_of(at, "/api/me")["paired"], true);
+        let tabs = json_of(at, "/api/tabs");
+        assert_eq!(tabs["live"], true);
+        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 12);
+        let turns = json_of(at, "/api/tabs/13/turns");
+        assert!(!turns["messages"].as_array().unwrap().is_empty());
+    }
 
-#[test]
-fn an_answer_clears_the_made_up_question_and_offline_holds_until_back() {
-    let at = preview(&assets());
-    let tab = |tabs: &Value| {
-        tabs["tabs"]
+    #[test]
+    fn an_answer_clears_the_made_up_question_and_offline_holds_until_back() {
+        let at = preview(&assets());
+        let tab = |tabs: &Value| {
+            tabs["tabs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["pane"] == "%11")
+                .cloned()
+                .unwrap()
+        };
+        let before = tab(&json_of(at, "/api/tabs"));
+        assert_eq!(before["state"], "waiting");
+        let id = before["prompt"]["id"].clone();
+        let (status, body) = http(
+            at,
+            "POST",
+            "/api/tabs/11/answer",
+            Some(json!({"reply": "1", "prompt": id})),
+        );
+        assert_eq!(status, 200, "{body}");
+        let after = tab(&json_of(at, "/api/tabs"));
+        assert!(after["prompt"].is_null(), "{after}");
+        assert_eq!(after["state"], "working");
+        let turns = json_of(at, "/api/tabs/11/turns");
+        let last = turns["messages"]
             .as_array()
             .unwrap()
-            .iter()
-            .find(|t| t["pane"] == "%11")
-            .cloned()
+            .last()
             .unwrap()
-    };
-    let before = tab(&json_of(at, "/api/tabs"));
-    assert_eq!(before["state"], "waiting");
-    let id = before["prompt"]["id"].clone();
-    let (status, body) = http(
-        at,
-        "POST",
-        "/api/tabs/11/answer",
-        Some(json!({"reply": "1", "prompt": id})),
-    );
-    assert_eq!(status, 200, "{body}");
-    let after = tab(&json_of(at, "/api/tabs"));
-    assert!(after["prompt"].is_null(), "{after}");
-    assert_eq!(after["state"], "working");
-    let turns = json_of(at, "/api/tabs/11/turns");
-    let last = turns["messages"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .clone();
-    assert_eq!(
-        (last["who"].as_str(), last["text"].as_str()),
-        (Some("you"), Some("Yes"))
-    );
-    // The question gone, the same answer is refused.
-    let (status, _) = http(
-        at,
-        "POST",
-        "/api/tabs/11/answer",
-        Some(json!({"reply": "1", "prompt": id})),
-    );
-    assert_eq!(status, 409);
+            .clone();
+        assert_eq!(
+            (last["who"].as_str(), last["text"].as_str()),
+            (Some("you"), Some("Yes"))
+        );
+        // The question gone, the same answer is refused.
+        let (status, _) = http(
+            at,
+            "POST",
+            "/api/tabs/11/answer",
+            Some(json!({"reply": "1", "prompt": id})),
+        );
+        assert_eq!(status, 409);
 
-    assert_eq!(http(at, "POST", "/preview/offline", None).0, 200);
-    assert_eq!(json_of(at, "/api/tabs")["live"], false);
-    let (status, _) = http(
-        at,
-        "POST",
-        "/api/tabs/16/message",
-        Some(json!({"text": "hello", "images": []})),
-    );
-    assert_eq!(status, 503);
-    assert_eq!(http(at, "POST", "/preview/online", None).0, 200);
-    assert_eq!(json_of(at, "/api/tabs")["live"], true);
-}
-
-#[test]
-fn a_saved_file_sends_a_reload() {
-    use std::io::{BufRead, BufReader};
-    let dir = common::TempDir::new("sb-phone-preview");
-    for entry in std::fs::read_dir(assets()).unwrap() {
-        let entry = entry.unwrap();
-        std::fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
+        assert_eq!(http(at, "POST", "/preview/offline", None).0, 200);
+        assert_eq!(json_of(at, "/api/tabs")["live"], false);
+        let (status, _) = http(
+            at,
+            "POST",
+            "/api/tabs/16/message",
+            Some(json!({"text": "hello", "images": []})),
+        );
+        assert_eq!(status, 503);
+        assert_eq!(http(at, "POST", "/preview/online", None).0, 200);
+        assert_eq!(json_of(at, "/api/tabs")["live"], true);
     }
-    let at = preview(dir.path());
-    let mut stream = std::net::TcpStream::connect(at).unwrap();
-    write!(
-        stream,
-        "GET /preview/reload HTTP/1.1\r\nHost: {at}\r\nAccept: text/event-stream\r\n\r\n"
-    )
-    .unwrap();
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut line = String::new();
-    // The headers read, the stream is open before the file is saved.
-    loop {
-        line.clear();
-        reader.read_line(&mut line).unwrap();
-        if line == "\r\n" {
-            break;
+
+    #[test]
+    fn a_saved_file_sends_a_reload() {
+        use std::io::{BufRead, BufReader};
+        let dir = common::TempDir::new("sb-phone-preview");
+        for entry in std::fs::read_dir(assets()).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
         }
-    }
-    let css = dir.path().join("app.css");
-    let mut text = std::fs::read_to_string(&css).unwrap();
-    text.push_str("\n.saved { color: red; }\n");
-    std::fs::write(&css, text).unwrap();
-    stream
-        .set_read_timeout(Some(
-            common::deadline(Duration::from_secs(5)).saturating_duration_since(Instant::now()),
-        ))
+        let at = preview(dir.path());
+        let mut stream = std::net::TcpStream::connect(at).unwrap();
+        write!(
+            stream,
+            "GET /preview/reload HTTP/1.1\r\nHost: {at}\r\nAccept: text/event-stream\r\n\r\n"
+        )
         .unwrap();
-    loop {
-        line.clear();
-        reader
-            .read_line(&mut line)
-            .expect("a reload before the deadline");
-        if line.starts_with("data:") {
-            assert_eq!(line.trim(), "data: app.css");
-            break;
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        // The headers read, the stream is open before the file is saved.
+        loop {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let css = dir.path().join("app.css");
+        let mut text = std::fs::read_to_string(&css).unwrap();
+        text.push_str("\n.saved { color: red; }\n");
+        std::fs::write(&css, text).unwrap();
+        stream
+            .set_read_timeout(Some(
+                common::deadline(Duration::from_secs(5)).saturating_duration_since(Instant::now()),
+            ))
+            .unwrap();
+        loop {
+            line.clear();
+            reader
+                .read_line(&mut line)
+                .expect("a reload before the deadline");
+            if line.starts_with("data:") {
+                assert_eq!(line.trim(), "data: app.css");
+                break;
+            }
         }
     }
 }
