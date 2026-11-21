@@ -73,6 +73,10 @@ button {
   min-height: 48px;
 }
 .head .title { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.head button.title { text-align: left; }
+/* The name shown whole: wrapped, the ☰ and the chip on its first line. */
+.head.whole { align-items: baseline; }
+.head .title.whole { white-space: normal; overflow-wrap: anywhere; }
 .head .where { color: var(--dim); font-weight: 400; }
 .head .menu { color: var(--accent); font-weight: 700; font-size: 18px; padding: 4px 8px 4px 0; }
 .offline-line { color: var(--dim); padding: 4px 16px 0; font-size: 12px; }
