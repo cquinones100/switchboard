@@ -59,6 +59,9 @@ pub struct Shown {
     /// The branch checked out there, as git's own files say it; `None` on
     /// no branch or outside git.
     pub branch: Option<String>,
+    /// Whether that branch is its repository's default branch, as git's own
+    /// files say it (`git::is_default_branch`).
+    pub on_default: bool,
     /// Whether the directory it was named from was removed under its pane
     /// (a worktree cleaned up), its name kept from before.
     pub gone: bool,
@@ -154,6 +157,9 @@ impl Server {
                 .as_ref()
                 .filter(|p| p.on_branch())
                 .map(|p| p.branch.clone()),
+            on_default: place
+                .as_ref()
+                .is_some_and(|p| p.on_branch() && git::is_default_branch(&p.common_dir, &p.branch)),
             worktree: place
                 .filter(|p| p.worktree().is_some())
                 .and_then(|_| git::top_level(&dir)),
@@ -411,6 +417,54 @@ impl Server {
         )
     }
 
+    /// Whether `pr`, among the tab's PRs `all`, is a merged one its session
+    /// made that the lookups keep on its list where the tab is now
+    /// (`prs::merged_stays_current`), current as long as it stays there.
+    fn landed_pr_stays(&self, tab: TabId, pr: &TabPr, all: &[TabPr]) -> bool {
+        let Some(t) = self.tabs.get(&tab) else {
+            return false;
+        };
+        let made = prs::read(t.opts.get(prs::MADE).map_or("", String::as_str));
+        let Some(facts) = self
+            .tab_pr_facts(pr)
+            .filter(|f| f.state == crate::facts::PrState::Merged)
+        else {
+            return false;
+        };
+        if !made.iter().any(|m| m.same(pr)) {
+            return false;
+        }
+        let shown = self.tab_names.shown.get(&tab);
+        // Origin's, or in a fork's clone upstream's too, where its PRs open.
+        let repos = self
+            .tab_path(tab)
+            .and_then(|p| self.sources.repos_kept(p))
+            .filter(|r| !r.is_empty());
+        let same_repo = match (repos, &pr.repo) {
+            (Some(repos), Some(repo)) => {
+                let repo = repo.to_string();
+                repos.iter().any(|r| r.eq_ignore_ascii_case(&repo))
+            }
+            _ => true,
+        };
+        let another_open = all.iter().any(|p| {
+            !p.same(pr)
+                && made.iter().any(|m| m.same(p))
+                && self
+                    .tab_pr_facts(p)
+                    .is_some_and(|f| f.state == crate::facts::PrState::Open)
+        });
+        prs::merged_stays_current(
+            &facts.head,
+            &prs::Place {
+                branch: shown.and_then(|s| s.branch.as_deref()),
+                on_default: shown.is_some_and(|s| s.on_default),
+                same_repo,
+                another_open,
+            },
+        )
+    }
+
     /// The tab's current PR when it isn't its branch's and its repository is
     /// known, which M-v opens by its number; `None` when the branch's PR is
     /// current, as before.
@@ -622,7 +676,9 @@ impl Server {
     /// its list once they have been seen so: a lookup's answer while the
     /// tab is in front of someone marks each, and the next answer takes the
     /// marked ones off. The branch's PR, never stored, shows as it always
-    /// has.
+    /// has, and a merged one the session made stays while it is the tab's
+    /// current PR (`prs::merged_stays_current`), so a tab whose PR landed
+    /// keeps it once the landing has moved it back to the main clone.
     pub fn drop_finished_tab_prs(&mut self, done: impl Fn(&TabPr) -> bool) {
         let ids: Vec<TabId> = self
             .tabs
@@ -634,8 +690,13 @@ impl Server {
         seen.retain(|(id, _)| ids.contains(id));
         for id in ids {
             let in_front = self.tab_in_front(id);
+            let all = self.tab_prs(id);
+            let landed = self
+                .tab_current_pr(id)
+                .filter(|c| self.landed_pr_stays(id, c, &all));
             let t = self.tabs.get_mut(&id).expect("listed above");
             let list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
+            let done = |p: &TabPr| done(p) && !landed.as_ref().is_some_and(|l| l.same(p));
             let mut left = Vec::new();
             for pr in list.iter().filter(|p| done(p)) {
                 let key = (id, pr.key());
