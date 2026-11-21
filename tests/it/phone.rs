@@ -1749,6 +1749,44 @@ mod preview_server {
     }
 
     #[test]
+    fn a_reminder_is_set_refused_and_cleared_on_the_made_up_tabs() {
+        let at = preview(&assets());
+        let tabs = json_of(at, "/api/tabs");
+        assert_eq!(tabs["reminders"], true);
+        assert_eq!(tabs["remind_times"].as_array().unwrap().len(), 5);
+        let pane = tabs["tabs"][0]["pane"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches('%')
+            .to_string();
+        let path = format!("/api/tabs/{pane}/remind");
+        let (status, body) = http(
+            at,
+            "POST",
+            &path,
+            Some(json!({"when": "soonish", "note": ""})),
+        );
+        assert_eq!(status, 409);
+        assert!(body.contains("isn't a time I know"), "{body}");
+        let (status, body) = http(
+            at,
+            "POST",
+            &path,
+            Some(json!({"when": "45m", "note": "check the deploy"})),
+        );
+        assert_eq!(status, 200, "{body}");
+        let set = json_of(at, "/api/tabs")["tabs"][0]["remind"].clone();
+        assert_eq!(
+            (set["note"].as_str(), set["due"].as_bool()),
+            (Some("check the deploy"), Some(false)),
+            "{set}"
+        );
+        let (status, _) = http(at, "POST", &path, Some(json!({"clear": true})));
+        assert_eq!(status, 200);
+        assert!(json_of(at, "/api/tabs")["tabs"][0]["remind"].is_null());
+    }
+
+    #[test]
     fn a_saved_file_sends_a_reload() {
         use std::io::{BufRead, BufReader};
         let dir = common::TempDir::new("sb-phone-preview");

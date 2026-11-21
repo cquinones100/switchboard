@@ -40,6 +40,7 @@ use tokio::sync::{broadcast, watch};
 
 use super::images;
 use crate::demo::phone as made_up;
+use crate::mission::remind;
 
 /// The port tried first, so a frame left open finds the next run.
 pub const PORT: u16 = 4174;
@@ -163,7 +164,13 @@ impl Data {
 
     /// What the stream sends.
     fn snapshot(&self) -> Value {
-        json!({"tabs": self.tabs, "live": self.live, "close": true})
+        json!({
+            "tabs": self.tabs,
+            "live": self.live,
+            "close": true,
+            "reminders": true,
+            "remind_times": super::serve::remind_times(&crate::util::local_now()),
+        })
     }
 }
 
@@ -301,6 +308,7 @@ fn routes(preview: Arc<Preview>) -> Router {
         .route("/api/images/{name}", get(image_of))
         .route("/api/tabs/{pane}/seen", post(seen))
         .route("/api/tabs/{pane}/close", post(close))
+        .route("/api/tabs/{pane}/remind", post(remind))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
         .layer(middleware::from_fn_with_state(
             preview.clone(),
@@ -742,6 +750,42 @@ async fn close(State(preview): State<Arc<Preview>>, UrlPath(n): UrlPath<String>)
         let pane = format!("%{n}");
         d.tabs.retain(|t| t["pane"] != pane.as_str());
         said(format!("Closed tab {index}"))
+    })
+}
+
+/// A tab's reminder set for the time the sheet sent (read as the
+/// workspace reads it, refused in its words when it can't be) with its
+/// note, or cleared; due at once when the time has passed.
+async fn remind(
+    State(preview): State<Arc<Preview>>,
+    UrlPath(n): UrlPath<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let when = text_of(&body, "when");
+    let note = text_of(&body, "note");
+    let clear = body["clear"] == true;
+    preview.change(|d| {
+        if !d.live {
+            return offline();
+        }
+        let Some(tab) = d.tab(&n) else {
+            return no_tab();
+        };
+        let index = tab["index"].clone();
+        if clear {
+            tab["remind"] = Value::Null;
+            return said(format!("Cleared the reminder for tab {index}"));
+        }
+        let now = crate::util::local_now();
+        let Some(at) = remind::when(when.trim(), &now) else {
+            return refused(
+                StatusCode::CONFLICT,
+                &format!("\"{}\" {}", when.trim(), remind::NOT_A_TIME),
+            );
+        };
+        let due = at <= now.timestamp().as_second();
+        tab["remind"] = json!({"at": at, "note": note.trim(), "due": due});
+        said(format!("Reminder for tab {index} at {}", remind::said(at)))
     })
 }
 
