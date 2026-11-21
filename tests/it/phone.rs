@@ -960,3 +960,89 @@ const out = [];
         "{stdout}"
     );
 }
+
+/// The tab's name at the top of a channel (assets/phone/app.js's `title`),
+/// run in Node over a stand-in for the page; skipped without Node.
+#[test]
+fn a_tap_on_a_long_tab_name_shows_it_whole_until_another_tab_opens() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    // Only what `el` and `title` touch of the page, each element as wide as
+    // its test says, and the page's start left waiting on a fetch that never
+    // answers.
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+class Node { constructor() { this.kids = []; } append(...k) { this.kids.push(...k); } }
+class Element extends Node {
+  constructor() { super(); this.attrs = {}; this.on = {}; this.className = ""; this.scrollWidth = 0; this.clientWidth = 0; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  getAttribute(k) { return this.attrs[k]; }
+  addEventListener(k, f) { this.on[k] = f; }
+}
+const ctx = vm.createContext({
+  Node,
+  document: {
+    getElementById: () => null,
+    addEventListener: () => {},
+    createElement: () => new Element(),
+    createTextNode: (t) => Object.assign(new Node(), { text: t }),
+  },
+  window: { addEventListener: () => {} },
+  history: { replaceState: () => {} },
+  location: { hash: "" },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  var button;
+  var draws = 0;
+  state.tabs = [
+    { index: 2, pane: "%2", name: "a name far too long for the one line at the top of the phone", state: "idle" },
+    { index: 3, pane: "%3", name: "short", state: "idle" },
+  ];
+  render = () => { draws++; button = title(state.tabs[0]); };
+  var look = () => button.className + " " + button.getAttribute("aria-expanded");
+  var tap = (wide, room) => { button.scrollWidth = wide; button.clientWidth = room; button.on.click(); };
+`, ctx);
+const run = (code) => console.log(vm.runInContext(code, ctx));
+run(`button = title(state.tabs[0]); look()`);
+// A name that fits: nothing changes.
+run(`tap(100, 100); look() + " " + draws`);
+run(`tap(300, 100); look()`);
+// A redraw, as when a message arrives, keeps it whole.
+run(`render(); look()`);
+run(`tap(100, 100); look()`);
+run(`tap(300, 100); openTab(number(state.tabs[1])); button = title(state.tabs[1]); look()`);
+"#;
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "title false",
+            "title false 0",
+            "title whole true",
+            "title whole true",
+            "title false",
+            "title false",
+        ],
+        "{stdout}"
+    );
+}

@@ -21,6 +21,7 @@ const state = {
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   chosen: [], // { file, url }: the images chosen from the photo library, waiting over the composer
   full: null, // the name of the image shown whole, or null
+  whole: false, // the open tab's name shown whole at the top, until another tab or the drawer shows
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), kept across redraws
@@ -430,6 +431,7 @@ async function closeTab(n) {
 }
 
 function drawer() {
+  state.whole = false;
   const box = search();
   box.show();
   const head = header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)));
@@ -455,6 +457,25 @@ function drawer() {
 
 const current = () => state.tabs.find((t) => number(t) === state.open);
 
+// The tab's name at the top, cut to one line; a tap shows a name too long for
+// it whole, wrapped, and a second folds it back.
+function title(tab) {
+  const node = el(
+    "button",
+    { class: "title" + (state.whole ? " whole" : ""), "aria-expanded": String(state.whole) },
+    el("span", { class: "num " + hue(tab) }, tab.index),
+    " ",
+    tab.name,
+  );
+  node.addEventListener("click", () => {
+    const cut = node.scrollWidth > node.clientWidth;
+    if (!state.whole && !cut) return;
+    state.whole = !state.whole;
+    render();
+  });
+  return node;
+}
+
 function drop(i) {
   URL.revokeObjectURL(state.chosen[i].url);
   state.chosen.splice(i, 1);
@@ -469,6 +490,7 @@ async function openTab(n) {
   state.unfolded = new Set();
   while (state.chosen.length) drop(0);
   state.full = null;
+  state.whole = false;
   history.replaceState(null, "", "#" + n);
   render();
   await loadTurns();
@@ -757,10 +779,10 @@ function channelHead(tab) {
   const chip = tab.state === "waiting" ? ["waiting", "y"] : tab.state === "done" ? ["done", "g"] : tab.state === "idle" ? ["idle", ""] : ["working", "b"];
   return el(
     "div",
-    { class: "head" },
+    { class: "head" + (state.whole ? " whole" : "") },
     el("button", { class: "menu", "aria-label": "Tabs", onclick: () => { state.open = null; history.replaceState(null, "", "#"); render(); } }, "☰"),
     el("span", { class: "mark " + kind }, m),
-    el("span", { class: "title" }, el("span", { class: "num " + hue(tab) }, tab.index), " ", tab.name),
+    title(tab),
     el("span", { class: "chip " + chip[1] }, chip[0]),
   );
 }
