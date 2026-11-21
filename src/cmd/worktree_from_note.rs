@@ -1333,7 +1333,7 @@ pub(crate) fn run(
         duplicates_first(Some(&file)),
         check_first(hands_free),
     );
-    hand_over(given, &root, &path, &start, target, prompt)
+    hand_over(given, &root, &path, &start, target, prompt, &making)
 }
 
 /// The branch an item's worktree is cut from and lands on, as `--target`
@@ -1439,7 +1439,8 @@ pub(crate) fn onto_words(target: Option<&str>) -> String {
 /// The tab handed to Claude in the worktree, told `prompt` (with
 /// `--prompt`'s words after it), its session's push rule as `push_rule`
 /// says: through the cd-file and settings-file the `wt` function reads,
-/// or by starting Claude here.
+/// or by starting Claude here; a file it can't write takes back what
+/// `making` says the start made, since no Claude starts.
 pub(crate) fn hand_over(
     given: &Given,
     root: &Path,
@@ -1447,6 +1448,7 @@ pub(crate) fn hand_over(
     start: &str,
     target: Option<&str>,
     mut prompt: String,
+    making: &worktree::Making,
 ) -> Result<ExitCode, String> {
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
     if !extra.is_empty() {
@@ -1455,13 +1457,19 @@ pub(crate) fn hand_over(
     let settings = push_rule(path, root, start, target);
     // Read by the `wt` function: line 1 the worktree, the rest the prompt.
     if let Some(cd_file) = &given.cd_file {
-        worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", path.display()))
-            .map_err(|e| e.to_string())?;
+        worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", path.display())).map_err(
+            |e| {
+                making.undo();
+                e.to_string()
+            },
+        )?;
     }
     // Read by it too: the settings its Claude starts with, empty for none.
     if let Some(settings_file) = given.last("--settings-file") {
-        fs::write(settings_file, settings.as_deref().unwrap_or_default())
-            .map_err(|e| format!("couldn't write {settings_file}: {e}"))?;
+        fs::write(settings_file, settings.as_deref().unwrap_or_default()).map_err(|e| {
+            making.undo();
+            format!("couldn't write {settings_file}: {e}")
+        })?;
     }
     if given.no_claude {
         return Ok(ExitCode::SUCCESS);

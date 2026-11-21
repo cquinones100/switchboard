@@ -286,7 +286,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         &duplicates_first(None),
         target,
     );
-    hand_over(given, &root, &path, &start, target, prompt)
+    hand_over(given, &root, &path, &start, target, prompt, &making)
 }
 
 /// What Claude is told about the issue: where it is, its title and body as
