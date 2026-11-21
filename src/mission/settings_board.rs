@@ -56,7 +56,7 @@ struct Entry {
 /// the view lists them (`settings::categories`: the grouped ones last, a
 /// group's together); a category's counts from its heading in the view
 /// where it has one, which a filter keeps whole.
-fn entries(items: &[Item], ux2: bool) -> (Vec<Entry>, Vec<Entry>) {
+fn entries(items: &[Item]) -> (Vec<Entry>, Vec<Entry>) {
     let all = settings::shown_settings();
     let names = settings::categories(&all);
     let mut categories: Vec<Entry> = names
@@ -67,7 +67,7 @@ fn entries(items: &[Item], ux2: bool) -> (Vec<Entry>, Vec<Entry>) {
                 id: format!("header:{category}"),
                 name: match settings::category_group(category) {
                     Some((_, name)) => name.to_string(),
-                    None => settings::category_name(category, ux2).to_string(),
+                    None => category.to_string(),
                 },
                 group: settings::group_of(category, &names).map(str::to_string),
                 count: members.clone().count(),
@@ -423,7 +423,7 @@ pub fn board(
         .map(|f| f.text.trim())
         .filter(|t| !t.is_empty());
     // The panel: the categories, then your files.
-    let (categories, files) = entries(items, m.snap.rules.ux2);
+    let (categories, files) = entries(items);
     let side_w = categories
         .iter()
         .chain(&files)
@@ -622,7 +622,7 @@ mod tests {
     use super::*;
 
     fn rows() -> Vec<Item> {
-        views::settings_items(&[], true)
+        views::settings_items(&[])
     }
 
     #[test]
@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn a_short_screen_scrolls_the_panel_to_the_category_in_front() {
         let own = crate::usage::own::own_items(std::path::Path::new("/nonexistent/own"));
-        let items = views::settings_items(&own, true);
+        let items = views::settings_items(&own);
         let last = items.iter().rposition(|i| !views::is_header(i)).unwrap();
         let view = View {
             id: views::ViewId::Settings,
@@ -655,7 +655,6 @@ mod tests {
             loaded: true,
         };
         let mut m = Mission::new();
-        m.snap.rules.ux2 = true;
         m.cursor = last as isize;
         let (mut lines, mut hits, mut images) = (Vec::new(), Vec::new(), Vec::new());
         board(&view, &m, 140, 16, &mut lines, &mut hits, &mut images);
@@ -684,7 +683,6 @@ mod tests {
             loaded: true,
         };
         let mut m = Mission::new();
-        m.snap.rules.ux2 = true;
         m.cursor = reply as isize;
         let (mut lines, mut hits, mut images) = (Vec::new(), Vec::new(), Vec::new());
         board(&view, &m, 160, 80, &mut lines, &mut hits, &mut images);

@@ -3,7 +3,7 @@
 //! it with each one's spend and share, the rate limits as meters with their
 //! pace, today's spend by model as meters of each one's share, and the
 //! request audit with a sparkline and a meter a service. New
-//! with UX 2.0, with no tmux-version file behind it.
+//!, with no tmux-version file behind it.
 //!
 //! Everything it draws comes from the model `usage::charts` works out off
 //! the server's task (the view's first row carries it), so drawing reads

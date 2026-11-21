@@ -2,7 +2,7 @@
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-A to the
 //! next idle tab, M-c to the tab's Claude, M-y to copy its latest reply,
-//! M-f to pin a tab), M-h for the tab's history (new with UX 2.0,
+//! M-f to pin a tab), M-h for the tab's history (new,
 //! src/history), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-S-f, M-u, src/views), M-d (src/diff) and Notes'
 //! M-N and M-e (src/notes/serve.rs), M-0, C-w, M-R and M-O (src/extras), under the
@@ -43,7 +43,7 @@ pub enum Action {
     /// Back or forward through the tabs visited, as a browser's buttons.
     TabBack,
     TabForward,
-    /// The tab with this number (1-based, as the status line shows).
+    /// The tab with this number (1-based, as the header shows).
     SelectTab(usize),
     /// A new tab, its shell in the current pane's directory.
     NewTab,

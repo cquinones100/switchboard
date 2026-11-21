@@ -80,11 +80,22 @@ fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
 
 /// Settings for the tests: no desktop notifications from them.
 fn settings(server: &TestServer, extra: Value) {
+    common::write_settings(&server.home, all_settings(extra));
+}
+
+/// The settings `settings` writes, `extra` over them.
+fn all_settings(extra: Value) -> Value {
     let mut all = json!({"notifications": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    common::write_settings(&server.home, all);
+    all
+}
+
+/// A server started with what `settings` writes, so they hold from its
+/// first draw.
+fn start(extra: Value) -> TestServer {
+    TestServer::start_with_settings(&all_settings(extra).to_string())
 }
 
 /// Writes a Claude session file for `pid`, as Claude Code does for each of
@@ -139,9 +150,8 @@ fn wait_list(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) -> 
 }
 
 #[test]
-fn a_hook_marks_its_pane_and_the_status_line_shows_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+fn a_hook_marks_its_pane_and_the_sidebar_shows_it() {
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -157,7 +167,12 @@ fn a_hook_marks_its_pane_and_the_status_line_shows_it() {
     assert_eq!(agent["state"], "working");
     assert_eq!(agent["loop"], "review");
     assert!(agent["since"].as_i64().unwrap() > 0);
-    client.wait_for("the working badge", |s| s[29].contains("1:  ⋯"));
+    // The sidebar's row, under the loop's heading.
+    let side =
+        |s: &[String]| -> Vec<String> { s.iter().map(|l| l.chars().take(34).collect()).collect() };
+    client.wait_for("the working badge", |s| {
+        side(s).iter().any(|l| l.contains("REVIEW LOOP"))
+    });
 
     hook(
         &server,
@@ -172,15 +187,14 @@ fn a_hook_marks_its_pane_and_the_status_line_shows_it() {
 
     // Finishing in the tab you're looking at isn't news, so look elsewhere.
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     hook(&server, &pane, "Stop", json!({"session_id": "s-1"}));
     let list = server.list();
     assert_eq!(pane_of(&list, &pane)["agent"]["state"], "done");
     assert_eq!(tabs(&list)[0]["agent"], "done");
-    let screen = client.wait_for("the done badge and count", |s| {
-        s[29].contains("1:  ✓") && s[29].contains("✓ 1")
+    client.wait_for("the done badge", |s| {
+        side(s).iter().any(|l| l.contains("✓ 1 home"))
     });
-    assert!(!screen[29].contains('⋯'), "{:?}", screen[29]);
 
     hook(
         &server,
@@ -194,27 +208,28 @@ fn a_hook_marks_its_pane_and_the_status_line_shows_it() {
         "waiting"
     );
     client.wait_for("the waiting badge", |s| {
-        s[29].contains("1:  !") && s[29].contains("! 1")
+        side(s).iter().any(|l| l.contains("● 1 home"))
     });
 
     hook(&server, &pane, "SessionEnd", json!({"reason": "exit"}));
     let list = server.list();
     assert_eq!(pane_of(&list, &pane)["agent"], Value::Null);
     assert_eq!(tabs(&list)[0]["agent"], Value::Null);
-    client.wait_for("no badge", |s| !s[29].contains('!'));
+    client.wait_for("no badge", |s| {
+        side(s).iter().any(|l| l.contains("○ 1 home"))
+    });
 }
 
 #[test]
 fn a_finished_tab_clears_once_it_has_been_in_front() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s-1"}));
     let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     hook(&server, &pane, "Stop", json!({}));
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
@@ -237,8 +252,7 @@ fn a_finished_tab_clears_once_it_has_been_in_front() {
 
 #[test]
 fn seen_marks_a_finished_tab_seen_from_away() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -246,7 +260,7 @@ fn seen_marks_a_finished_tab_seen_from_away() {
     let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
     // Another tab in front, as when you are away at the phone.
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     hook(&server, &pane, "Stop", json!({}));
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
@@ -278,8 +292,7 @@ fn seen_marks_a_finished_tab_seen_from_away() {
 
 #[test]
 fn a_claude_parked_behind_a_tool_still_marks_its_tab_and_is_seen_there() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     // A stand-in lazygit to take the pane's place.
     stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(100, 30);
@@ -295,7 +308,7 @@ fn a_claude_parked_behind_a_tool_still_marks_its_tab_and_is_seen_there() {
     // The tab still shows what its Claude is doing behind it.
     assert_eq!(tabs(&server.list())[0]["agent"], "working");
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     hook(&server, &pane, "Stop", json!({}));
     assert_eq!(tabs(&server.list())[0]["agent"], "done");
     // Looking at the tab sees it finished, though lazygit is in front.
@@ -319,8 +332,7 @@ fn say(file: &Path, entry: Value) {
 
 #[test]
 fn a_request_you_denied_hands_the_tab_back_as_idle_a_parked_claude_s_too() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
@@ -383,8 +395,7 @@ fn a_request_you_denied_hands_the_tab_back_as_idle_a_parked_claude_s_too() {
 
 #[test]
 fn a_request_auto_mode_allows_keeps_the_tab_working_until_a_prompt_reaches_you() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -422,8 +433,7 @@ fn a_request_auto_mode_allows_keeps_the_tab_working_until_a_prompt_reaches_you()
 
 #[test]
 fn a_permission_request_with_no_tool_takes_the_transcripts_words() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -458,8 +468,7 @@ fn a_permission_request_with_no_tool_takes_the_transcripts_words() {
 
 #[test]
 fn work_you_interrupted_hands_the_tab_back_as_idle_until_the_next_prompt() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -509,8 +518,7 @@ fn work_you_interrupted_hands_the_tab_back_as_idle_until_the_next_prompt() {
 
 #[test]
 fn a_compact_you_typed_that_fails_hands_the_tab_back_as_idle() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -544,8 +552,7 @@ fn a_compact_you_typed_that_fails_hands_the_tab_back_as_idle() {
 
 #[test]
 fn a_shell_command_typed_to_claude_shows_the_tab_working() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -574,8 +581,7 @@ fn a_shell_command_typed_to_claude_shows_the_tab_working() {
 
 #[test]
 fn a_pane_not_running_claude_keeps_no_state() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, _) = first_pane(&server);
@@ -587,8 +593,7 @@ fn a_pane_not_running_claude_keeps_no_state() {
 
 #[test]
 fn a_shell_holding_a_dead_claude_s_pid_drops_its_state() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -620,8 +625,7 @@ fn a_shell_holding_a_dead_claude_s_pid_drops_its_state() {
 
 #[test]
 fn a_headless_claudes_hooks_mark_nothing() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -649,8 +653,7 @@ fn a_headless_claudes_hooks_mark_nothing() {
 
 #[test]
 fn a_backgrounded_conversation_marks_the_tab_it_came_from() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -666,7 +669,7 @@ fn a_backgrounded_conversation_marks_the_tab_it_came_from() {
         json!({"sessionId": "job", "jobId": "j1"}),
     );
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     let got = run_hook(
         &server.home,
         &server.state,
@@ -697,8 +700,7 @@ fn a_backgrounded_conversation_marks_the_tab_it_came_from() {
 
 #[test]
 fn a_second_claude_in_a_tab_gets_a_tab_of_its_own() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (first, first_pid) = first_pane(&server);
@@ -744,14 +746,13 @@ fn tab_count(server: &TestServer) -> usize {
 
 #[test]
 fn the_keys_go_to_what_needs_you_to_claude_and_pin() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s"}));
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     hook(
         &server,
         &pane,
@@ -926,8 +927,7 @@ fn stand_in_clipboard(server: &TestServer) {
 
 #[test]
 fn m_y_copies_the_latest_reply_of_the_tabs_claude() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     stand_in_clipboard(&server);
     let mut client = server.attach(100, 30);
     client.wait_text("$");
@@ -993,16 +993,15 @@ fn m_y_copies_the_latest_reply_of_the_tabs_claude() {
 
 #[test]
 fn m_shift_a_walks_the_idle_tabs_wrapping_round() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     // The first two tabs' shells stand in for an idle Claude; the third
     // runs none, so it is no idle tab.
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     server.ok(&["new-tab", "-n", "plain"]);
-    client.wait_text("3:plain");
+    client.wait_text("3 plain");
     for (n, t) in tabs(&server.list()).iter().take(2).enumerate() {
         let pid = t["panes"][0]["pid"].as_u64().unwrap();
         session_file(&server.home, pid, json!({"sessionId": format!("s-{n}")}));
@@ -1070,8 +1069,7 @@ fn context_in(server: &TestServer, pane: &str) -> String {
 
 #[test]
 fn a_session_starting_in_a_tab_with_a_note_is_pointed_at_it() {
-    let server = TestServer::start();
-    settings(&server, json!({"tab_note_context": true}));
+    let server = start(json!({"tab_note_context": true}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, _) = first_pane(&server);
@@ -1112,7 +1110,7 @@ fn a_session_starting_in_a_tab_is_told_its_number() {
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     let second = tabs(&server.list())[1].clone();
     let pane = second["panes"][0]["id"].as_str().unwrap().to_string();
     let context = context_in(&server, &pane);
@@ -1141,8 +1139,7 @@ fn hook_says(server: &TestServer, pane: &str, event: &str, input: Value) -> Stri
 
 #[test]
 fn a_hands_free_tab_has_its_questions_answered_for_claude() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -1275,8 +1272,7 @@ fn wait_file(path: &Path, what: &str, pred: impl Fn(&str) -> bool) -> String {
 
 #[test]
 fn a_hands_free_tab_s_choices_are_written_into_its_plan_by_the_server() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -1378,8 +1374,7 @@ fn a_hands_free_tab_s_choices_are_written_into_its_plan_by_the_server() {
 
 #[test]
 fn the_landing_push_after_a_yes_is_asked_unless_the_tab_lands_without_asking() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -1441,8 +1436,7 @@ fn the_landing_push_after_a_yes_is_asked_unless_the_tab_lands_without_asking() {
 
 #[test]
 fn a_tab_follows_the_directory_its_claude_works_in_and_never_a_removed_one() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, _) = first_pane(&server);
@@ -1486,8 +1480,7 @@ fn a_tab_follows_the_directory_its_claude_works_in_and_never_a_removed_one() {
 
 #[test]
 fn a_session_ending_hands_the_tab_back_to_its_program_s_directory() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, _) = first_pane(&server);

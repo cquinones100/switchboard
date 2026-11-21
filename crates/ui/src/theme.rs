@@ -1,4 +1,4 @@
-//! Dark and light: the shades the status line, the lines between panes, the
+//! Dark and light: the shades the header, the lines between panes, the
 //! panes without the focus and the boxes are drawn in, as tmux/theme.sh set
 //! them for each mode (`status-style`, `window-status-format`,
 //! `@button_style`, `pane-border-style`, `window-style`), and which mode is
@@ -80,82 +80,50 @@ impl Theme {
 /// The shades one mode draws in, by the 256-colour palette's numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
-    /// The status line's background and text (`status-style`, theme.sh's
-    /// `BG_DARK` and `FG`).
+    /// A tab's header before its color is known (tmux's `status-style`,
+    /// theme.sh's `BG_DARK`).
     pub status_bg: Color,
-    pub status_fg: Color,
-    /// A tab's number and name before its color is known (`FG_DIM`).
-    pub tab_fg: Color,
-    /// The current tab's background (`BG_MED`).
-    pub current_bg: Color,
-    /// The session's name on its badge (`FG_BRIGHT`), and the second status
-    /// line's label.
+    /// Bright words (`FG_BRIGHT`).
     pub bright: Color,
-    /// Fainter words on the second status line (`FG_DIM`).
+    /// Fainter words (`FG_DIM`).
     pub dim: Color,
     /// The lines between panes (`pane-border-style`, `BG_MED`).
     pub border: Color,
     /// The background of a pane without the focus (`window-style`, `BG_DIM`).
     pub inactive_bg: Color,
-    /// The ⌘ Commands button (`@button_style`).
-    pub button_bg: Color,
-    pub button_fg: Color,
 }
 
 impl Palette {
     pub const DARK: Palette = Palette {
         status_bg: Color::Indexed(235),
-        status_fg: Color::Indexed(248),
-        tab_fg: Color::Indexed(244),
-        current_bg: Color::Indexed(238),
         bright: Color::Indexed(255),
         dim: Color::Indexed(244),
         border: Color::Indexed(238),
         inactive_bg: Color::Indexed(236),
-        button_bg: Color::Indexed(238),
-        button_fg: Color::Indexed(255),
     };
     pub const LIGHT: Palette = Palette {
         status_bg: Color::Indexed(253),
-        status_fg: Color::Indexed(234),
-        tab_fg: Color::Indexed(238),
-        current_bg: Color::Indexed(248),
         bright: Color::Indexed(232),
         dim: Color::Indexed(238),
         border: Color::Indexed(248),
         inactive_bg: Color::Indexed(254),
-        button_bg: Color::Indexed(250),
-        button_fg: Color::Indexed(232),
     };
     /// The dark mode in the UX 2.0 canvas's own colors, for a terminal that
     /// draws truecolor (`truecolor`).
     pub const DARK_TRUE: Palette = Palette {
         status_bg: Color::Rgb(0x20, 0x24, 0x3a),
-        status_fg: Color::Rgb(0xc9, 0xcd, 0xd9),
-        tab_fg: Color::Rgb(0x8d, 0x93, 0xa8),
-        current_bg: Color::Rgb(0x26, 0x2b, 0x40),
         bright: Color::Rgb(0xff, 0xff, 0xff),
         dim: Color::Rgb(0x8d, 0x93, 0xa8),
         border: Color::Rgb(0x3a, 0x3f, 0x52),
         inactive_bg: Color::Rgb(0x1b, 0x1e, 0x29),
-        button_bg: Color::Rgb(0x26, 0x2b, 0x40),
-        button_fg: Color::Rgb(0xff, 0xff, 0xff),
     };
 }
 
-/// The session badge's background before the current tab's color is known
-/// (tmux.conf's `colour24`, which update-colors.sh replaced on the first
-/// focus).
-pub const SESSION_BG: Color = Color::Indexed(24);
 /// The accent: the focused pane's lines and the current tab before its
 /// color is known (`colour81`).
 pub const ACCENT: Color = Color::Indexed(81);
-/// The health light's red (`colour196`).
+/// A failure's red (`colour196`).
 pub const RED: Color = Color::Indexed(196);
-/// The second status line's "waiting on you" and "finished" (`colour220`,
-/// `colour41`), the badges' own yellow and green.
-pub const YELLOW: Color = Color::Indexed(220);
-pub const GREEN: Color = Color::Indexed(41);
 
 /// What a terminal said its background is: not known, dark or light.
 static SYSTEM: AtomicU8 = AtomicU8::new(UNKNOWN);
@@ -410,9 +378,7 @@ mod tests {
     #[test]
     fn the_light_palette_is_theme_sh_s() {
         assert_eq!(Palette::LIGHT.status_bg, Color::Indexed(253));
-        assert_eq!(Palette::LIGHT.button_bg, Color::Indexed(250));
         assert_eq!(Palette::DARK.inactive_bg, Color::Indexed(236));
-        assert_eq!(Palette::DARK.button_fg, Color::Indexed(255));
     }
 
     #[test]
@@ -424,6 +390,6 @@ mod tests {
         assert_eq!(drawing_for(true, palette), &Palette::DARK_TRUE);
         assert_eq!(drawing_for(true, theme), Theme::DARK_TRUE);
         assert_eq!(palette(), &Palette::DARK, "put back after the draw");
-        assert_eq!(Palette::DARK_TRUE.status_fg, Color::Rgb(0xc9, 0xcd, 0xd9));
+        assert_eq!(Palette::DARK_TRUE.status_bg, Color::Rgb(0x20, 0x24, 0x3a));
     }
 }

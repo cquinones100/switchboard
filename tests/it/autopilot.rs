@@ -156,60 +156,25 @@ fn set_up_in(
     .unwrap();
 
     // Wide enough for the Autopilot view's board beside the sidebar.
-    let cols = if more.get("ux2").is_some() { 170 } else { 120 };
-    let mut client = server.attach(cols, 40);
+    let mut client = server.attach(170, 40);
     client.wait_text("$");
-    if more.get("ux2").is_some() {
-        client.wait_text("M-c Claude");
-    }
+    client.wait_text("M-c Claude");
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
     client.type_text("\x1bp");
     client.wait_text("Actions");
     client.type_text("autopilot");
     client.wait_text("Autopilot: work a note");
     client.type_text("\r");
-    if more.get("ux2").is_some() {
-        // With UX 2.0, its settings box, on the note and the pane's
-        // repository, which starts it with the counts as they were.
-        let screen = client.wait_text("M-↵  Start");
-        assert!(
-            screen.iter().any(|l| l.contains("Work a note")),
-            "{screen:#?}"
-        );
-        assert!(screen.iter().any(|l| l.contains("› Work ")), "{screen:#?}");
-        assert!(screen.iter().any(|l| l.contains("› ~/repo")), "{screen:#?}");
-        client.type_text("\x1b\r");
-        client.wait_text(
-            "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
-        );
-        return (notes, note, server, client, repo);
-    }
-    let screen = client.wait_text("More notes…");
+    // Its settings box, on the note and the pane's
+    // repository, which starts it with the counts as they were.
+    let screen = client.wait_text("M-↵  Start");
     assert!(
-        screen
-            .iter()
-            .any(|l| l.contains("Work which note continuously?"))
+        screen.iter().any(|l| l.contains("Work a note")),
+        "{screen:#?}"
     );
-    assert!(
-        !screen.iter().any(|l| l.contains("Done")),
-        "a note with nothing unticked is behind More notes…"
-    );
-    client.type_text("\r");
-    // Where it lands: the default branch first, so Enter keeps it.
-    let screen = client.wait_text("Another branch…");
-    assert!(
-        screen
-            .iter()
-            .any(|l| l.contains("main (the default branch)"))
-    );
-    assert!(screen.iter().any(|l| l.contains("team/next")));
-    client.type_text("\r");
-    client.wait_text("Tabs working at once");
-    client.type_text("\r");
-    client.wait_text("Tabs open at most");
-    client.type_text("\r");
-    client.wait_text("Spend limit");
-    client.type_text("\r");
+    assert!(screen.iter().any(|l| l.contains("› Work ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("› ~/repo")), "{screen:#?}");
+    client.type_text("\x1b\r");
     client.wait_text(
         "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
     );
@@ -217,8 +182,8 @@ fn set_up_in(
 }
 
 #[test]
-fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
-    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+fn it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({}));
     // M-p's command opened mission control on the Autopilot board, its
     // heading saying what the line said, and, once the queue is read, when
     // its ready items should be done.
@@ -245,9 +210,9 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 }
 
 #[test]
-fn with_ux2_its_command_shows_its_board_whose_menu_and_button_open_its_settings_box_whose_m_opens_the_menu()
- {
-    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+fn its_command_shows_its_board_whose_menu_and_button_open_its_settings_box_whose_m_opens_the_menu()
+{
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({}));
     client.wait_text("WAITING ON YOU");
     client.type_text("\x1b");
     client.wait_for("mission control closed", |s| {
@@ -305,8 +270,8 @@ fn with_ux2_its_command_shows_its_board_whose_menu_and_button_open_its_settings_
 }
 
 #[test]
-fn with_ux2_the_boards_m_pauses_lands_and_stops_while_a_cards_enter_keeps_to_its_item() {
-    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+fn the_boards_m_pauses_lands_and_stops_while_a_cards_enter_keeps_to_its_item() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({}));
     client.wait_text("WAITING ON YOU");
     // Enter on the chosen card offers only what acts on it.
     client.type_text("\r");
@@ -344,9 +309,9 @@ fn with_ux2_the_boards_m_pauses_lands_and_stops_while_a_cards_enter_keeps_to_its
 }
 
 #[test]
-fn with_ux2_a_blocked_cards_enter_goes_to_the_tab_working_the_item_it_waits_on() {
+fn a_blocked_cards_enter_goes_to_the_tab_working_the_item_it_waits_on() {
     let (_notes, _note, server, mut client, _repo) = set_up_with(
-        json!({ "ux2": true }),
+        json!({}),
         "# Work\n\n- [ ] First thing\n- [ ] Second thing\n  After: First thing\n",
         &[],
     );
@@ -389,8 +354,8 @@ fn with_ux2_a_blocked_cards_enter_goes_to_the_tab_working_the_item_it_waits_on()
 }
 
 #[test]
-fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages() {
-    let (notes, note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+fn the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages() {
+    let (notes, note, server, mut client, _repo) = set_up(json!({}));
     client.wait_text("WAITING ON YOU");
     // The first item's plan, in the plans folder beside the note, linked
     // under it; the second item links none.
@@ -498,7 +463,7 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
             .iter()
             .any(|t| t["options"]["@autopilot_item"] == "Second thing")
     });
-    client.wait_text("nothing left to take");
+    client.wait_text("nothing more to start");
     assert_eq!(opened(&server).len(), 2, "one tab an item, each once");
     let mode: Value = serde_json::from_str(
         &std::fs::read_to_string(server.state.join("autopilot.json")).unwrap(),
@@ -510,13 +475,11 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
     );
 
     // Its menu's "Land without asking", after a yes naming what it skips
-    // and keeps: its tabs not landed yet are marked, and its line says so.
-    // Mission control is open still, its line above the cards: k reaches
-    // it, and Enter opens its menu.
-    client.type_text("kkkk");
-    client.type_text("\r");
+    // and keeps: its tabs not landed yet are marked, and its board says so.
+    // Mission control is open still on its board, whose own menu is m's.
+    client.type_text("m");
     client.wait_text("Land without asking");
-    client.type_text("jjj\r");
+    client.type_text("/Land without\r");
     let screen = client.wait_text("without asking to push?");
     assert!(
         screen
@@ -533,13 +496,13 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
             .is_some_and(|m| m["landWithoutAsking"] == true)
             && opened(&server).iter().all(|t| t["options"]["@land"] == "1")
     });
-    client.wait_text("lands on its own");
+    client.wait_text("lands without asking");
 
     // Its menu's "Hands-free", after a yes naming what it decides and what
     // still stops: its tabs are marked, and its line says so.
-    client.type_text("\r");
+    client.type_text("m");
     client.wait_text("Hands-free: decide for me");
-    client.type_text("jjjj\r");
+    client.type_text("/Hands-free\r");
     let screen = client.wait_text("decide for you, hands-free?");
     assert!(
         screen
@@ -559,21 +522,6 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
                 .all(|t| t["options"]["@autopilot_handsfree"] == "1")
     });
     client.wait_text("hands-free");
-
-    // Its menu's "Change the target branch…": the tabs it opens from now
-    // land on the branch picked, which its line names.
-    client.type_text("\r");
-    client.wait_text("Change the target branch…");
-    client.type_text("jjjjj\r");
-    client.wait_text("Another branch…");
-    client.type_text("team/next\r");
-    wait("the target kept", &server, || {
-        std::fs::read_to_string(server.state.join("autopilot.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .is_some_and(|m| m["target"] == "team/next")
-    });
-    client.wait_text("→ team/next");
 
     // Renamed outside Notes: followed by its ID, its new path kept.
     std::fs::create_dir_all(notes.path().join("Projects")).unwrap();
@@ -674,7 +622,7 @@ fn hook(server: &TestServer, pane: &str, event: &str) {
 
 #[test]
 fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed() {
-    let (_notes, _note, server, mut client, repo) = set_up(json!({ "ux2": true }));
+    let (_notes, _note, server, mut client, repo) = set_up(json!({}));
     client.wait_text("WAITING ON YOU");
     let first = |server: &TestServer| {
         opened(server)
@@ -754,8 +702,7 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
 // of autopilot.json's closed ones and never in the sidebar.
 #[test]
 fn a_landed_tab_closed_unseen_stays_out_of_the_sidebar_with_its_notifications_off() {
-    let (_notes, _note, server, mut client, repo) =
-        set_up(json!({ "ux2": true, "autopilot_close": "now" }));
+    let (_notes, _note, server, mut client, repo) = set_up(json!({ "autopilot_close": "now" }));
     client.wait_text("WAITING ON YOU");
     let first = |server: &TestServer| {
         opened(server)
@@ -831,7 +778,7 @@ fn open_box(client: &mut TestClient, tabs: usize) {
 
 #[test]
 fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes() {
-    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({}));
     client.wait_text("☰ Menu");
     let before = mode(&server);
 
@@ -1468,7 +1415,7 @@ fn a_merged_pr_s_tab_lands_and_takes_its_issue_s_claim_label_off() {
     github.expect_refusals();
     let (graphql, api) = (github.graphql_url(), github.url.clone());
     let (_notes, _note, server, mut client, repo) = set_up_in(
-        json!({ "ux2": true, "github": true }),
+        json!({ "github": true }),
         "# Work\n\n- [ ] First thing\n- [ ] Second thing\n",
         &[],
         &[

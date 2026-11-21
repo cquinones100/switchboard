@@ -9,8 +9,7 @@
 //! Haiku is given (`split`, `input`, `commits`), the key a story is kept
 //! under (`key`), how its answer becomes the list's order and headings
 //! (`parse`), how an answer still streaming reads on the cover (`partial`,
-//! `progress`), the lines a page's heading and a hunk's note are drawn
-//! in (`heading`, `note_lines`), and the story of a diff running to the
+//! `progress`), and the story of a diff running to the
 //! working tree, its files not committed yet in a last page
 //! (`with_uncommitted`), all as the Lua module had them, so a story cached
 //! by Neovim reads the same here.
@@ -2054,42 +2053,6 @@ pub fn jump(starts: &[bool], at: usize, step: i32) -> Option<usize> {
     (1..current).rev().find(|&i| starts[i - 1])
 }
 
-/// The columns a terminal draws `text` in.
-fn width(text: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(text)
-}
-
-/// `text`'s words in lines of at most `cols` columns, each after `indent`
-/// (the first after `first`), a word longer than a line cut to fit.
-pub fn wrap(text: &str, cols: usize, first: &str, indent: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    let mut lead = first.to_string();
-    let room = |lead: &str| cols.saturating_sub(width(lead)).max(1);
-    for word in text.split(lua_space).filter(|w| !w.is_empty()) {
-        if !line.is_empty() && width(&format!("{line} {word}")) > room(&lead) {
-            lines.push(format!("{lead}{line}"));
-            line.clear();
-            lead = indent.to_string();
-        }
-        line = if line.is_empty() {
-            word.to_string()
-        } else {
-            format!("{line} {word}")
-        };
-        while width(&line) > room(&lead) {
-            let head = chars(&line, room(&lead));
-            lines.push(format!("{lead}{head}"));
-            line = line.chars().skip(head.chars().count()).collect();
-            lead = indent.to_string();
-        }
-    }
-    if !line.is_empty() {
-        lines.push(format!("{lead}{line}"));
-    }
-    lines
-}
-
 static FIRST_SENTENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*?[.!?])[ \t\n\r\x0b\x0c]").unwrap());
 
@@ -2101,76 +2064,17 @@ pub fn first_sentence(why: &str) -> String {
     }
 }
 
-/// What a line of a heading or note is drawn as.
+/// What a line over the list's files is drawn as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Look {
-    /// Neovim's Normal: a blank line between pages.
-    Normal,
-    /// A page's number and title.
+    /// A commit's subject.
     Title,
-    /// A why, or a note.
+    /// The keys under it.
     Comment,
-    /// What a reviewer should watch for.
-    Watch,
 }
 
 /// The mark a page's watch line starts with.
 pub use switchboard_ui::kit::WATCH_MARK;
-
-/// The lines over a page's first file in the list: its number and
-/// title, then its why (with `short`, its first sentence alone) and its
-/// watch line, each
-/// wrapped to `cols` columns, a blank line before every page but the first.
-pub fn heading(story: &Story, i: usize, cols: usize, short: bool) -> Vec<(String, Look)> {
-    let page = &story.pages[i - 1];
-    let why = if short {
-        first_sentence(&page.why)
-    } else {
-        page.why.clone()
-    };
-    let mut lines: Vec<(String, Look)> = Vec::new();
-    if i > 1 {
-        lines.push((String::new(), Look::Normal));
-    }
-    let number = format!("{} ", page_of(story, i, chapter_of(story, i)));
-    for text in wrap(&page.title, cols, &number, "    ") {
-        lines.push((text, Look::Title));
-    }
-    for text in wrap(&why, cols, "  ", "  ") {
-        lines.push((text, Look::Comment));
-    }
-    if !page.watch.is_empty() {
-        for text in wrap(&page.watch, cols, &format!("  {WATCH_MARK} "), "    ") {
-            lines.push((text, Look::Watch));
-        }
-    }
-    lines
-}
-
-/// The lines over a hunk in the diff, wrapped to `cols`: its note, and, for
-/// a hunk of another page than `home` (the file's, or the page's), that
-/// page's number and title first, so a file split between pages shows
-/// it; `None` for a hunk of its home page with no note.
-pub fn note_lines(story: &Story, hunk: &HunkNote, home: usize, cols: usize) -> Option<Vec<String>> {
-    let other = (hunk.page != home)
-        .then(|| story.pages.get(hunk.page.wrapping_sub(1)))
-        .flatten();
-    if hunk.note.is_empty() && other.is_none() {
-        return None;
-    }
-    let text = match other {
-        Some(other) => {
-            let from = chapter_of(story, home);
-            let mut text = format!("{} {}", page_of(story, hunk.page, from), other.title);
-            if !hunk.note.is_empty() {
-                text.push_str(&format!(" · {}", hunk.note));
-            }
-            text
-        }
-        None => hunk.note.clone(),
-    };
-    Some(wrap(&text, cols, "▎ ", "▎ "))
-}
 
 /// The last page's title in a diff running to the working tree, and the
 /// first's when the commits have no story of their own.
@@ -2434,50 +2338,6 @@ mod tests {
         assert_eq!(story.place["README.md"], 4);
         assert_eq!(story.place["pnpm-lock.yaml"], 5);
         assert_eq!(
-            heading(&story, 2, 24, false),
-            vec![
-                (String::new(), Look::Normal),
-                ("2/4 Show it".into(), Look::Title),
-                ("  The page shows it, a }".into(), Look::Comment),
-                ("  and all.".into(), Look::Comment),
-            ],
-            "its number and title, then its why, a brace in it kept"
-        );
-        let narrow = Story {
-            pages: vec![Page {
-                title: "Check the one-worktree cleanup mode".into(),
-                why: "The --worktree path must keep the same safety rules everywhere.".into(),
-                watch: String::new(),
-                files: vec![],
-                touches: vec![],
-                ..Default::default()
-            }],
-            place: HashMap::new(),
-            page: HashMap::new(),
-            hunks: HashMap::new(),
-            missed: None,
-            ..Default::default()
-        };
-        let lines: Vec<String> = heading(&narrow, 1, 16, false)
-            .into_iter()
-            .map(|(t, _)| t)
-            .collect();
-        assert_eq!(
-            lines,
-            strings(&[
-                "1/1 Check the",
-                "    one-worktree",
-                "    cleanup mode",
-                "  The --worktree",
-                "  path must keep",
-                "  the same",
-                "  safety rules",
-                "  everywhere."
-            ]),
-            "a long title and why wrapped to the list's width"
-        );
-        assert!(lines.iter().all(|l| l.chars().count() <= 16));
-        assert_eq!(
             parse("no json here", &strings(&["a"]), generated, &Hunks::new()),
             Err(None),
             "no story from an answer that isn't one"
@@ -2708,10 +2568,6 @@ mod tests {
             ["", "Old rows keep the default."],
             "a page with no watch reads \"\""
         );
-        assert_eq!(
-            heading(&story, 2, 80, false).last().unwrap(),
-            &("  ⚠ Old rows keep the default.".to_string(), Look::Watch)
-        );
         let files: Vec<Vec<String>> = story.pages.iter().map(|c| c.files.clone()).collect();
         assert_eq!(
             files,
@@ -2741,18 +2597,6 @@ mod tests {
         assert!(
             why.chars().count() <= 400 && why.ends_with("call."),
             "{why}"
-        );
-        assert_eq!(
-            heading(&story, 1, 80, true).last().unwrap().0,
-            "  It adds the field. …"
-        );
-        assert_eq!(
-            note_lines(&story, &story.hunks["src/big.js"][1], 1, 80),
-            Some(strings(&["▎ 2/2 Show it"]))
-        );
-        assert_eq!(
-            note_lines(&story, &story.hunks["src/big.js"][2], 1, 80),
-            None
         );
         let md = markdown(&story);
         assert!(md.starts_with("# The diff's story\n\n### 1. Add the field\n\nIt adds the field."));
@@ -2993,14 +2837,6 @@ mod tests {
         );
         assert_eq!((untold.place["a.js"], untold.place["b.js"]), (1, 2));
         assert_eq!((untold.page["a.js"], untold.page["b.js"]), (1, 2));
-        // Headed with no why under its title.
-        assert_eq!(
-            heading(&untold, 2, 40, false),
-            vec![
-                (String::new(), Look::Normal),
-                ("2/2 Not committed yet".into(), Look::Title)
-            ]
-        );
     }
 
     /// A diff of five files for a map: a store added, a count that calls

@@ -327,6 +327,8 @@ fn m_p_builds_the_checkout_and_installs_it_before_restarting() {
     let trusted = server.home.join(".config/switchboard/trusted-dirs");
     std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
     std::fs::write(&trusted, format!("{}\n", checkout.display())).unwrap();
+    // No sidebar for the build row to show in, so each step is said in a box.
+    common::write_settings(&server.home, serde_json::json!({"sidebar": false}));
     let target = checkout.join("target");
     std::fs::create_dir_all(&target).unwrap();
     common::stand_in::install(
@@ -335,6 +337,9 @@ fn m_p_builds_the_checkout_and_installs_it_before_restarting() {
     );
     let mut client = server.attach(100, 30);
     client.wait_text("$");
+    client.wait_for("the sidebar gone", |_| {
+        server.list()["sessions"][0]["sidebar"]["columns"] == 0
+    });
     let server_pid = server.pid().unwrap();
 
     // A binary put in place by hand since the server started is the latest:
@@ -696,6 +701,8 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
     let trusted = server.home.join(".config/switchboard/trusted-dirs");
     std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
     std::fs::write(&trusted, format!("{}\n", main.display())).unwrap();
+    // No sidebar for the build row to show in, so each step is said in a box.
+    common::write_settings(&server.home, serde_json::json!({"sidebar": false}));
     let target = main.join("target");
     std::fs::create_dir_all(&target).unwrap();
     common::stand_in::install(
@@ -712,6 +719,9 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
     };
     let mut client = server.attach(160, 40);
     client.wait_text("$");
+    client.wait_for("the sidebar gone", |_| {
+        server.list()["sessions"][0]["sidebar"]["columns"] == 0
+    });
 
     // Uncommitted changes: said, and nothing built.
     std::fs::write(main.join("file"), "").unwrap();
@@ -928,7 +938,7 @@ fn spot(screen: &[String], text: &str) -> Option<(usize, usize)> {
 }
 
 #[test]
-fn with_ux2_the_restart_builds_in_the_sidebars_row_without_blocking() {
+fn the_restart_builds_in_the_sidebars_row_without_blocking() {
     let dir = common::TempDir::new("sbc");
     let checkout = dir.path().join("checkout");
     std::fs::create_dir_all(&checkout).unwrap();
@@ -937,10 +947,7 @@ fn with_ux2_the_restart_builds_in_the_sidebars_row_without_blocking() {
         "SWITCHBOARD_CHECKOUT",
         checkout.to_str().unwrap(),
     )]);
-    common::write_settings(
-        &server.home,
-        serde_json::json!({ "ux2": true, "tips": false }),
-    );
+    common::write_settings(&server.home, serde_json::json!({ "tips": false }));
     let trusted = server.home.join(".config/switchboard/trusted-dirs");
     std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
     std::fs::write(&trusted, format!("{}\n", checkout.display())).unwrap();
@@ -1116,7 +1123,7 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
         ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
         ("SWITCHBOARD_BUILT_FROM", &built),
     ]);
-    let mut client = server.attach(140, 36);
+    let mut client = server.attach(200, 36);
     client.wait_text("$");
     let tab = server.list()["sessions"][0]["tabs"][0]["id"].to_string();
     let tab = tab.trim_matches('"').to_string();
@@ -1146,7 +1153,7 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
     // for the whole line.
     client.type_text("\x1b ");
     client.wait_text("MISSION CONTROL");
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("Switchboard's main has 1 landing this build lacks");
     land(2);
     let screen = client.wait_text("Switchboard's main has 2 landings this build lacks");

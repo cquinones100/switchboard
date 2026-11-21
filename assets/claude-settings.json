@@ -19,7 +19,6 @@
       "Bash(switchboard setting review_security)",
       "Bash(switchboard setting apply_after_landing)",
       "Bash(switchboard setting slack_threads)",
-      "Bash(switchboard setting ux2)",
       "Bash(switchboard setting relay_*)",
       "Bash(switchboard apply-actions *)",
       "Bash(switchboard landing)",

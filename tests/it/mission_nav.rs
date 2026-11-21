@@ -15,7 +15,6 @@ const ALT: &str = "\x1b";
 
 fn settings(extra: Value) -> String {
     let mut all = json!({
-        "ux2": true,
         "notifications": false,
         "tips": false,
         "github": false,

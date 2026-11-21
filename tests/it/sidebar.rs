@@ -24,11 +24,22 @@ const ALT: &str = "\x1b";
 
 /// Settings for the tests: no desktop notifications from them, and these.
 fn settings(server: &TestServer, extra: Value) {
+    common::write_settings(&server.home, all_settings(extra));
+}
+
+/// The settings `settings` writes, `extra` over them.
+fn all_settings(extra: Value) -> Value {
     let mut all = json!({"notifications": false, "tips": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    common::write_settings(&server.home, all);
+    all
+}
+
+/// A server started with what `settings` writes, so they hold from its
+/// first draw.
+fn start(extra: Value) -> TestServer {
+    TestServer::start_with_settings(&all_settings(extra).to_string())
 }
 
 /// A Claude session file for `pid`, as Claude Code writes one.
@@ -122,15 +133,14 @@ fn row_of(client: &mut TestClient, text: &str) -> usize {
 
 #[test]
 fn the_sidebar_is_on_the_left_of_a_wide_window_and_the_panes_beside_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
-    // The session's name at the top, the shell's tab under Other.
+    // The tab count at the top, the shell's tab under Other.
     let screen = client.wait_for("the sidebar", |s| {
-        s.iter().any(|l| left(l, 34).contains("OTHER 1"))
+        s.iter().any(|l| left(l, 34).contains("OTHER"))
     });
-    assert!(screen[0].starts_with("  main "), "{:?}", screen[0]);
+    assert!(left(&screen[0], 34).contains("1 tab"), "{:?}", screen[0]);
     assert_eq!(
         screen[0].chars().nth(34),
         Some('│'),
@@ -157,14 +167,14 @@ fn the_sidebar_is_on_the_left_of_a_wide_window_and_the_panes_beside_it() {
     // takes the whole width.
     client.resize(80, 24);
     wait_list(&server, "the pane the whole width", |l| pane_cols(l) == 80);
-    client.wait_for("no sidebar", |s| !s.iter().any(|l| l.contains("OTHER 1")));
+    client.wait_for("no sidebar", |s| !s.iter().any(|l| l.contains("OTHER")));
     client.resize(120, 30);
     wait_list(&server, "the sidebar back", |l| pane_cols(l) == 85);
 
     // Turned off in Settings, it goes at once; its own width from sidebar.json.
     settings(&server, json!({"sidebar": false}));
     wait_list(&server, "the sidebar off", |l| pane_cols(l) == 120);
-    client.wait_for("no sidebar", |s| !s.iter().any(|l| l.contains("OTHER 1")));
+    client.wait_for("no sidebar", |s| !s.iter().any(|l| l.contains("OTHER")));
     std::fs::write(
         server.home.join(".config/switchboard/sidebar.json"),
         r#"{"width": 40}"#,
@@ -176,15 +186,14 @@ fn the_sidebar_is_on_the_left_of_a_wide_window_and_the_panes_beside_it() {
 
 #[test]
 fn a_tab_a_hook_marked_waiting_is_under_needs_you() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s-1"}));
     // Waiting in a tab you aren't looking at.
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     hook(
         &server,
         &pane,
@@ -192,7 +201,7 @@ fn a_tab_a_hook_marked_waiting_is_under_needs_you() {
         json!({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
     );
     let screen = client.wait_for("Needs you", |s| {
-        s.iter().any(|l| left(l, 34).contains("NEEDS YOU 1"))
+        s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
     });
     let at = |text: &str| {
         screen
@@ -200,11 +209,11 @@ fn a_tab_a_hook_marked_waiting_is_under_needs_you() {
             .position(|l| left(l, 34).contains(text))
             .unwrap_or_else(|| panic!("{text:?} isn't in the sidebar:\n{}", screen.join("\n")))
     };
-    assert!(at("NEEDS YOU 1") < at("OTHER 1"), "{}", screen.join("\n"));
-    assert!(at("waiting on you") > at("NEEDS YOU 1"));
-    assert!(at("permission: Bash git push") > at("NEEDS YOU 1"));
+    assert!(at("NEEDS YOU") < at("OTHER"), "{}", screen.join("\n"));
+    assert!(at("waiting on you") > at("NEEDS YOU"));
+    assert!(at("permis") > at("NEEDS YOU"));
     // The count at the top, beside the session's name.
-    assert!(left(&screen[0], 34).contains("! 1"), "{:?}", screen[0]);
+    assert!(left(&screen[0], 34).contains("⊞ 1"), "{:?}", screen[0]);
     // Answered (the next tool runs), it is working, its badge spinning.
     hook(
         &server,
@@ -213,7 +222,7 @@ fn a_tab_a_hook_marked_waiting_is_under_needs_you() {
         json!({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
     );
     client.wait_for("Working", |s| {
-        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+        s.iter().any(|l| left(l, 34).contains("WORKING"))
     });
 }
 
@@ -226,7 +235,7 @@ fn a_question_keeps_its_tab_under_needs_you_while_a_background_agent_returns() {
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s-1"}));
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     // A loop's turn that starts an agent in the background, then asks.
     let agent = json!({"tool_name": "Agent", "tool_use_id": "a1", "tool_input": {"description": "Security review of branch"}});
     let ask = json!({"tool_name": "AskUserQuestion", "tool_use_id": "q1", "tool_input": {"questions": [{"question": "Push it?"}]}});
@@ -238,7 +247,7 @@ fn a_question_keeps_its_tab_under_needs_you_while_a_background_agent_returns() {
     );
     hook(&server, &pane, "PreToolUse", agent.clone());
     client.wait_for("its loop's stage", |s| {
-        s.iter().any(|l| left(l, 34).contains("QUEUE-AND-CLEAN 1"))
+        s.iter().any(|l| left(l, 34).contains("QUEUE-AND-CLEAN"))
     });
     hook(&server, &pane, "PreToolUse", ask.clone());
     // The agent returns: the conversation's own hook, for another call.
@@ -249,7 +258,7 @@ fn a_question_keeps_its_tab_under_needs_you_while_a_background_agent_returns() {
     assert_eq!(record["wait"], "asks: Push it?");
     assert_eq!(record["loop"], "queue");
     let screen = client.wait_for("Needs you", |s| {
-        s.iter().any(|l| left(l, 34).contains("NEEDS YOU 1"))
+        s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
     });
     assert!(
         !screen
@@ -270,21 +279,20 @@ fn a_question_keeps_its_tab_under_needs_you_while_a_background_agent_returns() {
     // The answer: the question's own call ends, and the loop goes on.
     hook(&server, &pane, "PostToolUse", ask);
     client.wait_for("its loop's stage again", |s| {
-        s.iter().any(|l| left(l, 34).contains("QUEUE-AND-CLEAN 1"))
+        s.iter().any(|l| left(l, 34).contains("QUEUE-AND-CLEAN"))
     });
 }
 
 #[test]
 fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitoring() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s-1"}));
     let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
     server.ok(&["new-tab", "-n", "other"]);
-    client.wait_text("2:other");
+    client.wait_text("2 other");
     // Its turn starts a Monitor watch and ends while the watch runs.
     let project = server.home.join(".claude/projects/p");
     std::fs::create_dir_all(&project).unwrap();
@@ -303,8 +311,8 @@ fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitori
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     hook(&server, &pane, "Stop", json!({}));
     let screen = client.wait_for("Needs you, its watch named", |s| {
-        s.iter().any(|l| left(l, 34).contains("NEEDS YOU 1"))
-            && s.iter().any(|l| left(l, 34).contains("monitoring"))
+        s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
+            && s.iter().any(|l| left(l, 34).contains("monitori"))
     });
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("MONITORING")),
@@ -314,7 +322,7 @@ fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitori
     // Seen: under Monitoring.
     server.ok(&["select-tab", "-t", &first]);
     client.wait_for("Monitoring once seen", |s| {
-        s.iter().any(|l| left(l, 34).contains("MONITORING 1"))
+        s.iter().any(|l| left(l, 34).contains("MONITORING"))
             && !s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
     });
 }
@@ -329,7 +337,7 @@ fn with_sidebar_enter_menu_off_enter_goes_to_the_tab() {
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
     client.type_text("k");
@@ -348,12 +356,11 @@ fn with_sidebar_enter_menu_off_enter_goes_to_the_tab() {
 
 #[test]
 fn m_s_and_its_keys_move_between_tabs() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -440,8 +447,8 @@ fn m_s_and_its_keys_move_between_tabs() {
 
     // A click on a tab's row goes there.
     server.ok(&["new-tab", "-n", "third"]);
-    client.wait_text("3:third");
-    let row = row_of(&mut client, "  1 ");
+    client.wait_text("3 third");
+    let row = row_of(&mut client, "1 home");
     client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", row + 1, row + 1).as_bytes());
     wait_list(&server, "the first in front", |l| {
         tabs(l)[0]["current"] == true && !focused(l)
@@ -450,8 +457,7 @@ fn m_s_and_its_keys_move_between_tabs() {
 
 #[test]
 fn a_message_to_a_claude_whose_prompt_is_in_vim_s_normal_mode_presses_i_first() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     // A stand-in Claude: its prompt's vim mode line at its foot, and what
@@ -483,8 +489,7 @@ fn a_message_to_a_claude_whose_prompt_is_in_vim_s_normal_mode_presses_i_first() 
 
 #[test]
 fn on_a_short_screen_the_header_stays_and_a_click_on_more_scrolls_half_a_screen() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 14);
     client.wait_text("$");
     for n in 2..=8 {
@@ -501,16 +506,16 @@ fn on_a_short_screen_the_header_stays_and_a_click_on_more_scrolls_half_a_screen(
         s.iter()
             .any(|l| left(l, 34).contains("▼") && left(l, 34).contains("more"))
     });
-    assert!(left(&screen[0], 34).contains("main"), "{:?}", screen[0]);
+    assert!(left(&screen[0], 34).contains("8 tabs"), "{:?}", screen[0]);
     assert!(!screen.iter().any(|l| left(l, 34).contains("▲")));
     let down = row_of(&mut client, "▼");
-    // A click on it: half a screen down, the session's line still at the
+    // A click on it: half a screen down, the count still at the
     // top and the tabs above counted under it.
     client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", down + 1, down + 1).as_bytes());
     let screen = client.wait_for("tabs above counted", |s| {
         left(&s[1], 34).contains("▲") && left(&s[1], 34).contains("more")
     });
-    assert!(left(&screen[0], 34).contains("main"), "{:?}", screen[0]);
+    assert!(left(&screen[0], 34).contains("8 tabs"), "{:?}", screen[0]);
     let list = wait_list(&server, "the sidebar focused, on a later tab", |l| {
         focused(l) && tabs(l)[0]["current"] == false
     });
@@ -548,8 +553,7 @@ fn short_screen_of_tabs(server: &TestServer) -> TestClient {
 
 #[test]
 fn the_wheel_over_the_sidebar_moves_half_a_screen_once_a_flick() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = short_screen_of_tabs(&server);
     // One wheel-down: half a screen on, as C-d, the focus in the sidebar.
     client.send(b"\x1b[<65;6;5M");
@@ -584,15 +588,14 @@ fn with_half_page_scrolling_off_the_wheel_moves_a_tab_at_a_time() {
     let list = server.list();
     assert_eq!(tabs(&list)[in_front(&list)]["name"], "t2");
     let screen = client.wait_for("the cursor on t2", |s| {
-        s.iter().any(|l| left(l, 34).contains("▌ ○  2 t2"))
+        s.iter().any(|l| left(l, 34).contains("▌○ 2 t2"))
     });
     assert!(!left(&screen[1], 34).contains("▲"), "{}", screen.join("\n"));
 }
 
 #[test]
 fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     // A stand-in lazygit, as tests/diff.rs has.
     stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(120, 30);
@@ -602,7 +605,7 @@ fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
         .unwrap()
         .to_string();
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
 
     // L on the first tab: gone to, lazygit in its pane's place.
     client.type_text(&format!("{ALT}s"));
@@ -622,8 +625,7 @@ fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
 
 #[test]
 fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
@@ -638,7 +640,7 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
     // At work behind it: under Working, not Other.
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     let screen = client.wait_for("Working", |s| {
-        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+        s.iter().any(|l| left(l, 34).contains("WORKING"))
     });
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("OTHER")),
@@ -647,7 +649,7 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
     );
     // Finished, and seen there: under Idle.
     hook(&server, &pane, "Stop", json!({}));
-    let screen = client.wait_for("Idle", |s| s.iter().any(|l| left(l, 34).contains("IDLE 1")));
+    let screen = client.wait_for("Idle", |s| s.iter().any(|l| left(l, 34).contains("IDLE")));
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("OTHER")),
         "{}",
@@ -657,7 +659,7 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
     // From another tab, l on it in the sidebar goes to it with the focus
     // in lazygit's pane, the Claude still parked behind it.
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -680,8 +682,7 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
 
 #[test]
 fn a_claude_behind_a_tool_opened_over_another_tool_keeps_its_tab_in_its_stage() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
@@ -706,7 +707,7 @@ fn a_claude_behind_a_tool_opened_over_another_tool_keeps_its_tab_in_its_stage() 
     let diff = tabs(&list)[0]["panes"][0]["id"].clone();
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     let screen = client.wait_for("Working", |s| {
-        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+        s.iter().any(|l| left(l, 34).contains("WORKING"))
     });
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("OTHER")),
@@ -716,7 +717,7 @@ fn a_claude_behind_a_tool_opened_over_another_tool_keeps_its_tab_in_its_stage() 
 
     // Gone to from the sidebar, the focus is in the diff, the one drawn.
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -738,8 +739,7 @@ fn a_claude_behind_a_tool_opened_over_another_tool_keeps_its_tab_in_its_stage() 
 
 #[test]
 fn a_reply_sent_to_a_tab_whose_claude_is_behind_a_tool_brings_the_claude_beside_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(140, 30);
     client.wait_text("$");
@@ -752,7 +752,7 @@ fn a_reply_sent_to_a_tab_whose_claude_is_behind_a_tool_brings_the_claude_beside_
     });
     // A second tab's Claude, with a reply in its transcript.
     server.ok(&["new-tab", "-n", "from"]);
-    client.wait_text("2:from");
+    client.wait_text("2 from");
     let from = wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -771,7 +771,7 @@ fn a_reply_sent_to_a_tab_whose_claude_is_behind_a_tool_brings_the_claude_beside_
     std::fs::write(project.join("s-from.jsonl"), text).unwrap();
     // Both tabs' Claudes read: neither is under Other.
     client.wait_for("both tabs under Idle", |s| {
-        s.iter().any(|l| left(l, 34).contains("IDLE 2"))
+        s.iter().any(|l| left(l, 34).contains("IDLE"))
     });
 
     server.ok(&["press", "send-reply"]);
@@ -810,8 +810,10 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     // A note written for you is a notification, as the meeting notes give one.
     let notes = common::TempDir::new("sbnw");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &all_settings(json!({})).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -819,7 +821,7 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("✎ New note: Plan");
 
     // M-s, then n: the cursor onto it, and the window in front, the focus
     // still in the sidebar, the notification's whole message in it.
@@ -830,19 +832,14 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
     });
     assert_eq!(notices_tab(&list), Some(1), "last, after the one tab");
-    let screen = client.wait_text("NOTIFICATIONS 1");
+    let screen = client.wait_text("‹ tabs");
     let has = |text: &str| screen.iter().any(|l| l.contains(text));
     assert!(has("‹ tabs"), "{}", screen.join("\n"));
     assert!(has("▌ Plan"));
     assert!(has("Written from Fathom into Plan.md"), "whole");
-    let bar = screen.last().unwrap();
-    assert!(
-        bar.contains("Notifications"),
-        "in the tab bar while in front: {bar}"
-    );
     // No tab in the sidebar or mission control: one tab under the heading.
     assert!(
-        screen.iter().any(|l| l.starts_with(" OTHER 1")),
+        screen.iter().any(|l| l.starts_with(" OTHER ")),
         "{}",
         screen.join("\n")
     );
@@ -856,7 +853,7 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     let screen = client.wait_for("the window out of the bar", |s| {
         !s.last().unwrap().contains("Notifications")
     });
-    assert!(screen.iter().any(|l| l.contains("● New note: Plan")));
+    assert!(screen.iter().any(|l| l.contains("✎ New note: Plan")));
 
     // Enter on the notification: its menu, as m opens it, which Esc
     // closes.
@@ -1002,31 +999,8 @@ fn j_and_k_in_the_notifications_window_wrap_from_its_last_to_its_first_and_back(
 }
 
 #[test]
-fn the_wheel_past_the_last_tab_steps_over_the_notifications_as_j_does() {
+fn j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
     let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
-    let mut client = server.attach(140, 36);
-    client.wait_text("2 new on Slack");
-    client.wait_text("New note: Plan");
-
-    // Down from the only tab: onto the Slack line, as j.
-    client.send(b"\x1b[<65;6;5M");
-    wait_list(&server, "the Notifications window in front", |l| {
-        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
-    });
-    wait_chosen(&mut client, "DM Ada");
-    // After the flick's pause, down again: the note's line.
-    std::thread::sleep(Duration::from_millis(300));
-    client.send(b"\x1b[<65;6;5M");
-    wait_chosen(&mut client, "Plan");
-    // Up: back onto the Slack line.
-    client.send(b"\x1b[<64;6;5M");
-    wait_chosen(&mut client, "DM Ada");
-}
-
-#[test]
-fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
-    let (server, _notes) =
-        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -1053,14 +1027,14 @@ fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
 }
 
 #[test]
-fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
+fn k_from_the_first_tab_goes_up_onto_the_notifications() {
     let notes = common::TempDir::new("sbnu");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     // UX 2.0 from the start: the notification drawn before the server read
     // a later setting would be the classic sidebar's, below the tab.
     let server = TestServer::start_with_env_and_settings(
         &[("NOTES_DIR", notes.path().to_str().unwrap())],
-        r#"{"notifications": false, "tips": false, "ux2": true, "sidebar_wrap": false}"#,
+        r#"{"notifications": false, "tips": false, "sidebar_wrap": false}"#,
     );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
@@ -1097,13 +1071,12 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
 
 #[test]
 fn up_and_down_wrap_around_the_tabs() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["new-tab", "-n", "third"]);
-    client.wait_text("3:third");
+    client.wait_text("3 third");
     wait_list(&server, "the third tab in front", |l| {
         tabs(l)[2]["current"] == true
     });
@@ -1131,7 +1104,7 @@ fn with_wrapping_off_up_and_down_stop_at_the_ends() {
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["new-tab", "-n", "third"]);
-    client.wait_text("3:third");
+    client.wait_text("3 third");
     wait_list(&server, "the third tab in front", |l| {
         tabs(l)[2]["current"] == true
     });
@@ -1156,7 +1129,7 @@ fn the_wheel_stops_at_the_last_tab_while_the_keys_wrap() {
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["new-tab", "-n", "third"]);
-    client.wait_text("3:third");
+    client.wait_text("3 third");
     wait_list(&server, "the third tab in front", |l| {
         tabs(l)[2]["current"] == true
     });
@@ -1207,9 +1180,8 @@ fn j_from_the_last_kind_of_notification_goes_round_to_the_first_tab() {
 // With UX 2.0 the wheel goes up from the first tab past its group's open
 // heading onto the notifications above it, a flick at a time.
 #[test]
-fn with_ux2_the_wheel_goes_up_past_the_first_heading_onto_the_notifications() {
-    let (server, _notes) =
-        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+fn the_wheel_goes_up_past_the_first_heading_onto_the_notifications() {
+    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -1231,9 +1203,8 @@ fn with_ux2_the_wheel_goes_up_past_the_first_heading_onto_the_notifications() {
 }
 
 #[test]
-fn with_ux2_j_from_the_last_tab_goes_round_to_the_first_kind_of_notification() {
-    let (server, _notes) =
-        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+fn j_from_the_last_tab_goes_round_to_the_first_kind_of_notification() {
+    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -1287,8 +1258,7 @@ fn cd(server: &TestServer, client: &mut TestClient, dir: &Path) {
 
 #[test]
 fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_main_clone() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let clone = server.dir.path().join("clone");
     std::fs::create_dir_all(&clone).unwrap();
     git(&clone, &["init", "-q"]);
@@ -1340,7 +1310,7 @@ fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_mai
     );
     // Back in the main clone, as queue-and-clean leaves the tab.
     cd(&server, &mut client, &clone);
-    let at = row_of(&mut client, "MERGED 1");
+    let at = row_of(&mut client, "MERGED");
     assert!(row_of(&mut client, "landed on ux-2-0") > at);
     // Gone on to a worktree, however Claude starts there.
     cd(&server, &mut client, &worktree);
@@ -1349,14 +1319,14 @@ fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_mai
     });
     // Back, it is Merged again; a new branch in the main clone is new work.
     cd(&server, &mut client, &clone);
-    row_of(&mut client, "MERGED 1");
+    row_of(&mut client, "MERGED");
     git(&clone, &["checkout", "-q", "-b", "new-work"]);
     client.wait_for("Merged gone on a new branch", |s| {
         !s.iter().any(|l| left(l, 34).contains("MERGED"))
     });
     // Back on its branch, it is Merged until a prompt starts new work there.
     git(&clone, &["checkout", "-q", "main"]);
-    row_of(&mut client, "MERGED 1");
+    row_of(&mut client, "MERGED");
     hook(
         &server,
         &pane,
@@ -1373,8 +1343,7 @@ fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_mai
 // above the choices, its dismissing worded as there.
 #[test]
 fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     std::fs::create_dir_all(&server.state).unwrap();
     // Sent now: a dismissal is kept two days past its message.
     let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
@@ -1430,14 +1399,13 @@ fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
 
 #[test]
 fn list_gives_each_tab_its_stage_as_the_sidebar_groups_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s-1"}));
     server.ok(&["new-tab", "-n", "later"]);
-    client.wait_text("2:later");
+    client.wait_text("2 later");
     let second = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
     let at = jiff::Timestamp::now().as_second() + 3600;
     server.ok(&["set", "-t", &second, "@remind_at", &at.to_string()]);
@@ -1463,8 +1431,7 @@ fn list_gives_each_tab_its_stage_as_the_sidebar_groups_it() {
 // filter outlives an upgrade; and with the setting off there is none.
 #[test]
 fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let alpha = server.dir.path().join("alpha");
     let beta = server.dir.path().join("beta");
     for dir in [&alpha, &beta] {
@@ -1485,11 +1452,10 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     wait_list(&server, "the filter set", |l| {
         repo(l) == json!(alpha.to_string_lossy())
     });
-    let fold = row_of(&mut client, "1 tab · beta");
-    assert!(row_of(&mut client, "OTHER REPOS 1") < fold);
+    let fold = row_of(&mut client, "OTHER REPOS") + 1;
+    assert!(row_of(&mut client, "OTHER REPOS") < fold);
     let screen = client.screen();
     assert!(left(&screen[0], 34).contains("alpha ×"), "{:?}", screen[0]);
-    assert!(left(&screen[0], 34).contains("1 of 2"), "{:?}", screen[0]);
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("bee")),
         "{screen:?}"
@@ -1503,21 +1469,24 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     wait_list(&server, "Other repos unfolded", |l| {
         l["sessions"][0]["sidebar"]["repo_open"] == true
     });
-    // Its tab is under the cursor but stays behind the one in front, until
-    // l goes into it.
+    // Its heading under the cursor; j onto its tab, which stays behind the
+    // one in front until l goes into it.
     row_of(&mut client, "bee");
     let list = server.list();
     assert!(
         tabs(&list)[0]["current"] == true && focused(&list),
         "{list}"
     );
+    client.type_text("j");
     client.type_text("l");
     wait_list(&server, "into the unfolded tab", |l| {
         tabs(l)[1]["current"] == true && !focused(l)
     });
 
     // A click on the chip clears the filter.
-    client.send(b"\x1b[<0;4;1M\x1b[<0;4;1m");
+    let top = client.screen()[0].clone();
+    let chip = top[..top.find(" ×").unwrap()].chars().count() + 1;
+    client.send(format!("\x1b[<0;{chip};1M\x1b[<0;{chip};1m").as_bytes());
     wait_list(&server, "the filter cleared", |l| repo(l).is_null());
     client.wait_for("Other repos gone", |s| {
         !s.iter().any(|l| left(l, 34).contains("OTHER REPOS"))
@@ -1556,7 +1525,7 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
         tabs(&server.list())[0]["id"].as_str().unwrap(),
     ]);
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
-    let fold = row_of(&mut client, "1 tab · beta");
+    let fold = row_of(&mut client, "OTHER REPOS") + 1;
     client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", fold + 1, fold + 1).as_bytes());
     wait_list(&server, "unfolded by a click", |l| {
         l["sessions"][0]["sidebar"]["repo_open"] == true && focused(l)
@@ -1605,9 +1574,7 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
 // too. With no filter there is no such group.
 #[test]
 fn a_reminder_come_due_shows_through_the_repository_filter() {
-    let server = TestServer::start();
-    // A reminder's box would take the M-a pressed under it.
-    settings(&server, json!({"message_boxes": false}));
+    let server = start(json!({}));
     let alpha = server.dir.path().join("alpha");
     let beta = server.dir.path().join("beta");
     for dir in [&alpha, &beta] {
@@ -1648,10 +1615,10 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
     );
 
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
-    let fold = row_of(&mut client, "1 tab · beta");
+    let fold = row_of(&mut client, "OTHER REPOS") + 1;
     let needs = row_of(&mut client, "NEEDS YOU");
     let mine = row_of(&mut client, "ant");
-    let group = row_of(&mut client, "REMINDERS ELSEWHERE 1");
+    let group = row_of(&mut client, "REMINDERS ELSEWHERE");
     let row = row_of(&mut client, "bee");
     assert!(needs < mine && mine < group && group < row && row < fold);
     let screen = client.screen();
@@ -1661,20 +1628,26 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
             .any(|l| left(l, 34).contains("beta")),
         "{screen:?}"
     );
-    assert!(left(&screen[0], 34).contains("2 of 4"), "{:?}", screen[0]);
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("wasp")),
         "{screen:?}"
     );
 
     server.ok(&["seen", "-t", &bee]);
-    row_of(&mut client, "2 tabs · beta");
+    row_of(&mut client, "OTHER REPOS");
     client.wait_for("bee folded away", |s| {
         !s.iter().any(|l| left(l, 34).contains("bee"))
     });
 
     server.ok(&["set", "-t", &bee, "@remind_at", "1"]);
-    row_of(&mut client, "REMINDERS ELSEWHERE 1");
+    row_of(&mut client, "REMINDERS ELSEWHERE");
+    // Each reminder come due says so in a box, which would take the M-a
+    // pressed under it.
+    client.wait_text("Reminder: ");
+    client.type_text("\x1b");
+    client.wait_for("the reminder's box closed", |s| {
+        !s.iter().any(|l| l.contains("Reminder: "))
+    });
     // M-a: the filtered repository's reminder first, then the other's.
     let current = |server: &TestServer| {
         let list = server.list();
@@ -1699,8 +1672,7 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
 // clearing the filter; M-p lists the command with its key.
 #[test]
 fn m_shift_r_filters_the_sidebar_to_a_repository() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let beta = server.dir.path().join("beta");
     {
         let dir = &beta;
@@ -1952,8 +1924,10 @@ fn the_repository_filters_list_ranks_by_the_tabs_left_through_a_step_back() {
 fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
     let notes = common::TempDir::new("sbrw");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &all_settings(json!({})).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -1961,7 +1935,7 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("✎ New note: Plan");
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
     client.type_text("n");
@@ -2007,7 +1981,7 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
     });
 
     // The tab's row in the sidebar: its menu, peeking first, Enter peeking.
-    let row = row_of(&mut client, "  1 ");
+    let row = row_of(&mut client, "1 home");
     right(&mut client, 6, row);
     client.wait_text("Peek at its screen");
     client.type_text("\r");
@@ -2026,8 +2000,7 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
 // tab under it from the sidebar unfolds it again.
 #[test]
 fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-d", "-n", "bee"]);
@@ -2043,8 +2016,8 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
     wait_list(&server, "the sidebar focused", focused);
     client.type_text("z");
     wait_list(&server, "Other folded", |l| folded(l) == json!(["other"]));
-    let line = row_of(&mut client, "2 tabs");
-    assert!(row_of(&mut client, "OTHER 2") < line);
+    let line = row_of(&mut client, "▸");
+    assert!(row_of(&mut client, "OTHER") < line);
     client.wait_for("bee folded away", |s| {
         !s.iter().any(|l| left(l, 34).contains("bee"))
     });
@@ -2065,7 +2038,7 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
     });
 
     // A click on its heading folds it.
-    let heading = row_of(&mut client, "OTHER 2");
+    let heading = row_of(&mut client, "OTHER");
     client.send(format!("\x1b[<0;4;{}M\x1b[<0;4;{}m", heading + 1, heading + 1).as_bytes());
     wait_list(&server, "folded by a click", |l| {
         folded(l) == json!(["other"])
@@ -2091,8 +2064,7 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
 // next group's heading.
 #[test]
 fn enter_on_a_group_s_heading_folds_and_unfolds_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -2100,7 +2072,7 @@ fn enter_on_a_group_s_heading_folds_and_unfolds_it() {
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     server.ok(&["new-tab", "-d", "-n", "bee"]);
     row_of(&mut client, "bee");
-    assert!(row_of(&mut client, "WORKING 1") < row_of(&mut client, "OTHER 1"));
+    assert!(row_of(&mut client, "WORKING") < row_of(&mut client, "OTHER"));
     let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
     let has = |l: &Value, stage: &str| {
         folded(l)
@@ -2139,12 +2111,11 @@ fn enter_on_a_group_s_heading_folds_and_unfolds_it() {
 // group's heading above it.
 #[test]
 fn half_a_page_up_passes_an_open_group_s_heading() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -2165,8 +2136,7 @@ fn half_a_page_up_passes_an_open_group_s_heading() {
 // the sidebar and counted on the top line's chip.
 #[test]
 fn with_sidebar_reminders_off_the_reminders_group_is_a_chip_on_the_top_line() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar_reminders": false}));
+    let server = start(json!({"sidebar_reminders": false}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-d", "-n", "later"]);
@@ -2175,10 +2145,7 @@ fn with_sidebar_reminders_off_the_reminders_group_is_a_chip_on_the_top_line() {
     let at = jiff::Timestamp::now().as_second() + 3600;
     server.ok(&["set", "-t", &second, "@remind_at", &at.to_string()]);
     client.wait_for("the chip, and no Reminders group", |s| {
-        left(&s[0], 34)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .ends_with(&["⏰", "1"])
+        left(&s[0], 34).contains("⏰  1")
             && !s.iter().any(|l| left(l, 34).contains("REMINDERS"))
             && !s.iter().any(|l| left(l, 34).contains("later"))
     });
@@ -2188,8 +2155,7 @@ fn with_sidebar_reminders_off_the_reminders_group_is_a_chip_on_the_top_line() {
 // Backspace can still fix it.
 #[test]
 fn a_search_matching_nothing_keeps_the_sidebar_focused() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     client.type_text(&format!("{ALT}s"));
@@ -2212,8 +2178,10 @@ fn a_search_matching_nothing_keeps_the_sidebar_focused() {
 fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
     let notes = common::TempDir::new("sbmk");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &all_settings(json!({})).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2221,7 +2189,7 @@ fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("✎ New note: Plan");
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
     let close = |client: &mut TestClient, text: &str| {
@@ -2230,7 +2198,7 @@ fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
     };
 
     // On a tab: its menu, beside its row, by m and by S-F10.
-    let tab = row_of(&mut client, "  1 ");
+    let tab = row_of(&mut client, "1 home");
     for key in ["m", "\x1b[21;2~"] {
         client.type_text(key);
         let screen = client.wait_text("Peek at its screen");
@@ -2257,7 +2225,7 @@ fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
 
     // On a notification: its own menu.
     client.type_text("n");
-    client.wait_text("NOTIFICATIONS 1");
+    client.wait_text("NOTIFICATIONS");
     client.type_text("m");
     client.wait_text("Open it in Notes");
     close(&mut client, "Open it in Notes");
@@ -2278,8 +2246,10 @@ fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
 fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
     let notes = common::TempDir::new("sbrm");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &all_settings(json!({})).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2310,12 +2280,12 @@ fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
 
     // A group's heading: folding it first, then unfolding it.
     let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
-    let heading = row_of(&mut client, "OTHER 1");
+    let heading = row_of(&mut client, "OTHER");
     right(&mut client, 4, heading);
     client.wait_text("Fold Other");
     client.type_text("\r");
     wait_list(&server, "Other folded", |l| folded(l) == json!(["other"]));
-    let heading = row_of(&mut client, "OTHER 1");
+    let heading = row_of(&mut client, "OTHER");
     right(&mut client, 4, heading);
     client.wait_text("Unfold Other");
     client.type_text("\r");
@@ -2324,7 +2294,7 @@ fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
     wait_list(&server, "out of the sidebar", |l| !focused(l));
 
     // A blank row under the tabs: the sidebar's own menu, by the press.
-    let tab = row_of(&mut client, "  1 ");
+    let tab = row_of(&mut client, "1 home");
     let screen = client.screen();
     let blank = (tab + 1..screen.len())
         .find(|&r| left(&screen[r], 24).trim().is_empty())
@@ -2353,7 +2323,7 @@ fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
     // With "Click in menus" off, a right press on a tab peeks, once the
     // server's tick has read the settings again (the menu until then).
     settings(&server, json!({"menu_mouse": false}));
-    let tab = row_of(&mut client, "  1 ");
+    let tab = row_of(&mut client, "1 home");
     let deadline = common::deadline(Duration::from_secs(10));
     loop {
         right(&mut client, 6, tab);
@@ -2391,8 +2361,7 @@ fn five_tabs_in_the_sidebar(server: &TestServer) -> TestClient {
 
 #[test]
 fn v_selects_several_tabs_in_the_sidebar_and_one_menu_closes_them() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = five_tabs_in_the_sidebar(&server);
     // v on a tab, then j and Space twice: three selected.
     client.type_text("j");
@@ -2448,8 +2417,7 @@ fn v_selects_several_tabs_in_the_sidebar_and_one_menu_closes_them() {
 
 #[test]
 fn esc_leaves_select_mode_and_a_shift_click_starts_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = five_tabs_in_the_sidebar(&server);
     client.type_text("v");
     client.wait_text("1 selected");
@@ -2464,10 +2432,10 @@ fn esc_leaves_select_mode_and_a_shift_click_starts_it() {
     // A Shift-click on a tab's row selects it, a plain click another.
     client.type_text("\x1b");
     wait_list(&server, "back out", |l| !focused(l));
-    let row = row_of(&mut client, "  2 ");
+    let row = row_of(&mut client, "2 t2");
     client.send(format!("\x1b[<4;6;{}M\x1b[<4;6;{}m", row + 1, row + 1).as_bytes());
     client.wait_text("1 selected");
-    let row = row_of(&mut client, "  3 ");
+    let row = row_of(&mut client, "3 t3");
     client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", row + 1, row + 1).as_bytes());
     client.wait_text("2 selected");
     assert_eq!(tabs(&server.list()).len(), 5);
@@ -2493,8 +2461,7 @@ fn with_sidebar_select_off_v_does_nothing() {
 
 #[test]
 fn the_line_beside_a_list_cut_short_is_its_scroll_bar_and_a_press_below_the_thumb_pages_down() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = short_screen_of_tabs(&server);
     let first = client.screen()[0].clone();
     let side = first.chars().position(|c| c == '│').unwrap();
@@ -2522,8 +2489,7 @@ fn the_line_beside_a_list_cut_short_is_its_scroll_bar_and_a_press_below_the_thum
 
 #[test]
 fn the_pointer_is_a_hand_over_a_tab_s_row_and_an_arrow_over_a_divider() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach_as("xterm-ghostty", 120, 30);
     client.wait_text("$");
     let row = row_of(&mut client, "  1 ") + 1;
@@ -2609,7 +2575,7 @@ fn cell_of(screen: &[String], text: &str) -> Option<(usize, usize)> {
 /// third is in front with the second and the first behind it.
 fn three_visited(extra: Value) -> (TestServer, TestClient) {
     let server = TestServer::start();
-    let mut all = json!({"ux2": true, "sidebar": true});
+    let mut all = json!({"sidebar": true});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
@@ -2625,7 +2591,7 @@ fn three_visited(extra: Value) -> (TestServer, TestClient) {
 }
 
 #[test]
-fn with_ux2_the_top_lines_arrows_step_back_and_forward_and_a_right_click_shows_the_trail() {
+fn the_top_lines_arrows_step_back_and_forward_and_a_right_click_shows_the_trail() {
     let (server, mut client) = three_visited(json!({}));
     let screen = client.wait_for("the buttons on the top line", |s| {
         s[0].starts_with("  ←   →   ⊞")
@@ -2665,7 +2631,7 @@ fn with_ux2_the_top_lines_arrows_step_back_and_forward_and_a_right_click_shows_t
 }
 
 #[test]
-fn with_ux2_the_mission_control_button_opens_and_closes_it_and_its_right_click_lists_the_views() {
+fn the_mission_control_button_opens_and_closes_it_and_its_right_click_lists_the_views() {
     let (server, mut client) = three_visited(json!({}));
     let screen = client.wait_for("the buttons on the top line", |s| {
         s[0].starts_with("  ←   →   ⊞")
@@ -2726,11 +2692,13 @@ fn with_the_sidebar_hidden_the_buttons_start_the_tab_header() {
 }
 
 #[test]
-fn with_ux2_the_notifications_window_on_the_trail_is_named_by_the_buttons_and_the_menu() {
+fn the_notifications_window_on_the_trail_is_named_by_the_buttons_and_the_menu() {
     let notes = common::TempDir::new("sbtw");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({"ux2": true, "sidebar": true}));
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &all_settings(json!({"sidebar": true})).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2796,8 +2764,7 @@ fn a_step_chosen_from_the_trail_menu_leaves_the_sidebar() {
 
 #[test]
 fn an_escape_in_a_hook_s_file_name_never_reaches_the_terminal() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -2809,7 +2776,7 @@ fn an_escape_in_a_hook_s_file_name_never_reaches_the_terminal() {
         "PreToolUse",
         json!({"tool_name": "Edit", "tool_input": {"file_path": "/x/a\u{1b}]52;c;aGk=\u{7}.rs"}}),
     );
-    row_of(&mut client, "editing a]52;c;aGk=.rs");
+    row_of(&mut client, "editing a]52;");
     assert!(
         !common::sent(&client.raw, b"\x1b]52;"),
         "the escape reached the terminal"
@@ -2819,15 +2786,14 @@ fn an_escape_in_a_hook_s_file_name_never_reaches_the_terminal() {
 
 #[test]
 fn a_tab_whose_command_waits_for_a_slot_says_so_under_working_until_it_holds_one() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
     session_file(&server.home, pid, json!({"sessionId": "s-slot"}));
     hook(&server, &pane, "UserPromptSubmit", json!({}));
     client.wait_for("Working", |s| {
-        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+        s.iter().any(|l| left(l, 34).contains("WORKING"))
     });
     // The stand-in reports as it waits, with this test's own process as
     // its, so the server's check that it still runs keeps it.
@@ -2842,7 +2808,7 @@ fn a_tab_whose_command_waits_for_a_slot_says_so_under_working_until_it_holds_one
             .any(|l| left(l, 34).contains("waits for a build slot, 1st"))
     });
     assert!(
-        screen.iter().any(|l| left(l, 34).contains("WORKING 1")),
+        screen.iter().any(|l| left(l, 34).contains("WORKING")),
         "{}",
         screen.join("\n")
     );
@@ -2865,12 +2831,11 @@ fn a_tab_whose_command_waits_for_a_slot_says_so_under_working_until_it_holds_one
 
 #[test]
 fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     // The hook counts the pane as Claude's only with its shell in front, the
     // process the session file names: a login shell's profile can run a
     // command of its own (Ubuntu's runs `locale`) before the prompt, and a
@@ -2981,12 +2946,11 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
 
 #[test]
 fn m_w_in_a_tabs_one_pane_without_claude_closes_the_tab() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     client.type_text("sleep 100\r");
     wait_list(&server, "sleep in front", |l| {
         tabs(l)[1]["panes"][0]["command"] == "sleep"
@@ -3008,12 +2972,11 @@ fn m_w_in_a_tabs_one_pane_without_claude_closes_the_tab() {
 
 #[test]
 fn m_w_closes_the_last_pane_and_its_tab_with_the_setting_off() {
-    let server = TestServer::start();
-    settings(&server, json!({"close_tab_from_claude": false}));
+    let server = start(json!({"close_tab_from_claude": false}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     // Its shell in front, so M-w doesn't ask: a login shell's profile can
     // run a command of its own (Ubuntu's runs `locale`) first.
     wait_list(
@@ -3036,12 +2999,11 @@ fn m_w_closes_the_last_pane_and_its_tab_with_the_setting_off() {
 
 #[test]
 fn m_w_on_a_sidebar_row_asks_to_close_that_tab() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -3059,8 +3021,10 @@ fn m_w_on_a_sidebar_row_asks_to_close_that_tab() {
 fn m_o_goes_to_the_notifications() {
     let notes = common::TempDir::new("sbmo");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &all_settings(json!({})).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -3068,13 +3032,13 @@ fn m_o_goes_to_the_notifications() {
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("✎ New note: Plan");
 
     client.type_text(&format!("{ALT}O"));
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
     });
-    client.wait_text("NOTIFICATIONS 1");
+    client.wait_text("NOTIFICATIONS");
 
     // Again, it stays there, as M-p's command does.
     client.type_text(&format!("{ALT}O"));
@@ -3119,7 +3083,7 @@ fn without_the_window_m_o_moves_the_sidebar_cursor_onto_the_first_notification()
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("✎ New note: Plan");
 
     client.type_text(&format!("{ALT}O"));
     let list = wait_list(&server, "the sidebar focused", focused);
@@ -3155,7 +3119,7 @@ fn drag_edge(client: &mut TestClient, from: u64, to: u64) {
 #[test]
 fn the_sidebars_edge_drags_and_the_resize_keys_move_it_kept_through_a_restart() {
     let mut server = TestServer::start_with_settings(
-        r#"{"notifications": false, "tips": false, "ux2": true, "auto_restore": true}"#,
+        r#"{"notifications": false, "tips": false, "auto_restore": true}"#,
     );
     let mut client = server.attach(200, 40);
     client.wait_text("$");
@@ -3239,8 +3203,7 @@ fn the_sidebars_edge_drags_and_the_resize_keys_move_it_kept_through_a_restart() 
 
 #[test]
 fn the_sidebars_own_menu_goes_back_to_the_default_width() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(200, 40);
     client.wait_text("$");
     wait_list(&server, "the sidebar at its default width", |_| {
@@ -3269,8 +3232,7 @@ fn the_sidebars_own_menu_goes_back_to_the_default_width() {
 
 #[test]
 fn with_resizing_off_the_sidebars_edge_takes_no_drag_and_a_kept_width_is_left_alone() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(200, 40);
     client.wait_text("$");
     drag_edge(&mut client, 34, 50);
@@ -3303,7 +3265,7 @@ fn with_resizing_off_the_sidebars_edge_takes_no_drag_and_a_kept_width_is_left_al
 #[test]
 fn a_status_chosen_from_a_tabs_menu_moves_its_row_and_outlives_a_restart() {
     let mut server = TestServer::start_with_settings(
-        r#"{"notifications": false, "tips": false, "ux2": true, "auto_restore": true}"#,
+        r#"{"notifications": false, "tips": false, "auto_restore": true}"#,
     );
     let mut client = server.attach(140, 36);
     client.wait_text("$");
@@ -3373,8 +3335,7 @@ fn lone_pane_and_pr_view(server: &TestServer, client: &mut TestClient) -> (Strin
 
 #[test]
 fn c_w_l_goes_round_from_a_view_beside_a_lone_pane_through_the_sidebar_to_the_pane() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true, "lone_pane_width": "80"}));
+    let server = start(json!({"lone_pane_width": "80"}));
     let mut client = server.attach(240, 36);
     let (pane, view) = lone_pane_and_pr_view(&server, &mut client);
 
@@ -3392,8 +3353,7 @@ fn c_w_l_goes_round_from_a_view_beside_a_lone_pane_through_the_sidebar_to_the_pa
 
 #[test]
 fn c_w_l_from_the_sidebar_goes_to_the_left_of_two_panes() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(200, 36);
     client.wait_text("$");
     let (left_pane, _) = first_pane(&server);
@@ -3412,8 +3372,7 @@ fn c_w_l_from_the_sidebar_goes_to_the_left_of_two_panes() {
 
 #[test]
 fn m_s_twice_from_a_view_beside_a_lone_pane_gives_the_keys_back_to_the_view() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true, "lone_pane_width": "80"}));
+    let server = start(json!({"lone_pane_width": "80"}));
     let mut client = server.attach(240, 36);
     let (_, view) = lone_pane_and_pr_view(&server, &mut client);
 
@@ -3427,8 +3386,7 @@ fn m_s_twice_from_a_view_beside_a_lone_pane_gives_the_keys_back_to_the_view() {
 
 #[test]
 fn c_w_l_from_the_sidebar_goes_to_the_left_edge_pane_last_used() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let mut client = server.attach(200, 40);
     client.wait_text("$");
     // A over B on the left, C over D on the right; B had the keys before C

@@ -68,7 +68,6 @@ use crate::util;
 /// The settings the demo starts with: every view on, and what would reach
 /// a service or a model it hasn't got off.
 pub const SETTINGS: &[(&str, &str)] = &[
-    ("ux2", "true"),
     ("update_check", "\"off\""),
     ("upgrade_after_update", "false"),
     ("auto_restore", "false"),

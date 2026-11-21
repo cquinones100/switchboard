@@ -7,8 +7,8 @@
 //! the workspace, the directory and branch, which inside it the tab already
 //! shows, and the context used, colored by how full it is, inside the
 //! workspace as outside it. Settings' `statusline_context` off leaves the
-//! context out inside the workspace while UX 2.0 (`ux2`) and mission
-//! control's Usage view (`usage`) are both on, where its Sessions show it;
+//! context out inside the workspace while mission control's Usage view
+//! (`usage`) is on, where its Sessions show it;
 //! a plain terminal has no Usage view, so there it stays.
 //!
 //! In a pane it tells the server it drew and the context used (`context`,
@@ -82,9 +82,8 @@ pub fn main(_args: Vec<String>) -> ExitCode {
     if in_workspace {
         tell_server(&payload);
     }
-    let hide_context = !crate::settings::is_on("statusline_context")
-        && crate::settings::is_on("ux2")
-        && crate::settings::is_on("usage");
+    let hide_context =
+        !crate::settings::is_on("statusline_context") && crate::settings::is_on("usage");
     let light = crate::settings::setting("theme")
         .as_ref()
         .and_then(Value::as_str)

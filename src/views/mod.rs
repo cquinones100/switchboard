@@ -265,10 +265,10 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::PrView => {
-                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again, with whether it can merge in its head and m opening its menu. With UX 2.0 on, it opens in this pane's place, or in the side panel beside a narrow lone pane in place of what is there. With no PR, it shows the branch's CI on GitHub."
+                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again, with whether it can merge in its head and m opening its menu. It opens in this pane's place, or in the side panel beside a narrow lone pane in place of what is there. With no PR, it shows the branch's CI on GitHub."
             }
             Command::TicketView => {
-                "The ticket is one chosen for the tab, else the GitHub issue its branch was started for or the Linear ticket its branch names (repos.json's tickets saying which), else a ticket or project in a name you gave the tab. The copy last read shows while it is asked again; with UX 2.0 on, it opens in this pane's place. With none found, you choose one of your Linear tickets and projects."
+                "The ticket is one chosen for the tab, else the GitHub issue its branch was started for or the Linear ticket its branch names (repos.json's tickets saying which), else a ticket or project in a name you gave the tab. The copy last read shows while it is asked again;, it opens in this pane's place. With none found, you choose one of your Linear tickets and projects."
             }
             Command::OpenPr => {
                 "A branch with no PR yet opens its repository instead, and a box says why. The link opens in the Chrome profile browser.json gives GitHub, and what went wrong is said in a box."

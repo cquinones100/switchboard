@@ -273,12 +273,12 @@ fn piped(server: &TestServer, args: &[&str], pane: &str, input: serde_json::Valu
 }
 
 #[test]
-fn with_ux2_a_statusline_s_spend_shows_on_the_usage_board_under_its_tab() {
+fn a_statusline_s_spend_shows_on_the_usage_board_under_its_tab() {
     use serde_json::json;
     let server = TestServer::start();
     common::write_settings(
         &server.home,
-        json!({"ux2": true, "notifications": false, "tips": false, "sidebar": false}),
+        json!({"notifications": false, "tips": false, "sidebar": false}),
     );
     let mut client = server.attach(160, 40);
     client.wait_text("$");

@@ -15,7 +15,7 @@
 //! `data` the event itself; the chosen one is drawn in a light blue, and a
 //! click on a block chooses it. Drawing reads nothing but the items.
 //!
-//! With UX 2.0 on (`timeline`), the day is drawn as the board draws it:
+//! The day (`timeline`) is drawn as the board draws it:
 //! from 8:00 to 7:00 (or the first event to the last), three rows an hour,
 //! dashed rules, each event a block with a bar in its color, past ones
 //! struck through, one moved since it was first seen today with a "moved"
@@ -50,10 +50,8 @@ use crate::ui::kit::{self, Tone};
 
 /// The hours' column, the time right-aligned in all but its last two.
 const GUTTER: usize = 9;
-/// An event's blue, and the deeper one it takes when it starts just as the
-/// one above it in its lane ends; the same for events already over.
-const SOLID: [u8; 2] = [32, 25];
-const PAST: [u8; 2] = [24, 23];
+/// An event's blue.
+const SOLID: u8 = 32;
 const CHOSEN: u8 = 75;
 const NOW: u8 = 196;
 /// What says the day is out of date.
@@ -135,7 +133,7 @@ pub fn is_day(view: &View) -> bool {
         && (view.data.error.is_none() || !view.data.items.is_empty())
 }
 
-/// An event block on the grid: its rows, its lane's columns, its shade.
+/// An event block on the grid: its rows and its lane's columns.
 struct Block {
     item: usize,
     event: CalEvent,
@@ -144,7 +142,6 @@ struct Block {
     x: usize,
     width: usize,
     lane: usize,
-    shade: usize,
 }
 
 /// What drawing the day needs beyond the view: the screen's columns, the
@@ -158,8 +155,6 @@ pub struct Look<'a> {
     pub theme: &'a Theme,
     /// The screen row the first line goes on, for where clicks land.
     pub top_row: usize,
-    /// UX 2.0's look: the day as a timeline, the chosen event beside it.
-    pub ux2: bool,
     /// The terminal draws the kit's half circles.
     pub caps: bool,
     /// The day shown; `None` is today.
@@ -304,8 +299,6 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
         .compatible()
         .map(|t| t.as_millisecond())
         .unwrap_or(look.now_ms);
-    let minutes =
-        |at: Option<Timestamp>| at.map(|t| (t.as_millisecond() - midnight) as f64 / 60_000.0);
     // Another day has no now: NaN leaves the hours to the events, draws no
     // line and says no event is next.
     let now_min = if shown == today {
@@ -349,7 +342,6 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
     lines.push(head.line());
 
     // All-day events as chips in a row of their own, above the hours.
-    let area = cols.saturating_sub(GUTTER);
     let chip = |chosen: bool, e: &CalEvent| {
         if chosen {
             Style::new()
@@ -358,11 +350,11 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
                 .add_modifier(Modifier::BOLD)
         } else if e.going() {
             Style::new()
-                .bg(Color::Indexed(SOLID[0]))
+                .bg(Color::Indexed(SOLID))
                 .fg(Color::Indexed(255))
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::new().bg(theme.panel).fg(Color::Indexed(SOLID[0]))
+            Style::new().bg(theme.panel).fg(Color::Indexed(SOLID))
         }
     };
     let all_day: Vec<&(usize, CalEvent)> = events.iter().filter(|(_, e)| e.all_day).collect();
@@ -393,201 +385,15 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
         lines.push(row.line());
     }
     lines.push(Row::new(cols, |_| " ", Style::new()).line());
-    if look.ux2 {
-        timeline(
-            &events,
-            look,
-            midnight,
-            now_min,
-            &mut lines,
-            &mut hits,
-            &mut images,
-        );
-        return (lines, hits, images);
-    }
-
-    // As many rows to an hour as the screen has room for, up to eight, so
-    // the day fills it as Google Calendar's does; an hour a row at least.
-    let timed: Vec<&(usize, CalEvent)> = events.iter().filter(|(_, e)| !e.all_day).collect();
-    let starts: Vec<f64> = timed
-        .iter()
-        .filter_map(|(_, e)| minutes(e.starts(tz)))
-        .collect();
-    let ends: Vec<f64> = timed
-        .iter()
-        .filter_map(|(_, e)| minutes(e.ends(tz)))
-        .collect();
-    let rows = 4.max(look.rows.saturating_sub(lines.len()));
-    let from = (starts
-        .iter()
-        .copied()
-        .fold((8.0f64 * 60.0).min(now_min), f64::min)
-        / 60.0)
-        .floor()
-        .max(0.0) as i64;
-    let to = ((ends
-        .iter()
-        .copied()
-        .fold((18.0 * 60.0f64).max(now_min + 1.0), f64::max)
-        / 60.0)
-        .ceil() as i64)
-        .min(24);
-    let hours = (to - from).max(1);
-    let per_hour = (rows as i64 / hours).clamp(1, 8);
-    let step = 60.0 / per_hour as f64;
-    // A day longer than the screen even by the hour starts an hour before now.
-    let first = if (hours as f64 * 60.0 / step) <= rows as f64 {
-        from
-    } else {
-        from.max(((now_min / 60.0).floor() as i64 - 1).min(to - rows as i64))
-    };
-    let count = (rows as f64)
-        .min(((to - first) as f64 * 60.0 / step).ceil())
-        .max(0.0) as usize;
-    let slot = |m: f64| (m - first as f64 * 60.0) / step;
-
-    // Events that overlap share the width, each in the first lane free, as
-    // Google Calendar places them.
-    let mut placed: Vec<Block> = timed
-        .iter()
-        .filter_map(|(i, e)| {
-            let start = minutes(e.starts(tz))?;
-            let end = minutes(e.ends(tz)).unwrap_or(start + 30.0);
-            let top = slot(start).round().max(0.0) as usize;
-            let bottom = (slot(end).round().max(0.0) as usize).max(top + 1);
-            (slot(end).round() > 0.0 && top < count).then(|| Block {
-                item: *i,
-                event: e.clone(),
-                top,
-                bottom,
-                x: GUTTER,
-                width: area,
-                lane: 0,
-                shade: 0,
-            })
-        })
-        .collect();
-    lanes(&mut placed, GUTTER, area);
-    // An event that starts on the row the one above it in the same place
-    // ends takes the other shade of that one.
-    shades(&mut placed);
-
-    let now_row = slot(now_min).floor();
-    let top_row = look.top_row + lines.len();
-    for b in &placed {
-        let w = b.width.saturating_sub(1);
-        if w == 0 {
-            continue;
-        }
-        for r in b.top..b.bottom.min(count) {
-            hits.push(HitBox {
-                y: (top_row + r) as u16,
-                x0: b.x as u16,
-                x1: (b.x + w - 1) as u16,
-                spot: Spot::Index(b.item as isize),
-            });
-        }
-    }
-    for r in 0..count {
-        let at = first as f64 * 60.0 + r as f64 * step;
-        let hour = at.rem_euclid(60.0) == 0.0;
-        let mut row = Row::new(
-            cols,
-            |x| if x >= GUTTER && hour { "┈" } else { " " },
-            Style::new().fg(theme.faint),
-        );
-        if hour {
-            let label = calendar::clock(
-                Timestamp::from_millisecond(midnight + (at * 60_000.0) as i64)
-                    .unwrap_or(Timestamp::UNIX_EPOCH),
-                tz,
-            );
-            row.put(
-                0,
-                &format!("{label:>w$}", w = GUTTER - 2),
-                Style::new().fg(theme.dim),
-                GUTTER,
-            );
-        }
-        if r as f64 == now_row {
-            row.put(GUTTER - 1, "●", fg(NOW), GUTTER);
-            for x in GUTTER..cols {
-                row.0[x] = Cell {
-                    symbol: "─".into(),
-                    style: fg(NOW),
-                };
-            }
-        }
-        for b in placed
-            .iter()
-            .filter(|b| b.top <= r && r < b.bottom.min(count))
-        {
-            let e = &b.event;
-            let over = e
-                .ends(tz)
-                .is_some_and(|t| t.as_millisecond() <= look.now_ms);
-            let chosen = look.cursor == Some(b.item);
-            let style = if chosen {
-                Style::new()
-                    .bg(Color::Indexed(CHOSEN))
-                    .fg(Color::Indexed(232))
-            } else if e.going() {
-                let shades = if over { PAST } else { SOLID };
-                Style::new()
-                    .bg(Color::Indexed(shades[b.shade]))
-                    .fg(Color::Indexed(if over { 250 } else { 255 }))
-            } else {
-                Style::new().bg(theme.panel).fg(if over {
-                    theme.dim
-                } else {
-                    Color::Indexed(SOLID[b.shade])
-                })
-            };
-            let w = b.width.saturating_sub(1);
-            for x in b.x..(b.x + w).min(cols) {
-                row.0[x] = Cell {
-                    symbol: " ".into(),
-                    style,
-                };
-            }
-            // An outlined event's colored edge.
-            if !e.going() && !chosen && b.x < cols {
-                row.0[b.x] = Cell {
-                    symbol: "▎".into(),
-                    style: style.fg(Color::Indexed(SOLID[b.shade])),
-                };
-            }
-            let line = r - b.top;
-            let single = b.bottom.min(count) - b.top == 1;
-            let range = match (e.starts(tz), e.ends(tz)) {
-                (Some(s), Some(t)) => calendar::range(s, t, tz),
-                _ => String::new(),
-            };
-            let words = if single {
-                format!("{} · {range}", e.title)
-            } else if line == 0 {
-                e.title.clone()
-            } else if line == 1 {
-                range
-            } else {
-                String::new()
-            };
-            if !words.is_empty() {
-                let style = if line == 0 {
-                    style.add_modifier(Modifier::BOLD)
-                } else {
-                    style
-                };
-                row.put(
-                    b.x + 1,
-                    &text::cut(&words, w.saturating_sub(2)),
-                    style,
-                    b.x + w,
-                );
-            }
-        }
-        lines.push(row.line());
-    }
+    timeline(
+        &events,
+        look,
+        midnight,
+        now_min,
+        &mut lines,
+        &mut hits,
+        &mut images,
+    );
     (lines, hits, images)
 }
 
@@ -624,20 +430,7 @@ fn lanes(placed: &mut [Block], x0: usize, area: usize) {
     }
 }
 
-/// An event that starts on the row the one above it in the same place ends
-/// takes the other shade of that one.
-fn shades(placed: &mut [Block]) {
-    for i in 0..placed.len() {
-        let above = (0..i).rev().find(|&a| {
-            placed[a].x == placed[i].x
-                && placed[a].width == placed[i].width
-                && placed[a].bottom == placed[i].top
-        });
-        placed[i].shade = above.map_or(0, |a| 1 - placed[a].shade);
-    }
-}
-
-/// UX 2.0's timeline: the hours' labels right-aligned in these columns.
+/// The timeline: the hours' labels right-aligned in these columns.
 const LABEL: usize = 7;
 /// Three rows to an hour at least, twenty minutes a row; a taller screen
 /// gives the hours more, up to `MOST_PER_HOUR`.
@@ -700,7 +493,7 @@ fn reply(e: &CalEvent) -> &'static str {
     }
 }
 
-/// The day with UX 2.0 on, as the board draws it: the hours down the left
+/// The day, as the board draws it: the hours down the left
 /// from 8:00 (or the first event, or now) to 7:00 (or the last), three rows
 /// an hour, each hour's label dim and right-aligned with a dashed
 /// rule across; each event a block of its own shade the height of its
@@ -821,7 +614,6 @@ fn timeline(
                 x: rule,
                 width: area,
                 lane: 0,
-                shade: 0,
             })
         })
         .collect();
@@ -1444,7 +1236,6 @@ mod tests {
             now_ms,
             theme: &Theme::DARK,
             top_row: 1,
-            ux2: false,
             caps: false,
             date: None,
             next: None,
@@ -1455,81 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn the_day_runs_down_the_hours_with_events_as_blocks_and_a_line_at_now() {
-        let tz = tz();
-        let v = view(vec![
-            Item::new("a", "Offsite")
-                .data(json!({ "title": "Offsite", "allDay": true, "you": "going" })),
-            event("Standup", (9, 0), (9, 30), "going"),
-            event("Design review", (10, 0), (12, 0), "not answered"),
-        ]);
-        // Eleven hours, 8 to 6, in 22 rows: two rows to an hour.
-        let (lines, hits, _) = day(&v, &look(Some(2), 25, now(13, 0), &tz));
-        let text = texts(&lines);
-        assert!(text[0].starts_with(" Monday, November 2"), "{text:?}");
-        assert!(text[1].starts_with("all day   Offsite"), "{text:?}");
-        assert_eq!(text[2], "");
-        assert!(text[3].starts_with("   8 AM  ┈┈┈"), "{text:?}");
-        // The standup, half an hour: one row with its times.
-        assert!(text[5].contains("Standup · 9 – 9:30 AM"), "{text:?}");
-        // The review, two hours: its title, then its times.
-        assert!(text[7].contains("Design review"), "{text:?}");
-        assert!(text[8].contains("10 AM – 12 PM"), "{text:?}");
-        // Now, at 1 PM: the red line across the hours.
-        let now_line = &lines[13];
-        assert!(
-            now_line.text().starts_with("   1 PM ●──"),
-            "{:?}",
-            now_line.text()
-        );
-        let dot = now_line.spans.iter().find(|s| s.content.contains('●'));
-        assert_eq!(dot.unwrap().style.fg, Some(Color::Indexed(NOW)));
-        // The chosen review is drawn in the light blue; a click on it chooses it.
-        assert!(
-            lines[7]
-                .spans
-                .iter()
-                .any(|s| s.style.bg == Some(Color::Indexed(CHOSEN)))
-        );
-        assert!(hits.iter().any(|h| h.y == 8 && h.spot == Spot::Index(2)));
-        assert!(hits.iter().any(|h| h.y == 2 && h.spot == Spot::Index(0)));
-        assert_eq!(lines.len(), 23, "ten hours of two rows, under three lines");
-        for l in &lines {
-            assert_eq!(width(&l.text()), 60, "{:?}", l.text());
-        }
-    }
-
-    #[test]
-    fn events_at_the_same_time_sit_side_by_side_and_one_unanswered_is_outlined() {
-        let tz = tz();
-        let v = view(vec![
-            event("One", (9, 0), (10, 0), "going"),
-            event("Two", (9, 0), (10, 0), "maybe"),
-            event("Three", (10, 0), (11, 0), "going"),
-            event("Four", (11, 0), (12, 0), "going"),
-        ]);
-        let (lines, _, _) = day(&v, &look(None, 13, now(7, 0), &tz));
-        let text = texts(&lines);
-        let row = text.iter().find(|l| l.contains("One")).unwrap();
-        let one = row.find("One").unwrap();
-        let two = row.find("▎Two").expect("outlined, with its edge");
-        assert!(two > one, "{row}");
-        // Back to back in the same place: the other shade.
-        let shade = |title: &str| {
-            let line = lines.iter().find(|l| l.text().contains(title)).unwrap();
-            line.spans
-                .iter()
-                .find(|s| s.content.contains(title))
-                .and_then(|s| s.style.bg)
-        };
-        assert_eq!(shade("Three"), Some(Color::Indexed(SOLID[0])));
-        assert_eq!(shade("Four"), Some(Color::Indexed(SOLID[1])));
-        // From 7, an hour before the first event's day.
-        assert!(text[2].starts_with("   7 AM"), "{text:?}");
-    }
-
-    #[test]
-    fn with_ux2_a_day_longer_than_the_screen_moves_to_show_the_chosen_event() {
+    fn a_day_longer_than_the_screen_moves_to_show_the_chosen_event() {
         let tz = tz();
         let v = view(vec![
             event("Standup", (9, 0), (9, 15), "going"),
@@ -1537,7 +1254,6 @@ mod tests {
         ]);
         let shown = |cursor| {
             let look = Look {
-                ux2: true,
                 ..look(cursor, 16, now(9, 0), &tz)
             };
             texts(&day(&v, &look).0).join("\n")
@@ -1550,7 +1266,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_day_is_a_timeline_and_the_chosen_event_sits_beside_it() {
+    fn the_day_is_a_timeline_and_the_chosen_event_sits_beside_it() {
         let tz = tz();
         let review = Item::new("Design review", "Design review").data(json!({
             "title": "Design review", "start": at(15, 0), "end": at(16, 0),
@@ -1574,7 +1290,6 @@ mod tests {
         ]);
         let look = Look {
             cols: 120,
-            ux2: true,
             ..look(Some(2), 40, now(13, 15), &tz)
         };
         let (lines, hits, avatars) = day(&v, &look);
@@ -1662,18 +1377,17 @@ mod tests {
         }
     }
 
-    fn ux2_look<'a>(cursor: Option<usize>, now_ms: i64, tz: &'a TimeZone) -> Look<'a> {
+    fn wide_look<'a>(cursor: Option<usize>, now_ms: i64, tz: &'a TimeZone) -> Look<'a> {
         Look {
             cols: 120,
-            ux2: true,
             ..look(cursor, 40, now_ms, tz)
         }
     }
 
     #[test]
-    fn with_ux2_a_day_with_no_events_runs_from_8_00_to_7_00() {
+    fn a_day_with_no_events_runs_from_8_00_to_7_00() {
         let tz = tz();
-        let (lines, _, _) = day(&view(Vec::new()), &ux2_look(None, now(12, 0), &tz));
+        let (lines, _, _) = day(&view(Vec::new()), &wide_look(None, now(12, 0), &tz));
         let text = texts(&lines);
         let hours: Vec<&str> = text
             .iter()
@@ -1697,7 +1411,7 @@ mod tests {
             "movedFrom": at(14, 0), "organizer": "Ana Ruiz",
         }));
         let v = view(vec![moved]);
-        let (lines, _, _) = day(&v, &ux2_look(Some(0), now(9, 0), &tz));
+        let (lines, _, _) = day(&v, &wide_look(Some(0), now(9, 0), &tz));
         let text = texts(&lines);
         let block = text.iter().find(|l| l.contains("▌ Sync")).unwrap();
         assert!(block.contains("Sync  moved"), "{block}");
@@ -1732,7 +1446,7 @@ mod tests {
         let v = view(vec![event("Standup", (9, 0), (9, 15), "going")]);
         let look = Look {
             next: Some(&next),
-            ..ux2_look(Some(0), now(8, 0), &tz)
+            ..wide_look(Some(0), now(8, 0), &tz)
         };
         let text = texts(&day(&v, &look).0);
         let pane: Vec<String> = text
@@ -1768,7 +1482,7 @@ mod tests {
         }))]);
         let look = Look {
             date: Some(jiff::civil::date(2026, 11, 3)),
-            ..ux2_look(Some(0), now(13, 0), &tz)
+            ..wide_look(Some(0), now(13, 0), &tz)
         };
         let (lines, _, _) = day(&v, &look);
         let text = texts(&lines);
@@ -1831,7 +1545,7 @@ mod tests {
         let look = Look {
             work: &work,
             notes: &notes,
-            ..ux2_look(Some(0), now(9, 0), &tz)
+            ..wide_look(Some(0), now(9, 0), &tz)
         };
         let text = texts(&day(&v, &look).0).join("\n");
         assert!(
@@ -1911,7 +1625,7 @@ mod tests {
         for cols in [120, 160, 240] {
             let look = Look {
                 cols,
-                ..ux2_look(Some(1), now(8, 0), &tz)
+                ..wide_look(Some(1), now(8, 0), &tz)
             };
             let (lines, _, _) = day(&v, &look);
             for l in &lines {
@@ -1934,13 +1648,13 @@ mod tests {
         // A narrow screen drops the pane first.
         let narrow = Look {
             cols: DAY_LEAST + 2 + PANE_LEAST - 1,
-            ..ux2_look(Some(1), now(8, 0), &tz)
+            ..wide_look(Some(1), now(8, 0), &tz)
         };
         assert!(!texts(&day(&v, &narrow).0).iter().any(|l| l.contains('│')));
         // A tall screen gives the hours more rows.
         let tall = Look {
             rows: 80,
-            ..ux2_look(None, now(8, 0), &tz)
+            ..wide_look(None, now(8, 0), &tz)
         };
         let text = texts(&day(&v, &tall).0);
         let at = |h: &str| {
@@ -1962,7 +1676,7 @@ mod tests {
         let small = |side_top| Look {
             rows: 12,
             side_top,
-            ..ux2_look(Some(0), now(8, 0), &tz)
+            ..wide_look(Some(0), now(8, 0), &tz)
         };
         let (lines, hits, _) = day(&v, &small(0));
         let last = hits
@@ -1992,7 +1706,7 @@ mod tests {
             .parse::<Timestamp>()
             .unwrap()
             .as_millisecond();
-        let (lines, _, _) = day(&v, &ux2_look(None, now_ms, &tz));
+        let (lines, _, _) = day(&v, &wide_look(None, now_ms, &tz));
         let text = texts(&lines);
         assert!(
             text.iter().any(|l| l.starts_with("  10:00 ▌ Sync")),

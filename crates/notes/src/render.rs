@@ -832,7 +832,7 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
 
 // ── UX 2.0's chips ──────────────────────────────────────────────────────────
 
-/// What a chip at the right of a checklist item says, with UX 2.0 and
+/// What a chip at the right of a checklist item says, and
 /// Settings' "Chips on checklist items" on, as board 7 draws them: an
 /// unticked item has a plan (an indented `Plan: [[...]]` line under it),
 /// waits on a choice ("needs a choice" in the item or that line, with what

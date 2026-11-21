@@ -451,7 +451,7 @@ impl Server {
             .is_some_and(|slot| sessions::pane_runs_claude(&sessions::sessions_dir(), &slot.pane))
     }
 
-    /// A tab's state, as its status line badge shows it.
+    /// A tab's state, as its mark shows it.
     pub fn tab_agent(&self, tab: TabId) -> Option<State> {
         self.agents.rollup(&self.tab_panes(tab))
     }
@@ -520,8 +520,8 @@ impl Server {
             .unwrap_or(Value::Null)
     }
 
-    /// Every status line showing this tab draws again: the badges and counts
-    /// are on all of a session's clients, whichever tab they show.
+    /// Every client of the tab's session draws again: its marks and counts
+    /// are in the sidebar, whichever tab a client shows.
     pub(crate) fn redraw_tab(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
             self.dirty_session(&name);
@@ -787,17 +787,14 @@ impl Server {
         {
             Some(pane) => self.focus_pane(pane),
             None => {
-                // UX 2.0: M-c is the header's Claude key, so with the diff,
+                // M-c is the header's Claude key, so with the diff,
                 // the PR or the ticket in Claude's place it closes that,
                 // which gives Claude its place back (src/diff/in_place.rs).
-                let in_place = settings::is_on("ux2")
-                    .then(|| self.tabs.get(&tab).map(|t| t.active))
-                    .flatten()
-                    .filter(|p| {
-                        self.panes
-                            .get(p)
-                            .is_some_and(|s| s.opts.contains_key("@in_place"))
-                    });
+                let in_place = self.tabs.get(&tab).map(|t| t.active).filter(|p| {
+                    self.panes
+                        .get(p)
+                        .is_some_and(|s| s.opts.contains_key("@in_place"))
+                });
                 match in_place {
                     Some(tool) => self.kill_pane(tool),
                     None => self.say(None, "No Claude in this tab"),

@@ -45,11 +45,10 @@
 //! goes under the text, which a sixel can't, so with sixel the frame asks
 //! for its text form instead (`images::shadow`).
 //!
-//! UX 2.0 (`ux2`) changes where panes are, not how: its header's rows are
-//! above the panes, so a picture scrolled up out of a pane is cut at the
-//! pane's top, under the header; and with no status line a pane reaches
-//! the screen's last row, which no piece is drawn on (`place`), so a
-//! picture there loses that row. Notes and the image view keep their own
+//! The header's rows are above the panes, so a picture scrolled up out of
+//! a pane is cut at the pane's top, under the header; and with no status
+//! line a pane reaches the screen's last row, which no piece is drawn on
+//! (`place`), so a picture there loses that row. Notes and the image view keep their own
 //! last row for a message or footer, so theirs never reach it.
 //!
 //! Nothing on the drawing path waits: a picture's file is looked at (its

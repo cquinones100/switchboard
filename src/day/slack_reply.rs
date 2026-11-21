@@ -22,7 +22,7 @@
 //! at once, what came before it in that conversation and thread is read
 //! (`slack::mark_replied`), as a reply the look finds is; a draft marks
 //! nothing until the look finds it sent.
-//! New with UX 2.0, with no tmux-version file behind it.
+//! New, with no tmux-version file behind it.
 
 use std::sync::LazyLock;
 use std::time::Duration;

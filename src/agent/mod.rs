@@ -1,7 +1,7 @@
 //! What each Claude session in the workspace is doing: Claude Code's hooks
 //! run `switchboard hook <event>`, which hands the hook's JSON to the server,
 //! and the server marks the pane working, waiting on you, or done, which its
-//! tab shows as a badge in the status line. This is tmux/agent-state.sh on
+//! tab shows as a mark in the sidebar and its header. This is tmux/agent-state.sh on
 //! the server's own model: pane options became `Agents`, a record per pane
 //! the server holds, and the tmux calls became the server's own methods.
 //!

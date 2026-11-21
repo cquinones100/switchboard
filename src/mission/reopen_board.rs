@@ -1,6 +1,5 @@
-//! With UX 2.0, the Reopen view as board 18 draws it and board 45 lays it
-//! out, new with the port (with UX 2.0 off the view is `render::list`'s,
-//! one line a row): the rows under their day's label, each two lines, its
+//! The Reopen view as board 18 draws it and board 45 lays it
+//! out, new with the port: the rows under their day's label, each two lines, its
 //! kind's chip (`tab`, `session`), its name bold, its directory dim, what
 //! became of its work as a chip and when at the right edge, then its last
 //! prompt; and under the list the chosen row's pane: its name and facts,
@@ -48,9 +47,8 @@ const PICTURE_ROWS: usize = 8;
 const LIST_LEAST: usize = 6;
 
 /// Whether the board draws the view: UX 2.0's, read, with rows.
-pub fn shown(m: &Mission, view: &View) -> bool {
-    m.snap.rules.ux2
-        && view.id == ViewId::Reopen
+pub fn shown(view: &View) -> bool {
+    view.id == ViewId::Reopen
         && view.loaded
         && view.data.setup.is_none()
         && !view.data.items.is_empty()

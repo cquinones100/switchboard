@@ -115,12 +115,8 @@ impl App {
         } else {
             0
         };
-        // UX 2.0's list starts under its own top line and a blank row.
-        let head = if self.opts.ux2 && list_w > 0 {
-            2.min(body_h)
-        } else {
-            0
-        };
+        // The list starts under its own top line and a blank row.
+        let head = if list_w > 0 { 2.min(body_h) } else { 0 };
         self.geo.list = Rect::new(0, head, list_w, body_h - head);
         let note_x = if list_w > 0 { list_w + 1 } else { 0 };
         self.geo.note = match split {
@@ -290,10 +286,10 @@ impl App {
         }
     }
 
-    /// Whether UX 2.0's "⌘ Commands" is drawn: Settings' palette_button
+    /// Whether "⌘ Commands" is drawn: Settings' palette_button
     /// on, and a palette to open (the workspace's, or the app's own).
     fn commands_shown(&self) -> bool {
-        self.opts.ux2 && self.opts.commands && (self.opts.server || self.opts.palette)
+        self.opts.commands && (self.opts.server || self.opts.palette)
     }
 
     /// A label of the list's top line at `r`, dim, lit under the mouse.
@@ -464,7 +460,7 @@ impl App {
         }
         if let Some(Some(hidden)) = ctx.folded.get(&row) {
             let text = line.trim_start_matches('#').trim().to_string();
-            if self.opts.ux2 && render::parked(line, ctx.kinds[row]) {
+            if render::parked(line, ctx.kinds[row]) {
                 let n = render::items_in(&ctx.kinds, row, row + hidden);
                 return vec![Shown::Fold {
                     row,
@@ -747,7 +743,7 @@ impl App {
                 }
             }
         }
-        let mut chips = if self.opts.ux2 && self.opts.item_chips {
+        let mut chips = if self.opts.item_chips {
             let mut chips = render::chips(&lines, &kinds, &self.note_tabs());
             for (row, hash) in render::landed(&lines, &kinds).into_iter().enumerate() {
                 if let Some(hash) = hash {
@@ -1302,10 +1298,10 @@ impl App {
         None
     }
 
-    /// Whether the bottom has UX 2.0's "Add an item" input, and the
-    /// footer its item keys: with a note open.
+    /// Whether the bottom has the "Add an item" input, and the footer
+    /// its item keys: with a note open.
     fn adds(&self) -> bool {
-        self.opts.ux2 && self.open.is_some()
+        self.open.is_some()
     }
 }
 

@@ -52,7 +52,7 @@ fn the_palette_filters_as_you_type_and_runs_the_pick() {
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     client.type_text(&format!("{ALT}p"));
-    let screen = client.wait_text("action>");
+    let screen = client.wait_text("╭─ Actions");
     assert!(
         screen.iter().any(|l| l.contains("Actions")),
         "the box has its title:\n{}",
@@ -72,7 +72,7 @@ fn the_palette_filters_as_you_type_and_runs_the_pick() {
     client.type_text("\r");
     client.wait_for("a second pane", |_| panes(&server.list()) == 2);
     client.wait_for("the palette gone", |s| {
-        !s.iter().any(|l| l.contains("action>"))
+        !s.iter().any(|l| l.contains("╭─ Actions"))
     });
     // The pick is remembered, and what was typed before it.
     let recent =
@@ -391,12 +391,12 @@ fn a_truecolor_terminal_gets_the_dark_theme_in_the_canvas_s_colors() {
     let server = TestServer::start();
     let mut canvas = server.attach_as("xterm-256color  truecolor", 100, 30);
     canvas.wait_text("$");
-    canvas.wait_sent("the status line in the canvas's text", b"38;2;201;205;217");
+    canvas.wait_sent("dim words in the canvas's color", b"38;2;141;147;168");
     let mut plain = server.attach(100, 30);
     plain.wait_text("$");
-    plain.wait_sent("the status line in the 256 colors", b"38;5;248");
+    plain.wait_sent("dim words in the 256 colors", b"38;5;244");
     assert!(
-        !sent(&plain.raw, b"38;2;201;205;217"),
+        !sent(&plain.raw, b"38;2;141;147;168"),
         "a terminal that doesn't say truecolor keeps the 256 colors"
     );
 }
@@ -407,8 +407,8 @@ fn the_light_theme_is_the_same_on_a_truecolor_terminal() {
     for term in ["xterm-256color  truecolor", "xterm-256color"] {
         let mut client = server.attach_as(term, 100, 30);
         client.wait_text("$");
-        client.wait_sent("the light status line", b"38;5;234");
-        assert!(!sent(&client.raw, b"38;2;201;205;217"), "{term}");
+        client.wait_sent("the light theme's dim words", b"38;5;242");
+        assert!(!sent(&client.raw, b"38;2;141;147;168"), "{term}");
         client.detach();
     }
 }

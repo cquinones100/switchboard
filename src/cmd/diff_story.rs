@@ -43,7 +43,6 @@ fn page_options() -> app::Options {
         ask: false,
         easy: false,
         key_help: false,
-        ux2: settings::is_on("ux2"),
         hover: false,
         light: false,
         pane_arrows: false,

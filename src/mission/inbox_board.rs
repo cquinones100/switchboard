@@ -1,5 +1,5 @@
-//! With UX 2.0, the Inbox view as a board (board 22 of the canvas, new with
-//! the port; the tmux version, and this view with UX 2.0 off, list the
+//! The Inbox view as a board (board 22 of the canvas, new with
+//! the port; the tmux version, and this view off, list the
 //! notifications as `render::list` does): the notifications grouped by day
 //! with their counts, each two rows beside the Large avatar of who acted
 //! (`kit::avatar`, their Linear photo drawn over their initial), its kind's
@@ -56,9 +56,8 @@ const DESCRIPTION_LINES: usize = 8;
 const FOOT: &str = "Read, archived and snoozed ones stay in Linear.";
 
 /// Whether the board draws the view: UX 2.0's, read, with notifications.
-pub fn shown(m: &Mission, view: &View) -> bool {
-    m.snap.rules.ux2
-        && view.id == ViewId::Inbox
+pub fn shown(view: &View) -> bool {
+    view.id == ViewId::Inbox
         && view.loaded
         && view.data.setup.is_none()
         && !view.data.items.is_empty()
@@ -872,7 +871,6 @@ mod tests {
         m.view = 1;
         m.size = (cols as u16, 40);
         m.snap.rules = rules();
-        m.snap.rules.ux2 = true;
         m.snap.now_secs = NOW_MS / 1000;
         m.snap.views = vec![View {
             id: ViewId::Inbox,

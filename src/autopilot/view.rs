@@ -1,4 +1,4 @@
-//! Autopilot's own view in mission control, with UX 2.0 on (the
+//! Autopilot's own view in mission control, (the
 //! view_autopilot setting): a heading saying which note it works, its tabs
 //! working and open against its slots and cap, whether its tabs land
 //! without asking, today's spend against its limit, and whether it is
@@ -47,8 +47,7 @@ use crate::items::{Item, State, Target};
 use crate::mux::TabId;
 use crate::sidebar::model::TabState;
 
-/// The heading's id: Enter on it opens the menu the Tabs view's line opens
-/// without UX 2.0 (`line::choices`).
+/// The heading's id: Enter on it opens its menu (`line::choices`).
 pub const HEADING: &str = "header:autopilot";
 
 /// The stages' names, as the view's heading shows them.

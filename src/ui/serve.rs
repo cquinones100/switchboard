@@ -123,9 +123,6 @@ pub enum Handed {
     Took { only_itself: bool },
 }
 
-/// How long the status line shows a message with message_boxes off: tmux's
-/// `display-time`, whose default tmux.conf kept.
-const DISPLAY_TIME: Duration = Duration::from_millis(750);
 /// How long after a pick from the palette its key's tip comes, so it shows
 /// over what the command opened rather than before it (tip.sh's `-d 1`).
 const KEY_TIP_DELAY: Duration = Duration::from_secs(1);
@@ -285,10 +282,6 @@ impl Server {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
-        // A message on the status line (message_boxes off) goes too.
-        if kind == "message" {
-            c.overlays.note = None;
-        }
         let (gone, kept): (Vec<Layer>, Vec<Layer>) = std::mem::take(&mut c.overlays.layers)
             .into_iter()
             .partition(|l| l.overlay.kind() == kind);
@@ -837,17 +830,12 @@ impl Server {
         }
     }
 
-    /// Closes a client's overlays whose time is up, and the status line's
-    /// message once it has been shown long enough.
+    /// Closes a client's overlays whose time is up.
     fn overlays_due(&mut self, id: ClientId) {
         let now = Instant::now();
         let Some(c) = self.clients.get_mut(&id) else {
             return;
         };
-        if c.overlays.note.as_ref().is_some_and(|(_, at)| *at <= now) {
-            c.overlays.note = None;
-            c.dirty = true;
-        }
         let (due, kept): (Vec<Layer>, Vec<Layer>) = std::mem::take(&mut c.overlays.layers)
             .into_iter()
             .partition(|l| l.overlay.deadline().is_some_and(|d| d <= now));
@@ -884,8 +872,7 @@ impl Server {
 
     /// Says something in a box in the middle of a client's screen (the one
     /// used last when `None`), which any key closes and which closes itself
-    /// after five seconds; with message_boxes off, on the status line for a
-    /// moment, as tmux's message was.
+    /// after five seconds.
     pub fn say(&mut self, client: Option<ClientId>, text: &str) {
         self.say_for(client, text, message::SECONDS);
     }
@@ -901,39 +888,18 @@ impl Server {
         else {
             return;
         };
-        // With no status line (UX 2.0), there is nowhere to put the line, so
-        // it is said in a box whatever the setting.
-        if !setting_on("message_boxes") && crate::status::lines() > 0 {
-            if let Some(c) = self.clients.get_mut(&id) {
-                let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                // A message asked to stay longer than a box's usual time
-                // (a link opening) stays as long on the status line.
-                let shown_for = if seconds > message::SECONDS {
-                    Duration::from_secs(seconds)
-                } else {
-                    DISPLAY_TIME
-                };
-                c.overlays.note = Some((line, Instant::now() + shown_for));
-            }
-            self.overlays_changed(id);
-            return;
-        }
         // One message at a time: a new one takes the place of one still up.
         self.close_overlays(id, "message");
         self.open(id, Box::new(Message::new(text, seconds)), None);
     }
 
-    /// What a client's message says while it is up, in its box or on the
-    /// status line (its words joined there by single spaces).
+    /// What a client's message says while it is up, in its box.
     pub fn message_shown(&self, client: ClientId) -> Option<String> {
         let c = self.clients.get(&client)?;
-        if let Some(m) = c.overlays.find::<Message>() {
-            return Some(m.text().to_string());
-        }
-        c.overlays.note.as_ref().map(|(line, _)| line.clone())
+        c.overlays.find::<Message>().map(|m| m.text().to_string())
     }
 
-    /// Closes a client's message, in its box or on the status line.
+    /// Closes a client's message.
     pub fn unsay(&mut self, client: ClientId) {
         self.close_overlays(client, "message");
     }
@@ -1132,20 +1098,18 @@ impl Server {
             .prompt("action> ")
             .exact()
             .order(order);
-        // UX 2.0 draws it as board 15: the input atom, and the chosen
+        // Drawn as board 15: the input atom, and the chosen
         // command's preview under the list.
-        if settings::is_on("ux2") {
-            let caps = self
-                .clients
-                .get(&client)
-                .is_some_and(|c| crate::mux::graphics::round_ends(&c.term));
-            let previews = notes
-                .iter()
-                .map(|n| n.preview.clone())
-                .chain(entries.iter().map(Entry::preview))
-                .collect();
-            picker = picker.previews(previews).kit(caps);
-        }
+        let caps = self
+            .clients
+            .get(&client)
+            .is_some_and(|c| crate::mux::graphics::round_ends(&c.term));
+        let previews = notes
+            .iter()
+            .map(|n| n.preview.clone())
+            .chain(entries.iter().map(Entry::preview))
+            .collect();
+        picker = picker.previews(previews).kit(caps);
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;

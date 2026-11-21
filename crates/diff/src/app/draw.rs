@@ -13,8 +13,8 @@ use ratatui::text::{Line as Spans, Span};
 
 use super::select::{Pane, Spot};
 use super::{
-    ACCENT, ADDED, App, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED, SHORT_WHY,
-    Telling, UNCOMMITTED, blend, own,
+    ACCENT, ADDED, App, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED, Telling, blend,
+    own,
 };
 use crate::git::{self, Entry, Section};
 use crate::sides::{self, Kind};
@@ -377,24 +377,15 @@ impl App {
     fn draw_filter_line(&self, buf: &mut Buffer, w: u16, theme: &switchboard_ui::Theme) {
         let (left, of) = self.filtered_count();
         let count = format!("{left} of {of} files");
-        if self.opts.ux2 {
-            let spans = kit::input_beside(
-                &self.path_filter,
-                "type to filter paths",
-                w as usize,
-                vec![Span::styled(count, Tone::Dim.style(theme))],
-                theme,
-                false,
-            );
-            put_line(buf, 0, 0, w, &Spans::from(spans));
-        } else {
-            let cursor = if self.filtering { "▏" } else { "" };
-            let text = format!(" /{}{cursor}", self.path_filter);
-            let room = (w as usize).saturating_sub(width(&count) + 1);
-            Self::put(buf, 0, 0, room as u16, &text, Style::new());
-            let x = w.saturating_sub(width(&count) as u16);
-            Self::put(buf, x, 0, w - x, &count, self.faint());
-        }
+        let spans = kit::input_beside(
+            &self.path_filter,
+            "type to filter paths",
+            w as usize,
+            vec![Span::styled(count, Tone::Dim.style(theme))],
+            theme,
+            false,
+        );
+        put_line(buf, 0, 0, w, &Spans::from(spans));
     }
 
     fn draw_list(&mut self, buf: &mut Buffer) {
@@ -442,15 +433,13 @@ impl App {
         self.list_top = self.list_top.min(rows.len().saturating_sub(1));
         let entries = self.entries().to_vec();
         let theme = self.theme();
-        if self.opts.ux2 {
-            // The list on the panel, a rule between it and the diff.
-            let panel = Surface::Panel.color(&theme);
-            for y in 0..self.diff_area().height {
-                for x in 0..w {
-                    buf[(x, y)].set_bg(panel);
-                }
-                put_line(buf, w, y, 1, &Spans::from(kit::rule_v(&theme)));
+        // The list on the panel, a rule between it and the diff.
+        let panel = Surface::Panel.color(&theme);
+        for y in 0..self.diff_area().height {
+            for x in 0..w {
+                buf[(x, y)].set_bg(panel);
             }
+            put_line(buf, w, y, 1, &Spans::from(kit::rule_v(&theme)));
         }
         // The rows a column narrower while the scroll bar is beside them.
         let bar = self.opts.scroll_bars && w > 1 && rows.len() > h;
@@ -484,7 +473,7 @@ impl App {
                 lit.push(y);
             }
             match row {
-                ListRow::Header(section) if self.opts.ux2 => {
+                ListRow::Header(section) => {
                     // What is listed apart under "Not committed yet" counted
                     // there, not here.
                     let apart = self.not_committed_apart();
@@ -630,7 +619,7 @@ impl App {
                         &Spans::from(kit::fit(spans, w as usize, Style::new())),
                     );
                 }
-                ListRow::File(k) if self.opts.ux2 => {
+                ListRow::File(k) => {
                     let Some(e) = self.order.get(*k).and_then(|&i| entries.get(i)) else {
                         continue;
                     };
@@ -643,21 +632,6 @@ impl App {
                         w,
                         &Spans::from(kit::row(spans, w as usize, chosen, &theme)),
                     );
-                }
-                ListRow::Header(section) => {
-                    let n = self
-                        .order
-                        .iter()
-                        .filter(|&&i| entries.get(i).is_some_and(|e| e.section == *section))
-                        .count();
-                    let text = match (&self.title, self.alone, &self.story) {
-                        (Some((title, _)), _, _) => title.clone(),
-                        (None, Some(p), Some(_)) => {
-                            format!(" {} ({n})", self.page_heading(p))
-                        }
-                        _ => format!(" {} ({n})", section.heading()),
-                    };
-                    Self::put(buf, 0, y, w, &text, self.faint());
                 }
                 ListRow::Loading => {
                     Self::put(
@@ -676,108 +650,8 @@ impl App {
                             .fg(Color::Indexed(4))
                             .add_modifier(Modifier::BOLD),
                         StoryLook::Comment => self.comment(),
-                        StoryLook::Watch => Tone::Needs.style(&self.theme()),
-                        StoryLook::Normal => Style::new(),
                     };
                     Self::put(buf, 1, y, w.saturating_sub(1), text, style);
-                }
-                ListRow::File(k) => {
-                    let Some(e) = self.order.get(*k).and_then(|&i| entries.get(i)) else {
-                        continue;
-                    };
-                    let chosen = *k == self.at;
-                    let bg = if chosen {
-                        Some(Color::Indexed(if self.focus == Focus::List {
-                            238
-                        } else {
-                            236
-                        }))
-                    } else {
-                        None
-                    };
-                    if let Some(bg) = bg {
-                        for x in 0..w {
-                            buf[(x, y)].set_bg(bg);
-                        }
-                    }
-                    let with = |s: Style| match bg {
-                        Some(bg) => s.bg(bg),
-                        None => s,
-                    };
-                    let status = match e.status {
-                        'A' => Color::Indexed(114),
-                        'D' => Color::Indexed(167),
-                        'R' | 'C' => Color::Indexed(75),
-                        _ => Color::Indexed(179),
-                    };
-                    let counts = if e.binary {
-                        " bin".to_string()
-                    } else {
-                        format!(" +{} −{}", e.additions, e.deletions)
-                    };
-                    // A file the open page shows a hunk of from another.
-                    // Left out where it would leave the name no room.
-                    let counts = match self.also_of(&e.path, self.run_of(e)) {
-                        Some(n) => {
-                            let also = format!(" also {}{counts}", self.page_named(n, &e.path));
-                            if width(&also) + 12 <= w as usize {
-                                also
-                            } else {
-                                counts
-                            }
-                        }
-                        None => counts,
-                    };
-                    let cw = width(&counts) as u16;
-                    let (dir, name) = match e.path.rsplit_once('/') {
-                        Some((d, n)) => (format!("{d}/"), n.to_string()),
-                        None => (String::new(), e.path.clone()),
-                    };
-                    // A file with changes not yet committed: a ● before its
-                    // counts, as diffview.lua marked its row.
-                    let marked = self.changed_since(e);
-                    if marked {
-                        Self::put(
-                            buf,
-                            w.saturating_sub(cw + 2),
-                            y,
-                            2,
-                            " ●",
-                            with(Style::new().fg(UNCOMMITTED)),
-                        );
-                    }
-                    let room = w.saturating_sub(cw + 1 + if marked { 2 } else { 0 });
-                    let mut x = Self::put(
-                        buf,
-                        1,
-                        y,
-                        room,
-                        &e.status.to_string(),
-                        with(Style::new().fg(status)),
-                    );
-                    x = Self::put(
-                        buf,
-                        x + 1,
-                        y,
-                        room.saturating_sub(x),
-                        &name,
-                        with(if chosen {
-                            Style::new().add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::new()
-                        }),
-                    );
-                    if x + 1 < room {
-                        Self::put(buf, x + 1, y, room - x - 1, &dir, with(self.faint()));
-                    }
-                    Self::put(
-                        buf,
-                        w.saturating_sub(cw),
-                        y,
-                        cw,
-                        &counts,
-                        with(self.faint()),
-                    );
                 }
             }
         }
@@ -924,14 +798,11 @@ impl App {
         self.page_title(cols)
     }
 
-    /// The page's lines over the diff with UX 2.0: its number and title
+    /// The page's lines over the diff: its number and title
     /// with what the change is compared with at the right (in a page
     /// opened from the map, how much of its chapter is read and the way
     /// back), its why, its watch line, and a rule.
     pub(super) fn page_title(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
-        if !self.opts.ux2 {
-            return Vec::new();
-        }
         let (Some(story), Some(n)) = (&self.story, self.current().and_then(|e| self.home(&e.path)))
         else {
             return Vec::new();
@@ -995,7 +866,7 @@ impl App {
     /// UX 2.0's one bar over both sides of a file: its path (the folders
     /// dim, the name bold, where a renamed one came from after it), its
     /// counts, and at the right the two sides compared.
-    pub(super) fn bar_ux2(&self, entry: &Entry, cols: usize) -> Vec<Span<'static>> {
+    pub(super) fn bar(&self, entry: &Entry, cols: usize) -> Vec<Span<'static>> {
         let theme = self.theme();
         let (dir, name) = match entry.path.rsplit_once('/') {
             Some((d, n)) => (format!("{d}/"), n.to_string()),
@@ -1072,73 +943,6 @@ impl App {
         out
     }
 
-    /// The bar over a side: the file's path from the repository's root,
-    /// its folders faint, its page before it; the old side's only for a
-    /// file renamed, which names where it was.
-    fn bar(&self, entry: &Entry, new_side: bool, cols: u16) -> Vec<(String, Style)> {
-        let mut out: Vec<(String, Style)> = vec![(" ".into(), Style::new())];
-        let path = if new_side {
-            entry.path.clone()
-        } else {
-            entry.old().to_string()
-        };
-        if !new_side && self.side_widths().1 > 0 && entry.old_path.is_none() {
-            return out;
-        }
-        let number = self.alone.or_else(|| {
-            self.story
-                .as_ref()
-                .and_then(|s| s.page.get(&entry.path).copied())
-        });
-        let mut used = 1;
-        if let (Some(story), Some(n), true) =
-            (&self.story, number, new_side || self.side_widths().1 == 0)
-            && let Some(page) = story.pages.get(n - 1)
-        {
-            let (k, m) = match self.told_map() {
-                Some(s) => {
-                    let (_, k, m) = story::page_number(s, n);
-                    (k, m)
-                }
-                None => (n, story.pages.len()),
-            };
-            let text = format!("{k}/{m} {} · ", page.title);
-            used += width(&text);
-            out.push((text, self.comment()));
-        }
-        let (dir, name) = match path.rsplit_once('/') {
-            Some((d, n)) => (format!("{d}/"), n.to_string()),
-            None => (String::new(), path.clone()),
-        };
-        used += width(&dir) + width(&name);
-        out.push((dir, self.faint()));
-        out.push((name, Style::new().add_modifier(Modifier::BOLD)));
-        // A file with changes not yet committed says so over the side that
-        // shows them.
-        if (new_side || self.side_widths().1 == 0) && self.changed_since(entry) {
-            let text = "   ● uncommitted";
-            used += width(text);
-            out.push((text.into(), Style::new().fg(UNCOMMITTED)));
-        }
-        // A list too narrow for a whole why heads its page with the
-        // first sentence: the whole why goes here, cut to fit.
-        if self.list_width < SHORT_WHY
-            && let (Some(story), Some(n)) = (&self.story, number)
-            && let Some(page) = story.pages.get(n - 1)
-            && !page.why.is_empty()
-            && story::first_sentence(&page.why) != page.why
-        {
-            let room = (cols as usize).saturating_sub(used + 3);
-            if room > 10 {
-                out.push((
-                    format!("   {}", switchboard_ui::draw::cut(&page.why, room)),
-                    self.comment(),
-                ));
-            }
-        }
-        out
-    }
-
     /// The diff, and its scroll bar in the column kept for it.
     fn draw_diff(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         let cursor = self.draw_diff_body(buf);
@@ -1158,7 +962,7 @@ impl App {
 
     fn draw_diff_body(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         let area = self.diff_area();
-        let Some(entry) = self.current().cloned() else {
+        if self.current().is_none() {
             if let Some(change) = &self.change {
                 let text = if self.alone.is_some()
                     && self.order.is_empty()
@@ -1182,7 +986,7 @@ impl App {
                 Self::put(buf, area.x + 1, 1, area.width, &text, self.faint());
             }
             return None;
-        };
+        }
         let head = self.page_head(area.width as usize);
         for (i, spans) in head.iter().enumerate() {
             put_line(
@@ -1201,50 +1005,7 @@ impl App {
             self.spot(Pane::Head, row, area.x, i64::from(y), false);
         }
         let h = self.body_height();
-        if self.one_scroll() {
-            return self.draw_scroll(buf, bar_y, body_y, h);
-        }
-        let (ow, nw) = self.side_widths();
-        let old_x = area.x;
-        let new_x = if ow > 0 { area.x + ow + 1 } else { area.x };
-        if self.opts.ux2 {
-            put_line(
-                buf,
-                area.x,
-                bar_y,
-                area.width,
-                &Spans::from(self.bar_ux2(&entry, area.width as usize)),
-            );
-        } else {
-            for (new_side, x, w) in [(false, old_x, ow), (true, new_x, nw)] {
-                if w == 0 {
-                    continue;
-                }
-                let mut cx = x;
-                for (text, style) in self.bar(&entry, new_side, w) {
-                    cx = Self::put(buf, cx, bar_y, (x + w).saturating_sub(cx), &text, style);
-                }
-            }
-        }
-        let binary = self.files.get(&entry.key()).is_some_and(|s| s.binary);
-        if binary {
-            Self::put(
-                buf,
-                area.x + 1,
-                body_y + 1,
-                area.width,
-                "A binary file: no text to compare.",
-                self.faint(),
-            );
-            return None;
-        }
-        let n = self.screen_lines().len();
-        self.cur = self.cur.min(n.saturating_sub(1));
-        self.keep_cursor();
-        self.top = self.top.min(n.saturating_sub(1));
-        let (at, top) = (self.at, self.top);
-        self.diff_moved((at, top), body_y);
-        self.draw_rows(buf, at, top, h, body_y)
+        self.draw_scroll(buf, bar_y, body_y, h)
     }
 
     /// The files read as one scroll (UX 2.0): from the view's first line
@@ -1268,7 +1029,7 @@ impl App {
             app.order
                 .get(k)
                 .and_then(|&i| app.entry(i))
-                .map(|e| app.bar_ux2(e, area.width as usize))
+                .map(|e| app.bar(e, area.width as usize))
                 .unwrap_or_default()
         };
         put_line(
@@ -1361,16 +1122,6 @@ impl App {
                     let whole = Rect { y, ..across };
                     spots.push(Spot::new(Pane::Wide, whole, area.x, place, false));
                 }
-                Line::Note { new_side, .. } => {
-                    let (x, w) = if *new_side { (new_x, nw) } else { (old_x, ow) };
-                    spots.push(Spot::new(
-                        Pane::Wide,
-                        Rect::new(x, y, w, 1),
-                        x,
-                        place,
-                        false,
-                    ));
-                }
                 Line::Pair { .. } => {}
             }
             match line {
@@ -1391,10 +1142,6 @@ impl App {
                 }
                 Line::Card(spans) | Line::Also(_, _, spans) => {
                     put_line(buf, area.x, y, area.width, &Spans::from(spans.clone()));
-                }
-                Line::Note { new_side, text } => {
-                    let (x, w) = if *new_side { (new_x, nw) } else { (old_x, ow) };
-                    Self::put(buf, x, y, w, text, self.comment());
                 }
                 Line::Pair { row, old, new } => {
                     let r = &s.rows[*row];

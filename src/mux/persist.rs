@@ -501,9 +501,6 @@ pub struct Persist {
     written: Option<u64>,
     written_shape: Option<u64>,
     written_at: Option<Instant>,
-    /// When the last write was asked for, by the clock, for the health light
-    /// (src/status/health.rs) to compare with the file's own time.
-    asked_at: Option<std::time::SystemTime>,
     /// How many panes the last file written held.
     written_panes: Option<usize>,
     /// The layout as the last tick found it, its panes, how many of them
@@ -592,11 +589,6 @@ pub fn written_panes(server: &Server) -> Option<usize> {
 /// the new build's first tick.
 pub fn take_written_panes(server: &mut Server, written: Option<usize>) {
     server.persist.written_panes = written;
-}
-
-/// When the layout's last write was asked for; `None` before any.
-pub fn last_asked(server: &Server) -> Option<std::time::SystemTime> {
-    server.persist.asked_at
 }
 
 /// `switchboard save`: saves now, giving the file.
@@ -841,7 +833,6 @@ impl Persist {
     /// Hands a file to the writer thread, started the first time; written
     /// here when no thread can be.
     fn send(&mut self, json: String, done: Option<channel::SyncSender<io::Result<()>>>) {
-        self.asked_at = Some(std::time::SystemTime::now());
         let job = Job {
             dir: paths::state_dir(),
             json,

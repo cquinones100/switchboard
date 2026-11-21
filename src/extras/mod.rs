@@ -272,7 +272,7 @@ impl Command {
                 "A drag of the sidebar's edge, or the pane resize keys while it has them, gives the sidebar a width of its own, kept through restarts, which mission control's list of views in its place shares; this clears it, the sidebar taking sidebar.json's width again, as its own menu's \"Use the default width\" does. Settings' \"Resize the sidebar by dragging or the pane resize keys\" (sidebar_resize)."
             }
             Command::Keys => {
-                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the boxes', the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
+                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the boxes', the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. A board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
         }
     }

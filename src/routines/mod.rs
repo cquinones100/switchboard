@@ -9,7 +9,7 @@
 //!   at 8:45", "every 30m 9-6", "nov 20 3pm"), its next runs and its words.
 //! - `routine`: a routine as it is kept, a file each in the state
 //!   directory, and its runs, a line each.
-//! - `view`: mission control's Routines view, its items and, with UX 2.0,
+//! - `view`: mission control's Routines view, its items and,
 //!   its board (board 29).
 //! - `form`: the box a routine is made and changed in (board 30).
 //! - `headless`: a run's `claude -p`, its arguments and its JSON read.

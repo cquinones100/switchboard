@@ -390,9 +390,6 @@ pub struct Rules {
     pub now_ms: i64,
     pub reminders: bool,
     pub build_failing: bool,
-    /// UX 2.0: the sidebar opens with its tab count and the notifications,
-    /// in place of the session's name with them pinned at the bottom.
-    pub ux2: bool,
     /// The sidebar drawn on a shade of its own, the canvas's sunken
     /// surface, a step off the panes (sidebar_panel).
     pub panel: bool,
@@ -407,7 +404,6 @@ impl Rules {
             now_ms: crate::util::now_ms(),
             reminders: crate::settings::is_on("reminders"),
             build_failing: crate::settings::is_on("build_failing"),
-            ux2: crate::settings::is_on("ux2"),
             panel: crate::settings::is_on("sidebar_panel"),
             scroll_bars: crate::settings::is_on("scroll_bars"),
         }
@@ -1272,7 +1268,6 @@ pub(crate) mod tests {
             now_ms: NOW_MS,
             reminders: true,
             build_failing: true,
-            ux2: false,
             panel: false,
             scroll_bars: false,
         }
@@ -2344,7 +2339,7 @@ pub(crate) mod tests {
         });
         t.review = Some("APPROVED".into());
         t.size = Some((340, 80));
-        assert_eq!(pr_facts(&t), vec!["✓12 ✕1 ⏳3", "approved", "+340 −80"]);
+        assert_eq!(pr_facts(&t), vec!["✓12 ✕1 ◌3", "approved", "+340 −80"]);
     }
 
     #[test]

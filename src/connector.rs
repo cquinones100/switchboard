@@ -15,9 +15,8 @@
 //! `not_connected` set and a message saying what to do, and each call records
 //! how its service answered in the state directory:
 //! `connectors.json` (`{ "Slack": { ok, at, message } }`) for the views, and
-//! `connectors-down`, a `<service>\t<when>` line for each one down, for the
-//! health light. So a feature that is on and
-//! can't reach its connector says so where it shows, and in the health light,
+//! `connectors-down`, a `<service>\t<when>` line for each one down. So a
+//! feature that is on and can't reach its connector says so where it shows,
 //! rather than failing quietly.
 //!
 //! A call nobody waits on (the Slack look, the meeting notes:

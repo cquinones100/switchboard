@@ -144,8 +144,8 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
-    ("] [", "next, last view (with UX 2.0, in its group)"),
-    ("M-] M-[", "with UX 2.0, the next, last group of views"),
+    ("] [", "next, last view in its group"),
+    ("M-] M-[", "the next, last group of views"),
     (
         "M-{ M-}",
         "back, forward through the tabs and views visited, closing it onto a tab",
@@ -159,7 +159,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("M-w", "close, whatever is open over it"),
     (
         "M-1-9",
-        "close and go to that tab; with UX 2.0, a click on a tab in the sidebar too",
+        "close and go to that tab;, a click on a tab in the sidebar too",
     ),
     (
         "M-p",
@@ -168,7 +168,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("?", "these keys"),
 ];
 
-/// The view menu's way to autopilot: its settings box with UX 2.0
+/// The view menu's way to autopilot: its settings box
 /// (`autopilot_menu`), else its menu.
 /// Whether M-j's picker searches what the panes show for this filter.
 fn searches_panes(m: &Mission, text: &str) -> bool {
@@ -179,11 +179,7 @@ fn searches_panes(m: &Mission, text: &str) -> bool {
 }
 
 fn autopilot_label() -> &'static str {
-    if crate::sidebar::text::ux2() {
-        "Autopilot's settings…"
-    } else {
-        "Autopilot: pause, land, stop…"
-    }
+    "Autopilot's settings…"
 }
 
 /// What an option of a view's menu (`m`) does.
@@ -679,7 +675,7 @@ impl Server {
         let was = (m.snap.frame, m.spun_at);
         m.snap.frame = spin_frame(m, boxed);
         let held = boxed && (m.snap.frame, m.spun_at) == was;
-        if !m.snap.rules.ux2 || held {
+        if held {
             return;
         }
         let screens = self.mission_screens();
@@ -788,10 +784,7 @@ impl Server {
                 }
             }
         }
-        // The note items show in the pane UX 2.0 draws beside the day.
-        if !m.snap.rules.ux2 {
-            return;
-        }
+        // The note items show in the pane beside the day.
         let fresh = self
             .mission
             .calendar_notes
@@ -819,7 +812,7 @@ impl Server {
             .into_iter()
             .filter(|(_, at)| *at != m.view)
             .filter_map(|(_, at)| at.checked_sub(1).and_then(|i| m.snap.views.get(i)))
-            .find(|v| super::render::slack_board_shown(m, v))
+            .find(|v| super::render::slack_board_shown(v))
             .cloned();
         if let Some(v) = cell {
             let first = super::slack_board::shown(&v.data.items, -1);
@@ -832,7 +825,7 @@ impl Server {
         }
         let Some(view) = m
             .current()
-            .filter(|v| super::render::slack_board_shown(m, v))
+            .filter(|v| super::render::slack_board_shown(v))
             .cloned()
         else {
             // The board isn't in front, so it shows no thread: a Slack
@@ -840,15 +833,6 @@ impl Server {
             // message chosen.
             self.slack_pane_shows(None);
             m.slack_thread_open = false;
-            // The plain list shows the whole look, so leaving marks it all
-            // seen, whatever the board showed before or after.
-            // (Not the board's loading screen, before its first look.)
-            if !m.snap.rules.ux2
-                && m.current()
-                    .is_some_and(|v| v.id == ViewId::Slack && !v.data.items.is_empty())
-            {
-                m.slack_plain_shown = true;
-            }
             return;
         };
         // What the board shows has been shown, every message of a thread's
@@ -884,7 +868,7 @@ impl Server {
     fn reopen_extras(&mut self, m: &mut Mission) {
         let name = m
             .current()
-            .filter(|v| v.id == ViewId::Reopen && m.snap.rules.ux2)
+            .filter(|v| v.id == ViewId::Reopen)
             .and_then(|_| m.chosen_item())
             .and_then(crate::usage::reopen::of)
             .and_then(|r| r["screen"].as_str())
@@ -936,7 +920,7 @@ impl Server {
     /// read off the task when there is no copy yet, the notification is
     /// newer than the copy, or the copy was read five minutes ago.
     fn inbox_extras(&mut self, m: &mut Mission) {
-        let Some(view) = m.current().filter(|v| inbox_board::shown(m, v)) else {
+        let Some(view) = m.current().filter(|v| inbox_board::shown(v)) else {
             return;
         };
         let actors: Vec<_> = view
@@ -1113,23 +1097,15 @@ impl Server {
         let Some((cols, rows)) = self.clients.get(&client).map(|c| (c.cols, c.rows)) else {
             return;
         };
-        // With UX 2.0 it fills the session's main area, header included,
-        // leaving the sidebar showing on its left.
-        let ux2 = settings::is_on("ux2");
-        let left = if ux2 {
-            self.clients
-                .get(&client)
-                .and_then(|c| self.session(&c.session))
-                .map_or(0, |s| s.main_area().x)
-                .min(cols.saturating_sub(1))
-        } else {
-            0
-        };
-        let screens = if ux2 {
-            self.mission_screens()
-        } else {
-            Default::default()
-        };
+        // It fills the session's main area, header included, leaving the
+        // sidebar showing on its left.
+        let left = self
+            .clients
+            .get(&client)
+            .and_then(|c| self.session(&c.session))
+            .map_or(0, |s| s.main_area().x)
+            .min(cols.saturating_sub(1));
+        let screens = self.mission_screens();
         let boxed = self.mission_boxed(client);
         let Some(mut m) = self.take_mission(client) else {
             return;
@@ -1194,7 +1170,7 @@ impl Server {
         // What the Slack board's From your work reads: today's Calendar and
         // the Tickets as they are, whatever day the Calendar shows or the
         // filter leaves.
-        let slack_work: Vec<View> = if ux2 && m.current().is_some_and(|v| v.id == ViewId::Slack) {
+        let slack_work: Vec<View> = if m.current().is_some_and(|v| v.id == ViewId::Slack) {
             all.iter()
                 .filter(|v| matches!(v.id, ViewId::Calendar | ViewId::Tickets))
                 .cloned()
@@ -1271,7 +1247,7 @@ impl Server {
                 }
                 // The Slack board lists its messages by section, so each
                 // section's are together, newest first.
-                if ux2 && v.id == ViewId::Slack {
+                if v.id == ViewId::Slack {
                     super::slack_board::in_order(
                         &mut v.data.items,
                         settings::is_on("slack_threads"),
@@ -1304,7 +1280,7 @@ impl Server {
                     | ViewId::Routines
                     | ViewId::Landing
                     | ViewId::Reopen
-            ) || ux2 && *id == ViewId::Slack
+            ) || *id == ViewId::Slack
         };
         // The Reminders view's chosen reminder, moved to another day, takes
         // the chosen day with it.
@@ -1343,10 +1319,6 @@ impl Server {
                 self.clients
                     .get(&client)
                     .is_some_and(crate::mux::server::Client::truecolor),
-            ),
-            card: (
-                self.sidebar.config.card_width,
-                self.sidebar.config.card_height,
             ),
             tab_focus: settings::is_on("tab_focus"),
             nav_follow: settings::is_on("mission_nav_follow"),
@@ -1396,7 +1368,7 @@ impl Server {
         m.left = left;
         // Its groups and views in a column of its own, beside the tabs
         // sidebar, or where there is no sidebar to list them in.
-        m.own_column = ux2 && (settings::is_on("mission_keep_tabs_sidebar") || left <= 1);
+        m.own_column = settings::is_on("mission_keep_tabs_sidebar") || left <= 1;
         // Mission control's own width (the resize keys'), else the setting's.
         m.lone = crate::mux::layout::width_of(
             self.clients
@@ -1443,10 +1415,12 @@ impl Server {
             .map_or("Tabs".to_string(), |(_, t)| t.clone());
         let came = m.came.replace(title.clone());
         let cards_shown = m.view == 0 || m.grid_shown().iter().any(|(_, at)| *at == 0);
-        let spins =
-            m.snap.tabs.iter().any(|t| {
-                crate::ui::kit::spins(model::badge_state(t, &m.snap.rules), m.snap.rules.ux2)
-            }) && cards_shown;
+        let spins = m
+            .snap
+            .tabs
+            .iter()
+            .any(|t| crate::ui::kit::spins(model::badge_state(t, &m.snap.rules)))
+            && cards_shown;
         let grid_ids: Vec<ViewId> = m
             .grid_shown()
             .iter()
@@ -1461,7 +1435,6 @@ impl Server {
         let slack_seen = m.slack_seen();
         if slack_left {
             m.slack_viewed = None;
-            m.slack_plain_shown = false;
         }
         self.put_mission(client, m);
         if slack_left {
@@ -1743,7 +1716,7 @@ impl Server {
                 if let Some(d) = landing {
                     out.push(view(id, title, d, true));
                 }
-                // Autopilot's own view, with UX 2.0 on, after Landing.
+                // Autopilot's own view, after Landing.
                 if let Some(items) =
                     self.autopilot_view(keep_autopilot, landing_items.as_deref().unwrap_or(&[]))
                 {
@@ -1800,7 +1773,7 @@ impl Server {
         }
         let own = self.mission_own();
         let data = ViewData {
-            items: views::settings_items(&own, settings::is_on("ux2")),
+            items: views::settings_items(&own),
             at: Some(1),
             ..ViewData::default()
         };
@@ -2150,10 +2123,7 @@ impl Server {
                         && c.overlays.find::<Mission>().is_some_and(|m| {
                             (m.view == 0 || m.grid_has(super::grid::TABS))
                                 && m.snap.tabs.iter().any(|t| {
-                                    crate::ui::kit::spins(
-                                        model::badge_state(t, &m.snap.rules),
-                                        m.snap.rules.ux2,
-                                    )
+                                    crate::ui::kit::spins(model::badge_state(t, &m.snap.rules))
                                 })
                         });
                     if busy || cards {
@@ -2186,16 +2156,13 @@ impl Server {
                 over,
                 text,
             } => {
-                let open = self.mission_open(client);
                 let footer_is_its_own = self.mission_mut(client).is_some_and(|m| {
                     m.slack_launch == launch && m.note.as_deref().is_none_or(|said| said == over)
                 });
                 if footer_is_its_own {
                     self.mission_note(client, text.clone());
                 }
-                if !open || settings::is_on("message_boxes") {
-                    self.say(Some(client), &text);
-                }
+                self.say(Some(client), &text);
             }
             MissionEvent::Done {
                 client,
@@ -2836,12 +2803,8 @@ impl Server {
             KeyCode::Char(']') if none => switch_view(m, 1, true),
             KeyCode::Char('[') if none => switch_view(m, -1, true),
             // M-] and M-[ move between the groups.
-            KeyCode::Char(']') if k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
-                switch_group(m, 1)
-            }
-            KeyCode::Char('[') if k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
-                switch_group(m, -1)
-            }
+            KeyCode::Char(']') if k.mods.alt && !k.mods.ctrl => switch_group(m, 1),
+            KeyCode::Char('[') if k.mods.alt && !k.mods.ctrl => switch_group(m, -1),
             KeyCode::Esc if m.filter.is_some() => {
                 // Esc clears a filter before it closes mission control.
                 m.filter = None;
@@ -2861,7 +2824,7 @@ impl Server {
             }
             KeyCode::Char('v') if none => m.jump = Some(Jump::default()),
             KeyCode::Enter if notice_history_here(m) => self.notice_enter(client, m),
-            // With UX 2.0, the shelf folded to its labels opens on one, and
+            // The shelf folded to its labels opens on one, and
             // Other repos on its own.
             KeyCode::Enter if shelf_label_chosen(m) || repos_label_chosen(m) => {
                 // The cursor stays on the label's first tab as the rest
@@ -2894,7 +2857,7 @@ impl Server {
     /// screen too narrow for the ticket beside, `i` showing it in the
     /// list's place, and `i` or Esc back. True when it took the key.
     fn inbox_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
-        if !m.current().is_some_and(|v| inbox_board::shown(m, v)) {
+        if !m.current().is_some_and(inbox_board::shown) {
             return false;
         }
         let Some(item) = m.chosen_item().cloned() else {
@@ -2926,9 +2889,7 @@ impl Server {
     /// which plays its video or shows its picture. True when it took the
     /// key.
     fn slack_board_key(m: &mut Mission, k: Key) -> bool {
-        let shown = m
-            .current()
-            .is_some_and(|v| super::render::slack_board_shown(m, v));
+        let shown = m.current().is_some_and(super::render::slack_board_shown);
         // C-n and C-p move as j and k do.
         let ctrl_step = k.mods == Mods::CTRL && matches!(k.code, KeyCode::Char('n' | 'p'));
         if !shown || !(plain(&k) || k.code == KeyCode::Enter || ctrl_step) {
@@ -3109,7 +3070,7 @@ impl Server {
 
     /// Counts, in the background, the branch of Reopen's chosen worktree
     /// against its default branch and its upstream, for its commits' chip
-    /// and its pane: only with UX 2.0 and Reopen in front, once
+    /// and its pane: only and Reopen in front, once
     /// for each commit it is at (read from git's files, so moving back to
     /// a row counted starts nothing), one count at a time, so the cursor
     /// running down the rows counts the one it settles on.
@@ -3124,7 +3085,7 @@ impl Server {
         else {
             return;
         };
-        if !m.snap.rules.ux2 || m.current().is_none_or(|v| v.id != ViewId::Reopen) {
+        if m.current().is_none_or(|v| v.id != ViewId::Reopen) {
             return;
         }
         let Some(tree) = m
@@ -3580,7 +3541,7 @@ impl Server {
     /// A tab's menu, as Enter on its card opens it: going there, the
     /// options of the question it waits on, answering, its reminder, its
     /// place in the landing queue. `screen` is whether the card shows its
-    /// screen in its place, on the Tabs view with UX 2.0, which the menu
+    /// screen in its place, on the Tabs view, which the menu
     /// offers to show or hide. `from` the sidebar puts peeking at it first,
     /// for the sidebar's right click, which peeked before it opened a menu,
     /// and chooses as the menu opens what the key that opened it did alone.
@@ -3720,7 +3681,7 @@ impl Server {
         // From a UX 2.0 card, the request as the card lays it out, the
         // screen's own options (an answer of your own) among them, so the
         // menu answers only what the card shows whole; from anywhere else
-        // (the sidebar, a reminder, a card with UX 2.0 off), where the
+        // (the sidebar, a reminder, a card off), where the
         // menu shows the request itself, one known whole.
         let whole = if on_card {
             let shown = super::Screen {
@@ -3776,7 +3737,7 @@ impl Server {
             };
             // Only a card has a screen to show in its place: a line on
             // the shelf has none.
-            let screen = (m.snap.rules.ux2 && !super::render::on_shelf_tab(&tab, &m.snap.rules))
+            let screen = (!super::render::on_shelf_tab(&tab, &m.snap.rules))
                 .then(|| m.card_screen == Some((tab.id, m.cursor)));
             self.tab_menu(client, &tab, screen, TabMenuFrom::Mission);
             return;
@@ -3792,8 +3753,7 @@ impl Server {
             self.tab_menu(client, &tab, None, TabMenuFrom::Mission);
             return;
         }
-        // Autopilot's view's heading opens the menu its line on the Tabs
-        // view opens without UX 2.0.
+        // Autopilot's view's heading opens its menu.
         if view.id == ViewId::Autopilot && item.id == crate::autopilot::view::HEADING {
             self.autopilot_menu(client);
             return;
@@ -3820,7 +3780,7 @@ impl Server {
         };
         // The Slack board shows one section at a time, which is what its
         // menu's "every message shown" puts away.
-        let shown: Vec<Item> = if super::render::slack_board_shown(m, &view) {
+        let shown: Vec<Item> = if super::render::slack_board_shown(&view) {
             slack_shown(m, &view)
                 .into_iter()
                 .map(|i| view.data.items[i].clone())
@@ -4071,10 +4031,7 @@ impl Server {
                 add("New routine…", ViewAct::NewRoutine);
                 // What `i` does on a screen too narrow for the pane.
                 let narrow = (m.laid().0 as usize) < crate::routines::view::BESIDE_AT;
-                if crate::routines::view::is_board(m)
-                    && narrow
-                    && (m.chosen_item().is_some() || m.routines_pane)
-                {
+                if narrow && (m.chosen_item().is_some() || m.routines_pane) {
                     add(
                         if m.routines_pane {
                             "Back to the list"
@@ -4088,7 +4045,7 @@ impl Server {
             Some(ViewId::Inbox) => {
                 // What `i` does on a screen too narrow for the ticket beside.
                 let narrow = !inbox_board::beside(m.laid().0 as usize);
-                let shown = view.as_ref().is_some_and(|v| inbox_board::shown(m, v));
+                let shown = view.as_ref().is_some_and(inbox_board::shown);
                 if shown && narrow && (m.chosen_item().is_some() || m.inbox_pane) {
                     add(
                         if m.inbox_pane {
@@ -4116,7 +4073,7 @@ impl Server {
                 let on_a_row = m
                     .chosen_item()
                     .is_some_and(|i| crate::usage::reopen::of(i).is_some());
-                if m.snap.rules.ux2 && narrow && (on_a_row || m.reopen_pane) {
+                if narrow && (on_a_row || m.reopen_pane) {
                     add(
                         if m.reopen_pane {
                             "Back to the list"
@@ -4136,9 +4093,7 @@ impl Server {
             Some(ViewId::Plugin(name)) => add("Ask it again", ViewAct::AskAgain(name.clone())),
             _ => {}
         }
-        if m.snap.rules.ux2 {
-            add("Several views at once…", ViewAct::ViewsAtOnce);
-        }
+        add("Several views at once…", ViewAct::ViewsAtOnce);
         let title = view.as_ref().map_or("Tabs", views::bar_title).to_string();
         if view.as_ref().is_none_or(|v| v.id != ViewId::Settings) {
             add("This view's settings", ViewAct::Settings(title.clone()));
@@ -5921,7 +5876,7 @@ impl Server {
             self.routine_new(client);
             return true;
         }
-        if k.code == KeyCode::Char('i') && crate::routines::view::is_board(m) {
+        if k.code == KeyCode::Char('i') {
             m.routines_pane = !m.routines_pane;
             return true;
         }
@@ -6110,7 +6065,7 @@ impl Server {
         Some(format!("{} {}", self.tab_number(tab), self.tab_label(tab)))
     }
 
-    /// "Remind me about this tab": with UX 2.0, the reminder's box (board
+    /// "Remind me about this tab": the reminder's box (board
     /// 34, `remind_box`); else when (remind.sh's times, or one typed),
     /// then what for, with a reminder set, clearing it coming first. The
     /// times are a list to pick from or type in, as remind.sh's fzf was: a
@@ -6137,89 +6092,20 @@ impl Server {
                 .cloned()
         };
         let set_at = opt("@remind_at").and_then(|v| v.parse::<i64>().ok());
-        if settings::is_on("ux2") {
-            let set = set_at.map(|at| (at, opt("@remind_note").unwrap_or_default()));
-            let boxed = super::remind_box::RemindBox::new(&name, set).typed(typed);
-            self.open(
-                client,
-                Box::new(boxed),
-                Some(Box::new(move |server: &mut Server, client, outcome| {
-                    let Outcome::Picked(p) = outcome else {
-                        return;
-                    };
-                    match (p.index, p.value.parse::<i64>()) {
-                        (1, _) => server.clear_reminder(client, tab),
-                        (_, Ok(at)) => server.set_reminder(client, tab, at, &p.query),
-                        _ => {}
-                    }
-                })),
-            );
-            return;
-        }
-        let set = set_at.is_some();
-        let mut labels: Vec<String> = Vec::new();
-        if set {
-            labels.push("Clear the reminder".into());
-        }
-        labels.extend(remind::CHOICES.iter().map(|c| c.to_string()));
-        let rows = labels
-            .iter()
-            .enumerate()
-            .map(|(i, label)| PickItem {
-                text: label.clone(),
-                key: (i + 1).to_string(),
-                value: label.clone(),
-                ..PickItem::default()
-            })
-            .collect();
-        let picker = Picker::new(format!("Remind me about {name}"), rows)
-            .prompt("When? ")
-            .header(remind::TYPED_HINT)
-            .exact()
-            .free()
-            .order(Box::new(|_, matched| matched.to_vec()));
-        self.pick(client, picker, move |server, client, picked| {
-            let Some(picked) = picked else {
-                return;
-            };
-            let typed = picked.query.trim();
-            let label = match typed.parse::<usize>() {
-                Ok(n) if (1..=labels.len()).contains(&n) => labels[n - 1].clone(),
-                _ if !typed.is_empty() && remind::when(typed, &util::local_now()).is_some() => {
-                    typed.to_string()
-                }
-                _ => labels
-                    .get(picked.index)
-                    .cloned()
-                    .unwrap_or_else(|| typed.to_string()),
-            };
-            if label == "Clear the reminder" {
-                server.clear_reminder(client, tab);
-                return;
-            }
-            server.remind_when(client, tab, &label);
-        });
-    }
-
-    /// A reminder's time read; then what it is for asked, and it set.
-    fn remind_when(&mut self, client: ClientId, tab: TabId, text: &str) {
-        let Some(at) = remind::when(text, &util::local_now()) else {
-            self.mission_note(client, format!("\"{text}\" {}", remind::NOT_A_TIME));
-            return;
-        };
-        let ask = Ask::new(
-            "What for?",
-            "Optional. Enter sets the reminder; Esc cancels.",
-        )
-        .empty_ok();
+        let set = set_at.map(|at| (at, opt("@remind_note").unwrap_or_default()));
+        let boxed = super::remind_box::RemindBox::new(&name, set).typed(typed);
         self.open(
             client,
-            Box::new(ask),
+            Box::new(boxed),
             Some(Box::new(move |server: &mut Server, client, outcome| {
                 let Outcome::Picked(p) = outcome else {
                     return;
                 };
-                server.set_reminder(client, tab, at, &p.value);
+                match (p.index, p.value.parse::<i64>()) {
+                    (1, _) => server.clear_reminder(client, tab),
+                    (_, Ok(at)) => server.set_reminder(client, tab, at, &p.query),
+                    _ => {}
+                }
             })),
         );
     }
@@ -7532,9 +7418,7 @@ fn slack_shown(m: &Mission, view: &View) -> Vec<usize> {
 /// pane, in the view in front, where its sections were last drawn (a cell
 /// of views shown at once starts where it is).
 fn slack_sections_at(m: &Mission, col: u16) -> bool {
-    let shown = m
-        .current()
-        .is_some_and(|v| super::render::slack_board_shown(m, v));
+    let shown = m.current().is_some_and(super::render::slack_board_shown);
     shown
         && m.hits.iter().any(|h| {
             matches!(h.spot, Spot::Choose(_))
@@ -7543,7 +7427,7 @@ fn slack_sections_at(m: &Mission, col: u16) -> bool {
         })
 }
 
-/// The Keys board's moves with UX 2.0: h and l between groups, j and k
+/// The Keys board's moves: h and l between groups, j and k
 /// between the group's keys (the arrows too). True when it took the key.
 fn keys_board_key(m: &mut Mission, k: Key) -> bool {
     let Some(view) = m.current() else {
@@ -7629,9 +7513,7 @@ fn context_menu_key(m: &mut Mission) -> Key {
     super::nav::end_typing(m);
     // On a row of the list of views, that view's menu, as a right click on
     // the row opens it: the view brought to the front first.
-    if let Some(Focus::View(v)) = m.focus
-        && m.groups().is_some()
-    {
+    if let Some(Focus::View(v)) = m.focus {
         if v != m.view {
             show_view(m, v);
         }
@@ -7655,7 +7537,7 @@ fn context_menu_key(m: &mut Mission) -> Key {
 }
 
 fn on_reminders(m: &Mission) -> bool {
-    m.current().is_some_and(|v| v.id == ViewId::Reminders) && super::reminders::is_month(m)
+    m.current().is_some_and(|v| v.id == ViewId::Reminders)
 }
 
 /// The Reminders view's chosen day moved to `day` (today's kept as
@@ -7719,7 +7601,7 @@ fn with_check(mut item: Item, n: usize) -> Item {
 /// until `i` or Esc. What acts on the worktree is in its menu, which Enter
 /// opens. True when it took the key.
 fn landing_key(m: &mut Mission, k: Key) -> bool {
-    if !m.snap.rules.ux2 || !m.current().is_some_and(|v| v.id == ViewId::Landing) {
+    if !m.current().is_some_and(|v| v.id == ViewId::Landing) {
         return false;
     }
     if m.landing_output && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
@@ -7773,7 +7655,7 @@ fn remove_one_worktree(dir: &Path) -> String {
 /// narrow to show it under the rows, until `i` or Esc. True when it took
 /// the key.
 fn reopen_key(m: &mut Mission, k: Key) -> bool {
-    if !m.snap.rules.ux2 || !m.current().is_some_and(|v| v.id == ViewId::Reopen) {
+    if !m.current().is_some_and(|v| v.id == ViewId::Reopen) {
         return false;
     }
     if m.reopen_pane && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
@@ -7809,15 +7691,12 @@ fn calendar_key(m: &Mission, k: Key) -> Option<i64> {
     }
 }
 
-/// What a key does in the CI view with UX 2.0, before mission control's
+/// What a key does in the CI view, before mission control's
 /// own keys: `j` and `k` move through the PRs and their failed checks'
 /// lines. What acts on the chosen check is in its menu, which Enter opens.
 /// True when it took the key.
 fn ci_key(m: &mut Mission, k: Key) -> bool {
-    let Some(view) = m
-        .current()
-        .filter(|v| v.id == ViewId::Ci && m.snap.rules.ux2)
-    else {
+    let Some(view) = m.current().filter(|v| v.id == ViewId::Ci) else {
         return false;
     };
     let count = view.data.items.len() as isize;
@@ -7916,14 +7795,14 @@ fn only_moves(m: &Mission, key: Key) -> bool {
     // takes its snapshot again.
     if on_reminders(m)
         || m.current()
-            .is_some_and(|v| v.id == ViewId::Calendar || super::render::slack_board_shown(m, v))
+            .is_some_and(|v| v.id == ViewId::Calendar || super::render::slack_board_shown(v))
     {
         return false;
     }
     // So does the Inbox's chosen notification, with its ticket, and the
     // Reopen board's chosen row, with its last screen.
     if m.current()
-        .is_some_and(|v| inbox_board::shown(m, v) || super::reopen_board::shown(m, v))
+        .is_some_and(|v| inbox_board::shown(v) || super::reopen_board::shown(v))
     {
         return false;
     }
@@ -7952,7 +7831,7 @@ fn chosen_tab(m: &Mission) -> Option<TabId> {
 /// Whether the chosen place is a label of the shelf folded on a narrow
 /// screen, which Enter opens.
 fn shelf_label_chosen(m: &Mission) -> bool {
-    if m.view != 0 || !m.snap.rules.ux2 || m.shelf_open {
+    if m.view != 0 || m.shelf_open {
         return false;
     }
     if super::render::across(m.laid().0 as usize) > 1 {
@@ -7969,7 +7848,7 @@ fn shelf_label_chosen(m: &Mission) -> bool {
 /// Whether the chosen place is the label of Other repos folded while the
 /// sidebar's repository filter is on, which Enter opens.
 fn repos_label_chosen(m: &Mission) -> bool {
-    if m.view != 0 || !m.snap.rules.ux2 || !super::render::repos_folded(m) {
+    if m.view != 0 || !super::render::repos_folded(m) {
         return false;
     }
     chosen_tab(m).is_some_and(|tab| {
@@ -8099,10 +7978,10 @@ fn window_key(m: &mut Mission, k: Key) -> bool {
         KeyCode::Char('k') | KeyCode::Up if either => return section_step(m, -1),
         _ => return false,
     };
-    // With UX 2.0 the list of views is the leftmost stop, before the
-    // view's own panes: its rows take the keys as Tab's focus gives them.
-    let nav = usize::from(m.groups().is_some());
-    let on_nav = nav == 1 && matches!(m.focus, Some(Focus::View(_) | Focus::Group(_)));
+    // The list of views is the leftmost stop, before the view's own
+    // panes: its rows take the keys as Tab's focus gives them.
+    let nav = 1;
+    let on_nav = matches!(m.focus, Some(Focus::View(_) | Focus::Group(_)));
     let panes = m.panes();
     let stops = (nav + panes.len()) as isize;
     let at = if on_nav {
@@ -8224,7 +8103,7 @@ fn side_step(m: &Mission, by: isize) -> isize {
     if view.id == ViewId::Settings && super::render::settings_board_shown(m) {
         return super::settings_board::side_step(&view.data.items, m.cursor, by);
     }
-    if super::render::pilot_board_shown(m, view, m.laid().0 as usize) {
+    if super::render::pilot_board_shown(view, m.laid().0 as usize) {
         return pilot_side_step(m, &view.data.items, by);
     }
     let Some(columns) = view.columns() else {
@@ -8256,12 +8135,10 @@ fn side_step(m: &Mission, by: isize) -> isize {
         return m.cursor;
     };
     let row = cursor - starts[at];
-    // With UX 2.0 the PR and ticket boards draw their last group as a row
+    // The PR and ticket boards draw their last group as a row
     // under the columns, where h and l go from card to card, h from its
     // first card to the columns.
-    let in_week_row = m.snap.rules.ux2
-        && matches!(view.id, ViewId::Prs | ViewId::Tickets)
-        && at == columns.len() - 1;
+    let in_week_row = matches!(view.id, ViewId::Prs | ViewId::Tickets) && at == columns.len() - 1;
     if in_week_row {
         let next = row as isize + by;
         if next >= 0 && (next as usize) < counts[at] {
@@ -8325,17 +8202,18 @@ fn pilot_side_step(m: &Mission, items: &[crate::items::Item], by: isize) -> isiz
 }
 
 /// `]` and `[` (`in_group`), Tab and Shift-Tab: the next or last view,
-/// round; with UX 2.0 in the bar's order, and `]` and `[` round the views
-/// of the group in front.
+/// round, in the bar's order, and `]` and `[` round the views of the
+/// group in front.
 fn switch_view(m: &mut Mission, by: isize, in_group: bool) {
-    let order: Vec<usize> = match m.groups() {
-        Some(groups) if in_group => groups
+    let groups = m.groups();
+    let order: Vec<usize> = if in_group {
+        groups
             .into_iter()
             .find(|(_, held)| held.contains(&m.view))
             .map(|(_, held)| held)
-            .unwrap_or_default(),
-        Some(groups) => groups.into_iter().flat_map(|(_, held)| held).collect(),
-        None => (0..=m.snap.views.len()).collect(),
+            .unwrap_or_default()
+    } else {
+        groups.into_iter().flat_map(|(_, held)| held).collect()
     };
     let Some(at) = order.iter().position(|v| *v == m.view) else {
         return;
@@ -8344,12 +8222,13 @@ fn switch_view(m: &mut Mission, by: isize, in_group: bool) {
     show_view(m, to);
 }
 
-/// } and { with UX 2.0: the first view of the next or last group,
+/// } and {: the first view of the next or last group,
 /// round; Tab's focus on a group's name follows.
 fn switch_group(m: &mut Mission, by: isize) {
-    let Some(groups) = m.groups() else {
+    let groups = m.groups();
+    if groups.is_empty() {
         return;
-    };
+    }
     let at = groups
         .iter()
         .position(|(_, held)| held.contains(&m.view))
@@ -8361,9 +8240,9 @@ fn switch_group(m: &mut Mission, by: isize) {
     }
 }
 
-/// A group's first view, with UX 2.0.
+/// A group's first view.
 fn first_of(m: &Mission, g: views::Group) -> Option<usize> {
-    m.groups()?
+    m.groups()
         .into_iter()
         .find(|(x, _)| *x == g)
         .map(|(_, held)| held[0])
@@ -8428,7 +8307,7 @@ fn nav_key_in(m: &mut Mission, k: Key) -> bool {
         nav_focus_listed(m);
         return true;
     }
-    let Some(Focus::View(at)) = m.focus.filter(|_| m.groups().is_some()) else {
+    let Some(Focus::View(at)) = m.focus else {
         return false;
     };
     if !plain(&k) && !matches!(k.code, KeyCode::Up | KeyCode::Down) {
@@ -8471,7 +8350,7 @@ fn nav_key_in(m: &mut Mission, k: Key) -> bool {
 /// (Settings' `mission_nav_follow`), the list one Tab stop: not while
 /// several views show at once, where a view is a cell to focus.
 fn follows(m: &Mission) -> bool {
-    m.snap.nav_follow && m.groups().is_some() && m.grid.is_none()
+    m.snap.nav_follow && m.grid.is_none()
 }
 
 /// Enter on the list's row of the view in front: the keys go to the view,
@@ -8514,7 +8393,7 @@ fn show_view(m: &mut Mission, to: usize) {
 }
 
 /// Tab and Shift-Tab with tab_focus: focus a section at a time, in reading
-/// order, round: with UX 2.0 each view's row in the list of groups and
+/// order, round: each view's row in the list of groups and
 /// views, else each view's name; the filter (not on a board), a side panel,
 /// each section of the list (`Mission::sections`, the whole list where it
 /// has one) at its first row, a pane beside, the footer's keys and easy
@@ -8537,22 +8416,20 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(v) => v.data.items.len(),
         None => m.order().len(),
     };
-    // With UX 2.0, each listed view's row (src/mission/nav.rs), or, while
-    // the list's cursor brings each view to the front, the list as one
-    // stop, `j` and `k` moving through it.
+    // Each listed view's row (src/mission/nav.rs), or, while the list's
+    // cursor brings each view to the front, the list as one stop, `j` and
+    // `k` moving through it.
+    let order = super::nav::order(m);
     let follow = follows(m);
-    let mut stops: Vec<Stop> = match m.groups() {
+    let mut stops: Vec<Stop> = if follow {
         // The view in front's row, or the first the list's filter leaves
         // when it hides that one.
-        Some(_) if follow => {
-            let order = super::nav::order(m);
-            let row = Some(m.view)
-                .filter(|v| order.contains(v))
-                .or(order.first().copied());
-            row.map(Stop::View).into_iter().collect()
-        }
-        Some(_) => super::nav::order(m).into_iter().map(Stop::View).collect(),
-        None => (0..=m.snap.views.len()).map(Stop::View).collect(),
+        let row = Some(m.view)
+            .filter(|v| order.contains(v))
+            .or(order.first().copied());
+        row.map(Stop::View).into_iter().collect()
+    } else {
+        order.into_iter().map(Stop::View).collect()
     };
     if notice_board(m) {
         stops.extend((1..=7).map(Stop::Kind));
@@ -8584,7 +8461,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     let searching = m.filter.as_ref().is_some_and(|f| !f.text.trim().is_empty());
     let panel_chooses = m.current().is_some_and(|v| {
         v.id == ViewId::Settings && super::render::settings_board_shown(m) && !searching
-            || super::render::slack_board_shown(m, v)
+            || super::render::slack_board_shown(v)
     }) && (floor(m)..count as isize).contains(&m.cursor)
         && !heading(m.cursor);
     if starts.is_empty() && panel_chooses {
@@ -8685,7 +8562,7 @@ fn move_focus(m: &mut Mission, by: isize) {
 /// Whether the Notifications view in front shows the history with its
 /// keycaps (UX 2.0).
 fn notice_board(m: &Mission) -> bool {
-    m.snap.rules.ux2 && notice_history_here(m)
+    notice_history_here(m)
 }
 
 /// Whether the Notifications view in front shows the history, by day.
@@ -9003,7 +8880,7 @@ mod tests {
         }
     }
 
-    /// The CI view with UX 2.0: #12 failing two checks, the first with
+    /// The CI view: #12 failing two checks, the first with
     /// its step read, then #13 passing.
     fn ci_mission() -> Mission {
         let failing = Item::new("f", "#12 Fix").data(serde_json::json!({ "ci": {
@@ -9027,7 +8904,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(1, vec![view]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         m
@@ -9254,7 +9130,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(1, vec![settings]);
-        m.snap.rules.ux2 = true;
         m.size = (200, 50);
         m.view = 1;
         m.cursor = 3;
@@ -9338,7 +9213,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(0, vec![routines]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         m.focus = Some(Focus::Item);
@@ -9354,7 +9228,6 @@ mod tests {
         m.snap.views[0].data.items = (0..3)
             .map(|i| Item::new(i.to_string(), format!("reminder {i}")))
             .collect();
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 0;
         m.focus = Some(Focus::Item);
@@ -9404,9 +9277,8 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_tab_stops_on_a_narrow_board_s_more_markers() {
+    fn tab_stops_on_a_narrow_board_s_more_markers() {
         let mut m = mission(1, vec![view(ViewId::Prs, "PRs")]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 0;
         m.focus = Some(Focus::Item);
@@ -9461,7 +9333,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_braces_go_round_the_groups_and_brackets_round_the_group_in_front() {
+    fn braces_go_round_the_groups_and_brackets_round_the_group_in_front() {
         // In the order the server builds them, not the bar's.
         let mut m = mission(
             1,
@@ -9474,7 +9346,6 @@ mod tests {
                 view(ViewId::Settings, "Settings"),
             ],
         );
-        m.snap.rules.ux2 = true;
         switch_view(&mut m, 1, true);
         assert_eq!(m.view, 2, "the Map, after the tabs in Work");
         switch_view(&mut m, 1, true);
@@ -9507,7 +9378,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_j_and_k_move_through_the_listed_views_and_slash_narrows_them() {
+    fn j_and_k_move_through_the_listed_views_and_slash_narrows_them() {
         let mut m = mission(
             1,
             vec![
@@ -9516,7 +9387,6 @@ mod tests {
                 view(ViewId::Settings, "Settings"),
             ],
         );
-        m.snap.rules.ux2 = true;
         let key = |c| Key::new(KeyCode::Char(c), Mods::NONE);
         assert!(
             !nav_key(&mut m, key('j')),
@@ -9559,7 +9429,6 @@ mod tests {
                 view(ViewId::Settings, "Settings"),
             ],
         );
-        m.snap.rules.ux2 = true;
         m.snap.nav_follow = true;
         let key = |c| Key::new(KeyCode::Char(c), Mods::NONE);
         let before = m.trail_view();
@@ -9600,7 +9469,6 @@ mod tests {
     #[test]
     fn with_the_list_not_following_j_leaves_the_view_in_front() {
         let mut m = mission(1, vec![view(ViewId::Prs, "PRs")]);
-        m.snap.rules.ux2 = true;
         m.focus = Some(Focus::View(0));
         nav_key(&mut m, Key::new(KeyCode::Char('j'), Mods::NONE));
         assert_eq!((m.view, m.focus), (0, Some(Focus::View(1))));
@@ -9630,7 +9498,6 @@ mod tests {
             views: vec!["tabs".into(), "landing".into()],
             layout: super::super::grid::Layout::Side,
         };
-        m.snap.rules.ux2 = true;
         m.grid = Some(super::super::grid::Grid::new(choice));
         m.settle_grid();
         assert_eq!(m.view, 0);
@@ -9651,10 +9518,11 @@ mod tests {
 
     #[test]
     fn j_and_k_move_a_row_of_cards_keeping_the_column() {
-        // Five idle tabs in one stage, three across: rows of 3 and 2.
+        // Five working tabs, four across: rows of 4 and 1.
         let mut m = mission(5, Vec::new());
         for t in &mut m.snap.tabs {
             t.claude = Some(crate::sidebar::claude::SessionRef::default());
+            t.state = crate::sidebar::model::TabState::Working;
         }
         m.size = (3 * 56, 40);
         m.cursor = 2;
@@ -9664,7 +9532,7 @@ mod tests {
             "under the third, the last of the shorter row"
         );
         m.cursor = 4;
-        assert_eq!(row_step(&m, -1), 1);
+        assert_eq!(row_step(&m, -1), 0);
         assert_eq!(row_step(&m, 1), 4, "nothing below the last row");
         m.cursor = 1;
         assert_eq!(row_step(&m, -1), 1, "nothing above the first row");
@@ -9696,7 +9564,7 @@ mod tests {
             drained: false,
             failing: String::new(),
         });
-        m.cursor = 1;
+        m.cursor = 0;
         let to = row_step(&m, -1);
         move_to(&mut m, to, 5);
         assert_eq!(m.cursor, -1, "on the mode's line");
@@ -9735,9 +9603,9 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_h_and_l_go_along_the_row_of_the_week_s_cards() {
+    fn h_and_l_go_along_the_row_of_the_week_s_cards() {
         let item = |n: u32, column: &str| Item::new(n.to_string(), format!("#{n}")).group(column);
-        let columns = crate::sources::prboard::columns(true);
+        let columns = crate::sources::prboard::COLUMNS;
         let week = columns[columns.len() - 1];
         let board = View {
             id: ViewId::Prs,
@@ -9749,7 +9617,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(0, vec![board]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         assert_eq!(side_step(&m, 1), 2, "along the row");
@@ -9763,7 +9630,7 @@ mod tests {
     #[test]
     fn in_a_short_cell_l_passes_over_the_week_row_it_leaves_out() {
         let item = |n: u32, column: &str| Item::new(n.to_string(), format!("#{n}")).group(column);
-        let columns = crate::sources::prboard::columns(true);
+        let columns = crate::sources::prboard::COLUMNS;
         let week = columns[columns.len() - 1];
         let board = View {
             id: ViewId::Prs,
@@ -9775,7 +9642,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(0, vec![board, view(ViewId::Inbox, "Inbox")]);
-        m.snap.rules.ux2 = true;
         let choice = super::super::grid::Choice {
             views: vec!["prs".into(), "inbox".into()],
             layout: super::super::grid::Layout::Side,
@@ -9816,7 +9682,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(0, vec![board]);
-        m.snap.rules.ux2 = true;
         m.size = (120, 40);
         m.view = 1;
         m.cursor = 2;
@@ -9846,7 +9711,6 @@ mod tests {
                     loaded,
                 }],
             );
-            m.snap.rules.ux2 = true;
             m.size = (120, 30);
             m.view = 1;
             m.cursor = 0;
@@ -9946,7 +9810,7 @@ mod tests {
         assert!(m.filter.as_ref().is_some_and(|f| !f.typing));
     }
 
-    /// The Tickets board with UX 2.0 on a screen 160 wide, its one ticket
+    /// The Tickets board a screen 160 wide, its one ticket
     /// chosen, its description beside it.
     fn tickets_board() -> Mission {
         let ticket = Item::new("1", "Fix it")
@@ -9956,7 +9820,6 @@ mod tests {
         tickets.id = ViewId::Tickets;
         tickets.data.items = vec![ticket];
         let mut m = mission(1, vec![tickets]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (160, 30);
         m
@@ -10064,7 +9927,12 @@ mod tests {
 
     #[test]
     fn a_click_chooses_a_view_or_a_row_and_a_second_click_takes_it() {
-        let mut m = mission(2, vec![list("Closed", 3)]);
+        // A plain list: the Reopen view's board needs its rows' kinds.
+        let plain = View {
+            id: ViewId::WorkMap,
+            ..list("Closed", 3)
+        };
+        let mut m = mission(2, vec![plain]);
         m.view = 1;
         let draw = |m: &mut Mission| {
             let (_, hits) = super::super::render::screen(m, 120, 20);
@@ -10124,26 +9992,6 @@ mod tests {
             ),
             Then::Enter
         );
-        // A click on the tabs' name in the bar goes there; the wheel moves.
-        let tabs = at(&m, Spot::View(0));
-        assert_eq!(
-            mouse_in(
-                &mut m,
-                mouse(MouseKind::Press, MouseButton::Left, tabs),
-                true
-            ),
-            Then::Prepare
-        );
-        assert_eq!((m.view, m.cursor), (0, 0));
-        assert_eq!(
-            mouse_in(
-                &mut m,
-                mouse(MouseKind::Press, MouseButton::WheelDown, (5, 5)),
-                true
-            ),
-            Then::Key(Key::new(KeyCode::Char('l'), Mods::NONE)),
-            "card by card on the tabs"
-        );
     }
 
     fn settings_mission() -> Mission {
@@ -10165,7 +10013,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(1, vec![view]);
-        m.snap.rules.ux2 = true;
         m.size = (160, 40);
         m.view = 1;
         m.cursor = 2;
@@ -10531,7 +10378,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(1, vec![view]);
-        m.snap.rules.ux2 = true;
         m.snap.tz = jiff::tz::TimeZone::UTC;
         m.view = 1;
         assert_eq!(m.sections(), vec![0, 2]);
@@ -10569,9 +10415,5 @@ mod tests {
             .get_or_insert_default()
             .insert("b".into(), crate::items::Item::new("b", "Bo"));
         assert_eq!(m.slack_seen(), None, "every one shown");
-        // The plain list, shown before or after the board, shows them all.
-        m.slack_viewed = Some(Default::default());
-        m.slack_plain_shown = true;
-        assert_eq!(m.slack_seen(), None, "the plain list shown");
     }
 }

@@ -17,11 +17,22 @@ use switchboard::tabs::{self, Shade};
 
 /// Settings for the tests: no desktop notifications, and these.
 fn settings(server: &TestServer, extra: Value) {
+    common::write_settings(&server.home, all_settings(extra));
+}
+
+/// The settings `settings` writes, `extra` over them.
+fn all_settings(extra: Value) -> Value {
     let mut all = json!({"notifications": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    common::write_settings(&server.home, all);
+    all
+}
+
+/// A server started with what `settings` writes, so they hold from its
+/// first draw.
+fn start(extra: Value) -> TestServer {
+    TestServer::start_with_settings(&all_settings(extra).to_string())
 }
 
 /// Runs git in `dir` with an identity of its own.
@@ -48,6 +59,22 @@ fn repo(dir: &Path, branch: &str) {
         &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
     );
     git(dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+}
+
+/// Where a tab's number starts on its row in the sidebar, under the
+/// sidebar's top line, `text` being its number and name.
+fn sidebar_number(screen: &[String], text: &str) -> (usize, usize) {
+    let row = (1..screen.len())
+        .find(|&r| {
+            screen[r]
+                .chars()
+                .take(34)
+                .collect::<String>()
+                .contains(text)
+        })
+        .unwrap_or_else(|| panic!("{text:?} in the sidebar: {screen:#?}"));
+    let at = screen[row].find(text).unwrap();
+    (row, switchboard::ui::draw::width(&screen[row][..at]))
 }
 
 fn first_tab(server: &TestServer) -> Value {
@@ -84,7 +111,7 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     client.wait_text("$");
     client.type_text(&format!("cd {}\r", work.display()));
     let screen = client.wait_for("the repository's name in the tab", |s| {
-        s[29].ends_with("1:shop:feature-x")
+        s[0].contains("○ 1 shop:feature-x")
     });
 
     // Drawn in the project's color, the same one accent-color.sh gave.
@@ -93,10 +120,10 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
         expected,
         tabs::accent_color("shop | branch:feature-x", Shade::Soft)
     );
-    let col =
-        switchboard::ui::draw::width(&screen[29][..screen[29].find("shop:feature-x").unwrap()]);
+    // The number on its sidebar row.
+    let (row, col) = sidebar_number(&screen, "1 shop:feature-x");
     assert_eq!(
-        client.fg_rgb(29, col),
+        client.fg_rgb(row, col),
         Some((expected.r, expected.g, expected.b))
     );
     let tab = first_tab(&server);
@@ -119,10 +146,10 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
 
     // A name given to the tab wins, still in the project's color.
     server.ok(&["rename-tab", "-t", &id, "My work"]);
-    let screen = client.wait_for("the given name", |s| s[29].ends_with("1:My work"));
-    let col = switchboard::ui::draw::width(&screen[29][..screen[29].find("My work").unwrap()]);
+    let screen = client.wait_for("the given name", |s| s[0].contains("○ 1 My work"));
+    let (row, col) = sidebar_number(&screen, "1 My work");
     assert_eq!(
-        client.fg_rgb(29, col),
+        client.fg_rgb(row, col),
         Some((expected.r, expected.g, expected.b))
     );
     assert_eq!(first_tab(&server)["label"], "My work");
@@ -131,15 +158,15 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     // "Rename the tab" set it, names it too.
     server.ok(&["rename-tab", "-t", &id, ""]);
     client.wait_for("the directory's name again", |s| {
-        s[29].ends_with("1:shop:feature-x")
+        s[0].contains("○ 1 shop:feature-x")
     });
     server.ok(&["set", "-t", &id, "@tab_name", "Shaping: things"]);
-    client.wait_for("the @tab_name", |s| s[29].ends_with("1:Shaping: things"));
+    client.wait_for("the @tab_name", |s| s[0].contains("○ 1 Shaping: things"));
 
     // A branch of its own's name follows the checkout, and the trunk isn't named.
     server.ok(&["set", "-t", &id, "-u", "@tab_name"]);
     git(&work, &["checkout", "-q", "-b", "main"]);
-    client.wait_for("the trunk's tab", |s| s[29].ends_with("1:shop"));
+    client.wait_for("the trunk's tab", |s| s[0].contains("○ 1 shop"));
     let main = tabs::accent_color("shop | branch:main", Shade::Soft);
     wait_tab(&server, "the trunk's color", |t| t["color"] == main.hex());
 
@@ -342,7 +369,7 @@ fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     client.wait_text("$");
     client.type_text(&format!("cd {}\r", work.display()));
     client.wait_for("the repository's name in the tab", |s| {
-        s[29].ends_with("1:shop:feature-x")
+        s[0].contains("○ 1 shop:feature-x")
     });
     let id = first_tab(&server)["id"].as_str().unwrap().to_string();
     let long = "A tab's name long enough that the status line and the sidebar would cut it short somewhere";
@@ -366,7 +393,11 @@ fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     let short = tabs::title::short_name(item);
     server.ok(&["set", "-t", &id, "@tab_name", &short]);
     server.ok(&["set", "-t", &id, "@tab_title", item]);
-    client.wait_for("the short name", |s| s[29].contains("clipboard…"));
+    client.wait_for("the short name", |_| {
+        first_tab(&server)["label"]
+            .as_str()
+            .is_some_and(|l| l.ends_with("clipboard…"))
+    });
     client.type_text("\x1bT");
     let text = client.wait_text("Copy the title").join("\n");
     assert!(text.contains("a tip"), "the item whole: {text}");
@@ -376,8 +407,8 @@ fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     });
     // Renamed since, even to the item's first words, it shows its name.
     server.ok(&["set", "-t", &id, "@tab_name", "Copy Claude's last reply"]);
-    client.wait_for("the new name", |s| {
-        s[29].ends_with("Copy Claude's last reply")
+    client.wait_for("the new name", |_| {
+        first_tab(&server)["label"] == "Copy Claude's last reply"
     });
     client.type_text("\x1bT");
     let text = client.wait_text("Copy the title").join("\n");
@@ -422,14 +453,16 @@ mod from_the_services {
     #[test]
     fn the_pr_number_and_ticket_title_arrive_from_the_background() {
         let (github, linear) = fake_services();
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("LINEAR_API_KEY", "test-key"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &github.url),
-            ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
-        ]);
-        settings(&server, json!({}));
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("LINEAR_API_KEY", "test-key"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+                ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+            ],
+            &all_settings(json!({})).to_string(),
+        );
         let work = server.dir.path().join("widgets");
         repo(&work, "eng-42-fix-login");
         git(
@@ -446,7 +479,7 @@ mod from_the_services {
         client.wait_text("$");
         client.type_text(&format!("cd {}\r", work.display()));
         client.wait_for("the PR and the ticket's title", |s| {
-            s[29].ends_with("1:#12 ENG-42: Fix the login")
+            s[0].contains("○ 1 #12 ENG-42")
         });
         let tab = first_tab(&server);
         assert_eq!(tab["label"], "#12 ENG-42: Fix the login");
@@ -455,7 +488,7 @@ mod from_the_services {
         // A name of its own keeps the PR in front.
         let id = tab["id"].as_str().unwrap().to_string();
         server.ok(&["rename-tab", "-t", &id, "Login"]);
-        client.wait_for("the name after the PR", |s| s[29].ends_with("1:#12 Login"));
+        client.wait_for("the name after the PR", |s| s[0].contains("○ 1 #12 Login"));
     }
 
     #[test]
@@ -814,7 +847,7 @@ fn each_tab_takes_a_hue_of_its_own_and_keeps_it() {
     // drawn in its own.
     client.type_text(&format!("cd {work_dir}\r"));
     client.wait_for("the first tab in the repository", |s| {
-        s[29].ends_with("1:shop")
+        s[0].contains("○ 1 shop")
     });
     server.ok(&["new-tab", "-d", "-c", work_dir]);
     server.ok(&["new-tab", "-d", "-c", work_dir]);
@@ -877,8 +910,7 @@ fn each_tab_takes_a_hue_of_its_own_and_keeps_it() {
 
 #[test]
 fn claude_s_statusline_draws_its_tab_s_hue() {
-    let server = TestServer::start();
-    settings(&server, json!({"github": false, "linear": false}));
+    let server = start(json!({"github": false, "linear": false}));
     let work = server.dir.path().join("shop");
     repo(&work, "main");
     let work_dir = work.to_str().unwrap();
@@ -1086,13 +1118,14 @@ mod moving_to_another_branch {
     }
 
     fn start(github: &Fake) -> TestServer {
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &github.url),
-        ]);
-        settings(&server, json!({"linear": false}));
-        server
+        TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+            ],
+            &all_settings(json!({"linear": false})).to_string(),
+        )
     }
 
     /// A clone of acme/widgets with a worktree on `hooks-v2` and one on

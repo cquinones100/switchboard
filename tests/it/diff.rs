@@ -189,14 +189,14 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
     });
 
     client.send(b"\x1bd");
-    let screen = client.wait_text("1/2 Change the core");
+    let screen = client.wait_text(" 1 Change the core");
     let row = screen
         .iter()
-        .position(|l| l.contains("1/2 Change the core"))
+        .position(|l| l.contains(" 1 Change the core"))
         .unwrap();
     let later = screen
         .iter()
-        .position(|l| l.contains("2/2 Follow it"))
+        .position(|l| l.contains(" 2 Follow it"))
         .unwrap();
     assert!(row < later, "the pages in order: {screen:?}");
     client.wait_text("Check a.");
@@ -265,7 +265,7 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
     // M-d again opens the story kept, with no new ask for it.
     let before = stories_asked(&server.home);
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     assert_eq!(
         stories_asked(&server.home),
         before,
@@ -309,16 +309,20 @@ fn the_pointer_over_the_diff_s_pane_is_the_shape_the_diff_names() {
     client.wait_sent("the beam over the shell", b"\x1b]22;text\x1b\\");
 
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     let screen = client.wait_text("export const a = 2;");
     // Where `text` is on the screen, as a mouse report names a cell in it.
+    // The list's chosen row, under its accent bar, for a file's name.
     let place = |text: &str| {
-        let row = screen.iter().position(|l| l.contains(text)).unwrap();
+        let row = screen
+            .iter()
+            .position(|l| l.contains(text) && (!text.ends_with(".js") || l.contains("▌")))
+            .unwrap();
         let col = screen[row].find(text).unwrap();
         (screen[row][..col].chars().count() + 2, row + 1)
     };
     // A file's row in the diff's list is pressed by a click: a hand.
-    let (col, row) = place("M a.js");
+    let (col, row) = place("a.js");
     client.send(format!("\x1b[<35;{col};{row}M").as_bytes());
     wait_until("a hand over the file's row", || {
         count(&mut client, "pointer") == 1
@@ -335,7 +339,7 @@ fn the_pointer_over_the_diff_s_pane_is_the_shape_the_diff_names() {
     assert_eq!(count(&mut client, "pointer"), 1);
     // M-d closes the diff under a mouse that stays where it is: the shell
     // back in its place has the beam at once, whatever the diff last said.
-    let (col, row) = place("M a.js");
+    let (col, row) = place("a.js");
     client.send(format!("\x1b[<35;{col};{row}M").as_bytes());
     wait_until("the hand again", || count(&mut client, "pointer") == 2);
     // Copy mode entered by its keys takes the clicks, so the beam is back
@@ -384,7 +388,7 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_page_and_r_reads_it_again() {
 
     // A clean branch: its commits' story, nothing marked.
     client.send(b"\x1bd");
-    let screen = client.wait_text("2/2 Follow it");
+    let screen = client.wait_text(" 2 Follow it");
     assert!(
         !marked(&screen, "a.js") && !marked(&screen, "b.js"),
         "{screen:?}"
@@ -394,16 +398,16 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_page_and_r_reads_it_again() {
     std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
     std::fs::write(work.join("src/c.js"), "export const c = 1;\n").unwrap();
     client.type_text("R");
-    let screen = client.wait_text("3/3 Not committed yet");
+    let screen = client.wait_text("NOT COMMITTED YET");
     let at = |text: &str| screen.iter().position(|l| l.contains(text)).unwrap();
     assert!(
-        at("1/3 Change the core") < at("2/3 Follow it")
-            && at("2/3 Follow it") < at("3/3 Not committed yet"),
+        at(" 1 Change the core") < at(" 2 Follow it")
+            && at(" 2 Follow it") < at("NOT COMMITTED YET"),
         "the commits' pages, then the last: {screen:?}"
     );
-    assert!(at("3/3 Not committed yet") < at("c.js"), "{screen:?}");
+    assert!(at("NOT COMMITTED YET") < at("c.js"), "{screen:?}");
     assert!(
-        at("b.js") < at("3/3 Not committed yet"),
+        at("b.js") < at("NOT COMMITTED YET"),
         "a file in both keeps its committed page: {screen:?}"
     );
     assert!(
@@ -417,9 +421,10 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_page_and_r_reads_it_again() {
     client.type_text("G");
     let screen = client.wait_text("export const c = 1;");
     assert!(
-        screen[0].contains("c.js") && screen[0].contains("● uncommitted"),
-        "{:?}",
-        screen[0]
+        screen
+            .iter()
+            .any(|l| l.contains("c.js") && l.contains("working tree")),
+        "{screen:?}"
     );
     client.type_text("q");
     wait_until("the pane back", || {
@@ -463,7 +468,7 @@ fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() 
     // story asked for.
     std::fs::write(work.join("notes.txt"), "a thought\n").unwrap();
     client.send(b"\x1bd");
-    let screen = client.wait_text("1/1 Not committed yet");
+    let screen = client.wait_text("NOT COMMITTED YET");
     assert!(marked(&screen, "notes.txt"), "{screen:?}");
     client.wait_text("a thought");
     // Neither a story nor Haiku's order: the only asks are the server's
@@ -491,7 +496,7 @@ fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() 
 #[test]
 fn m_d_shows_the_default_branchs_unpushed_commits_and_names_the_base_with_no_pr() {
     let server = TestServer::start();
-    let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "ux2": true});
+    let all = json!({"notifications": false, "tips": false, "github": false, "linear": false});
     common::write_settings(&server.home, all);
     stand_in_claude(&server.home);
     let work = repository(server.dir.path());
@@ -823,9 +828,9 @@ fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
             .is_some_and(|d| d.ends_with("work"))
     });
     server.ok(&["press", "diff-working-tree"]);
-    let screen = client.wait_text("Staged changes (1)");
+    let screen = client.wait_text("STAGED CHANGES");
     let at = |text: &str| screen.iter().position(|l| l.contains(text)).unwrap();
-    assert!(at("Changes (2)") < at("Staged changes (1)"), "{screen:?}");
+    assert!(at("CHANGES") < at("STAGED CHANGES"), "{screen:?}");
     client.wait_text("brand new");
     client.type_text("j");
     let screen = client.wait_text("export const a = 4;");
@@ -866,7 +871,7 @@ fn c_in_the_diff_goes_through_the_branchs_commits_one_at_a_time() {
             .is_some_and(|d| d.ends_with("work"))
     });
     client.send(b"\x1bd");
-    client.wait_text("Changes (2)");
+    client.wait_text("CHANGES");
     client.type_text("c");
     client.wait_text("Commit 1 of 2");
     client.wait_text("Change both");
@@ -886,7 +891,7 @@ fn c_in_the_diff_goes_through_the_branchs_commits_one_at_a_time() {
         "the second commit's own change: {row:?}"
     );
     client.type_text("c");
-    client.wait_text("Changes (2)");
+    client.wait_text("CHANGES");
     client.type_text("q");
     wait_until("the pane back", || {
         panes(&server)[0]["options"].get("@in_place").is_none()
@@ -1056,7 +1061,7 @@ fn ga_asks_a_copy_of_the_tabs_own_session_and_haiku_with_the_setting_off() {
 
     let ask = |client: &mut common::TestClient, question: &str| {
         client.send(b"\x1bd");
-        client.wait_text("1/2 Change the core");
+        client.wait_text(" 1 Change the core");
         client.type_text("ga");
         client.wait_text("Ask about this diff");
         client.type_text(question);
@@ -1131,7 +1136,7 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     // the spread, the pane narrowed to the rest.
     let spread = 240 - side;
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     let shown = panes(&server);
     assert_eq!(shown.len(), 2, "beside the pane: {shown:?}");
     assert_eq!(shown[0]["id"], first.as_str());
@@ -1154,7 +1159,7 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     with(json!({"lone_pane_width": "81", "diff_beside_share": "spare"}));
     wait_until("the pane at 81", || panes(&server)[0]["cols"] == 81);
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     let shown = panes(&server);
     assert_eq!(shown.len(), 2, "beside the pane: {shown:?}");
     assert_eq!(shown[0]["cols"], 81);
@@ -1168,7 +1173,7 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     with(json!({"lone_pane_width": wider.to_string()}));
     wait_until("the pane wider", || panes(&server)[0]["cols"] == wider);
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     let shown = panes(&server);
     assert_eq!(shown.len(), 1, "in the pane's place: {shown:?}");
     assert_eq!(shown[0]["options"]["@parked_pane"], first.as_str());
@@ -1181,7 +1186,7 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     with(json!({"lone_pane_width": "80", "views_beside_narrow_pane": false}));
     wait_until("capped again", || panes(&server)[0]["cols"] == 80);
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     assert_eq!(panes(&server).len(), 1);
     client.send(b"\x1bd");
     wait_until("the pane back", || {
@@ -1194,7 +1199,7 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     wait_until("a split", || panes(&server).len() == 2);
     server.ok(&["select-pane", "-t", &first]);
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     let shown = panes(&server);
     assert_eq!(shown.len(), 2, "in the pane's place: {shown:?}");
     assert!(shown.iter().all(|p| p["id"] != first.as_str()));
@@ -1216,7 +1221,7 @@ fn the_pane_resize_keys_move_the_lists_edge_and_go_back_to_the_pane_from_the_dif
             .is_some_and(|d| d.ends_with("work"))
     });
     client.send(b"\x1bd");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     client.wait_text("export const a = 2;");
 
     // The list has the keys as the diff opens: C-M-S-l reaches the diff,
@@ -1318,7 +1323,9 @@ fn the_workspaces_keys_reach_it_while_the_diffs_story_cover_is_up_and_esc_and_t_
     client.wait_text("telling the change as a story");
     // M-j, the open tabs to pick from.
     client.send(b"\x1b[106;3u");
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("\x1b");
     client.wait_text("telling the change as a story");
     // The cover's own keys still reach it: t shows the answer so far, and
@@ -1350,7 +1357,7 @@ fn a_diff_that_finishes_loading_while_you_are_elsewhere_puts_its_tab_under_needs
     // takes the tab's mark with it.
     client.type_text("\x1b ");
     client.wait_text("MISSION CONTROL");
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_for("the notification chosen", |s| {
         s.iter()
             .any(|l| l.contains('›') && l.contains("Diff ready in tab 1"))
@@ -1385,7 +1392,7 @@ fn a_diff_that_finishes_loading_while_you_are_elsewhere_puts_its_tab_under_needs
     server.ok(&["ready", "-t", &first, "Diff"]);
     client.wait_text("Diff ready in tab 1");
     client.send(b"\x1b1");
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     wait_until("the mark cleared", || ready_of(&server, &first).is_empty());
     client.wait_for("the sidebar without it", |s| {
         !s.iter().any(|l| l.contains("Diff ready"))
@@ -1398,7 +1405,7 @@ fn a_diff_that_finishes_loading_in_front_or_with_the_setting_off_marks_nothing()
     let (server, mut client, release) = diff_under_its_cover(json!({}));
     let first = tab_ids(&server)[0].clone();
     std::fs::write(&release, "").unwrap();
-    client.wait_text("1/2 Change the core");
+    client.wait_text(" 1 Change the core");
     std::thread::sleep(Duration::from_millis(500) * common::patience());
     assert_eq!(ready_of(&server, &first), "");
     drop(server);

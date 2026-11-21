@@ -22,7 +22,7 @@
 //! and the Mermaid diagrams are drawn as pictures once they are had
 //! (`super::pictures`), each laid out again where it was as one arrives.
 //!
-//! A board (`super::board`, the PR and the ticket with UX 2.0) scrolls its
+//! A board (`super::board`, the PR and the ticket) scrolls its
 //! column as any text, its panel fixed beside it in a pane wide enough, and
 //! names its keys on the prompt line. One with a menu (the PR's) opens it
 //! with m, a right click or a click on the prompt line's "m view actions"
@@ -87,14 +87,6 @@ pub enum Content {
     /// The PR or the ticket as UX 2.0's boards draw them: a column with a
     /// panel beside it, or under it in a narrow pane (`super::board`).
     Board(Board),
-    /// Markdown with a menu (`m`), titled `title`, offering `actions`: the
-    /// PR with UX 2.0 off.
-    MarkdownMenu {
-        text: String,
-        place: String,
-        title: String,
-        actions: Vec<(String, board::Do)>,
-    },
     /// Something that can't be read here, with a link o opens (a Slack
     /// message); any other key closes it.
     Offer { text: String, url: String },
@@ -367,9 +359,7 @@ impl Pager {
             .map(|l| l.anchor);
         let at = self.cursor_anchor();
         self.markdown = match &content {
-            Content::Markdown { text, place } | Content::MarkdownMenu { text, place, .. } => {
-                Some(Markdown::parse(text, place))
-            }
+            Content::Markdown { text, place } => Some(Markdown::parse(text, place)),
             _ => None,
         };
         self.content = content;
@@ -502,9 +492,7 @@ impl Pager {
                     .map(|l| vec![Span::new(expand_tabs(l), Style::fg(252))])
                     .collect(),
             ),
-            (Content::Markdown { .. } | Content::MarkdownMenu { .. } | Content::Board(_), None) => {
-                Doc::default()
-            }
+            (Content::Markdown { .. } | Content::Board(_), None) => Doc::default(),
         };
     }
 
@@ -968,7 +956,6 @@ impl Pager {
     fn menu_of(&self) -> Option<(&str, &[(String, board::Do)])> {
         let (title, actions) = match &self.content {
             Content::Board(b) => (b.title.as_str(), b.actions.as_slice()),
-            Content::MarkdownMenu { title, actions, .. } => (title.as_str(), actions.as_slice()),
             _ => return None,
         };
         // One with a menu (a title) that reads again has it with that alone.
@@ -1000,9 +987,8 @@ impl Pager {
         if self.menu_of().is_none() || self.typing.is_some() || self.note.is_some() {
             return false;
         }
-        // Markdown's prompt line starts with it.
         let Content::Board(b) = &self.content else {
-            return col < VIEW_ACTIONS.len();
+            return false;
         };
         let mut keys = b.keys.clone();
         if self.has_cursor() && self.full_at(self.cursor).is_some() {
@@ -1323,11 +1309,9 @@ impl Pager {
         const CLOSES: &str = " · q closes  ";
         let at_end = self.markdown.is_some() && self.at_end();
         let mut out = String::new();
-        let menu = matches!(self.content, Content::MarkdownMenu { .. });
         // The name gets what the rest leaves, short of the last column so
         // the line never wraps and scrolls the page; none, it is left out.
-        let rest = usize::from(menu) * (VIEW_ACTIONS.len() + 2)
-            + usize::from(at_end) * END.len()
+        let rest = usize::from(at_end) * END.len()
             + usize::from(full) * FULL.len()
             + crate::ui::draw::width(CLOSES)
             + 1;
@@ -1337,11 +1321,6 @@ impl Pager {
             let name: String = name.chars().filter(|c| !c.is_control()).collect();
             let name = crate::ui::draw::cut(&name, room - rest);
             out.push_str(&format!("\x1b[38;5;{DIM}m{name}{CLOSES}\x1b[0m"));
-        }
-        if menu {
-            out.push_str(&format!(
-                "\x1b[38;5;{CURSOR}mm\x1b[38;5;{DIM}m view actions\x1b[0m  "
-            ));
         }
         if at_end {
             out.push_str(&format!("\x1b[7m{}\x1b[0m ", END.trim_end()));

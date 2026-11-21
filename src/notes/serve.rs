@@ -687,9 +687,8 @@ impl Server {
         if old == here_tab
             && here == notes
             && self.tab_opt(here_tab, "@notes").as_deref() == Some("1")
-            && settings::is_on("ux2")
         {
-            // In Notes' own tab, with UX 2.0, M-e is the app's: the plan of
+            // In Notes' own tab, M-e is the app's: the plan of
             // the item under its cursor beside the note, or put away.
             if let Some(slot) = self.panes.get_mut(&notes)
                 && let Some(key) = crate::mux::input::Key::parse("M-e")
@@ -747,14 +746,13 @@ impl Server {
     }
 
     /// M-e with an app in each tab: the tab's own Notes ended when it has
-    /// one (M-e passed to it in Notes' own tab, with UX 2.0, as the app's),
+    /// one (M-e passed to it in Notes' own tab, as the app's),
     /// else one started beside `here` on the tab's note.
     fn notes_beside_per_tab(&mut self, client: Option<ClientId>, here: PaneId, tab: TabId) {
         let own_tab = self.tab_opt(tab, "@notes").as_deref() == Some("1");
         if let Some(notes) = self.tab_notes_pane(tab) {
             if own_tab {
                 if here == notes
-                    && settings::is_on("ux2")
                     && let Some(slot) = self.panes.get_mut(&notes)
                     && let Some(key) = crate::mux::input::Key::parse("M-e")
                 {

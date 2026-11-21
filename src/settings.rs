@@ -184,16 +184,6 @@ impl Setting {
     }
 }
 
-/// A category's name as the Settings view shows it: with UX 2.0 on, the
-/// tabs' row is a header rather than the status bar's, so "Tabs and status
-/// bar" reads "Tabs and header".
-pub fn category_name(category: &str, ux2: bool) -> &str {
-    match category {
-        "Tabs and status bar" if ux2 => "Tabs and header",
-        _ => category,
-    }
-}
-
 /// A category named `group: name` (`Mission control: Slack`) as its group
 /// and its name under it: the Settings view draws the group as a heading
 /// and the category under it. None for a category with no group.

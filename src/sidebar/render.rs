@@ -19,8 +19,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::model::{self, Rules, Stage, TabModel, TabState};
-use super::text::{self, Badge, SPINNER, width};
+use super::model::{self, Rules, Stage, TabModel};
+use super::text::{self, width};
 use crate::items::{Item, State};
 use crate::mux::TabId;
 use crate::ui::Theme;
@@ -42,7 +42,7 @@ const YELLOW: Color = Color::Indexed(220);
 /// or unfolds; or the top line's ⏰ chip while the sidebar leaves the
 /// Reminders group out, which a click opens mission control's Reminders
 /// view from; or, in select mode, its chip on the top line, which a click
-/// opens the menu of; or, with UX 2.0, one of the workspace's own buttons
+/// opens the menu of; or, one of the workspace's own buttons
 /// first on the top line (back, forward, mission control).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
@@ -94,7 +94,7 @@ pub struct Notice {
     pub title: String,
     pub detail: String,
     /// When the newest of its kind came, in seconds since the epoch, shown
-    /// as how long ago with UX 2.0 on; none for a kind that keeps no time.
+    /// as how long ago; none for a kind that keeps no time.
     pub time: Option<i64>,
 }
 
@@ -137,7 +137,7 @@ pub enum Going {
     View(String),
 }
 
-/// The workspace's own buttons on the top line, with UX 2.0 (boards 57
+/// The workspace's own buttons on the top line, (boards 57
 /// to 60): ← and → while back and forward step through the tabs visited
 /// (tab_back_forward), with the place each goes to, and ⊞ mission control.
 #[derive(Clone, Debug, Default)]
@@ -171,8 +171,7 @@ pub struct View<'a> {
     pub keep: Option<usize>,
     /// What the mouse is over.
     pub hover: Option<&'a Owner>,
-    /// The computer held awake (src/awake): a ☕ after the tab count with
-    /// UX 2.0, which has no status line to show it.
+    /// The computer held awake (src/awake): a ☕ after the tab count.
     pub awake: bool,
     /// The repository the tabs are filtered to, by its folder's name, its
     /// chip on the top line; every other one's tabs are under Other repos.
@@ -186,13 +185,13 @@ pub struct View<'a> {
     /// Reminders group out (sidebar_reminders off), counted on the top
     /// line's ⏰ chip; 0 shows no chip.
     pub reminders: usize,
-    /// M-p's restart as it goes, on the line under the count with UX 2.0
+    /// M-p's restart as it goes, on the line under the count
     /// (board 56's build row).
     pub build: Option<&'a crate::mux::build_row::Row>,
     /// Select mode: the tabs selected, each drawn with the selected mark, and how
     /// many on the top line's chip.
     pub selected: Option<&'a std::collections::BTreeSet<TabId>>,
-    /// The workspace's own buttons first on the top line, with UX 2.0.
+    /// The workspace's own buttons first on the top line,.
     pub buttons: Option<&'a Buttons>,
 }
 
@@ -309,30 +308,6 @@ pub struct Lines {
     pub buttons_at: Vec<(Owner, usize, usize)>,
 }
 
-/// A tab's badge: a colored pill three columns wide, the spinner turning
-/// while Claude works; an idle tab's mark faint, with no pill.
-fn badge(badge: Badge, frame: usize, theme: &Theme) -> Span<'static> {
-    let look = badge.look();
-    let Some(color) = look.color else {
-        return Span::styled(format!(" {} ", look.mark), Style::new().fg(theme.faint));
-    };
-    let mark = if badge.spins() {
-        SPINNER[frame % SPINNER.len()]
-    } else {
-        look.mark
-    };
-    // A two-column mark (the pin) takes the space after it, so every pill
-    // is three columns and the text after it lines up.
-    let after = if width(mark) > 1 { "" } else { " " };
-    Span::styled(
-        format!(" {mark}{after}"),
-        Style::new()
-            .bg(Color::Indexed(color))
-            .fg(Color::Indexed(look.ink.unwrap_or(255)))
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
 fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
@@ -350,53 +325,6 @@ fn bold(c: Color) -> Style {
     Style::new().fg(c).add_modifier(Modifier::BOLD)
 }
 
-/// The counts beside the session's name: the failing builds first, in their
-/// red, so a long session name cuts the others before it; then how many
-/// wait on you, have finished and are working (a loop's too).
-fn counts(row: &mut Row, tabs: &[TabModel], r: &Rules, theme: &Theme) {
-    let mut items: Vec<(String, Style)> = Vec::new();
-    let failing = tabs.iter().filter(|t| model::build_failing(t, r)).count();
-    if failing > 0 {
-        items.push((
-            format!("{} {failing}", Badge::Failing.look().mark),
-            bold(Color::Indexed(160)),
-        ));
-    }
-    for (badge, n) in [
-        (
-            Badge::Waiting,
-            tabs.iter().filter(|t| t.state == TabState::Waiting).count(),
-        ),
-        (
-            Badge::Done,
-            tabs.iter().filter(|t| t.state == TabState::Done).count(),
-        ),
-        (
-            Badge::Working,
-            tabs.iter().filter(|t| t.state.busy()).count(),
-        ),
-    ] {
-        if n == 0 {
-            continue;
-        }
-        let mark = if badge == Badge::Working {
-            "⋯"
-        } else {
-            badge.look().mark
-        };
-        items.push((
-            format!("{mark} {n}"),
-            bold(badge.color().unwrap_or(theme.text)),
-        ));
-    }
-    for (i, (text, style)) in items.into_iter().enumerate() {
-        if i > 0 {
-            row.put("  ", fg(theme.faint));
-        }
-        row.put(text, style);
-    }
-}
-
 /// A tab's number in its project's color, as its row shows it.
 fn number_color(tab: &TabModel, theme: &Theme) -> Color {
     tab.color
@@ -404,7 +332,7 @@ fn number_color(tab: &TabModel, theme: &Theme) -> Color {
         .unwrap_or(theme.faint)
 }
 
-/// The workspace's own buttons, first on the top line with UX 2.0 (boards
+/// The workspace's own buttons, first on the top line (boards
 /// 57 to 60): ← and → (faint with no tab that way) while they step through
 /// the tabs visited, then ⊞ with the count of tabs that need you, lit while
 /// mission control is open; each on the chosen surface under the mouse,
@@ -462,7 +390,6 @@ pub fn sidebar_lines(
     frozen: Option<&model::Frozen>,
     notices: &[Notice],
     sections: &[Section],
-    session: &str,
     cols: usize,
     rows: usize,
     view: &View<'_>,
@@ -484,22 +411,9 @@ pub fn sidebar_lines(
     } else {
         Some(view.here)
     };
-    let here = tabs.iter().find(|t| t.id == view.here);
 
-    // The session's name in a pill of its tab's color, and the counts.
-    // With UX 2.0, which has no sessions to tell apart, how many tabs
-    // there are in its place.
+    // How many tabs there are.
     let mut pill_row = Row::default();
-    let pill = match here.and_then(|t| t.color) {
-        Some(c) => Style::new()
-            .bg(c.into())
-            .fg(crate::tabs::color::words_on(c.into()))
-            .add_modifier(Modifier::BOLD),
-        None => Style::new()
-            .bg(theme.highlight)
-            .fg(theme.bright)
-            .add_modifier(Modifier::BOLD),
-    };
     // The repository filter's chip, and how many of the tabs are its.
     // In `room` columns: where they are short, "7 of 9" gives way first,
     // then the repository's name is cut, so what follows it keeps its place.
@@ -560,87 +474,70 @@ pub fn sidebar_lines(
             .map(|t| (t, "→")),
         _ => None,
     };
-    if r.ux2 {
-        // The count, a ☕ while the computer is held awake, and on the
-        // right how to filter; the groups' own headings say how many need
-        // you or work. Filtered to a repository, its chip in its place.
-        let n = tabs.len();
-        let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
-        pill_row.put(" ", Style::new());
-        if let Some(b) = view.buttons {
-            buttons_at = buttons(&mut pill_row, b, view.hover, theme);
+    // The count, a ☕ while the computer is held awake, and on the
+    // right how to filter; the groups' own headings say how many need
+    // you or work. Filtered to a repository, its chip in its place.
+    let n = tabs.len();
+    let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
+    pill_row.put(" ", Style::new());
+    if let Some(b) = view.buttons {
+        buttons_at = buttons(&mut pill_row, b, view.hover, theme);
+    }
+    // Under the mouse, a button names where it goes in place of the
+    // rest of the line.
+    let named = match (going, view.hover) {
+        (Some((Going::View(title), _)), _) => {
+            pill_row.put(format!("⊞ {title}"), bold(theme.text));
+            true
         }
-        // Under the mouse, a button names where it goes in place of the
-        // rest of the line.
-        let named = match (going, view.hover) {
-            (Some((Going::View(title), _)), _) => {
-                pill_row.put(format!("⊞ {title}"), bold(theme.text));
-                true
-            }
-            (Some((Going::Tab(tab), _)), _) => {
-                let state = model::badge_state(tab, r);
-                pill_row
-                    .spans
-                    .push(kit::mark(Mark::of_badge(state), view.frame, theme));
-                pill_row
-                    .put(" ", Style::new())
-                    .put(tab.index.to_string(), fg(number_color(tab, theme)))
-                    .put(" ", Style::new())
-                    .put(tab.name.clone(), fg(theme.text));
-                true
-            }
-            (None, Some(Owner::Mission)) if view.buttons.is_some() => {
-                pill_row.put("Mission control", bold(theme.text));
-                true
-            }
-            _ => false,
-        };
-        if !named {
-            // The ⏰ chip first, so a long repository chip never pushes it off.
-            if view.reminders > 0 {
-                reminders_at = reminders_chip(&mut pill_row);
-                pill_row.put(" ", Style::new());
-            }
-            // Room for "/ filter" at the right, a column apart, as the
-            // board has it beside the chip (43).
-            let before: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
-            let cup = if view.awake { 3 } else { 0 };
-            repo_chip(
-                &mut pill_row,
-                cols.saturating_sub(before + cup + width("/ filter") + 2),
-            );
-            if view.repo.is_none() {
-                pill_row.put(said.clone(), fg(theme.dim));
-            }
-            let mut used: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
-            if view.awake {
-                let cup = kit::mark(Mark::Awake, 0, theme);
-                used += 2 + width(&cup.content);
-                pill_row.put("  ", Style::new());
-                pill_row.spans.push(cup);
-            }
-            let gap = cols.saturating_sub(used + width("/ filter") + 1);
-            if gap > 0 {
-                pill_row
-                    .put(" ".repeat(gap), Style::new())
-                    .put("/ filter", fg(theme.faint));
-            }
+        (Some((Going::Tab(tab), _)), _) => {
+            let state = model::badge_state(tab, r);
+            pill_row
+                .spans
+                .push(kit::mark(Mark::of_badge(state), view.frame, theme));
+            pill_row
+                .put(" ", Style::new())
+                .put(tab.index.to_string(), fg(number_color(tab, theme)))
+                .put(" ", Style::new())
+                .put(tab.name.clone(), fg(theme.text));
+            true
         }
-    } else {
-        pill_row
-            .put(" ", Style::new())
-            .put(format!(" {session} "), pill)
-            .put("  ", Style::new());
-        // The ⏰ chip first, so the counts after it are what a narrow
-        // sidebar cuts.
+        (None, Some(Owner::Mission)) if view.buttons.is_some() => {
+            pill_row.put("Mission control", bold(theme.text));
+            true
+        }
+        _ => false,
+    };
+    if !named {
+        // The ⏰ chip first, so a long repository chip never pushes it off.
         if view.reminders > 0 {
             reminders_at = reminders_chip(&mut pill_row);
             pill_row.put(" ", Style::new());
         }
-        if repo_chip(&mut pill_row, usize::MAX) > 0 {
-            pill_row.put("  ", Style::new());
+        // Room for "/ filter" at the right, a column apart, as the
+        // board has it beside the chip (43).
+        let before: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
+        let cup = if view.awake { 3 } else { 0 };
+        repo_chip(
+            &mut pill_row,
+            cols.saturating_sub(before + cup + width("/ filter") + 2),
+        );
+        if view.repo.is_none() {
+            pill_row.put(said.clone(), fg(theme.dim));
         }
-        counts(&mut pill_row, tabs, r, theme);
+        let mut used: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
+        if view.awake {
+            let cup = kit::mark(Mark::Awake, 0, theme);
+            used += 2 + width(&cup.content);
+            pill_row.put("  ", Style::new());
+            pill_row.spans.push(cup);
+        }
+        let gap = cols.saturating_sub(used + width("/ filter") + 1);
+        if gap > 0 {
+            pill_row
+                .put(" ".repeat(gap), Style::new())
+                .put("/ filter", fg(theme.faint));
+        }
     }
     // In select mode, the top line is how many are selected, a chip a
     // click on opens their menu, and the keys.
@@ -687,9 +584,9 @@ pub fn sidebar_lines(
             }
             head.push(row.fit(cols, None));
         }
-        // With UX 2.0, M-p's restart as it goes, lit under the mouse
+        // M-p's restart as it goes, lit under the mouse
         // since a click shows its steps.
-        None => match view.build.filter(|_| r.ux2) {
+        None => match view.build {
             Some(build) => {
                 spins |= build.spins();
                 let lit = view.hover == Some(&Owner::BuildRow);
@@ -701,7 +598,7 @@ pub fn sidebar_lines(
             None => head.push(Line::blank(cols)),
         },
     }
-    let build_row = r.ux2 && view.filter.is_none() && view.build.is_some();
+    let build_row = view.filter.is_none() && view.build.is_some();
 
     for group in model::grouped(tabs, frozen, r) {
         headings.push(lines.len());
@@ -709,11 +606,10 @@ pub fn sidebar_lines(
         // at a glance.
         let mut heading = Row::default();
         heading.put(" ", Style::new());
-        // UX 2.0's Other repos, folded: ▸ and its tabs' marks on its
+        // Other repos, folded: ▸ and its tabs' marks on its
         // heading, so one that needs you still shows, its count at the
         // right edge (board 43); its repositories by name under it.
-        let other_folded =
-            r.ux2 && group.stage == Stage::OtherRepos && view.folded.contains(&group.stage);
+        let other_folded = group.stage == Stage::OtherRepos && view.folded.contains(&group.stage);
         if other_folded {
             let tone = Mark::of_badge(group.stage.color()).look().1;
             let n = group.tabs.len().to_string();
@@ -724,16 +620,16 @@ pub fn sidebar_lines(
             let room = cols.saturating_sub(kit::spans_width(&spans) + width(&n) + 2);
             for t in group.tabs.iter().take(room) {
                 let state = model::badge_state(t, r);
-                spins |= kit::spins(state, true);
+                spins |= kit::spins(state);
                 spans.push(kit::mark(Mark::of_badge(state), view.frame, theme));
             }
             let gap = cols.saturating_sub(kit::spans_width(&spans) + width(&n) + 1);
             spans.push(Span::raw(" ".repeat(gap.max(1))));
             spans.push(Span::styled(n, tone.style(theme)));
             heading.spans = kit::fit(spans, cols, Style::new());
-        } else if r.ux2 {
-            // UX 2.0: the kit's label in its stage's tone, so what needs you
-            // reads yellow and what works blue, its count at the right edge.
+        } else {
+            // The kit's label in its stage's tone, so what needs you reads
+            // yellow and what works blue, its count at the right edge.
             let tone = Mark::of_badge(group.stage.color()).look().1;
             heading.spans = kit::label(
                 group.stage.title(),
@@ -742,16 +638,6 @@ pub fn sidebar_lines(
                 cols,
                 theme,
             );
-        } else if group.stage == Stage::Failing {
-            heading.put(
-                format!("✗ {}", group.stage.title().to_uppercase()),
-                bold(Color::Indexed(160)),
-            );
-        } else {
-            heading.put(group.stage.title().to_uppercase(), fg(theme.dim));
-        }
-        if !r.ux2 {
-            heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
         }
         let owner = Owner::Group(group.stage);
         // A heading folds or unfolds its group on a click, so it lights
@@ -811,11 +697,10 @@ pub fn sidebar_lines(
                 };
                 row.put("  ", Style::new()).put(said, fg(theme.faint));
             } else {
-                row.put(if r.ux2 { "" } else { " " }, Style::new());
                 row.put("▸ ", fg(theme.dim));
                 for t in &group.tabs {
                     let state = model::badge_state(t, r);
-                    spins |= kit::spins(state, true);
+                    spins |= kit::spins(state);
                     row.spans
                         .push(kit::mark(Mark::of_badge(state), view.frame, theme));
                 }
@@ -833,18 +718,14 @@ pub fn sidebar_lines(
                 cursor_at = lines.len();
                 cursor_end = lines.len();
             }
-            let line = if r.ux2 {
-                Line {
-                    spans: kit::row(
-                        row.fit(cols.saturating_sub(1), None).spans,
-                        cols,
-                        chosen,
-                        theme,
-                    ),
-                    fill,
-                }
-            } else {
-                row.fit(cols, fill)
+            let line = Line {
+                spans: kit::row(
+                    row.fit(cols.saturating_sub(1), None).spans,
+                    cols,
+                    chosen,
+                    theme,
+                ),
+                fill,
             };
             lines.push(line);
             owners.push(Some(owner));
@@ -852,7 +733,6 @@ pub fn sidebar_lines(
             owners.push(None);
             continue;
         }
-        let last = group.tabs.len().saturating_sub(1);
         // In select mode, the selected mark in the accent before a selected tab's
         // mark, and room for one before every other's, so the marks line up.
         let tick_cols = if view.selected.is_some() { 2 } else { 0 };
@@ -866,279 +746,131 @@ pub fn sidebar_lines(
             }
             None => {}
         };
-        for (i, tab) in group.tabs.iter().enumerate() {
+        for tab in &group.tabs {
             let chosen = selected == Some(tab.id);
             if chosen {
                 cursor_at = lines.len();
             }
-            if r.ux2 {
-                // UX 2.0: two lines a tab, each the kit's row (the cursor's
-                // shaded, with an accent bar at its left). Its state's mark,
-                // its number in its project's color, its name on one line;
-                // under it, what it is doing.
-                let state = model::badge_state(tab, r);
-                spins |= kit::spins(state, true);
-                // The tab ← or → goes to lights under the mouse on it too,
-                // the arrow at its right edge.
-                let arrow = going
-                    .filter(|(t, _)| matches!(t, Going::Tab(t) if t.id == tab.id))
-                    .map(|(_, a)| a);
-                let fill = if chosen {
-                    Some(theme.highlight)
-                } else if view.hover == Some(&Owner::Tab(tab.id)) || arrow.is_some() {
-                    Some(theme.panel)
-                } else {
-                    None
-                };
-                let number = tab.index.to_string();
-                let name_style = if chosen || tab.id == view.here {
-                    bold(theme.bright)
-                } else {
-                    fg(theme.text)
-                };
-                // A status you set: the kit's chip after its name (board 158).
-                let by_you = model::by_hand(tab, r)
-                    .is_some()
-                    .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
-                let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
-                // A tab following several PRs: the current one's number
-                // before its name, how many more after it, dim (board 127).
-                let (name, more) = match tab.prs.first() {
-                    Some(current) if current.current => (
-                        format!("#{} {}", current.number, tab.name),
-                        format!(" +{}", tab.prs.len() - 1),
-                    ),
-                    Some(_) => (tab.name.clone(), format!(" +{}", tab.prs.len())),
-                    None => (tab.name.clone(), String::new()),
-                };
-                let room =
-                    cols.saturating_sub(4 + width(&number) + tick_cols + chip_w + width(&more));
-                let mut first = Row::default();
-                tick(&mut first, tab.id);
-                first
-                    .spans
-                    .push(kit::mark(Mark::of_badge(state), view.frame, theme));
-                first
-                    .put(" ", Style::new())
-                    .put(number, fg(number_color(tab, theme)))
-                    .put(" ", Style::new())
-                    .put(text::cut(&name, room), name_style);
-                if !more.is_empty() {
-                    first.put(more, fg(theme.dim));
-                }
-                if let Some(chip) = by_you {
-                    first.put(" ", Style::new());
-                    first.spans.extend(chip);
-                }
-                let kit_row = |row: Row| Line {
-                    spans: kit::row(
-                        row.fit(cols.saturating_sub(1), None).spans,
-                        cols,
-                        chosen,
-                        theme,
-                    ),
-                    fill,
-                };
-                let first = match arrow {
-                    Some(a) => {
-                        let mut spans = first.fit(cols.saturating_sub(3), None).spans;
-                        spans.push(Span::styled(a, Tone::Accent.bold(theme)));
-                        Row { spans }
-                    }
-                    None => first,
-                };
-                lines.push(kit_row(first));
-                owners.push(Some(Owner::Tab(tab.id)));
-                let mut doing: Vec<String> = model::state_words(tab, r)
-                    .split(" · ")
-                    .filter(|p| !p.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                if let Some(c) = tab.checks.filter(|c| c.fail > 0) {
-                    doing.insert(0, format!("✕ {} failing", c.fail));
-                }
-                if let Some(n) = tab
-                    .pr
-                    .filter(|n| tab.prs.is_empty() && !tab.name.contains(&format!("#{n}")))
-                {
-                    doing.push(format!("#{n}"));
-                }
-                // The other repository first, so a long state never cuts it.
-                if let Some(repo) = &tab.from_repo {
-                    doing.insert(0, repo.clone());
-                }
-                if !doing.is_empty() || !tab.prs.is_empty() {
-                    let mut second = Row::default();
-                    second.put("    ", Style::new());
-                    // Each PR's mark by where it stands, the current one
-                    // first, before what it is doing.
-                    let mut used = 4;
-                    for pr in &tab.prs {
-                        let words = format!(" #{}  ", pr.number);
-                        if used + 1 + width(&words) > cols.saturating_sub(2) {
-                            break;
-                        }
-                        second.spans.push(kit::mark(pr.mark, 0, theme));
-                        second.put(words.clone(), fg(theme.dim));
-                        used += 1 + width(&words);
-                    }
-                    if !doing.is_empty() {
-                        second.put(
-                            text::cut(&doing.join(" · "), cols.saturating_sub(2 + used)),
-                            fg(theme.dim),
-                        );
-                    }
-                    lines.push(kit_row(second));
-                    owners.push(Some(Owner::Tab(tab.id)));
-                }
-                if chosen {
-                    cursor_end = lines.len() - 1;
-                }
-                continue;
-            }
+            // UX 2.0: two lines a tab, each the kit's row (the cursor's
+            // shaded, with an accent bar at its left). Its state's mark,
+            // its number in its project's color, its name on one line;
+            // under it, what it is doing.
+            let state = model::badge_state(tab, r);
+            spins |= kit::spins(state);
+            // The tab ← or → goes to lights under the mouse on it too,
+            // the arrow at its right edge.
+            let arrow = going
+                .filter(|(t, _)| matches!(t, Going::Tab(t) if t.id == tab.id))
+                .map(|(_, a)| a);
             let fill = if chosen {
                 Some(theme.highlight)
-            } else if view.hover == Some(&Owner::Tab(tab.id)) {
+            } else if view.hover == Some(&Owner::Tab(tab.id)) || arrow.is_some() {
                 Some(theme.panel)
             } else {
                 None
             };
-            let bar_color = tab.color.map(Color::from).unwrap_or(theme.faint);
-            let bar = (if chosen { "▌" } else { "▏" }, fg(bar_color));
-            let name_style = if tab.id == view.here {
+            let number = tab.index.to_string();
+            let name_style = if chosen || tab.id == view.here {
                 bold(theme.bright)
             } else {
                 fg(theme.text)
             };
-            // The name wraps under itself, up to NAME_LINES lines, beside
-            // the kit's chip while a status you set holds (board 158).
+            // A status you set: the kit's chip after its name (board 158).
             let by_you = model::by_hand(tab, r)
                 .is_some()
                 .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
             let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
-            let indent = 6 + tab.index.to_string().len() + tick_cols;
-            let room = cols.saturating_sub(indent + chip_w);
-            let wrapped = text::wrap(&tab.name, room);
-            let name: Vec<String> = if wrapped.len() > NAME_LINES {
-                let mut kept = wrapped[..NAME_LINES - 1].to_vec();
-                kept.push(text::cut(&wrapped[NAME_LINES - 1..].join(" "), room));
-                kept
-            } else {
-                wrapped
+            // A tab following several PRs: the current one's number
+            // before its name, how many more after it, dim (board 127).
+            let (name, more) = match tab.prs.first() {
+                Some(current) if current.current => (
+                    format!("#{} {}", current.number, tab.name),
+                    format!(" +{}", tab.prs.len() - 1),
+                ),
+                Some(_) => (tab.name.clone(), format!(" +{}", tab.prs.len())),
+                None => (tab.name.clone(), String::new()),
             };
-            let state = model::badge_state(tab, r);
-            spins |= state.spins();
+            let room = cols.saturating_sub(4 + width(&number) + tick_cols + chip_w + width(&more));
             let mut first = Row::default();
-            first.put(bar.0, bar.1);
             tick(&mut first, tab.id);
-            first.spans.push(badge(state, view.frame, theme));
+            first
+                .spans
+                .push(kit::mark(Mark::of_badge(state), view.frame, theme));
             first
                 .put(" ", Style::new())
-                .put(tab.index.to_string(), fg(theme.faint))
+                .put(number, fg(number_color(tab, theme)))
                 .put(" ", Style::new())
-                .put(name[0].clone(), name_style);
+                .put(text::cut(&name, room), name_style);
+            if !more.is_empty() {
+                first.put(more, fg(theme.dim));
+            }
             if let Some(chip) = by_you {
                 first.put(" ", Style::new());
                 first.spans.extend(chip);
             }
-            let mut tab_lines = vec![first.fit(cols, fill)];
-            for line in &name[1..] {
-                let mut row = Row::default();
-                row.put(bar.0, bar.1)
-                    .put(" ".repeat(indent - 1), Style::new())
-                    .put(line.clone(), name_style);
-                tab_lines.push(row.fit(cols, fill));
-            }
-            // What it is doing, packed onto as few lines as fit, breaking
-            // only between its parts, so a PR number is never cut. The PR's
-            // number, unless its name already says it; a failing check,
-            // which needs you, so the sidebar says so too.
-            let pr = tab
-                .pr
-                .map(|n| match tab.prs.len() {
-                    0 => format!("#{n}"),
-                    all => format!("#{n} +{}", all - 1),
-                })
-                .filter(|pr| !tab.name.contains(pr.as_str()));
-            let failing = tab
-                .checks
-                .filter(|c| c.fail > 0)
-                .map(|c| format!("✗{} failing", c.fail));
-            let mut parts: Vec<String> = model::state_words(tab, r)
+            let kit_row = |row: Row| Line {
+                spans: kit::row(
+                    row.fit(cols.saturating_sub(1), None).spans,
+                    cols,
+                    chosen,
+                    theme,
+                ),
+                fill,
+            };
+            let first = match arrow {
+                Some(a) => {
+                    let mut spans = first.fit(cols.saturating_sub(3), None).spans;
+                    spans.push(Span::styled(a, Tone::Accent.bold(theme)));
+                    Row { spans }
+                }
+                None => first,
+            };
+            lines.push(kit_row(first));
+            owners.push(Some(Owner::Tab(tab.id)));
+            let mut doing: Vec<String> = model::state_words(tab, r)
                 .split(" · ")
                 .filter(|p| !p.is_empty())
                 .map(str::to_string)
                 .collect();
-            parts.extend(pr);
-            parts.extend(failing.clone());
-            parts.extend(tab.from_repo.clone());
-            if tab.notes_here {
-                parts.push("✎ Notes here".into());
+            if let Some(c) = tab.checks.filter(|c| c.fail > 0) {
+                doing.insert(0, format!("✕ {} failing", c.fail));
             }
-            // A tab autopilot opened says so, and that it
-            // landed once back in the main clone, closing soon, and whether
-            // it landed without asking.
-            // A direct landing's state words already say it landed.
-            if tab.autopilot && tab.landed_on.is_none() {
-                parts.push(
-                    match (tab.autopilot_landed, tab.autopilot_autoland) {
-                        (true, true) => "landed without asking",
-                        (true, false) => "landed",
-                        _ => "auto",
-                    }
-                    .into(),
-                );
+            if let Some(n) = tab
+                .pr
+                .filter(|n| tab.prs.is_empty() && !tab.name.contains(&format!("#{n}")))
+            {
+                doing.push(format!("#{n}"));
             }
-            let mut details: Vec<String> = Vec::new();
-            for part in parts {
-                match details.last_mut() {
-                    Some(last) if width(&format!("{last} · {part}")) <= cols.saturating_sub(6) => {
-                        last.push_str(" · ");
-                        last.push_str(&part);
+            // The other repository first, so a long state never cuts it.
+            if let Some(repo) = &tab.from_repo {
+                doing.insert(0, repo.clone());
+            }
+            if !doing.is_empty() || !tab.prs.is_empty() {
+                let mut second = Row::default();
+                second.put("    ", Style::new());
+                // Each PR's mark by where it stands, the current one
+                // first, before what it is doing.
+                let mut used = 4;
+                for pr in &tab.prs {
+                    let words = format!(" #{}  ", pr.number);
+                    if used + 1 + width(&words) > cols.saturating_sub(2) {
+                        break;
                     }
-                    _ => details.push(part),
+                    second.spans.push(kit::mark(pr.mark, 0, theme));
+                    second.put(words.clone(), fg(theme.dim));
+                    used += 1 + width(&words);
                 }
-            }
-            let state_color = state.color().unwrap_or(theme.dim);
-            let color = if tab.state == TabState::Idle {
-                theme.dim
-            } else {
-                state_color
-            };
-            for detail in details {
-                let mut row = Row::default();
-                row.put(bar.0, bar.1).put("     ", Style::new());
-                // The failing checks in bold red whatever the tab is doing,
-                // so a build failing under a working tab still stands out.
-                match failing
-                    .as_deref()
-                    .and_then(|f| detail.find(f).map(|at| (f, at)))
-                {
-                    Some((f, at)) => {
-                        row.put(detail[..at].to_string(), fg(color))
-                            .put(f.to_string(), bold(Color::Indexed(160)))
-                            .put(detail[at + f.len()..].to_string(), fg(color));
-                    }
-                    None => {
-                        row.put(detail, fg(color));
-                    }
+                if !doing.is_empty() {
+                    second.put(
+                        text::cut(&doing.join(" · "), cols.saturating_sub(2 + used)),
+                        fg(theme.dim),
+                    );
                 }
-                tab_lines.push(row.fit(cols, fill));
-            }
-            for line in tab_lines {
-                lines.push(line);
+                lines.push(kit_row(second));
                 owners.push(Some(Owner::Tab(tab.id)));
             }
             if chosen {
                 cursor_end = lines.len() - 1;
-            }
-            // A faint rule between tabs, which also spaces them apart.
-            if i < last {
-                let mut rule = Row::default();
-                rule.put(" ", Style::new())
-                    .put("─".repeat(cols.saturating_sub(2)), fg(theme.highlight));
-                lines.push(rule.fit(cols, None));
-                owners.push(None);
             }
         }
         lines.push(Line::blank(cols));
@@ -1182,9 +914,8 @@ pub fn sidebar_lines(
     // heading, so they read as no tab and never scroll away.
     let mut notice_lines: Vec<Line> = Vec::new();
     let mut notice_owners: Vec<Option<Owner>> = Vec::new();
-    // With UX 2.0 they open the sidebar instead, under the header, a line
-    // each, and are gone when there are none; they never scroll away
-    // either.
+    // Notifications open the sidebar, under the header, a line each, and
+    // are gone when there are none; they never scroll away.
     let mut top_owners: Vec<Option<Owner>> = Vec::new();
     // Their heading folds or unfolds them on a click, so it lights under
     // the mouse; folded, they are one line of their kinds.
@@ -1194,7 +925,7 @@ pub fn sidebar_lines(
         .map(|n| n.title.as_str())
         .collect::<Vec<_>>()
         .join(" · ");
-    if r.ux2 && !notices.is_empty() {
+    if !notices.is_empty() {
         let heading = Line {
             spans: kit::label(
                 "Notifications",
@@ -1296,68 +1027,22 @@ pub fn sidebar_lines(
         }
         head.push(Line::blank(cols));
         top_owners.push(None);
-    } else if !notices.is_empty() {
-        notice_lines.push(Line::blank(cols));
-        let mut rule = Row::default();
-        rule.put(" ", Style::new())
-            .put("═".repeat(cols.saturating_sub(2)), fg(YELLOW));
-        notice_lines.push(rule.fit(cols, None));
-        let mut heading = Row::default();
-        heading
-            .put(" ", Style::new())
-            .put("NOTIFICATIONS", bold(YELLOW));
-        notice_lines.push(heading.fit(cols, notices_lit.then_some(theme.panel)));
-        notice_owners.extend([None, None, Some(Owner::Notices)]);
-        if view.notices_folded {
-            let mut row = Row::default();
-            row.put(" ▸ ", fg(theme.dim))
-                .put(kinds.clone(), fg(theme.text));
-            notice_lines.push(row.fit(cols, notices_lit.then_some(theme.panel)));
-            notice_owners.push(Some(Owner::Notices));
-        }
-        for n in notices.iter().filter(|_| !view.notices_folded) {
-            // The sidebar's cursor on it, as on a tab.
-            let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
-                Some(theme.highlight)
-            } else if view.hover == Some(&n.owner) {
-                Some(theme.panel)
-            } else {
-                None
-            };
-            let mut row = Row::default();
-            row.put(if fill.is_some() { "▌" } else { " " }, fg(YELLOW))
-                .put(" ", Style::new())
-                .put("●", fg(YELLOW))
-                .put(" ", Style::new())
-                .put(n.title.clone(), bold(theme.bright));
-            notice_lines.push(row.fit(cols, fill));
-            notice_owners.push(Some(n.owner.clone()));
-            if !n.detail.is_empty() {
-                let mut row = Row::default();
-                row.put("    ", Style::new())
-                    .put(n.detail.clone(), fg(theme.dim));
-                notice_lines.push(row.fit(cols, fill));
-                notice_owners.push(Some(n.owner.clone()));
-            }
-        }
     }
 
-    // UX 2.0's last row: the keys that start, find and walk tabs, or with
+    // The last row: the keys that start, find and walk tabs, or with
     // the focus in the sidebar, start, find and open the chosen row's menu.
-    if r.ux2 {
-        let mut hint = Row::default();
-        hint.put(" ", Style::new());
-        // The four don't fit the default width, so the menu's key takes
-        // M-a's place while the sidebar has the focus.
-        let keys = if view.focused {
-            [("M-t", "new"), ("M-j", "jump"), ("m", "menu")]
-        } else {
-            [("M-t", "new"), ("M-j", "jump"), ("M-a", "next")]
-        };
-        hint.spans.extend(kit::hints(&keys, theme));
-        notice_lines.push(hint.fit(cols, None));
-        notice_owners.push(None);
-    }
+    let mut hint = Row::default();
+    hint.put(" ", Style::new());
+    // The four don't fit the default width, so the menu's key takes
+    // M-a's place while the sidebar has the focus.
+    let keys = if view.focused {
+        [("M-t", "new"), ("M-j", "jump"), ("m", "menu")]
+    } else {
+        [("M-t", "new"), ("M-j", "jump"), ("M-a", "next")]
+    };
+    hint.spans.extend(kit::hints(&keys, theme));
+    notice_lines.push(hint.fit(cols, None));
+    notice_owners.push(None);
 
     // The list scrolls to keep the chosen tab in sight between the header
     // and the notifications, from where it was scrolled to (view.top, as C-d
@@ -1552,9 +1237,9 @@ pub fn draw(buf: &mut Buffer, area: Rect, lines: &[Line]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::facts::{Checks, PrState};
-    use crate::sidebar::model::tests::{NOW_MS, rules, tab};
-    use crate::sidebar::model::{MergeState, TabLoop};
+    use crate::facts::Checks;
+    use crate::sidebar::model::TabState;
+    use crate::sidebar::model::tests::{rules, tab};
 
     static NONE_FOLDED: std::collections::BTreeSet<Stage> = std::collections::BTreeSet::new();
 
@@ -1587,18 +1272,7 @@ mod tests {
     }
 
     fn lines(tabs: &[TabModel], cols: usize, rows: usize, v: &View<'_>) -> Lines {
-        sidebar_lines(
-            tabs,
-            None,
-            &[],
-            &[],
-            "s",
-            cols,
-            rows,
-            v,
-            &rules(),
-            &Theme::DARK,
-        )
+        sidebar_lines(tabs, None, &[], &[], cols, rows, v, &rules(), &Theme::DARK)
     }
 
     #[test]
@@ -1615,39 +1289,15 @@ mod tests {
         for line in &out.lines {
             assert_eq!(width(&line.text()), 30, "{:?}", line.text());
         }
-        // The name wraps to three lines at most, the last cut.
+        // The name is cut to its one line.
         let name_lines = out
             .owners
             .iter()
             .zip(&out.lines)
             .filter(|(o, l)| **o == Some(Owner::Tab(TabId(1))) && l.text().contains("a very"))
             .count();
-        assert_eq!(name_lines, 3);
+        assert_eq!(name_lines, 1);
         assert!(out.spins, "a working tab's badge spins");
-    }
-
-    #[test]
-    fn a_detail_too_long_breaks_between_its_parts() {
-        let mut t = tab(1, "work", TabState::Idle);
-        t.claude = None;
-        t.command = Some("cat".into());
-        t.since = Some(rules().now_secs() - 300);
-        t.pr = Some(12345);
-        let out = lines(&[t], 26, 8, &view(1));
-        let text = texts(&out);
-        assert_eq!(text[4..6], ["▌     idle for 5m · cat", "▌     #12345"]);
-    }
-
-    #[test]
-    fn tabs_are_set_apart_by_a_rule_and_grouped_under_headings() {
-        let tabs = vec![tab(1, "one", TabState::Idle), tab(2, "two", TabState::Idle)];
-        let out = lines(&tabs, 30, 14, &view(1));
-        let text: Vec<String> = out.lines.iter().map(Line::text).collect();
-        assert!(text[2].starts_with(" IDLE 2"));
-        assert_eq!(text[4], format!(" {} ", "─".repeat(28)));
-        assert_eq!(out.owners[4], None);
-        assert_eq!(out.owners[3], Some(Owner::Tab(TabId(1))));
-        assert_eq!(out.owners[5], Some(Owner::Tab(TabId(2))));
     }
 
     #[test]
@@ -1658,131 +1308,16 @@ mod tests {
         let out = lines(&tabs, 30, 14, &view(1));
         let text: Vec<String> = out.lines.iter().map(Line::text).collect();
         let at = |heading: &str| text.iter().position(|l| l.starts_with(heading));
-        let queue = at(" QUEUE-AND-CLEAN 1").expect("a Queue-and-clean heading");
-        let working = at(" WORKING 1").expect("a Working heading");
+        let queue = at(" QUEUE-AND-CLEAN").expect("a Queue-and-clean heading");
+        let working = at(" WORKING").expect("a Working heading");
         assert!(working < queue, "{text:?}");
         assert_eq!(out.owners[queue + 1], Some(Owner::Tab(TabId(1))));
     }
 
     #[test]
-    fn the_header_counts_and_a_pr_said_once() {
-        let r = rules();
-        let mut failing = tab(2, "red idle", TabState::Idle);
-        failing.pr = Some(12);
-        failing.pr_state = Some(PrState::Open);
-        failing.checks = Some(Checks {
-            pass: 3,
-            fail: 1,
-            pending: 0,
-        });
-        let mut waiting = tab(1, "Fix #7 regressions", TabState::Waiting);
-        waiting.pr = Some(7);
-        let tabs = vec![waiting, failing, tab(3, "busy", TabState::Working)];
-        let out = sidebar_lines(
-            &tabs,
-            None,
-            &[],
-            &[],
-            "main",
-            40,
-            30,
-            &view(1),
-            &r,
-            &Theme::DARK,
-        );
-        let text = texts(&out).join("\n");
-        assert!(
-            text.lines()
-                .next()
-                .unwrap()
-                .starts_with("  main   ✗ 1  ! 1  ⋯ 1"),
-            "{text}"
-        );
-        assert!(text.contains("✗ BUILD FAILING 1"), "{text}");
-        assert!(text.contains(" ✗  2 red idle"), "{text}");
-        assert!(text.contains("✗1 failing"), "{text}");
-        assert_eq!(text.matches("#7").count(), 1, "said by its name already");
-        assert!(text.contains("#12"));
-        // The failing count in bold red, whatever the tab does.
-        let red = out
-            .lines
-            .iter()
-            .flat_map(|l| &l.spans)
-            .find(|s| s.content == "✗1 failing")
-            .unwrap();
-        assert_eq!(red.style.fg, Some(Color::Indexed(160)));
-        assert!(red.style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn badges_wear_their_states_colors_and_marks() {
-        let r = rules();
-        let mut queued = tab(2, "queued third", TabState::Idle);
-        queued.merge = Some(MergeState::Queued);
-        queued.position = Some(3);
-        let mut landed = tab(4, "landed", TabState::Idle);
-        landed.merge = Some(MergeState::Merged);
-        let mut pinned = tab(5, "pinned", TabState::Working);
-        pinned.pinned = true;
-        let mut reviewing = tab(6, "review", TabState::Background);
-        reviewing.background = 2;
-        reviewing.tab_loop = Some(TabLoop::Run(crate::sidebar::claude::LoopRun {
-            kind: "review",
-            round: 2,
-        }));
-        let mut later = tab(7, "later", TabState::Idle);
-        later.remind_at = Some(NOW_MS / 1000 + 3600);
-        let tabs = vec![queued, landed, pinned, reviewing, later];
-        let out = sidebar_lines(
-            &tabs,
-            None,
-            &[],
-            &[],
-            "s",
-            40,
-            40,
-            &view(2),
-            &r,
-            &Theme::DARK,
-        );
-        let text = texts(&out).join("\n");
-        assert!(text.contains("IN MERGE QUEUE 1"));
-        assert!(text.contains(" »  2 queued third"), "{text}");
-        assert!(text.contains(" ◆  4 landed"), "{text}");
-        assert!(text.contains(" 📌 5 pinned"), "{text}");
-        assert!(text.contains(" ⏰ 7 later"), "{text}");
-        let review_badge = out
-            .lines
-            .iter()
-            .flat_map(|l| &l.spans)
-            .find(|s| s.content == " ⠋ " && s.style.bg == Some(Color::Indexed(97)));
-        assert!(review_badge.is_some(), "the review loop's own color");
-        // The spinner turns with the frame.
-        let turned = sidebar_lines(
-            &tabs,
-            None,
-            &[],
-            &[],
-            "s",
-            40,
-            40,
-            &View {
-                frame: 1,
-                ..view(2)
-            },
-            &r,
-            &Theme::DARK,
-        );
-        assert!(texts(&turned).join("\n").contains(" ⠙  6 review"));
-    }
-
-    #[test]
-    fn with_ux2_the_build_row_is_the_line_under_the_count_and_a_click_stop() {
+    fn the_build_row_is_the_line_under_the_count_and_a_click_stop() {
         let t = tab(1, "work", TabState::Idle);
-        let r = Rules {
-            ux2: true,
-            ..rules()
-        };
+        let r = Rules { ..rules() };
         let row = crate::mux::build_row::Row::Working {
             what: "Building",
             meter: Some((212, 415)),
@@ -1799,7 +1334,6 @@ mod tests {
             None,
             &[],
             &[],
-            "s",
             30,
             10,
             &v,
@@ -1816,28 +1350,13 @@ mod tests {
             "lit under the mouse"
         );
         assert!(out.spins, "its spinner turns");
-        // Without UX 2.0 it is the status line's, not the sidebar's.
-        let old = sidebar_lines(
-            std::slice::from_ref(&t),
-            None,
-            &[],
-            &[],
-            "s",
-            30,
-            10,
-            &v,
-            &rules(),
-            &Theme::DARK,
-        );
-        assert!(!texts(&old)[1].contains("Building"));
-        assert_ne!(old.owners[1], Some(Owner::BuildRow));
     }
 
     // Board 43: filtered to a repository, the top line keeps "/ filter"
     // beside the chip, the count giving way first, and Other repos folded
     // has ▸ and its tabs' marks on its heading, its repositories under it.
     #[test]
-    fn with_ux2_the_filtered_sidebar_keeps_its_hint_and_folds_other_repos_onto_its_heading() {
+    fn the_filtered_sidebar_keeps_its_hint_and_folds_other_repos_onto_its_heading() {
         let mut bench = tab(2, "benchmark harness", TabState::Idle);
         bench.elsewhere = true;
         bench.repo_dir = Some("/code/sb-bench".into());
@@ -1845,10 +1364,7 @@ mod tests {
         oncall.elsewhere = true;
         oncall.repo_dir = Some("/code/oncall-tools".into());
         let tabs = vec![tab(1, "planning", TabState::Working), bench, oncall];
-        let r = Rules {
-            ux2: true,
-            ..rules()
-        };
+        let r = Rules { ..rules() };
         let folded: std::collections::BTreeSet<Stage> = [Stage::OtherRepos].into();
         let draw = |buttons: Option<&Buttons>, reminders: usize| {
             texts(&sidebar_lines(
@@ -1856,7 +1372,6 @@ mod tests {
                 None,
                 &[],
                 &[],
-                "s",
                 34,
                 30,
                 &View {
@@ -1903,7 +1418,7 @@ mod tests {
     // Board 1: each notification wears its kind's mark, and a failing
     // count the kit's ✕.
     #[test]
-    fn with_ux2_notifications_wear_their_kinds_marks_and_failing_counts_the_kits() {
+    fn notifications_wear_their_kinds_marks_and_failing_counts_the_kits() {
         let notice = |source: &str, id: &str, title: &str| Notice {
             owner: Owner::Notice {
                 source: source.into(),
@@ -1924,16 +1439,12 @@ mod tests {
             fail: 2,
             ..Checks::default()
         });
-        let r = Rules {
-            ux2: true,
-            ..rules()
-        };
+        let r = Rules { ..rules() };
         let text = texts(&sidebar_lines(
             std::slice::from_ref(&red),
             None,
             &notices,
             &[],
-            "s",
             34,
             20,
             &view(1),
@@ -1952,22 +1463,18 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_top_line_starts_with_back_forward_and_mission_control() {
+    fn the_top_line_starts_with_back_forward_and_mission_control() {
         let tabs = vec![
             tab(1, "planning", TabState::Working),
             tab(2, "stable note IDs", TabState::Waiting),
         ];
-        let r = Rules {
-            ux2: true,
-            ..rules()
-        };
+        let r = Rules { ..rules() };
         let draw = |b: &Buttons, hover: Option<&Owner>| {
             sidebar_lines(
                 &tabs,
                 None,
                 &[],
                 &[],
-                "s",
                 40,
                 20,
                 &View {
@@ -2049,7 +1556,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_tab_count_and_the_notifications_open_the_sidebar() {
+    fn the_tab_count_and_the_notifications_open_the_sidebar() {
         let t = tab(1, "work", TabState::Idle);
         let notice = Notice {
             owner: Owner::Notice {
@@ -2060,16 +1567,12 @@ mod tests {
             detail: "Ada · #general".into(),
             time: Some(rules().now_secs() - 720),
         };
-        let r = Rules {
-            ux2: true,
-            ..rules()
-        };
+        let r = Rules { ..rules() };
         let out = sidebar_lines(
             std::slice::from_ref(&t),
             None,
             std::slice::from_ref(&notice),
             &[],
-            "s",
             40,
             20,
             &view(1),
@@ -2105,7 +1608,6 @@ mod tests {
                 None,
                 std::slice::from_ref(n),
                 &[],
-                "s",
                 40,
                 20,
                 &view(1),
@@ -2128,7 +1630,6 @@ mod tests {
             None,
             &[],
             &[],
-            "s",
             40,
             20,
             &View {
@@ -2158,7 +1659,6 @@ mod tests {
             None,
             std::slice::from_ref(&notice),
             &[],
-            "s",
             34,
             20,
             &View {
@@ -2183,7 +1683,6 @@ mod tests {
             None,
             &[],
             &[],
-            "s",
             40,
             20,
             &view(1),
@@ -2194,77 +1693,14 @@ mod tests {
     }
 
     #[test]
-    fn notifications_sit_at_the_bottom_under_their_own_heading() {
-        let t = tab(1, "work", TabState::Idle);
-        let notice = Notice {
-            owner: Owner::Notice {
-                source: "slack".into(),
-                id: "n1".into(),
-            },
-            title: "3 new on Slack".into(),
-            detail: "Ada · #general".into(),
-            time: None,
-        };
-        let out = sidebar_lines(
-            std::slice::from_ref(&t),
-            None,
-            std::slice::from_ref(&notice),
-            &[],
-            "s",
-            40,
-            20,
-            &view(1),
-            &rules(),
-            &Theme::DARK,
-        );
-        assert_eq!(out.lines.len(), 20);
-        let text = texts(&out);
-        assert_eq!(
-            text[16..],
-            [
-                format!(" {}", "═".repeat(38)),
-                " NOTIFICATIONS".to_string(),
-                "  ● 3 new on Slack".to_string(),
-                "    Ada · #general".to_string(),
-            ]
-        );
-        assert_eq!(out.owners[18], Some(notice.owner.clone()));
-        assert_eq!(out.owners[19], Some(notice.owner.clone()));
-        let chosen = sidebar_lines(
-            std::slice::from_ref(&t),
-            None,
-            std::slice::from_ref(&notice),
-            &[],
-            "s",
-            40,
-            20,
-            &View {
-                focused: true,
-                cursor: Some(&notice.owner),
-                ..view(1)
-            },
-            &rules(),
-            &Theme::DARK,
-        );
-        assert!(chosen.lines[18].text().starts_with("▌ ● 3 new on Slack"));
-        assert_eq!(chosen.lines[18].fill, Some(Theme::DARK.highlight));
-        let none = lines(&[t], 40, 20, &view(1));
-        assert!(!texts(&none).iter().any(|l| l.contains("NOTIFICATIONS")));
-    }
-
-    #[test]
     fn with_its_shade_every_line_of_the_sidebar_is_on_the_sunken_surface_but_the_chosen_row() {
         let tabs = [
             tab(1, "work", TabState::Idle),
             tab(2, "other", TabState::Idle),
         ];
         let shaded = |panel: bool, theme: &Theme| {
-            let r = Rules {
-                ux2: true,
-                panel,
-                ..rules()
-            };
-            sidebar_lines(&tabs, None, &[], &[], "s", 34, 20, &view(1), &r, theme)
+            let r = Rules { panel, ..rules() };
+            sidebar_lines(&tabs, None, &[], &[], 34, 20, &view(1), &r, theme)
         };
         for theme in [Theme::DARK, Theme::DARK_TRUE, Theme::LIGHT] {
             let out = shaded(true, &theme);
@@ -2312,7 +1748,6 @@ mod tests {
             None,
             &[],
             std::slice::from_ref(&section),
-            "s",
             40,
             20,
             &view(1),
@@ -2361,7 +1796,7 @@ mod tests {
             free.cursor_at,
             "kept past the cursor: back up to it"
         );
-        assert_eq!(at(5, Some(4)).top, 4, "the cursor in sight: the list holds");
+        assert_eq!(at(5, Some(2)).top, 2, "the cursor in sight: the list holds");
         let last = at(8, Some(0));
         assert!(last.top > 0 && last.top <= last.cursor_at);
         assert_eq!(
@@ -2372,134 +1807,8 @@ mod tests {
     }
 
     #[test]
-    fn on_a_short_screen_the_header_stays_says_what_is_out_of_sight_and_the_list_holds_still() {
-        // Three groups of two-line tabs: 3 waiting, 4 working, 5 idle.
-        let tabs: Vec<TabModel> = (1..=12)
-            .map(|n| {
-                let state = match n {
-                    1..=3 => TabState::Waiting,
-                    4..=7 => TabState::Working,
-                    _ => TabState::Idle,
-                };
-                let mut t = tab(n, &format!("tab {n}"), state);
-                t.since = Some(rules().now_secs() - 60);
-                t
-            })
-            .collect();
-        let draw = |here: u32, keep: Option<usize>, filter: Option<&Filter>| {
-            let v = View {
-                keep,
-                filter,
-                ..view(here)
-            };
-            lines(&tabs, 30, 16, &v)
-        };
-        for here in [1, 5, 7, 12] {
-            assert!(
-                texts(&draw(here, None, None))[0].contains(" s "),
-                "the session's pill first, beside tab {here}"
-            );
-        }
-        let first = draw(1, None, None);
-        let text = texts(&first);
-        assert_eq!(text[1], "", "at the top, the filter line is blank");
-        assert_eq!(
-            text[15], " ▼ 8 more",
-            "and the last row says how many tabs are cut below"
-        );
-        assert_eq!(first.owners[15], Some(Owner::ScrollDown));
-        // Beside a tab in sight at the top, the same list, but for which tab
-        // is the one it sits beside.
-        let unmarked = |out: &Lines| -> Vec<String> {
-            texts(out)[1..]
-                .iter()
-                .map(|l| l.replace(['▌', '▏'], ""))
-                .collect()
-        };
-        assert_eq!(
-            unmarked(&draw(2, None, None)),
-            unmarked(&first),
-            "two tabs in sight show the same list"
-        );
-        let low = draw(7, None, None);
-        let text = texts(&low);
-        assert!(
-            text[2].starts_with(" WORKING 4"),
-            "a tab below the fold scrolls the list to its group's heading: {text:?}"
-        );
-        assert_eq!(
-            unmarked(&draw(5, None, None)),
-            unmarked(&low),
-            "and every tab in that group shows it the same"
-        );
-        assert_eq!(
-            text[1], " ▲ 3 more",
-            "the filter line says how many are above"
-        );
-        assert_eq!(low.owners[1], Some(Owner::ScrollUp));
-        assert_eq!(text[15], " ▼ 5 more");
-        // Each tab's rows still name it, shifted under the header.
-        for (owner, line) in low.owners.iter().zip(&text) {
-            if let Some(Owner::Tab(t)) = owner
-                && line.contains("tab ")
-            {
-                assert!(
-                    line.contains(&format!("tab {} ", t.0))
-                        || line.ends_with(&format!("tab {}", t.0)),
-                    "{line:?} belongs to {t:?}"
-                );
-            }
-        }
-        assert!(low.owners.contains(&Some(Owner::Tab(TabId(7)))));
-        let kept = Filter {
-            text: "tab".into(),
-            typing: false,
-        };
-        assert!(
-            texts(&draw(7, None, Some(&kept)))[1].contains("/tab"),
-            "a filter keeps its line"
-        );
-        // Under the mouse, the more row lights as a tab's does.
-        let lit = lines(
-            &tabs,
-            30,
-            16,
-            &View {
-                hover: Some(&Owner::ScrollDown),
-                ..view(7)
-            },
-        );
-        assert_eq!(lit.lines[15].fill, Some(Theme::DARK.panel));
-
-        // A group taller than the list: beside a tab in sight where the list
-        // was last shown (keep), it is shown there too.
-        let many: Vec<TabModel> = (1..=20)
-            .map(|n| tab(n, &format!("tab {n}"), TabState::Working))
-            .collect();
-        let tall = |here: u32, keep: Option<usize>| {
-            lines(&many, 30, 40, &View { keep, ..view(here) })
-                .scroll
-                .top
-        };
-        let front = tall(15, None);
-        assert!(front > 0);
-        assert_eq!(
-            tall(14, Some(front)),
-            front,
-            "going to a tab in sight leaves the list where it was"
-        );
-        assert!(
-            tall(20, Some(front)) > front,
-            "and a tab out of sight still scrolls it"
-        );
-    }
-
-    #[test]
-    fn with_ux2_a_pinned_tab_wears_the_flag_in_place_of_its_state_mark() {
-        let r = Rules {
-            ux2: true,
-            ..rules()
-        };
+    fn a_pinned_tab_wears_the_flag_in_place_of_its_state_mark() {
+        let r = Rules { ..rules() };
         let mut pinned = tab(1, "pinned", TabState::Waiting);
         pinned.pinned = true;
         let waiting = tab(2, "waiting", TabState::Waiting);
@@ -2508,7 +1817,6 @@ mod tests {
             None,
             &[],
             &[],
-            "s",
             40,
             20,
             &view(1),
@@ -2543,15 +1851,14 @@ mod tests {
             .map(|n| tab(n, &format!("tab {n}"), TabState::Idle))
             .collect();
         let picked: std::collections::BTreeSet<TabId> = [TabId(1), TabId(2), TabId(4)].into();
-        for ux2 in [false, true] {
-            let r = Rules { ux2, ..rules() };
+        {
+            let r = rules();
             let draw = |selected| {
                 sidebar_lines(
                     &tabs,
                     None,
                     &[],
                     &[],
-                    "s",
                     34,
                     30,
                     &View {
@@ -2617,36 +1924,6 @@ mod tests {
 
     // test/tmux-sidebar.test.js's "a landing without asking marks its tab":
     // the sidebar says so once it has landed.
-    #[test]
-    fn a_tab_of_the_work_a_note_mode_says_auto_then_landed_and_whether_without_asking() {
-        let r = rules();
-        let mut auto = tab(1, "one", TabState::Working);
-        auto.autopilot = true;
-        let mut landed = tab(2, "two", TabState::Idle);
-        landed.autopilot = true;
-        landed.autopilot_landed = true;
-        let mut alone = tab(3, "three", TabState::Idle);
-        alone.autopilot = true;
-        alone.autopilot_landed = true;
-        alone.autopilot_autoland = true;
-        let tabs = vec![auto, landed, alone];
-        let out = sidebar_lines(
-            &tabs,
-            None,
-            &[],
-            &[],
-            "s",
-            40,
-            40,
-            &view(1),
-            &r,
-            &Theme::DARK,
-        );
-        let text = texts(&out).join("\n");
-        assert!(text.contains("auto"), "{text}");
-        assert!(text.contains("landed without asking"), "{text}");
-        assert_eq!(text.matches("landed").count(), 2, "{text}");
-    }
 
     #[test]
     fn drawing_puts_each_character_in_the_columns_it_takes() {
@@ -2691,7 +1968,7 @@ mod tests {
         let text = texts(&out);
         let heading = text
             .iter()
-            .position(|l| l.starts_with(" WORKING 2"))
+            .position(|l| l.starts_with(" WORKING"))
             .expect("Working's heading with its count");
         assert!(text[heading + 1].contains("2 tabs"), "{text:?}");
         assert!(!text.iter().any(|l| l.contains("busy")), "{text:?}");
@@ -2701,54 +1978,10 @@ mod tests {
         // target of its own.
         let needs = text
             .iter()
-            .position(|l| l.starts_with(" NEEDS YOU 1"))
+            .position(|l| l.starts_with(" NEEDS YOU"))
             .unwrap();
         assert_eq!(out.owners[needs], Some(Owner::Group(Stage::Needs)));
         assert!(text.iter().any(|l| l.contains("asks")), "{text:?}");
-    }
-
-    #[test]
-    fn folded_notifications_are_their_heading_and_one_line_of_their_kinds() {
-        let notice = |source: &str, title: &str| Notice {
-            owner: Owner::Notice {
-                source: source.into(),
-                id: "n1".into(),
-            },
-            title: title.into(),
-            detail: "detail".into(),
-            time: None,
-        };
-        let notices = [
-            notice("slack", "3 new on Slack"),
-            notice("prs", "2 PR updates"),
-        ];
-        let v = View {
-            notices_folded: true,
-            ..view(1)
-        };
-        let out = sidebar_lines(
-            &[tab(1, "work", TabState::Idle)],
-            None,
-            &notices,
-            &[],
-            "s",
-            50,
-            20,
-            &v,
-            &rules(),
-            &Theme::DARK,
-        );
-        let text = texts(&out);
-        assert_eq!(
-            text[18..],
-            [
-                " NOTIFICATIONS".to_string(),
-                " ▸ 3 new on Slack · 2 PR updates".to_string(),
-            ]
-        );
-        assert_eq!(out.owners[18], Some(Owner::Notices));
-        assert_eq!(out.owners[19], Some(Owner::Notices));
-        assert!(!text.iter().any(|l| l.contains("detail")), "{text:?}");
     }
 
     #[test]

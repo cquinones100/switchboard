@@ -6,7 +6,7 @@
 //!
 //! At the top a bar naming the views (the tabs, then each view, with how
 //! many items each has), the counts of tabs waiting, finished and working,
-//! and the filter; with UX 2.0 two rows and a rule (`grouped_bar`), the
+//! and the filter; two rows and a rule (`grouped_bar`), the
 //! groups of views by feature over the views of the one in front; at the
 //! bottom the keys, or what the last action did. In
 //! between, the view in front:
@@ -18,12 +18,12 @@
 //!   the end of what Claude said or the tool call it is stopped on;
 //! - a board (the PR and ticket boards): a column for each place, side by
 //!   side, each item two lines;
-//! - with UX 2.0, the Autopilot view as a board of cards (`pilot_board`),
+//! - the Autopilot view as a board of cards (`pilot_board`),
 //!   each with a meter placed as an image over the lines (`Image`);
 //! - a table (Resources): its columns' names, its rows, and a totals row;
-//!   with UX 2.0 and room, the board `resources_board` draws instead;
+//!   with room, the board `resources_board` draws instead;
 //! - any other view, one row per item, a heading over each group, Settings'
-//!   rows as name, value and what the option does; with UX 2.0 and room,
+//!   rows as name, value and what the option does; with room,
 //!   Settings as the board `settings_board` draws.
 
 use std::sync::LazyLock;
@@ -38,13 +38,11 @@ use crate::items::{Item, State};
 use crate::mux::input::{Key, KeyCode, Mods};
 use crate::sidebar::model::{self, Rules, TabModel, TabState};
 use crate::sidebar::render::Line;
-use crate::sidebar::text::{self, Badge, SPINNER, width};
+use crate::sidebar::text::{self, Badge, width};
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Mark, Tone};
 use crate::views::markdown::{Images, PictureRow};
 
-/// A box's border takes a column each side.
-const BORDER: usize = 2;
 /// The edge of mission control's boxes and its name.
 const ACCENT: Color = Color::Indexed(81);
 const YELLOW: Color = Color::Indexed(220);
@@ -137,28 +135,6 @@ fn fit(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'static>>
     out
 }
 
-/// A badge: a colored pill three columns wide, the spinner turning while
-/// Claude works; an idle tab's mark faint, with no pill (the sidebar's).
-fn badge(badge: Badge, frame: usize, theme: &Theme) -> Span<'static> {
-    let look = badge.look();
-    let Some(color) = look.color else {
-        return Span::styled(format!(" {} ", look.mark), fg(theme.faint));
-    };
-    let mark = if badge.spins() {
-        SPINNER[frame % SPINNER.len()]
-    } else {
-        look.mark
-    };
-    let after = if width(mark) > 1 { "" } else { " " };
-    Span::styled(
-        format!(" {mark}{after}"),
-        Style::new()
-            .bg(Color::Indexed(color))
-            .fg(Color::Indexed(look.ink.unwrap_or(255)))
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
 /// An item's mark: needing you yellow, under way blue, the rest faint.
 fn item_mark(item: &Item, theme: &Theme) -> Span<'static> {
     match item.state {
@@ -166,51 +142,6 @@ fn item_mark(item: &Item, theme: &Theme) -> Span<'static> {
         State::Active => Span::styled("●", bold(Color::Indexed(67))),
         State::Idle => Span::styled("○", fg(theme.faint)),
     }
-}
-
-/// The counts beside the views: failing builds, then how many wait on you,
-/// have finished and are working (a loop's too).
-fn tally(tabs: &[TabModel], r: &Rules, theme: &Theme) -> Vec<Span<'static>> {
-    let mut items: Vec<(String, Style)> = Vec::new();
-    let failing = tabs.iter().filter(|t| model::build_failing(t, r)).count();
-    if failing > 0 {
-        items.push((
-            format!("{} {failing}", Badge::Failing.look().mark),
-            bold(Color::Indexed(160)),
-        ));
-    }
-    for (b, n) in [
-        (
-            Badge::Waiting,
-            tabs.iter().filter(|t| t.state == TabState::Waiting).count(),
-        ),
-        (
-            Badge::Done,
-            tabs.iter().filter(|t| t.state == TabState::Done).count(),
-        ),
-        (
-            Badge::Working,
-            tabs.iter().filter(|t| t.state.busy()).count(),
-        ),
-    ] {
-        if n == 0 {
-            continue;
-        }
-        let mark = if b == Badge::Working {
-            "⋯"
-        } else {
-            b.look().mark
-        };
-        items.push((format!("{mark} {n}"), bold(b.color().unwrap_or(theme.text))));
-    }
-    let mut out = Vec::new();
-    for (i, (t, style)) in items.into_iter().enumerate() {
-        if i > 0 {
-            out.push(Span::styled("  ", fg(theme.faint)));
-        }
-        out.push(Span::styled(t, style));
-    }
-    out
 }
 
 // ── The grid of cards ───────────────────────────────────────────────────────
@@ -242,84 +173,6 @@ pub struct Grid {
     pub order: Vec<usize>,
     pub shelves: Vec<Shelf>,
     pub rows: Vec<Vec<usize>>,
-}
-
-/// A card's width: a row of `across` cards fits even when every card is in
-/// a box, and border, of its own.
-pub fn card_width(cols: usize, config: (u16, u16)) -> usize {
-    let across = (cols / (config.0.max(1) as usize)).max(1);
-    (cols / across).saturating_sub(BORDER).max(20)
-}
-
-/// Mission control's tabs laid out in stages, packed: each row of the screen
-/// a shelf of stage boxes side by side. A box takes its cards' width and two
-/// columns of border, and a shelf is `cols` wide. A stage that fits in the
-/// room left on the shelf goes there, in one row of cards; one that doesn't
-/// starts the next shelf, as wide as it needs up to the shelf, in as many
-/// rows of cards as it takes.
-pub fn grid(tabs: &[TabModel], r: &Rules, cols: usize, card: usize) -> Grid {
-    let mut order = Vec::new();
-    let mut shelves: Vec<Shelf> = Vec::new();
-    let card = card.max(1);
-    let fit = (cols.saturating_sub(BORDER) / card).max(1);
-    let mut used = 0;
-    for staged in model::grouped(tabs, None, r) {
-        let n = staged.tabs.len();
-        let room = if shelves.is_empty() {
-            0
-        } else {
-            cols.saturating_sub(used + BORDER) / card
-        };
-        if shelves.is_empty() || room < n {
-            shelves.push(Shelf {
-                rows: 0,
-                blocks: Vec::new(),
-            });
-            used = 0;
-        }
-        let across = n.min(fit);
-        let rows = n.div_ceil(across);
-        let cards: Vec<usize> = staged
-            .tabs
-            .iter()
-            .map(|t| {
-                let at = tabs.iter().position(|x| x.id == t.id).unwrap_or(0);
-                order.push(at);
-                order.len() - 1
-            })
-            .collect();
-        let shelf = shelves.last_mut().expect("a shelf was pushed");
-        shelf.blocks.push(Block {
-            stage: staged.stage,
-            count: n,
-            cards,
-            across,
-            rows,
-        });
-        shelf.rows = shelf.rows.max(rows);
-        used += BORDER + across * card;
-    }
-    let rows = shelves
-        .iter()
-        .flat_map(|s| {
-            (0..s.rows).map(move |i| {
-                s.blocks
-                    .iter()
-                    .flat_map(|b| {
-                        let row = (b.rows - 1).min(i * b.rows / s.rows);
-                        let start = (row * b.across).min(b.cards.len());
-                        let end = (start + b.across).min(b.cards.len());
-                        b.cards[start..end].to_vec()
-                    })
-                    .collect::<Vec<usize>>()
-            })
-        })
-        .collect();
-    Grid {
-        order,
-        shelves,
-        rows,
-    }
 }
 
 /// A link in a card as the few words that name it: a Markdown link as its
@@ -357,192 +210,9 @@ fn short_url(url: &str) -> String {
         .map_or_else(|| url.to_string(), |m| m[1].to_string())
 }
 
-/// What a card shows under its edge, with a reply of at most `room` lines
-/// (the end of a longer one).
-fn card_body(
-    tab: &TabModel,
-    inner: usize,
-    room: usize,
-    r: &Rules,
-    theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    let mut body: Vec<Vec<Span<'static>>> = Vec::new();
-    let b = model::badge_state(tab, r);
-    let color = b.color().unwrap_or(theme.dim);
-    let mut facts = vec![model::state_words(tab, r)];
-    facts.extend(tab.pr.map(|p| format!("#{p}")));
-    facts.extend(model::pr_facts(tab));
-    facts.extend(tab.claude.as_ref().and_then(|c| c.name.clone()));
-    if tab.notes_here {
-        facts.push("✎ Notes here".into());
-    }
-    let facts: Vec<String> = facts.into_iter().filter(|f| !f.is_empty()).collect();
-    body.push(vec![Span::styled(facts.join(" · "), fg(color))]);
-    let turn = tab.claude.as_ref().and(tab.turn.as_ref());
-    let Some(turn) = turn else {
-        let place = tab
-            .path
-            .as_ref()
-            .map(crate::paths::tilde)
-            .unwrap_or_default();
-        body.push(vec![Span::styled(place, fg(theme.dim))]);
-        return body;
-    };
-    for (i, line) in text::wrap(
-        &unlinked(&text::plain(&turn.prompt)),
-        inner.saturating_sub(2),
-    )
-    .into_iter()
-    .take(2)
-    .enumerate()
-    {
-        let lead = if i > 0 { "  " } else { "› " };
-        body.push(vec![Span::styled(format!("{lead}{line}"), fg(theme.dim))]);
-    }
-    body.push(Vec::new());
-    // A turn stopped on a tool call is asking to run it, under the reply.
-    let asking: Vec<String> = match &turn.pending {
-        Some(p) if tab.state == TabState::Waiting => text::wrap(&format!("Asking: {p}"), inner)
-            .into_iter()
-            .take(2)
-            .collect(),
-        _ => Vec::new(),
-    };
-    let reply = match &turn.reply {
-        Some(reply) => unlinked(&text::plain(reply)),
-        None if tab.state == TabState::Working => {
-            if turn.tools > 0 {
-                format!(
-                    "(working, {} tool call{} so far)",
-                    turn.tools,
-                    if turn.tools == 1 { "" } else { "s" }
-                )
-            } else {
-                "(working)".into()
-            }
-        }
-        None => "(no reply yet)".into(),
-    };
-    let left = room
-        .saturating_sub(body.len())
-        .saturating_sub(if asking.is_empty() {
-            0
-        } else {
-            asking.len() + 1
-        });
-    let lines = text::layout(&reply, inner);
-    // The end of a long reply is where its question or conclusion is.
-    let kept: Vec<String> = if lines.len() > left {
-        std::iter::once("…".to_string())
-            .chain(
-                lines[lines.len() - left.saturating_sub(1).min(lines.len())..]
-                    .iter()
-                    .cloned(),
-            )
-            .collect()
-    } else {
-        lines
-    };
-    for line in kept {
-        body.push(vec![Span::styled(line, fg(theme.text))]);
-    }
-    if !asking.is_empty() {
-        body.push(Vec::new());
-        for line in asking {
-            body.push(vec![Span::styled(line, bold(YELLOW))]);
-        }
-    }
-    body
-}
-
-/// How tall a tab's card would need to be to show all of it.
-fn card_needs(tab: &TabModel, w: usize, r: &Rules, theme: &Theme) -> usize {
-    card_body(tab, w.saturating_sub(4), usize::MAX, r, theme).len() + 2
-}
-
-/// A tab's card, `w` wide and `h` tall: its mark and name in its top edge,
-/// what it is doing, and its latest turn.
-#[allow(clippy::too_many_arguments)]
-fn card(
-    tab: &TabModel,
-    w: usize,
-    h: usize,
-    chosen: bool,
-    hovered: bool,
-    frame: usize,
-    r: &Rules,
-    theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    let inner = w.saturating_sub(4);
-    let color = tab.color.map(Color::from).unwrap_or(theme.bright);
-    let edge = if chosen {
-        bold(color)
-    } else if hovered {
-        fg(color)
-    } else {
-        fg(theme.faint)
-    };
-    let index = tab.index.to_string();
-    // A merged tab at work again wears its work's badge, and Merged's
-    // after it.
-    let merged_too =
-        tab.merge == Some(model::MergeState::Merged) && model::badge_state(tab, r) != Badge::Merged;
-    let second = if merged_too {
-        spans_width(&[badge(Badge::Merged, frame, theme)]) + 1
-    } else {
-        0
-    };
-    let name = text::cut(&tab.name, inner.saturating_sub(8 + width(&index) + second));
-    let name_style = if chosen {
-        bold(theme.bright)
-    } else {
-        fg(theme.text)
-    };
-    let mut top = vec![
-        Span::styled("╭─", edge),
-        Span::raw(" "),
-        badge(model::badge_state(tab, r), frame, theme),
-        Span::raw(" "),
-    ];
-    if merged_too {
-        top.push(badge(Badge::Merged, frame, theme));
-        top.push(Span::raw(" "));
-    }
-    top.extend([
-        Span::styled(index, fg(theme.dim)),
-        Span::raw(" "),
-        Span::styled(name, name_style),
-        Span::raw(" "),
-    ]);
-    let used = spans_width(&top);
-    top.push(Span::styled("─".repeat(w.saturating_sub(used + 2)), edge));
-    top.push(Span::styled("─╮", edge));
-    let mut out = vec![fit(top, w, Style::new())];
-    let body = card_body(tab, inner, h.saturating_sub(2), r, theme);
-    for line in body.into_iter().take(h.saturating_sub(2)) {
-        let mut row = vec![Span::styled("│", edge), Span::raw(" ")];
-        row.extend(fit(line, inner, Style::new()));
-        row.push(Span::raw(" "));
-        row.push(Span::styled("│", edge));
-        out.push(row);
-    }
-    while out.len() < h.saturating_sub(1) {
-        out.push(vec![
-            Span::styled("│", edge),
-            Span::raw(" ".repeat(w.saturating_sub(2))),
-            Span::styled("│", edge),
-        ]);
-    }
-    out.push(vec![Span::styled(
-        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
-        edge,
-    )]);
-    out
-}
-
 // ── UX 2.0's Tabs: cards grouped as the sidebar, then the shelf (board 3) ──
 
-/// A card's least width with UX 2.0, and the most rows one takes: each is
+/// A card's least width, and the most rows one takes: each is
 /// as tall as what it holds, up to this. A request counts as shown whole
 /// (`ask_fits`) only when its kind, its words, a row clear and its options
 /// with their descriptions fit the rows this leaves inside (`ASK_ROWS`):
@@ -702,25 +372,15 @@ fn tab_groups(tabs: &[TabModel], r: &Rules) -> Vec<(model::Stage, Vec<usize>)> {
     groups
 }
 
-/// The Tabs view's grid for whichever look it has: UX 2.0's groups and
-/// shelf, or the stage boxes.
+/// The Tabs view's grid: its groups and shelf.
 pub fn tabs_grid(m: &Mission, cols: usize) -> Grid {
-    if m.snap.rules.ux2 {
-        grid_ux2(
-            &m.snap.tabs,
-            &m.snap.rules,
-            cols,
-            m.shelf_open,
-            repos_folded(m),
-        )
-    } else {
-        grid(
-            &m.snap.tabs,
-            &m.snap.rules,
-            cols,
-            card_width(cols, m.snap.card),
-        )
-    }
+    grid(
+        &m.snap.tabs,
+        &m.snap.rules,
+        cols,
+        m.shelf_open,
+        repos_folded(m),
+    )
 }
 
 /// Whether the shelf shows only its labels: with room for one column of
@@ -746,7 +406,7 @@ fn stage_folded(stage: model::Stage, shelf: bool, repos: bool) -> bool {
 /// UX 2.0's Tabs laid out: each group of cards in rows of `across`, then
 /// each shelf line a row of its own; a folded group is one row, its first
 /// tab standing for its label.
-pub fn grid_ux2(tabs: &[TabModel], r: &Rules, cols: usize, open: bool, repos_folded: bool) -> Grid {
+pub fn grid(tabs: &[TabModel], r: &Rules, cols: usize, open: bool, repos_folded: bool) -> Grid {
     let n = across(cols);
     let folded = shelf_folded(cols, open);
     let mut order = Vec::new();
@@ -1129,7 +789,7 @@ pub fn ask_fits(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
 
 /// Whether what a waiting tab asks is known whole, whatever a card has
 /// room for: what a menu opened away from a UX 2.0 card answers from (the
-/// sidebar's, a reminder's, the cards' with UX 2.0 off), which shows the
+/// sidebar's, a reminder's, the cards' off), which shows the
 /// request itself.
 pub fn ask_whole(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
     ask_sized(tab, screen, false)
@@ -1450,7 +1110,7 @@ fn last_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> Ins
     }
 }
 
-/// What a tab's card holds with UX 2.0, before it is drawn at its row's
+/// What a tab's card holds, before it is drawn at its row's
 /// height: its top edge's words, the lines inside it, and its foot.
 struct Card {
     title: Vec<Span<'static>>,
@@ -1484,7 +1144,7 @@ impl Card {
     }
 }
 
-/// A tab's card with UX 2.0 (board 3), the kit's card: its mark, its
+/// A tab's card (board 3), the kit's card: its mark, its
 /// number in its color and its name on the top edge, cut only where the
 /// edge has no room, its state and how long at the edge's right end, the
 /// edge in its group's tone (the accent when chosen, the tab's color under
@@ -1701,7 +1361,7 @@ fn shelf_line(
 /// line a tab, folded to their labels when only one card fits; scrolled to
 /// keep the chosen one in view, the cards a column to the left while a
 /// scroll bar has the last one.
-fn cards_ux2(
+fn cards(
     m: &Mission,
     cols: usize,
     body: usize,
@@ -1892,160 +1552,6 @@ fn cards_ux2(
         for y in (top..=bottom).filter(|y| shown(*y)) {
             hits.push(HitBox {
                 y: (y - start + top_row) as u16,
-                x0: x0 as u16,
-                x1: x1.saturating_sub(1) as u16,
-                spot: Spot::Index(index as isize),
-            });
-        }
-    }
-}
-
-/// The tabs' cards in their stages' boxes, scrolled to keep the chosen card
-/// in view, and where each card's cells are.
-fn cards(
-    m: &Mission,
-    cols: usize,
-    body: usize,
-    top_row: usize,
-    lines: &mut Vec<Line>,
-    hits: &mut Vec<HitBox>,
-) {
-    let snap = &m.snap;
-    let theme = &snap.theme;
-    let r = &snap.rules;
-    if r.ux2 {
-        cards_ux2(m, cols, body, top_row, lines, hits);
-        return;
-    }
-    let cw = card_width(cols, snap.card);
-    let g = grid(&snap.tabs, r, cols, cw);
-    if g.order.is_empty() {
-        lines.push(
-            Row::default()
-                .put("  No tabs.", fg(theme.dim))
-                .take()
-                .line(cols, None),
-        );
-        return;
-    }
-    let card_rows: usize = g.shelves.iter().map(|s| s.rows).sum();
-    // Cards are as tall as their shelf's fullest card needs, at least six
-    // lines and at most what would fill the screen, so a shelf of quiet
-    // tabs stays short rather than stretching empty cards down the screen.
-    let most = 6usize
-        .max(snap.card.1 as usize)
-        .max(30.min(body.saturating_sub(BORDER * g.shelves.len()) / card_rows.max(1)));
-    let mut drawn: Vec<Vec<Span<'static>>> = Vec::new();
-    // Each card's lines in `drawn`, and its columns.
-    let mut at: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
-    let (mut cursor_top, mut cursor_bottom) = (0, 0);
-    for shelf in &g.shelves {
-        let top = drawn.len();
-        let tallest = shelf
-            .blocks
-            .iter()
-            .flat_map(|b| b.cards.iter())
-            .map(|&i| card_needs(&snap.tabs[g.order[i]], cw, r, theme))
-            .max()
-            .unwrap_or(6);
-        let height = shelf.rows * most.min(tallest.max(6));
-        let mut box_x = 0;
-        let mut boxes: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
-        for block in &shelf.blocks {
-            let x = box_x;
-            let inner = block.across * cw;
-            box_x += inner + BORDER;
-            let row_height = |row: usize| {
-                if row < block.rows - 1 {
-                    height / block.rows
-                } else {
-                    height - (height / block.rows) * (block.rows - 1)
-                }
-            };
-            let mut row_top = top + 1;
-            let mut body_lines: Vec<Vec<Span<'static>>> = Vec::new();
-            for row in 0..block.rows {
-                let h = row_height(row);
-                let start = (row * block.across).min(block.cards.len());
-                let end = (start + block.across).min(block.cards.len());
-                let row_cards: Vec<Vec<Vec<Span<'static>>>> = block.cards[start..end]
-                    .iter()
-                    .enumerate()
-                    .map(|(c, &i)| {
-                        at.push((
-                            row_top,
-                            row_top + h - 1,
-                            x + 1 + c * cw,
-                            x + (c + 1) * cw,
-                            i,
-                        ));
-                        let tab = &snap.tabs[g.order[i]];
-                        let chosen = i as isize == m.cursor;
-                        let hovered = m.hover == Some(Spot::Index(i as isize));
-                        card(tab, cw, h, chosen, hovered, snap.frame, r, theme)
-                    })
-                    .collect();
-                for line in 0..h {
-                    let mut spans: Vec<Span<'static>> = Vec::new();
-                    for c in &row_cards {
-                        spans.extend(c.get(line).cloned().unwrap_or_default());
-                    }
-                    body_lines.push(fit(spans, inner, Style::new()));
-                }
-                row_top += h;
-            }
-            let color = fg(block.stage.color().color().unwrap_or(theme.dim));
-            let title = format!(" {} {} ", block.stage.title().to_uppercase(), block.count);
-            let shown = text::cut(&title, inner.saturating_sub(2));
-            let mut lines_of = vec![vec![
-                Span::styled("╭─", color),
-                Span::styled(shown.clone(), color.add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    format!("{}╮", "─".repeat(inner.saturating_sub(1 + width(&shown)))),
-                    color,
-                ),
-            ]];
-            for line in body_lines {
-                let mut spans = vec![Span::styled("│", color)];
-                spans.extend(line);
-                spans.push(Span::styled("│", color));
-                lines_of.push(spans);
-            }
-            lines_of.push(vec![Span::styled(
-                format!("╰{}╯", "─".repeat(inner)),
-                color,
-            )]);
-            boxes.push(lines_of);
-        }
-        for line in 0..height + BORDER {
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            for b in &boxes {
-                spans.extend(b.get(line).cloned().unwrap_or_default());
-            }
-            drawn.push(fit(spans, cols, Style::new()));
-        }
-        if shelf
-            .blocks
-            .iter()
-            .any(|b| b.cards.iter().any(|&i| i as isize == m.cursor))
-        {
-            cursor_top = top;
-            cursor_bottom = drawn.len();
-        }
-    }
-    let start = cursor_top.min(cursor_bottom.saturating_sub(body));
-    let from = lines.len();
-    for spans in drawn.iter().skip(start).take(body) {
-        lines.push(Line {
-            spans: spans.clone(),
-            fill: None,
-        });
-    }
-    rows_bar(&mut lines[from..], (drawn.len(), start, body), cols, m);
-    for (top, bottom, x0, x1, index) in at {
-        for line in top.max(start)..=bottom.min(start + body - 1) {
-            hits.push(HitBox {
-                y: (line - start + top_row) as u16,
                 x0: x0 as u16,
                 x1: x1.saturating_sub(1) as u16,
                 spot: Spot::Index(index as isize),
@@ -3000,11 +2506,8 @@ pub fn item_beside(m: &Mission) -> Option<(&Item, &'static str, &'static str)> {
         _ => return None,
     };
     let is_a_board = view.columns().is_some() || view.id == ViewId::Autopilot;
-    let board_with_the_pane = m.snap.rules.ux2
-        && is_a_board
-        && view.data.setup.is_none()
-        && view.loaded
-        && m.laid().0 as usize >= board_at;
+    let board_with_the_pane =
+        is_a_board && view.data.setup.is_none() && view.loaded && m.laid().0 as usize >= board_at;
     if !board_with_the_pane {
         return None;
     }
@@ -3288,7 +2791,7 @@ fn list(
         );
         return;
     }
-    if let Some(counts) = snap.notice_counts.as_ref().filter(|_| snap.rules.ux2)
+    if let Some(counts) = snap.notice_counts.as_ref()
         && view.id == ViewId::Notifications
     {
         notice_board(view, counts, cols, rows, m, top_row, lines, hits);
@@ -3312,8 +2815,7 @@ fn list(
         return;
     }
     // `i`'s output over the list, whether the board or the list is drawn.
-    if snap.rules.ux2
-        && view.id == ViewId::Landing
+    if view.id == ViewId::Landing
         && m.landing_output
         && cols < LANDING_OUTPUT_AT
         && let Some(landing) = m
@@ -3325,10 +2827,7 @@ fn list(
         lines.extend(landing_output_over(landing, cols, budget, m));
         return;
     }
-    if snap.rules.ux2
-        && view.id == ViewId::Landing
-        && stage_board_fits(view, cols, snap.now_secs * 1000)
-    {
+    if view.id == ViewId::Landing && stage_board_fits(view, cols, snap.now_secs * 1000) {
         stage_rows(view, cols, rows, m, top_row, lines, hits);
         return;
     }
@@ -3553,7 +3052,7 @@ fn list(
                 .put("  ", Style::new())
                 .put(text::pad(value, value_width), value_style)
                 .put(" ", Style::new());
-            if snap.rules.ux2 && item.data["changed"] == true {
+            if item.data["changed"] == true {
                 row.spans
                     .extend(kit::chip("changed", Tone::Needs, snap.caps, theme));
             }
@@ -4592,8 +4091,7 @@ fn stage_rows(
 /// Whether the Keys view is drawn as UX 2.0's board (`keys_board`): with
 /// UX 2.0, room for it and a key to show.
 pub fn keys_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
-    m.snap.rules.ux2
-        && v.id == ViewId::Keys
+    v.id == ViewId::Keys
         && cols >= super::keys_board::BOARD_AT
         && v.data.items.iter().any(|i| !views::is_header(i))
         && super::keys_board::fits(&v.data.items, m.laid().1 as usize)
@@ -4611,29 +4109,28 @@ const PILOT_SIDE_W: usize = 44;
 const PLAN_PLACE: &str = "its plan note in Notes";
 
 /// Whether the Autopilot view is drawn as its board on a main area `cols`
-/// wide: with UX 2.0 on, the screen wide enough, the view loaded and set up,
+/// wide: the screen wide enough, the view loaded and set up,
 /// and at least one item, else as the plain list. The drawing, the layout's
 /// sections, the footer's keys and `h`/`l` all ask this, so none of them
 /// treats the list as the board.
-pub fn pilot_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
-    m.snap.rules.ux2
-        && v.id == ViewId::Autopilot
+pub fn pilot_board_shown(v: &View, cols: usize) -> bool {
+    v.id == ViewId::Autopilot
         && cols >= PILOT_BOARD_AT
         && v.loaded
         && v.data.setup.is_none()
         && !v.data.items.is_empty()
 }
 
-/// Whether the Slack view is drawn as its board: with UX 2.0 on, once
+/// Whether the Slack view is drawn as its board: once
 /// something is saved.
-pub fn slack_board_shown(m: &Mission, v: &View) -> bool {
-    m.snap.rules.ux2 && v.id == ViewId::Slack && v.loaded && v.data.at.is_some()
+pub fn slack_board_shown(v: &View) -> bool {
+    v.id == ViewId::Slack && v.loaded && v.data.at.is_some()
 }
 
-/// Whether the Settings view is drawn as its board: with UX 2.0 on and the
+/// Whether the Settings view is drawn as its board: and the
 /// screen wide enough.
 pub fn settings_board_shown(m: &Mission) -> bool {
-    m.snap.rules.ux2 && m.laid().0 as usize >= super::settings_board::BOARD_AT
+    m.laid().0 as usize >= super::settings_board::BOARD_AT
 }
 
 /// An image atom (src/ui/images.rs) a board places once its lines are
@@ -5445,7 +4942,7 @@ fn with_right(
     out
 }
 
-/// With UX 2.0, the CI view: its sections' labels with their counts; each
+/// The CI view: its sections' labels with their counts; each
 /// failing PR its mark, number, title and tab, a dim line of its
 /// repository, branch and checks failed, and a line for each failed check
 /// with why it failed; each running or passing PR a line. On a wide
@@ -5702,14 +5199,6 @@ impl Row {
 
 // ── The whole screen ────────────────────────────────────────────────────────
 
-/// A view's label in the bar: ` Title count `.
-fn label(title: &str, count: Option<usize>) -> String {
-    match count {
-        Some(n) => format!(" {title} {n} "),
-        None => format!(" {title} "),
-    }
-}
-
 /// The keys the footer names for the view in front, each a key and what it
 /// does (a pair with no key is words of its own).
 fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(String, String)> {
@@ -5772,11 +5261,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
         });
         return out;
     }
-    // With UX 2.0 the bar names the keys through its groups and views.
-    let next: &[(&str, &str)] = if m.snap.tab_focus && m.snap.rules.ux2 {
+    // The bar names the keys through its groups and views.
+    let next: &[(&str, &str)] = if m.snap.tab_focus {
         &[("tab", "focus")]
-    } else if m.snap.tab_focus {
-        &[("[ ]", "views"), ("tab", "focus")]
     } else {
         &[("tab", "next view")]
     };
@@ -5828,12 +5315,8 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
         return with_acts(&[("hjkl", "move")], ACTS, VIEW, filter);
     };
     match view.id {
-        ViewId::Reminders if super::reminders::is_month(m) => {
-            with_acts(super::reminders::hints(), ACTS, VIEW, &[])
-        }
-        ViewId::Routines if crate::routines::view::is_board(m) => {
-            with_acts(&[("jk", "move")], ACTS, VIEW, filter)
-        }
+        ViewId::Reminders => with_acts(super::reminders::hints(), ACTS, VIEW, &[]),
+        ViewId::Routines => with_acts(&[("jk", "move")], ACTS, VIEW, filter),
         ViewId::Settings if settings_board_shown(m) => with_acts(
             &[("hl", "category"), ("jk", "option")],
             "its choices",
@@ -5848,7 +5331,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             VIEW,
             &[("/", "filter keys, words, tags")],
         ),
-        ViewId::Slack if slack_board_shown(m, view) => {
+        ViewId::Slack if slack_board_shown(view) => {
             let mut keys = Vec::new();
             let threads = crate::settings::is_on("slack_threads");
             if threads && !super::slack_board::beside(m.laid().0 as usize) {
@@ -5862,7 +5345,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             };
             with_acts(&[("jk", "move"), hl], ACTS, VIEW, &keys)
         }
-        ViewId::Landing if m.snap.rules.ux2 => {
+        ViewId::Landing => {
             let narrow = (m.laid().0 as usize) < LANDING_OUTPUT_AT;
             let output = m
                 .chosen_item()
@@ -5875,7 +5358,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             with_acts(&[("jk", "move")], ACTS, VIEW, rest)
         }
         ViewId::Calendar => with_acts(&[("jk", "events"), ("hl", "day")], ACTS, VIEW, &[]),
-        ViewId::Autopilot if pilot_board_shown(m, view, m.laid().0 as usize) => with_acts(
+        ViewId::Autopilot if pilot_board_shown(view, m.laid().0 as usize) => with_acts(
             &[("hl", "column"), ("jk", "move")],
             ACTS,
             "view actions: its settings, pause",
@@ -5889,10 +5372,10 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
         ),
         // No letter keys (boards 18, 22): `i` still shows the chosen row's
         // pane on a narrow screen, as the view's menu does.
-        ViewId::Inbox if super::inbox_board::shown(m, view) => {
+        ViewId::Inbox if super::inbox_board::shown(view) => {
             with_acts(&[("jk", "move")], "actions, marks read", VIEW, filter)
         }
-        ViewId::Reopen if super::reopen_board::shown(m, view) => with_acts(
+        ViewId::Reopen if super::reopen_board::shown(view) => with_acts(
             &[("jk", "move")],
             "reopen, forget",
             "view actions: tabs or sessions only",
@@ -5907,16 +5390,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
         ViewId::Prs | ViewId::Tickets => {
             with_acts(&[("hl", "column"), ("jk", "move")], ACTS, VIEW, &[])
         }
-        ViewId::Usage
-            if m.snap.rules.ux2 && m.laid().0 as usize >= super::usage_board::BOARD_AT =>
-        {
+        ViewId::Usage if m.laid().0 as usize >= super::usage_board::BOARD_AT => {
             with_acts(&[("jk", "tab or service")], ACTS, VIEW, filter)
         }
         _ => with_acts(&[("jk", "move")], ACTS, VIEW, filter),
     }
 }
 
-/// The Notifications view as a history by day, with UX 2.0 (`history`):
+/// The Notifications view as a history by day, (`history`):
 /// a keycap for each kind with its week's count, the one shown lit, and
 /// the week's count and the sidebar's at the right; the column heads over
 /// a dashed rule; then each day's label and its notifications, a row each:
@@ -6149,7 +5630,7 @@ fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
 }
 
 /// The footer, whose keys take a click and a Tab stop: the kit's hints
-/// with UX 2.0, dim words without, each key that names one a spot (`Spot::Key`) at row `y`, lit
+///, dim words without, each key that names one a spot (`Spot::Key`) at row `y`, lit
 /// under the mouse.
 fn key_footer(
     pairs: &[(String, String)],
@@ -6162,21 +5643,8 @@ fn key_footer(
     let mut x = 1;
     for (key, what) in pairs {
         let p: [(&str, &str); 1] = [(key.as_str(), what.as_str())];
-        // With UX 2.0 the kit's hints, each key in the accent; else dim
-        // words, as before, the key its own span so it lights alone.
-        let mut spans = if m.snap.rules.ux2 {
-            kit::hints(&p, theme)
-        } else {
-            let dim = fg(theme.dim);
-            match (key.is_empty(), what.is_empty()) {
-                (true, _) => vec![Span::styled(what.clone(), dim)],
-                (_, true) => vec![Span::styled(key.clone(), dim)],
-                _ => vec![
-                    Span::styled(key.clone(), dim),
-                    Span::styled(format!(" {what}"), dim),
-                ],
-            }
-        };
+        // The kit's hints, each key in the accent.
+        let mut spans = kit::hints(&p, theme);
         if !out.is_empty() {
             out.push(Span::raw("  "));
             x += 2;
@@ -6342,31 +5810,7 @@ struct Bar {
     filter_hit: bool,
 }
 
-/// How many of a bar's names, `widths` wide with a space between, to skip
-/// so the one at `target` and the `tail` after it end inside `cols`, after
-/// the `before` columns ahead of the names and a `‹ ` once any are skipped.
-fn bar_skip(
-    widths: &[usize],
-    target: Option<usize>,
-    before: usize,
-    tail: usize,
-    cols: usize,
-) -> usize {
-    let Some(t) = target.filter(|&t| t < widths.len()) else {
-        return 0;
-    };
-    let end_of = |skip: usize| {
-        let names: usize = widths[skip..=t].iter().map(|w| w + 1).sum();
-        before + if skip > 0 { 2 } else { 0 } + names - 1 + tail
-    };
-    let mut skip = 0;
-    while skip < t && end_of(skip) > cols {
-        skip += 1;
-    }
-    skip
-}
-
-/// With UX 2.0, the header over the view in front (board 64), since its
+/// The header over the view in front (board 64), since its
 /// groups and views are listed down the side (src/mission/nav.rs): the
 /// view's name, its group and its facts (the Reminders' or the Routines'
 /// words, with several views at once how many), then the filter, and on
@@ -6450,12 +5894,11 @@ pub fn drawn(
     (lines, hits, meters, pictures)
 }
 
-/// The bar: with UX 2.0 the header over the view in front (`header`),
+/// The bar: the header over the view in front (`header`),
 /// else one row naming every view.
 pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line> {
     let snap = &m.snap;
     let theme = &snap.theme;
-    let jumped = m.jump.as_ref().and_then(|j| j.matched);
     // The filter, a view's name being typed, or, with Tab moving focus, a
     // stop of its own even while empty on a view that filters.
     let view = m.view.checked_sub(1).and_then(|i| snap.views.get(i));
@@ -6492,9 +5935,7 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
     }
     // With the Reminders view in front, the bar's right counts them.
     // And with Routines, them and when the next runs.
-    let counts = match view
-        .filter(|v| matches!(v.id, ViewId::Reminders | ViewId::Routines) && snap.rules.ux2)
-    {
+    let counts = match view.filter(|v| matches!(v.id, ViewId::Reminders | ViewId::Routines)) {
         Some(v) if v.id == ViewId::Routines => {
             let now = jiff::Timestamp::from_second(snap.now_secs)
                 .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
@@ -6505,109 +5946,18 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
             )]
         }
         Some(v) => vec![Span::styled(super::reminders::bar_words(v), fg(theme.dim))],
-        None if m.groups().is_some() => vec![Span::styled(
+        None => vec![Span::styled(
             tabs_words(&snap.tabs, &snap.rules),
             Tone::Dim.style(theme),
         )],
-        None => tally(&snap.tabs, &snap.rules, theme),
     };
     let mut lines = Vec::new();
-    if m.groups().is_some() {
-        let bar = Bar {
-            counts,
-            filter,
-            filter_hit: filter_stop || (m.filter.is_some() && snap.tab_focus),
-        };
-        header(m, bar, cols, &mut lines, hits);
-    } else {
-        let mut names: Vec<(String, usize)> = vec![("Tabs".into(), snap.tabs.len())];
-        names.extend(
-            snap.views
-                .iter()
-                .map(|v| (v.title.clone(), v.data.items.len())),
-        );
-        // A bar too wide for the screen with every count in it keeps only the
-        // chosen view's count.
-        let prefix = " MISSION CONTROL  ";
-        let all_labels: String = names
-            .iter()
-            .map(|(t, n)| label(t, Some(*n)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let roomy = width(prefix) + width(&all_labels) + 30 <= cols;
-        let labels: Vec<String> = names
-            .iter()
-            .enumerate()
-            .map(|(i, (t, n))| {
-                let count = (roomy || i == m.view || jumped == Some(i)).then_some(*n);
-                label(t, count)
-            })
-            .collect();
-        // With Tab's focus on a view's name or the filter past the screen's
-        // edge, the bar scrolls: the names before it give way to a ‹.
-        let target = match m.focus {
-            Some(Focus::Filter) => Some(labels.len() - 1),
-            Some(Focus::View(v)) => Some(v.min(labels.len() - 1)),
-            _ => None,
-        };
-        let tail = if m.focus == Some(Focus::Filter) {
-            2 + spans_width(&counts) + spans_width(&filter)
-        } else {
-            0
-        };
-        let widths: Vec<usize> = labels.iter().map(|l| width(l)).collect();
-        let skip = bar_skip(&widths, target, width(prefix), tail, cols);
-        let mut head = Row::default();
-        head.put(" ", Style::new())
-            .put("MISSION CONTROL", bold(ACCENT))
-            .put("  ", Style::new());
-        if skip > 0 {
-            head.put("‹ ", fg(theme.dim));
-        }
-        for (i, l) in labels.iter().enumerate().skip(skip) {
-            if i > skip {
-                head.put(" ", Style::new());
-            }
-            let x = head.width();
-            hits.push(HitBox {
-                y: 0,
-                x0: x as u16,
-                x1: (x + width(l)).saturating_sub(1) as u16,
-                spot: Spot::View(i),
-            });
-            let ring =
-                m.focus == Some(Focus::View(i)) || (m.hover == Some(Spot::View(i)) && i != m.view);
-            let style = if ring {
-                bold(theme.bright).add_modifier(Modifier::REVERSED)
-            } else if jumped == Some(i) {
-                Style::new()
-                    .bg(YELLOW)
-                    .fg(Color::Indexed(232))
-                    .add_modifier(Modifier::BOLD)
-            } else if i == m.view {
-                Style::new()
-                    .bg(theme.highlight)
-                    .fg(theme.bright)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                fg(theme.dim)
-            };
-            head.put(l.clone(), style);
-        }
-        head.put("  ", Style::new());
-        head.spans.extend(counts);
-        if !filter.is_empty() && (filter_stop || (m.filter.is_some() && snap.tab_focus)) {
-            let x = head.width() + 2;
-            hits.push(HitBox {
-                y: 0,
-                x0: x as u16,
-                x1: (head.width() + spans_width(&filter)).saturating_sub(1) as u16,
-                spot: Spot::Filter,
-            });
-        }
-        head.spans.extend(filter);
-        lines.push(with_close(head, Vec::new(), m, cols, hits));
-    }
+    let bar = Bar {
+        counts,
+        filter,
+        filter_hit: filter_stop || (m.filter.is_some() && snap.tab_focus),
+    };
+    header(m, bar, cols, &mut lines, hits);
     lines
 }
 
@@ -6651,20 +6001,15 @@ pub(super) fn body(
             cards(m, cols, body, top, lines, hits);
         }
         Some(v) => {
-            let pilot_board_shown = pilot_board_shown(m, v, cols);
-            let ci_shown = snap.rules.ux2
-                && v.id == ViewId::Ci
+            let pilot_board_shown = pilot_board_shown(v, cols);
+            let ci_shown = v.id == ViewId::Ci
                 && v.loaded
                 && v.data.setup.is_none()
                 && !v.data.items.is_empty();
-            let settings_shown = snap.rules.ux2
-                && v.id == ViewId::Settings
-                && cols >= super::settings_board::BOARD_AT
-                && v.loaded;
-            let relay_shown =
-                snap.rules.ux2 && v.id == ViewId::Relay && cols >= super::relay_board::BOARD_AT;
-            let resources_shown = snap.rules.ux2
-                && v.id == ViewId::Resources
+            let settings_shown =
+                v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT && v.loaded;
+            let relay_shown = v.id == ViewId::Relay && cols >= super::relay_board::BOARD_AT;
+            let resources_shown = v.id == ViewId::Resources
                 && cols >= super::resources_board::BOARD_AT
                 && v.loaded
                 && !v.data.items.is_empty();
@@ -6694,24 +6039,23 @@ pub(super) fn body(
                     }
                     let top = lines.len();
                     let room = rows.saturating_sub(1 + top);
-                    if snap.rules.ux2 && matches!(v.id, ViewId::Prs | ViewId::Tickets) {
+                    if matches!(v.id, ViewId::Prs | ViewId::Tickets) {
                         pictures = board_cards(v, columns, cols, room, m, theme, top, lines, hits);
                     } else {
                         board(v, columns, cols, room, m, theme, top, lines, hits);
                     }
                 }
-            } else if snap.rules.ux2
-                && v.id == ViewId::Usage
+            } else if v.id == ViewId::Usage
                 && cols >= super::usage_board::BOARD_AT
                 && super::usage_board::board(v, m, cols, rows, lines, hits, meters)
             {
-            } else if super::inbox_board::shown(m, v) {
+            } else if super::inbox_board::shown(v) {
                 super::inbox_board::board(v, cols, rows, m, lines, hits, meters);
-            } else if super::reopen_board::shown(m, v) {
+            } else if super::reopen_board::shown(v) {
                 super::reopen_board::board(v, cols, rows, m, lines, hits, meters);
             } else if keys_board_shown(m, v, cols) {
                 super::keys_board::board(v, cols, rows, m, lines, hits, meters);
-            } else if slack_board_shown(m, v) {
+            } else if slack_board_shown(v) {
                 let look = super::slack_board::Look {
                     cols,
                     rows: rows.saturating_sub(1 + lines.len()),
@@ -6750,9 +6094,9 @@ pub(super) fn body(
                 lines.extend(board);
                 hits.extend(at);
                 meters.extend(images);
-            } else if v.id == ViewId::Reminders && super::reminders::is_month(m) {
+            } else if v.id == ViewId::Reminders {
                 super::reminders::month(v, m, cols, rows, lines, hits);
-            } else if v.id == ViewId::Routines && crate::routines::view::is_board(m) {
+            } else if v.id == ViewId::Routines {
                 crate::routines::view::board(v, m, cols, rows, lines, hits);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let look = super::calendar::Look {
@@ -6763,7 +6107,6 @@ pub(super) fn body(
                     now_ms: snap.now_secs * 1000,
                     theme,
                     top_row: lines.len(),
-                    ux2: crate::settings::is_on("ux2"),
                     caps: snap.caps,
                     date: m.calendar_day.as_deref().and_then(|d| d.parse().ok()),
                     next: snap.calendar_next.as_ref(),
@@ -6836,7 +6179,7 @@ pub(super) fn finish(
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
             let resizes = hits.iter().any(|h| matches!(h.spot, Spot::SideEdge(_)));
             let pairs = hints(m, view, beside, resizes);
-            // Every footer's keys take a click and a Tab stop, with UX 2.0
+            // Every footer's keys take a click and a Tab stop,
             // or without.
             let y = rows.saturating_sub(1) as u16;
             row.spans
@@ -6858,11 +6201,10 @@ pub(super) fn finish(
 mod tests {
     use super::*;
     use crate::items::ViewData;
-    use crate::mission::{Jump, Snapshot};
+    use crate::mission::Snapshot;
     use crate::mux::TabId;
-    use crate::sidebar::claude::{LoopRun, SessionRef};
+    use crate::sidebar::claude::SessionRef;
     use crate::sidebar::model::tests::rules;
-    use crate::sidebar::model::{MergeState, TabLoop};
 
     #[test]
     fn a_focused_pane_beside_lights_the_rule_before_it_alone_or_with_its_space() {
@@ -6930,18 +6272,6 @@ mod tests {
     }
 
     #[test]
-    fn a_merged_tab_at_work_on_a_default_card_wears_both_badges_inside_its_edge() {
-        let r = model::tests::rules();
-        let mut t = tab(1, &"a long name ".repeat(10));
-        t.state = TabState::Working;
-        t.merge = Some(model::MergeState::Merged);
-        let drawn = card(&t, 40, 6, false, false, 0, &r, &Theme::DARK);
-        let top: String = drawn[0].iter().map(|s| s.content.to_string()).collect();
-        assert_eq!(width(&top), 40, "{top}");
-        assert!(top.ends_with("─╮"), "{top}");
-    }
-
-    #[test]
     fn a_merged_tabs_card_says_merged_at_its_foot_while_it_works_again() {
         let words = |t: &TabModel| -> String {
             card_foot(t, None, 50, 0, &Theme::DARK)
@@ -6999,7 +6329,6 @@ mod tests {
             views,
             rules: rules(),
             theme: Theme::DARK,
-            card: (56, 13),
             tab_focus: true,
             nav_follow: false,
             side_keys: String::new(),
@@ -7074,147 +6403,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stages_pack_side_by_side_each_block_under_its_own_header() {
-        let r = rules();
-        let mut tabs: Vec<TabModel> = Vec::new();
-        let mut add = |n: u32, name: &str, f: &dyn Fn(&mut TabModel)| {
-            let mut t = tab(n, name);
-            f(&mut t);
-            tabs.push(t);
-        };
-        add(1, "plain", &|_| {});
-        add(2, "queued b", &|t| {
-            t.merge = Some(MergeState::Queued);
-            t.position = Some(2);
-        });
-        add(3, "reviewing", &|t| {
-            t.state = TabState::Background;
-            t.background = 2;
-            t.tab_loop = Some(TabLoop::Run(LoopRun {
-                kind: "review",
-                round: 2,
-            }));
-        });
-        add(4, "busy", &|t| t.state = TabState::Working);
-        add(5, "queued a", &|t| {
-            t.merge = Some(MergeState::Queued);
-            t.position = Some(1);
-        });
-        add(6, "asking", &|t| t.state = TabState::Waiting);
-        add(7, "ci fixing", &|t| {
-            t.state = TabState::Background;
-            t.background = 1;
-            t.tab_loop = Some(TabLoop::Run(LoopRun {
-                kind: "ci",
-                round: 1,
-            }));
-        });
-        add(8, "landed", &|t| t.merge = Some(MergeState::Merged));
-        add(9, "watching the queue", &|t| {
-            t.state = TabState::Background;
-            t.background = 1;
-            t.tab_loop = Some(TabLoop::Run(LoopRun {
-                kind: "queue",
-                round: 1,
-            }));
-            t.merge = Some(MergeState::Queued);
-            t.position = Some(3);
-        });
-        // Room for three cards a shelf, each box with its two columns of
-        // border: a stage that doesn't fit in the room left starts the next
-        // shelf.
-        let g = grid(&tabs, &r, 3 * 22, 20);
-        let laid: Vec<Vec<(&str, Vec<&str>)>> = g
-            .shelves
-            .iter()
-            .map(|s| {
-                s.blocks
-                    .iter()
-                    .map(|b| {
-                        (
-                            b.stage.title(),
-                            b.cards
-                                .iter()
-                                .map(|&i| tabs[g.order[i]].name.as_str())
-                                .collect(),
-                        )
-                    })
-                    .collect()
-            })
-            .collect();
-        assert_eq!(
-            laid,
-            vec![
-                vec![
-                    ("Needs you", vec!["asking"]),
-                    ("Working", vec!["busy"]),
-                    ("Review loop", vec!["reviewing"])
-                ],
-                vec![("CI loop", vec!["ci fixing"])],
-                vec![(
-                    "In merge queue",
-                    vec!["queued a", "queued b", "watching the queue"]
-                )],
-                vec![("Merged", vec!["landed"]), ("Idle", vec!["plain"])],
-            ],
-            "a loop is its own stage, but a PR's place in the queue or merged comes first; the queue in queue order"
-        );
-        let many: Vec<TabModel> = (0..5).map(|i| tab(20 + i, &format!("idle {i}"))).collect();
-        let big = grid(&many, &r, 3 * 22, 20);
-        assert_eq!(big.shelves.len(), 1);
-        assert_eq!(
-            (
-                big.shelves[0].blocks[0].across,
-                big.shelves[0].blocks[0].rows
-            ),
-            (3, 2)
-        );
-        assert_eq!(
-            big.rows.iter().map(Vec::len).collect::<Vec<_>>(),
-            vec![3, 2],
-            "its rows are the rows the keys move through"
-        );
-        let m = mission(tabs, Vec::new());
-        let (lines, hits) = screen(&m, 3 * 56, 200);
-        let text = texts(&lines);
-        let tops: Vec<&String> = text.iter().filter(|l| l.starts_with("╭─ ")).collect();
-        assert!(
-            tops[0].contains("NEEDS YOU 1") && tops[0].contains("WORKING 1"),
-            "{tops:?}"
-        );
-        assert_eq!(
-            text.iter().filter(|l| l.starts_with("╰")).count(),
-            tops.len(),
-            "every box closed"
-        );
-        assert!(text[0].contains("MISSION CONTROL"));
-        assert!(
-            text[0].contains("⋯ 4"),
-            "the loops count as working: {}",
-            text[0]
-        );
-        assert!(hits.iter().any(|h| h.spot == Spot::Index(0)));
-    }
-
-    #[test]
-    fn a_shelf_of_quiet_tabs_is_as_short_as_a_card_can_be() {
-        let mut quiet = vec![tab(1, "quiet 1"), tab(2, "quiet 2")];
-        for t in &mut quiet {
-            t.claude = None;
-        }
-        let m = mission(quiet, Vec::new());
-        let (lines, _) = screen(&m, 3 * 56, 60);
-        let text = texts(&lines);
-        let bottom = text.iter().position(|l| l.starts_with("╰")).unwrap();
-        assert_eq!(bottom, 8, "{text:#?}");
-        assert!(text[9..59].iter().all(String::is_empty));
-        assert!(
-            text.iter().any(|l| l.contains("/work")),
-            "a card with no Claude shows its directory"
-        );
-    }
-
     /// The tabs board 3 draws: one waiting on a question, two working,
     /// one idle and one landing.
     fn board_3() -> Mission {
@@ -7267,7 +6455,6 @@ mod tests {
             method: crate::facts::Method::Direct,
         });
         let mut m = mission(vec![asks, working, other, idle, landing], Vec::new());
-        m.snap.rules.ux2 = true;
         m.snap.screens.insert(
             TabId(2),
             crate::mission::Screen {
@@ -7322,7 +6509,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_tabs_are_cards_under_their_groups_labels_and_a_shelf_under_them() {
+    fn the_tabs_are_cards_under_their_groups_labels_and_a_shelf_under_them() {
         let mut m = board_3();
         m.cursor = 1;
         let (lines, hits) = screen(&m, 160, 60);
@@ -7441,7 +6628,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_command_too_long_for_its_card_is_never_answered_from_it() {
+    fn a_command_too_long_for_its_card_is_never_answered_from_it() {
         let mut m = board_3();
         let long: Vec<String> = (1..=12).map(|n| format!("echo step {n}")).collect();
         let ask = crate::agent::Wait {
@@ -7472,8 +6659,7 @@ mod tests {
             ..ask.clone()
         });
         assert!(ask_fits(&spaced, None));
-        let mut shown = mission(vec![spaced.clone()], Vec::new());
-        shown.snap.rules.ux2 = true;
+        let shown = mission(vec![spaced.clone()], Vec::new());
         let text = texts(&screen(&shown, 160, 40).0);
         assert!(
             text.iter().any(|l| l.contains("rm -rf 'old  backup'")),
@@ -7492,10 +6678,9 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_long_shelf_scrolls_to_its_chosen_line() {
+    fn a_long_shelf_scrolls_to_its_chosen_line() {
         let tabs: Vec<TabModel> = (1..=40).map(|n| tab(n, &format!("idle {n}"))).collect();
         let mut m = mission(tabs, Vec::new());
-        m.snap.rules.ux2 = true;
         m.cursor = 39;
         let (lines, hits) = screen(&m, 160, 20);
         let text = texts(&lines);
@@ -7507,7 +6692,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_card_follows_the_question_its_screen_shows_and_its_options() {
+    fn a_card_follows_the_question_its_screen_shows_and_its_options() {
         let mut m = board_3();
         m.cursor = 1;
         if let Some(a) = m.snap.tabs[0].ask.as_mut() {
@@ -7537,7 +6722,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_waiting_card_s_options_have_no_numbers_or_clicks_of_their_own() {
+    fn a_waiting_card_s_options_have_no_numbers_or_clicks_of_their_own() {
         let m = board_3();
         let (lines, hits) = screen(&m, 160, 60);
         let text = texts(&lines);
@@ -7551,25 +6736,23 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_tab_with_only_its_background_running_shows_its_last_turn() {
+    fn a_tab_with_only_its_background_running_shows_its_last_turn() {
         let mut watching = tab(1, "watching");
         watching.state = TabState::Background;
         watching.background = 1;
         watching.summary = Some("Started the deploy watch.".into());
-        let mut m = mission(vec![watching], Vec::new());
-        m.snap.rules.ux2 = true;
+        let m = mission(vec![watching], Vec::new());
         let text = texts(&screen(&m, 160, 40).0);
         assert!(text.iter().any(|l| l.contains("LAST TURN")), "{text:#?}");
         assert!(!text.iter().any(|l| l.contains("thinking")), "{text:#?}");
     }
 
     #[test]
-    fn with_ux2_a_card_s_foot_is_its_branch_and_checks_with_no_context_meter() {
+    fn a_card_s_foot_is_its_branch_and_checks_with_no_context_meter() {
         let mut t = tab(1, "a tab with quite a long name");
         t.state = TabState::Working;
         t.context = Some(62);
         let mut m = mission(vec![t], Vec::new());
-        m.snap.rules.ux2 = true;
         m.snap.screens.insert(
             TabId(1),
             crate::mission::Screen {
@@ -7601,7 +6784,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_request_that_fits_keeps_every_option_on_its_card() {
+    fn a_request_that_fits_keeps_every_option_on_its_card() {
         let mut m = board_3();
         if let Some(a) = m.snap.tabs[0].ask.as_mut() {
             // Six lines of question at a card's least width, and three
@@ -7666,7 +6849,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_scroll_bar_takes_the_last_column_and_the_cards_end_before_it() {
+    fn a_scroll_bar_takes_the_last_column_and_the_cards_end_before_it() {
         let tabs: Vec<TabModel> = (1..=9)
             .map(|n| {
                 let mut t = tab(n, &format!("work {n}"));
@@ -7675,7 +6858,6 @@ mod tests {
             })
             .collect();
         let mut m = mission(tabs, Vec::new());
-        m.snap.rules.ux2 = true;
         m.snap.rules.scroll_bars = true;
         // Three rows of cards on a screen with room for two.
         let text = texts(&screen(&m, 125, 20).0);
@@ -7695,7 +6877,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_only_what_needs_you_and_what_works_are_cards_and_the_rest_the_shelf() {
+    fn only_what_needs_you_and_what_works_are_cards_and_the_rest_the_shelf() {
         let now = rules().now_secs();
         let mut finished = tab(1, "full titles");
         finished.state = TabState::Done;
@@ -7710,11 +6892,10 @@ mod tests {
         let mut shell = tab(4, "a shell");
         shell.claude = None;
         let idle = tab(5, "quiet");
-        let mut m = mission(
+        let m = mission(
             vec![finished, reviewing, monitoring, shell, idle],
             Vec::new(),
         );
-        m.snap.rules.ux2 = true;
         let text = texts(&screen(&m, 160, 60).0);
         let row = |has: &str| {
             text.iter()
@@ -7777,7 +6958,6 @@ mod tests {
         let mut fixing = failing.clone();
         fixing.state = TabState::Working;
         let mut both = mission(vec![failing.clone()], Vec::new());
-        both.snap.rules.ux2 = true;
         both.snap.rules.build_failing = true;
         assert!(on_shelf_tab(&failing, &both.snap.rules));
         assert!(!on_shelf_tab(&fixing, &both.snap.rules));
@@ -7792,13 +6972,13 @@ mod tests {
             "{fixed:#?}"
         );
         // The keys move through them in that order.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false, false);
+        let g = grid(&m.snap.tabs, &m.snap.rules, 160, false, false);
         assert_eq!(g.order, vec![0, 1, 2, 4, 3]);
         assert_eq!(g.rows, vec![vec![0], vec![1, 2], vec![3], vec![4]]);
     }
 
     #[test]
-    fn with_ux2_the_tabs_follow_the_sidebar_s_repository_filter() {
+    fn the_tabs_follow_the_sidebar_s_repository_filter() {
         // The server marks the tabs of another repository than the filter's
         // (`sidebar_all_marked`): elsewhere, or with a reminder come due.
         let mut here = tab(1, "here work");
@@ -7812,7 +6992,6 @@ mod tests {
         due.outside_filter = true;
         due.from_repo = Some("api".into());
         let mut m = mission(vec![here, away, also, due], Vec::new());
-        m.snap.rules.ux2 = true;
         m.snap.repo_filter = Some("app".into());
         let text = texts(&screen(&m, 160, 60).0);
         assert!(text[0].contains("Filtered to app"), "{text:#?}");
@@ -7838,7 +7017,7 @@ mod tests {
         assert!(due_at < other, "{text:#?}");
         assert!(text[due_at].contains("api ·"), "{text:#?}");
         // The fold one place the keys rest on, its first tab standing for it.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false, true);
+        let g = grid(&m.snap.tabs, &m.snap.rules, 160, false, true);
         assert_eq!(g.order, vec![0, 3, 1]);
         // Opened, its tabs are lines of their own.
         m.other_repos_open = true;
@@ -7849,8 +7028,7 @@ mod tests {
             "{text:#?}"
         );
         // With no filter, every tab is where its state puts it.
-        let mut plain = mission(vec![tab(1, "here work"), tab(2, "away work")], Vec::new());
-        plain.snap.rules.ux2 = true;
+        let plain = mission(vec![tab(1, "here work"), tab(2, "away work")], Vec::new());
         let text = texts(&screen(&plain, 160, 60).0);
         assert!(
             !text[0].contains("Filtered") && !text.iter().any(|l| l.contains("OTHER REPOS")),
@@ -7860,7 +7038,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_cards_fill_any_width_and_give_way_in_board_45_s_order() {
+    fn the_cards_fill_any_width_and_give_way_in_board_45_s_order() {
         let mut tabs: Vec<TabModel> = (1..=5)
             .map(|n| {
                 let mut t = tab(n, &format!("work {n}"));
@@ -7874,7 +7052,6 @@ mod tests {
         idle.summary = Some("Answered the question about the layout.".into());
         tabs.push(idle);
         let mut m = mission(tabs, Vec::new());
-        m.snap.rules.ux2 = true;
         m.cursor = 5;
         for (cols, across) in [(120, 2), (160, 3), (240, 4)] {
             let (lines, _) = screen(&m, cols, 80);
@@ -7914,11 +7091,11 @@ mod tests {
             );
         }
         // Each row of cards a row the keys move through, each shelf line one.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false, false);
+        let g = grid(&m.snap.tabs, &m.snap.rules, 160, false, false);
         assert_eq!(g.rows, vec![vec![0, 1, 2], vec![3, 4], vec![5]]);
         // With room for one card, the shelf folds to its label until Enter
         // on it opens it.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 60, false, false);
+        let g = grid(&m.snap.tabs, &m.snap.rules, 60, false, false);
         assert_eq!(g.rows.len(), 6);
         let (lines, _) = screen(&m, 60, 120);
         let text = texts(&lines);
@@ -7964,16 +7141,16 @@ mod tests {
         }
         let text = texts(&lines);
         assert!(
-            text[1].starts_with(
+            text[3].starts_with(
                 " AUTO Work  2 of 3 working · 4 of 5 open · next: Next thing · 1 skipped"
             ),
             "{}",
-            text[1]
+            text[3]
         );
-        assert_eq!(lines[1].fill, Some(Theme::DARK.highlight), "chosen");
+        assert_eq!(lines[3].fill, Some(Theme::DARK.highlight), "chosen");
         assert!(
             hits.contains(&HitBox {
-                y: 1,
+                y: 3,
                 x0: 0,
                 x1: 119,
                 spot: Spot::Index(-1)
@@ -7983,7 +7160,7 @@ mod tests {
         assert!(
             hits.iter()
                 .filter(|h| matches!(h.spot, Spot::Index(i) if i >= 0))
-                .all(|h| h.y >= 2),
+                .all(|h| h.y >= 4),
             "the cards under it"
         );
     }
@@ -8013,7 +7190,6 @@ mod tests {
         let view = list_view(ViewId::Reminders, "Reminders", items);
         let draw_at = |cols: usize, rows: usize| {
             let mut m = mission(tabs.clone(), vec![view.clone()]);
-            m.snap.rules.ux2 = true;
             m.snap.all_tabs = tabs.clone();
             m.view = 1;
             m.size = (cols as u16, rows as u16);
@@ -8077,7 +7253,6 @@ mod tests {
     #[test]
     fn a_footer_key_with_tabs_focus_is_lit() {
         let mut m = mission(vec![tab(1, "one")], Vec::new());
-        m.snap.rules.ux2 = true;
         let menu = crate::mux::input::Key::parse("m").unwrap();
         let lit = |m: &Mission| {
             let (lines, _) = screen(m, 120, 20);
@@ -8088,21 +7263,9 @@ mod tests {
         assert!(!lit(&m));
         m.focus = Some(Focus::Key(menu));
         assert!(lit(&m));
-        // A click, with UX 2.0 off as on.
-        for ux2 in [false, true] {
-            m.snap.rules.ux2 = ux2;
-            let (_, hits) = screen(&m, 120, 20);
-            assert!(hits.iter().any(|h| h.spot == Spot::Key(menu)), "ux2 {ux2}");
-        }
-        // Each key of a group is a key of its own, symbols too.
-        m.snap.rules.ux2 = false;
-        m.snap.tab_focus = true;
+        // A click.
         let (_, hits) = screen(&m, 120, 20);
-        for c in ["[", "]"] {
-            let k = crate::mux::input::Key::parse(c).unwrap();
-            assert!(hits.iter().any(|h| h.spot == Spot::Key(k)), "{c}");
-        }
-        m.snap.tab_focus = false;
+        assert!(hits.iter().any(|h| h.spot == Spot::Key(menu)));
         // A filter being typed is no key, whatever its letters.
         m.filter = Some(crate::sidebar::render::Filter {
             text: "queue".into(),
@@ -8122,7 +7285,6 @@ mod tests {
             );
         }
         // A key cut off at the screen's edge is no click or Tab stop.
-        m.snap.rules.ux2 = false;
         let esc = crate::mux::input::Key::parse("Escape").unwrap();
         let (_, hits) = screen(&m, 60, 20);
         assert!(!hits.iter().any(|h| h.spot == Spot::Key(esc)));
@@ -8134,9 +7296,8 @@ mod tests {
         let has = |pairs: &[(String, String)], key: &str, what: &str| {
             pairs.iter().any(|(k, w)| k == key && w == what)
         };
-        for ux2 in [false, true] {
-            let mut m = mission(vec![tab(1, "one")], Vec::new());
-            m.snap.rules.ux2 = ux2;
+        {
+            let m = mission(vec![tab(1, "one")], Vec::new());
             let pairs = hints(&m, None, false, false);
             assert!(has(&pairs, "Enter", "actions") && has(&pairs, "m", "view actions"));
             for id in [
@@ -8159,7 +7320,6 @@ mod tests {
                     vec![tab(1, "one")],
                     vec![list_view(id.clone(), "V", Vec::new())],
                 );
-                m.snap.rules.ux2 = ux2;
                 m.view = 1;
                 let pairs = hints(&m, m.current(), false, false);
                 let enter = pairs
@@ -8260,7 +7420,6 @@ mod tests {
         nine.index = 9;
         let draw = |cols: usize, pane: bool| {
             let mut m = mission(vec![nine.clone()], vec![view.clone()]);
-            m.snap.rules.ux2 = true;
             m.snap.all_tabs = vec![nine.clone()];
             m.view = 1;
             m.size = (cols as u16, 44);
@@ -8322,7 +7481,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Routines, "Routines", items)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (240, 30);
         m.cursor = 19;
@@ -8391,7 +7549,6 @@ mod tests {
         let items = crate::routines::view::items(&[needing], &facts);
         let view = list_view(ViewId::Routines, "Routines", items);
         let mut m = mission(vec![nine.clone()], vec![view]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (240, 44);
         let (lines, _, _, _) = drawn(&m, 240, 44);
@@ -8410,7 +7567,7 @@ mod tests {
         );
     }
 
-    /// The Reopen view with UX 2.0: a closed tab that landed, chosen, with
+    /// The Reopen view: a closed tab that landed, chosen, with
     /// its last screen and 41 turns, and a past session.
     fn reopen_mission() -> (Mission, i64) {
         use crate::usage::closed::Closing;
@@ -8446,7 +7603,6 @@ mod tests {
             &|_| "today".into(),
         );
         let mut m = mission(Vec::new(), vec![list_view(ViewId::Reopen, "Reopen", items)]);
-        m.snap.rules.ux2 = true;
         m.snap.now_secs = now / 1000;
         m.snap.reopen_shot = Some(std::sync::Arc::new(Shot {
             lines: vec![ShotLine {
@@ -8459,7 +7615,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_reopen_s_worktrees_are_a_line_each_the_merged_ones_folded() {
+    fn reopen_s_worktrees_are_a_line_each_the_merged_ones_folded() {
         let (mut m, now) = reopen_mission();
         let row = |tree: &str, pr: Option<&str>, standing: &str, merged: bool| {
             Item::new(tree, tree)
@@ -8519,7 +7675,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_reopen_rows_and_the_chosen_one_s_pane_fill_any_width() {
+    fn reopen_rows_and_the_chosen_one_s_pane_fill_any_width() {
         let (mut m, _) = reopen_mission();
         for cols in [240, 160] {
             let (lines, _, images, _) = drawn(&m, cols, 40);
@@ -8672,12 +7828,11 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_ci_view_heads_its_sections_and_shows_the_chosen_check_s_step_beside() {
+    fn the_ci_view_heads_its_sections_and_shows_the_chosen_check_s_step_beside() {
         let mut working = tab(6, "cache");
         working.pr = Some(27);
         working.pr_repo = Some("acme/app".into());
         let mut m = mission(vec![working], vec![ci_view()]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         let mut lines = Vec::new();
@@ -8748,9 +7903,8 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_ci_view_draws_on_a_screen_with_room_for_almost_nothing() {
+    fn the_ci_view_draws_on_a_screen_with_room_for_almost_nothing() {
         let mut m = mission(Vec::new(), vec![ci_view()]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         for rows in 0..4 {
@@ -8761,9 +7915,8 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_chosen_check_is_the_one_beside_and_a_narrow_screen_puts_it_under() {
+    fn the_chosen_check_is_the_one_beside_and_a_narrow_screen_puts_it_under() {
         let mut m = mission(Vec::new(), vec![ci_view()]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         m.ci_check = Some((
@@ -8792,46 +7945,7 @@ mod tests {
     }
 
     #[test]
-    fn a_list_names_its_rows_and_the_bar_its_views_with_their_counts() {
-        let items = vec![
-            Item::new("a", "First thing")
-                .detail("about it")
-                .state(State::Attention),
-            Item::new("b", "Second thing"),
-        ];
-        let mut m = mission(
-            vec![tab(1, "one")],
-            vec![list_view(ViewId::Reopen, "Reopen", items)],
-        );
-        m.view = 1;
-        let (lines, hits) = screen(&m, 120, 12);
-        let text = texts(&lines);
-        assert!(
-            text[0].contains(" Tabs 1 ") && text[0].contains(" Reopen 2 "),
-            "{}",
-            text[0]
-        );
-        assert!(text[1].contains("● First thing  about it"));
-        assert!(text[2].contains("○ Second thing"));
-        assert_eq!(
-            lines[1].fill,
-            Some(Theme::DARK.highlight),
-            "the chosen row lit"
-        );
-        assert!(text[11].contains("jk move"));
-        let tabs_name = hits.iter().find(|h| h.spot == Spot::View(0)).unwrap();
-        assert_eq!(tabs_name.y, 0);
-        assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 2));
-        m.jump = Some(Jump {
-            text: "clo".into(),
-            matched: Some(1),
-        });
-        let (lines, _) = screen(&m, 120, 12);
-        assert!(texts(&lines)[0].contains("view: clo"));
-    }
-
-    #[test]
-    fn with_ux2_the_header_names_the_view_and_its_group_over_a_rule() {
+    fn the_header_names_the_view_and_its_group_over_a_rule() {
         let mut m = mission(
             vec![tab(1, "api")],
             vec![
@@ -8840,7 +7954,6 @@ mod tests {
                 list_view(ViewId::Settings, "Settings", vec![]),
             ],
         );
-        m.snap.rules.ux2 = true;
         m.view = 2;
         let (lines, hits) = screen(&m, 100, 12);
         let t = texts(&lines);
@@ -8873,7 +7986,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_list_of_views_scrolls_to_keep_the_chosen_one_in_sight() {
+    fn the_list_of_views_scrolls_to_keep_the_chosen_one_in_sight() {
         let mut m = mission(
             vec![tab(1, "api")],
             vec![
@@ -8883,7 +7996,6 @@ mod tests {
                 list_view(ViewId::Keys, "Keys", vec![]),
             ],
         );
-        m.snap.rules.ux2 = true;
         let text = |m: &Mission| {
             let (lines, hits, top) = super::super::nav::lines(m, 34, 10, false);
             (texts(&lines).join("\n"), hits, top)
@@ -8907,9 +8019,8 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_tabs_focus_on_the_filter_is_on_the_header() {
+    fn tabs_focus_on_the_filter_is_on_the_header() {
         let mut m = mission(vec![tab(1, "api")], work_views());
-        m.snap.rules.ux2 = true;
         m.snap.tab_focus = true;
         m.focus = Some(Focus::Filter);
         let (lines, hits) = screen(&m, 48, 12);
@@ -8925,20 +8036,6 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_one_row_bar_scrolls_to_tabs_focus() {
-        let mut m = mission(vec![tab(1, "api")], work_views());
-        m.snap.tab_focus = true;
-        let t = texts(&screen(&m, 60, 12).0);
-        assert!(!t[0].contains('‹'), "{:?}", t[0]);
-        m.focus = Some(Focus::View(5));
-        let (lines, hits) = screen(&m, 60, 12);
-        let t = texts(&lines);
-        assert!(t[0].contains("‹ "), "{:?}", t[0]);
-        let last = hits.iter().find(|h| h.spot == Spot::View(5)).unwrap();
-        assert!(last.x1 < 60, "{last:?}");
-    }
-
-    #[test]
     fn the_slack_relay_views_plain_list_shows_its_labels_and_whole_counts() {
         let items = super::super::relay_board::items(&[], None);
         let mut m = mission(
@@ -8946,40 +8043,34 @@ mod tests {
             vec![list_view(ViewId::Relay, "Slack relay", items)],
         );
         m.view = 1;
-        let text = texts(&screen(&m, 160, 30).0).join("\n");
+        let text = texts(&screen(&m, 79, 30).0).join("\n");
         assert!(text.contains("Not running"), "{text}");
-        assert!(
-            text.contains("0 sent by itself, 0 notified you today"),
-            "{text}"
-        );
+        assert!(text.contains("0 sent by itself, 0 notified"), "{text}");
         assert!(text.contains("Finished turns"), "{text}");
-        assert!(
-            text.contains("Failed commits, pushes and pull requests"),
-            "{text}"
-        );
+        assert!(text.contains("Failed commits, pushes"), "{text}");
         assert!(text.contains("Thread only, 0 today"), "{text}");
     }
 
     #[test]
     fn settings_rows_line_up_as_name_value_and_what_it_does() {
-        let items = views::settings_items(&[], false);
+        let items = views::settings_items(&[]);
         let mut m = mission(
             Vec::new(),
             vec![list_view(ViewId::Settings, "Settings", items)],
         );
         m.view = 1;
-        let (lines, _) = screen(&m, 160, 20);
+        let (lines, _) = screen(&m, 100, 20);
         let text = texts(&lines);
-        assert!(text[1].starts_with(" INTEGRATIONS"), "{text:#?}");
+        assert!(text[3].starts_with(" INTEGRATIONS"), "{text:#?}");
         assert!(
-            text[2].contains("GitHub") && (text[2].contains(" on ") || text[2].contains(" off ")),
+            text[4].contains("GitHub") && (text[4].contains(" on ") || text[4].contains(" off ")),
             "{}",
-            text[2]
+            text[4]
         );
     }
 
     #[test]
-    fn with_ux2_settings_is_a_board_of_categories_and_the_options_of_the_one_in_front() {
+    fn settings_is_a_board_of_categories_and_the_options_of_the_one_in_front() {
         let mut all = crate::settings::schema();
         let changed = all
             .iter_mut()
@@ -8987,7 +8078,7 @@ mod tests {
             .unwrap();
         changed.value = serde_json::Value::Bool(!crate::util::truthy(&changed.default));
         let (key, label) = (changed.key.clone(), changed.label.clone());
-        let items = views::settings_items_of(&all, &[], true);
+        let items = views::settings_items_of(&all, &[]);
         let at = items
             .iter()
             .position(|i| i.id == format!("setting:{key}"))
@@ -8996,7 +8087,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Settings, "Settings", items.clone())],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (160, 48);
         m.cursor = at as isize;
@@ -9089,36 +8179,7 @@ mod tests {
     }
 
     #[test]
-    fn a_board_lays_its_columns_side_by_side() {
-        let item = |n: u32, column: &str| {
-            Item::new(n.to_string(), format!("#{n} PR {n}"))
-                .detail("open")
-                .group(column)
-        };
-        let items = vec![
-            item(1, "Draft"),
-            item(2, "In review"),
-            item(3, "In review"),
-            item(4, "Merged"),
-        ];
-        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
-        m.view = 1;
-        let (lines, hits) = screen(&m, 150, 20);
-        let text = texts(&lines);
-        assert!(
-            text[1].contains("DRAFT 1")
-                && text[1].contains("IN REVIEW 2")
-                && text[1].contains("MERGED 1"),
-            "{}",
-            text[1]
-        );
-        assert!(text[3].contains("#1 PR 1") && text[3].contains("#2 PR 2"));
-        assert!(text[5].contains("#3 PR 3"));
-        assert!(hits.iter().any(|h| h.spot == Spot::Index(3)));
-    }
-
-    #[test]
-    fn with_ux2_the_pr_board_draws_each_pr_as_a_card() {
+    fn the_pr_board_draws_each_pr_as_a_card() {
         let item = |n: u32, column: &str, checks: &str| {
             Item::new(
                 n.to_string(),
@@ -9136,10 +8197,9 @@ mod tests {
             item(3, "Approved", "pending"),
         ];
         let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
-        let (lines, hits) = screen(&m, 150, 30);
+        let (lines, hits) = screen(&m, 180, 30);
         let text = texts(&lines);
         assert!(
             text[3].contains("IN REVIEW 2") && text[3].contains("APPROVED 1"),
@@ -9195,11 +8255,10 @@ mod tests {
             .group("In review")
             .data(serde_json::json!({ "pr": { "number": 1 }, "author": "ana", "body": body }));
         let mut m = mission(vec![], vec![list_view(ViewId::Prs, "PRs", vec![item])]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 0;
         m.size = (160, 20);
-        let columns = crate::sources::prboard::columns(true);
+        let columns = crate::sources::prboard::COLUMNS;
         let draw = |m: &Mission| {
             let (mut lines, mut hits) = (Vec::new(), Vec::new());
             let view = &m.snap.views[0];
@@ -9263,7 +8322,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_pr_board_names_reviewers_or_the_tab_and_shows_the_chosen_pr_beside_it() {
+    fn the_pr_board_names_reviewers_or_the_tab_and_shows_the_chosen_pr_beside_it() {
         let item = |n: u32, column: &str, reviewers: &str| {
             Item::new(n.to_string(), format!("#{n} PR {n}"))
                 .group(column)
@@ -9281,10 +8340,9 @@ mod tests {
         let mut working = tab(3, "settings");
         working.pr = Some(1);
         let mut m = mission(vec![working], vec![list_view(ViewId::Prs, "PRs", items)]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
-        let columns = crate::sources::prboard::columns(true);
+        let columns = crate::sources::prboard::COLUMNS;
         let mut lines = Vec::new();
         let mut hits = Vec::new();
         let view = &m.snap.views[0];
@@ -9384,11 +8442,10 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Tickets, "Tickets", items)],
         );
-        m.snap.rules.ux2 = true;
         m.snap.side_keys = "C-M-S-h C-M-S-l".into();
         m.view = 1;
         m.cursor = 0;
-        let columns = crate::sources::tickets::columns(true);
+        let columns = crate::sources::tickets::COLUMNS;
         let drawn = |m: &Mission| {
             let mut l = Vec::new();
             let mut h = Vec::new();
@@ -9543,7 +8600,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_pr_and_ticket_boards_draw_the_kit_s_cards_at_any_width() {
+    fn the_pr_and_ticket_boards_draw_the_kit_s_cards_at_any_width() {
         let pr = Item::new("1", "#1 Fix the menu")
             .group("In review")
             .data(serde_json::json!({ "pr": { "number": 1 }, "checks": "success", "meta": "w" }));
@@ -9558,7 +8615,7 @@ mod tests {
                 ViewId::Prs,
                 "PRs",
                 pr,
-                crate::sources::prboard::columns(true),
+                crate::sources::prboard::COLUMNS,
                 "IN REVIEW 1",
                 "╭ #1 ─",
             ),
@@ -9566,13 +8623,12 @@ mod tests {
                 ViewId::Tickets,
                 "Tickets",
                 ticket,
-                crate::sources::tickets::columns(true),
+                crate::sources::tickets::COLUMNS,
                 "TODO 1",
                 "╭ AB-1 ─",
             ),
         ] {
             let mut m = mission(Vec::new(), vec![list_view(id, title, vec![item])]);
-            m.snap.rules.ux2 = true;
             m.view = 1;
             m.cursor = 0;
             for cols in [120, 160, 240] {
@@ -9627,7 +8683,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_ticket_board_draws_each_ticket_as_a_card_and_the_chosen_one_beside_it() {
+    fn the_ticket_board_draws_each_ticket_as_a_card_and_the_chosen_one_beside_it() {
         let ticket = |id: &str, column: &str, priority: u64, extra: serde_json::Value| {
             let mut data = serde_json::json!({
                 "ticket": id, "priority": priority, "priorityLabel": "Urgent",
@@ -9659,10 +8715,9 @@ mod tests {
             vec![tab(4, "AB-2")],
             vec![list_view(ViewId::Tickets, "Tickets", items)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 0;
-        let columns = crate::sources::tickets::columns(true);
+        let columns = crate::sources::tickets::COLUMNS;
         let (mut lines, mut hits) = (Vec::new(), Vec::new());
         board_cards(
             &m.snap.views[0],
@@ -9740,7 +8795,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_prs_merged_this_week_are_a_row_under_the_columns() {
+    fn the_prs_merged_this_week_are_a_row_under_the_columns() {
         let item = |n: u32, column: &str| {
             let mut i = Item::new(n.to_string(), format!("#{n} PR {n}"))
                 .group(column)
@@ -9750,9 +8805,8 @@ mod tests {
         };
         let items = vec![item(1, "In review"), item(2, "Merged"), item(3, "Merged")];
         let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
-        m.snap.rules.ux2 = true;
         m.cursor = 2;
-        let columns = crate::sources::prboard::columns(true);
+        let columns = crate::sources::prboard::COLUMNS;
         let (mut lines, mut hits) = (Vec::new(), Vec::new());
         board_cards(
             &m.snap.views[0],
@@ -9800,17 +8854,16 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_narrow_pr_board_shows_the_chosen_pr_s_column() {
+    fn a_narrow_pr_board_shows_the_chosen_pr_s_column() {
         let item = |n: u32, column: &str| {
             Item::new(n.to_string(), format!("#{n} PR {n}"))
                 .group(column)
                 .data(serde_json::json!({ "pr": { "number": n } }))
         };
-        let columns = crate::sources::prboard::columns(true);
+        let columns = crate::sources::prboard::COLUMNS;
         let last = columns[columns.len() - 2];
         let items = vec![item(1, columns[0]), item(2, last)];
         let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
-        m.snap.rules.ux2 = true;
         let draw = |m: &Mission| {
             let (mut l, mut h) = (Vec::new(), Vec::new());
             board_cards(
@@ -9893,11 +8946,11 @@ mod tests {
         let (lines, _) = screen(&m, 100, 12);
         let text = texts(&lines);
         assert!(
-            text[1].contains("Tab") && text[1].contains("% CPU"),
+            text[3].contains("Tab") && text[3].contains("% CPU"),
             "{}",
-            text[1]
+            text[3]
         );
-        assert!(text[2].contains("1 build") && text[2].contains("93.0"));
+        assert!(text[4].contains("1 build") && text[4].contains("93.0"));
         assert!(text[10].contains("All tabs"), "{text:#?}");
     }
 
@@ -9975,7 +9028,6 @@ mod tests {
             vec![tab(7, "rust notes"), tab(3, "uncommitted")],
             vec![view],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         super::super::resources_board::Sort::Cpu.sort(&mut m.snap.views[0].data.items);
         m.cursor = 1;
@@ -10025,7 +9077,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_resources_is_a_board_of_the_computer_and_each_tab() {
+    fn resources_is_a_board_of_the_computer_and_each_tab() {
         use crate::usage::resources::{self, History, Proc, TabPanes, Top};
         let proc = |pid, ppid, name: &str, cpu, memory| Proc {
             pid,
@@ -10076,7 +9128,6 @@ mod tests {
             loaded: true,
         };
         let mut m = mission(vec![tab(1, "calm"), tab(3, "build")], vec![view]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         // The snapshot's CPU order, as the server sorts it for the client.
         super::super::resources_board::Sort::Cpu.sort(&mut m.snap.views[0].data.items);
@@ -10191,7 +9242,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_autopilot_keeps_the_chosen_card_in_sight() {
+    fn autopilot_keeps_the_chosen_card_in_sight() {
         let rows: Vec<_> = (1..=10)
             .map(|n| pilot_row(n, &format!("item-{n}"), TabState::Working))
             .collect();
@@ -10213,7 +9264,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = last as isize;
         let (lines, hits, meters, _) = drawn(&m, 125, 24);
@@ -10227,7 +9277,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_autopilot_times_each_card_until_it_lands() {
+    fn autopilot_times_each_card_until_it_lands() {
         let now = 1_700_100_000;
         let mut working = pilot_row(3, "Give notes stable IDs", TabState::Working);
         working.started = Some(now - 42 * 60);
@@ -10249,7 +9299,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.snap.now_secs = now;
         m.view = 1;
         let (lines, _, _, _) = drawn(&m, 300, 24);
@@ -10273,7 +9322,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_an_item_whose_start_failed_says_why_on_its_card_and_beside_the_board() {
+    fn an_item_whose_start_failed_says_why_on_its_card_and_beside_the_board() {
         let mut list = crate::autopilot::view::items(
             &pilot_summary(),
             "",
@@ -10297,7 +9346,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = chosen as isize;
         let text = texts(&drawn(&m, 200, 30).0).join("\n");
@@ -10313,7 +9361,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_autopilot_is_a_board_of_its_items_with_the_skipped_last() {
+    fn autopilot_is_a_board_of_its_items_with_the_skipped_last() {
         let mut landing = pilot_row(3, "Give notes stable IDs", TabState::Working);
         landing.loop_skill = Some("queue".into());
         landing.phase = Some("pushing".into());
@@ -10359,7 +9407,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (200, 30);
         // A card whose item links no plan says so, and so does one whose
@@ -10479,7 +9526,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_autopilot_has_no_skipped_column_while_nothing_is_skipped() {
+    fn autopilot_has_no_skipped_column_while_nothing_is_skipped() {
         let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
         let list = crate::autopilot::view::items(
             &pilot_summary(),
@@ -10495,7 +9542,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (200, 30);
         let text = texts(&drawn(&m, 200, 30).0);
@@ -10511,7 +9557,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_blocked_item_stands_in_its_own_column_naming_each_item_it_waits_on() {
+    fn a_blocked_item_stands_in_its_own_column_naming_each_item_it_waits_on() {
         let rows = vec![pilot_row(3, "The base", TabState::Working)];
         let held = [crate::autopilot::pilot::Held {
             text: "Builds on both".into(),
@@ -10539,7 +9585,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (200, 40);
         m.cursor = blocked as isize;
@@ -10676,7 +9721,6 @@ mod tests {
                 list_view(ViewId::Settings, "Settings", vec![Item::default()]),
             ],
         );
-        m.snap.rules.ux2 = true;
         m.lone = Some(165);
         let spread = ratatui::layout::Rect::new(35, 0, 365, 40);
         let width = |m: &Mission| m.view_area(spread).width;
@@ -10699,9 +9743,6 @@ mod tests {
         assert_eq!(width(&m), 165, "Settings has no pane beside");
         m.view = 0;
         assert_eq!(width(&m), 165, "the Tabs cards");
-        m.view = 2;
-        m.snap.rules.ux2 = false;
-        assert_eq!(width(&m), 165, "no pane beside the list with UX 2.0 off");
     }
 
     #[test]
@@ -10736,7 +9777,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_notifications_are_a_history_by_day_with_their_kinds() {
+    fn notifications_are_a_history_by_day_with_their_kinds() {
         use crate::sidebar::history::{Entry, Kind, Sidebar};
         const DAY: i64 = 86_400_000;
         let now = rules().now_ms;
@@ -10781,7 +9822,6 @@ mod tests {
                 rows(None),
             )],
         );
-        m.snap.rules.ux2 = true;
         m.snap.notice_counts = Some(crate::mission::history::counts(&all, today, &tz));
         m.view = 1;
         let (lines, hits) = screen(&m, 140, 30);
@@ -10819,7 +9859,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_chosen_landing_stays_in_sight_under_two_headings() {
+    fn the_chosen_landing_stays_in_sight_under_two_headings() {
         let landing = |n: usize| {
             Item::new(format!("land:/w/{n}"), format!("1. landing-{n}"))
                 .detail("waiting")
@@ -10834,7 +9874,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Landing, "Landing", items)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = last as isize;
         let (lines, _) = screen(&m, 140, 24);
@@ -10846,7 +9885,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_landing_fills_the_screen_whatever_the_headings_out_of_sight() {
+    fn landing_fills_the_screen_whatever_the_headings_out_of_sight() {
         let landing = |n: usize| {
             Item::new(format!("land:/w/{n}"), format!("1. landing-{n}"))
                 .detail("waiting")
@@ -10866,7 +9905,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Landing, "Landing", items)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = last as isize;
         let (lines, _) = screen(&m, 140, 26);
@@ -11007,14 +10045,13 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Landing, "Landing", items)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
         m
     }
 
     #[test]
-    fn with_ux2_landing_s_columns_fill_any_width_and_narrow_in_board_45_s_order() {
+    fn landing_s_columns_fill_any_width_and_narrow_in_board_45_s_order() {
         let m = landing_board();
         // The last tinted column of a row: the cells end at the right edge.
         let tinted_end = |line: &Line| {
@@ -11078,7 +10115,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_chosen_landing_s_detail_says_what_it_waits_on_and_its_last_review() {
+    fn the_chosen_landing_s_detail_says_what_it_waits_on_and_its_last_review() {
         let mut m = landing_board();
         let (lines, hits) = screen(&m, 160, 50);
         let text = texts(&lines).join("\n");
@@ -11164,7 +10201,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_landing_s_worktree_under_the_home_is_written_from_tilde() {
+    fn a_landing_s_worktree_under_the_home_is_written_from_tilde() {
         let mut m = landing_board();
         let landing = m
             .snap
@@ -11182,7 +10219,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_landing_is_a_row_of_stage_cells_with_its_note_under_its_name() {
+    fn a_landing_is_a_row_of_stage_cells_with_its_note_under_its_name() {
         let landing = |n: &str, holding: bool, place: Option<u64>, phase: Option<&str>| {
             Item::new(format!("land:/w/{n}"), format!("1. {n}"))
                 .detail(if holding {
@@ -11203,7 +10240,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Landing, "Landing", items)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         let (lines, _) = screen(&m, 140, 20);
         let text = texts(&lines);
@@ -11277,7 +10313,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Landing, "Landing", more)],
         );
-        f.snap.rules.ux2 = true;
         f.view = 1;
         let (flines, _) = screen(&f, 140, 30);
         let ftext = texts(&flines);
@@ -11309,14 +10344,6 @@ mod tests {
             ftext[pr]
         );
         assert!(ftext[pr + 2].contains("✕ can't merge"), "{}", ftext[pr + 2]);
-        // Off, the rows are as before.
-        m.snap.rules.ux2 = false;
-        let (lines, _) = screen(&m, 140, 20);
-        assert!(
-            texts(&lines)
-                .iter()
-                .any(|l| l.contains("1. note-stable-ids"))
-        );
     }
 
     /// A description of `n` paragraphs, "Line 1" to "Line <n>".
@@ -11338,7 +10365,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Tickets, "Tickets", vec![item])],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (160, 20);
         let pane = |m: &Mission| texts(&drawn(m, 160, 20).0).join("\n");
@@ -11378,7 +10404,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Tickets, "Tickets", vec![item])],
         );
-        m.snap.rules.ux2 = true;
         m.snap.rules.scroll_bars = true;
         m.view = 1;
         m.size = (160, 20);
@@ -11439,7 +10464,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (160, 30);
         m.cursor = chosen as isize;
@@ -11495,7 +10519,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_usage_view_is_a_board_of_charts_tabs_limits_and_requests() {
+    fn the_usage_view_is_a_board_of_charts_tabs_limits_and_requests() {
         use crate::requests::{ServiceCount, Tally};
         use crate::usage::charts::{self, Limit, Model, ModelSpend, SpanSpend, TabSpend};
         let now = rules().now_secs();
@@ -11607,7 +10631,6 @@ mod tests {
             Vec::new(),
             vec![list_view(ViewId::Usage, "Usage", items.clone())],
         );
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (160, 40);
         // The cursor on the first tab's row.
@@ -11758,7 +10781,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_keys_view_is_a_board_of_groups_a_heatmap_the_chosen_key_and_its_table() {
+    fn the_keys_view_is_a_board_of_groups_a_heatmap_the_chosen_key_and_its_table() {
         use crate::mission::keymap::{self, Shown};
         let mut bindings = crate::mux::keys::Bindings::default();
         bindings.apply(&serde_json::json!({ "root": { "M-g": "new-tab" } }));
@@ -11776,7 +10799,6 @@ mod tests {
         let mut view = list_view(ViewId::Keys, "Keys", items.clone());
         view.data.head = keymap::head(&counts, true);
         let mut m = mission(Vec::new(), vec![view]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.size = (160, 44);
         let find = items
@@ -11851,7 +10873,6 @@ mod tests {
         let mut view = list_view(ViewId::Keys, "Keys", items.clone());
         view.data.head = keymap::head(&counts, true);
         let mut m = mission(Vec::new(), vec![view]);
-        m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = items
             .iter()

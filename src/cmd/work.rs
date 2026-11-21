@@ -1469,89 +1469,28 @@ impl Server {
                         return;
                     }
                 };
-                let short = crate::tabs::title::short_name(&item.text);
                 let linked = tabs
                     .iter()
                     .find(|(t, named)| *named == item.text && server.tabs.contains_key(t))
                     .map(|(t, _)| *t);
-                if settings::is_on("ux2") {
-                    let open = ItemOpen {
-                        note,
-                        line,
-                        item,
-                        key,
-                        text,
-                        repos: found.dirs,
-                        note_repo,
-                        linked,
-                        reopened: false,
-                        here: found.here.clone(),
-                    };
-                    server.work_item_box(client, open, None);
-                    return;
-                }
-                if let Some(tab) = linked {
-                    let question = Confirm::new(format!("“{short}” has a tab already. Go to it?"));
-                    server.ask(client, question, move |server, client, yes| {
-                        if yes {
-                            server.go_to_tab(client, tab);
-                        }
-                    });
-                    return;
-                }
-                let ask = format!("Work on “{short}”: the repository");
-                server.ask_dir(
-                    client,
-                    &ask,
-                    found,
-                    Wanted::Repo,
-                    move |server, client, repo, _| {
-                        let (at, name) = (repo.clone(), note.clone());
-                        server.off_task(
-                            client,
-                            move || {
-                                worktree_from_note::unclaimed(&at, &name, &text)
-                                    .iter()
-                                    .any(|i| i.line == line)
-                            },
-                            move |server, client, free| {
-                                if !free {
-                                    server.say(
-                                        Some(client),
-                                        &format!(
-                                            "“{short}” has a worktree in {} already.",
-                                            paths::tilde(&repo)
-                                        ),
-                                    );
-                                    return;
-                                }
-                                let at = repo.clone();
-                                server.autopilot_pick_target(
-                                    client,
-                                    at,
-                                    move |server, client, target| {
-                                        keep_note_repo(key, &repo);
-                                        if let Some(tab) = server.open_item_tab(
-                                            client,
-                                            &repo,
-                                            &note,
-                                            &item,
-                                            &target,
-                                            Opened::Front,
-                                        ) {
-                                            server.front(client, &[tab]);
-                                        }
-                                    },
-                                );
-                            },
-                        );
-                    },
-                );
+                let open = ItemOpen {
+                    note,
+                    line,
+                    item,
+                    key,
+                    text,
+                    repos: found.dirs,
+                    note_repo,
+                    linked,
+                    reopened: false,
+                    here: found.here.clone(),
+                };
+                server.work_item_box(client, open, None);
             },
         );
     }
 
-    /// UX 2.0's "Work on this item" box (src/cmd/work_item_box.rs) for
+    /// The "Work on this item" box (src/cmd/work_item_box.rs) for
     /// `open`'s item, on the repository `chosen` (by its place among the
     /// offered ones, the note's last first when none is), what it shows of
     /// the repository read off the task: its branches and the one last
@@ -2018,8 +1957,8 @@ impl Server {
             &item_args(item.line, target),
         ));
         let tab = self.work_tab(client, repo, command, opened)?;
-        // Named with the item cut short, for the tab bar and the second
-        // status line, its whole first line kept as the tab's full title,
+        // Named with the item cut short, for the header and the sidebar,
+        // its whole first line kept as the tab's full title,
         // which M-T, the sidebar and mission control show.
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.insert(

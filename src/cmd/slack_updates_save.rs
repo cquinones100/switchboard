@@ -18,7 +18,7 @@
 //! "ts": "…", "thread": "…" }], "threads": [{ "channel": "C…", "thread":
 //! "…", "text": "…" }] }`, replied being what you wrote yourself and threads
 //! the threads read, each `text` the read-thread tool's answer as it came,
-//! kept for the Slack board while Settings' `slack_threads` and `ux2` are on
+//! kept for the Slack board while Settings' `slack_threads` is on
 //! (`day::slack_thread::save_found`).
 
 use std::io::Read;
@@ -61,7 +61,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 .get("threads")
                 .and_then(Value::as_array)
                 .unwrap_or(&none);
-            let board = crate::settings::is_on("slack_threads") && crate::settings::is_on("ux2");
+            let board = crate::settings::is_on("slack_threads");
             if !board {
                 println!("{said}");
                 return ExitCode::SUCCESS;

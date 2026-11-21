@@ -11,7 +11,7 @@
 //! which lights the card it is on, so the side with the keys shows), a
 //! letter in the plan (or a click on a card) chooses that option, `e` opens the plan note in
 //! the note's place, Esc closes the panel, and Enter starts the item, as
-//! `gw` does. New with UX 2.0; the tmux version opened a plan as any note.
+//! `gw` does. New; the tmux version opened a plan as any note.
 //!
 //! The note and the plan are laid out with `kit::columns`, weighted as
 //! board 8 draws them (45 and 79, the plan never under 34); the board's

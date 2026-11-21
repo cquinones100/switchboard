@@ -1,7 +1,7 @@
-//! UX 2.0's tab header: the rows at the top of a tab's area, above its
-//! panes, in place of the status line's tab at the bottom. New with UX 2.0,
-//! with no tmux-version file behind it, since tmux drew its status line
-//! and nothing over a window's panes.
+//! The tab header (UX 2.0's design): the rows at the top of a tab's area,
+//! above its panes, in place of the status line tmux drew at the bottom.
+//! New, with no tmux-version file behind it, since tmux drew nothing over a
+//! window's panes.
 //!
 //! With the sidebar hidden, its first row starts with the workspace's own
 //! buttons, as the sidebar's top line does (boards 57 to 60): ← and → back

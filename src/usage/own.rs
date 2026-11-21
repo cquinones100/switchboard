@@ -282,18 +282,6 @@ pub const OWN_FILES: &[OwnFile] = &[
                 40,
                 "The narrowest window that gets a sidebar, 40 or more",
             ),
-            number(
-                "cardWidth",
-                "Card width",
-                30,
-                "Mission control's cards, in columns, 30 or more",
-            ),
-            number(
-                "cardHeight",
-                "Card height",
-                6,
-                "Mission control's cards, in lines, 6 or more",
-            ),
             whole(
                 "Plugins",
                 "The plugins that load and their options, under \"plugins\" (opens the file)",

@@ -121,7 +121,7 @@ impl Server {
         }
     }
 
-    /// The ☕ on the status line, or the sidebar's top line, drawn again.
+    /// The ☕ on the sidebar's top line, drawn again.
     fn awake_redraw(&mut self) {
         for c in self.clients.values_mut() {
             c.dirty = true;

@@ -31,8 +31,8 @@
 //! background), wherever it is, since a terminal without kitty's pictures
 //! draws the character as a box: those of the panes, and those copied
 //! anywhere else (a card, the header's rows, the sidebar). No piece is
-//! ever on the frame's last row, which a pane reaches with UX 2.0's status
-//! line gone: a sixel reaching it would scroll the screen, so a picture
+//! ever on the frame's last row, which a pane reaches with no status line
+//! under it: a sixel reaching it would scroll the screen, so a picture
 //! there loses that row.
 
 use std::collections::{HashMap, HashSet};
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn a_pane_reaching_the_last_row_has_its_picture_cut_above_it() {
-        // UX 2.0: no status line, the pane down to the frame's last row.
+        // No status line: the pane down to the frame's last row.
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 10));
         let pane = Rect::new(0, 4, 20, 6);
         draw(&mut buf, 7, (3, 7), 0, 3, 4);

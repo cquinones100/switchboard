@@ -346,11 +346,10 @@ impl Server {
             None => Some(slot.pane.styled_lines()),
             Some(at) => record.shot_settled(at).map(|s| s.lines.clone()),
         };
-        let header = crate::status::top() > 0
-            && !self
-                .tabs
-                .get(&tab)
-                .is_some_and(|t| t.zoomed || session.is_some_and(|s| s.headerless(t)));
+        let header = !self
+            .tabs
+            .get(&tab)
+            .is_some_and(|t| t.zoomed || session.is_some_and(|s| s.headerless(t)));
         let caps = crate::mux::graphics::round_ends(&c.term);
         let c = self.clients.get_mut(&id).expect("checked above");
         if let Some(view) = c.overlays.find_mut::<HistoryView>() {

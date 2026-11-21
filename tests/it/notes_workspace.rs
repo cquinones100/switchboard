@@ -220,7 +220,6 @@ fn m_e_brings_notes_beside_a_pane_and_home_again_with_a_pane_left_in_its_place()
             .ok(&["capture-pane", "-t", &stand_in])
             .contains("Notes is beside tab 1")
     });
-    client.wait_text("Notes here");
     client.wait_text("Notes is beside tab 1");
 
     // M-e again, in Notes: home, in the place of the pane left there.
@@ -504,7 +503,7 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
     let rig = Rig::with(json!({ "notice_list": false }));
     note_written(&rig, "Plan.md", "Plan");
     let mut client = rig.server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("✎ New note: Plan");
     // M-s into the sidebar, n to the notifications, Enter on the first.
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
@@ -520,13 +519,13 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
         "Plan.md"
     );
     client.wait_for("the notification let go", |s| {
-        !s.iter().any(|l| l.contains("● New note: Plan"))
+        !s.iter().any(|l| l.contains("✎ New note: Plan"))
     });
     // Running, it is asked to show the note through its socket.
     std::fs::write(rig.notes_dir().join("Work/Later.md"), "# Later\n").unwrap();
     note_written(&rig, "Work/Later.md", "Later");
     client.type_text(&format!("{ALT}1"));
-    client.wait_text("● New note: Later");
+    client.wait_text("✎ New note: Later");
     // A choice from the sidebar's menu that opens Notes may leave the
     // focus in the sidebar.
     let list = rig.wait("the first tab in front", |l| tabs(l)[0]["current"] == true);
@@ -565,7 +564,7 @@ fn a_new_notes_notification_takes_notes_home_from_beside_a_tab_before_opening_it
     .unwrap();
 
     note_written(&rig, "Work/Later.md", "Later");
-    client.wait_text("● New note: Later");
+    client.wait_text("✎ New note: Later");
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
     open_from_the_view(&mut client);
@@ -641,15 +640,15 @@ fn m_p_with_notes_in_front_lists_autopilot_on_its_note_and_its_own_commands() {
     client.type_text("autopilot work plan");
     client.wait_text("1/1");
     client.type_text("\r");
-    client.wait_text("Working Plan");
+    client.wait_text("Autopilot · Plan");
 }
 
 /// With UX 2.0, M-e in Notes' own tab is the app's (the plan of the item
 /// under its cursor beside the note): passed to it, Notes staying where it
 /// is; beside another tab, M-e still sends Notes home.
 #[test]
-fn with_ux2_m_e_in_notes_own_tab_is_the_apps_and_beside_a_tab_sends_it_home() {
-    let rig = Rig::with(json!({ "ux2": true }));
+fn m_e_in_notes_own_tab_is_the_apps_and_beside_a_tab_sends_it_home() {
+    let rig = Rig::with(json!({}));
     let (mut client, first, notes) = notes_open(&rig);
     // Notes' own tab in front, M-e there: the stand-in app is sent it.
     client.type_text(&format!("{ALT}2"));
@@ -738,8 +737,8 @@ fn with_an_app_in_each_tab_m_e_opens_one_on_each_tabs_note_and_leaves_the_others
 /// line (board 7), so its pane takes the header's rows, while another tab
 /// keeps the header and its keys.
 #[test]
-fn with_ux2_notes_own_tab_has_no_header_and_its_pane_takes_the_rows() {
-    let rig = Rig::with(json!({ "ux2": true }));
+fn notes_own_tab_has_no_header_and_its_pane_takes_the_rows() {
+    let rig = Rig::with(json!({}));
     let (mut client, first, notes) = notes_open(&rig);
     client.wait_for("the first tab's header", |s| s[2].contains("M-c Claude"));
     let rows_of = |l: &Value, pane: &str| {

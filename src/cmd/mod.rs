@@ -625,7 +625,7 @@ mod tests {
         assert!(has("land-lock", Some("*")));
         assert!(!has("land-lock", Some("nosuch")));
         assert!(!has("no-such-program", None));
-        assert!(has("setting", Some("ux2")));
+        assert!(has("setting", Some("theme")));
         assert!(has("show", Some("*")));
     }
 }

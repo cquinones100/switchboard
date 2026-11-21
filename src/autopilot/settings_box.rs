@@ -3,7 +3,7 @@
 //! count: "Work a note" while the mode is off, which starts it, and
 //! "Autopilot · <note>" while it is on, which saves what changed at once.
 //! No tmux-version file is behind it; it takes the place of
-//! `autopilot_setup`'s chain (src/autopilot/serve.rs) with UX 2.0 on.
+//! `autopilot_setup`'s chain (src/autopilot/serve.rs).
 //!
 //! Under a status line (working, paused or off, its tabs working and open,
 //! today's spend against the limit), each setting is a row: the note (Enter

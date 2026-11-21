@@ -1,4 +1,4 @@
-//! With UX 2.0, the Resources view as a board (board 25 of the canvas,
+//! The Resources view as a board (board 25 of the canvas,
 //! new with the port; the tmux version drew it only as the table `list`
 //! still draws below `BOARD_AT` columns): the whole computer at the top (its
 //! CPU as a sparkline of the last two minutes, its memory as a meter, and

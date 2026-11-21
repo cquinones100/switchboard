@@ -11,7 +11,7 @@
 //! and the ticket read again in the background, through Linear's API with
 //! the key `integrations::linear` finds.
 //!
-//! With UX 2.0 on, the ticket is laid out as board 14 draws it (`board`,
+//! The ticket is laid out as board 14 draws it (`board`,
 //! through `super::board`): the description, sub-issues and comment
 //! threads, with its facts, pull requests, related tickets and links beside
 //! them.
@@ -29,7 +29,7 @@ use super::pager::{self, Content};
 use crate::integrations::{github, linear};
 use crate::photos::{Service, Who};
 use crate::ui::kit::{self, Mark, Tone};
-use crate::{paths, settings, util};
+use crate::{paths, util};
 
 const SOURCE: &str = "M-i ticket view";
 /// Where a diagram that can't be drawn here is shown properly.
@@ -395,10 +395,6 @@ pub fn tidy(text: &str) -> String {
         .into_owned()
 }
 
-fn day(iso: &Value) -> String {
-    iso.as_str().unwrap_or("").chars().take(10).collect()
-}
-
 fn name_at(v: &Value, path: &str) -> Option<String> {
     v.pointer(path)
         .and_then(Value::as_str)
@@ -411,175 +407,6 @@ fn nodes<'a>(v: &'a Value, path: &str) -> Vec<&'a Value> {
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default()
-}
-
-/// The ticket as Markdown, as pr-view.js's `ticket` laid it out.
-pub fn markdown(issue: &Value) -> String {
-    let text = |path: &str| name_at(issue, path).unwrap_or_default();
-    let mut facts: Vec<String> = Vec::new();
-    if let Some(state) = name_at(issue, "/state/name") {
-        facts.push(state);
-    }
-    if let Some(priority) = name_at(issue, "/priorityLabel").filter(|p| p != "No priority") {
-        facts.push(priority);
-    }
-    facts.push(match name_at(issue, "/assignee/name") {
-        Some(name) => format!("assigned to {name}"),
-        None => "unassigned".into(),
-    });
-    if let Some(project) = name_at(issue, "/project/name") {
-        facts.push(format!("project {project}"));
-    }
-    if let Some(cycle) = issue.get("cycle").filter(|c| c.is_object()) {
-        let named = name_at(cycle, "/name").or_else(|| {
-            cycle
-                .get("number")
-                .filter(|n| !n.is_null())
-                .map(util::js_string)
-        });
-        facts.push(format!("cycle {}", named.unwrap_or_default()));
-    }
-    if let Some(estimate) = issue.get("estimate").filter(|e| !e.is_null()) {
-        facts.push(format!("estimate {}", util::js_string(estimate)));
-    }
-    let labels: Vec<String> = nodes(issue, "/labels/nodes")
-        .iter()
-        .filter_map(|l| name_at(l, "/name"))
-        .collect();
-    if !labels.is_empty() {
-        facts.push(labels.join(", "));
-    }
-    let list = |title: &str, rows: Vec<String>| {
-        if rows.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n## {title}\n\n{}", rows.join("\n"))
-        }
-    };
-    let link = |i: &Value| {
-        let state = name_at(i, "/state/name")
-            .map(|s| format!(" _({s})_"))
-            .unwrap_or_default();
-        format!(
-            "**{}** {}{state}",
-            name_at(i, "/identifier").unwrap_or_default(),
-            name_at(i, "/title").unwrap_or_default()
-        )
-    };
-    let relation = |kind: &str| match kind {
-        "blocks" => "Blocks".to_string(),
-        "duplicate" => "Duplicates".to_string(),
-        "related" => "Related to".to_string(),
-        "similar" => "Similar to".to_string(),
-        other => other.to_string(),
-    };
-    let mut comments = nodes(issue, "/comments/nodes");
-    comments.sort_by(|a, b| {
-        let at = |c: &Value| {
-            c.get("createdAt")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string()
-        };
-        at(a).cmp(&at(b))
-    });
-    let comment = |c: &Value, reply: bool| {
-        let who = name_at(c, "/user/name")
-            .or_else(|| name_at(c, "/botActor/name"))
-            .unwrap_or_else(|| "Someone".into());
-        let head = format!(
-            "{}**{who}** · {}",
-            if reply { "↳ " } else { "" },
-            day(c.get("createdAt").unwrap_or(&Value::Null))
-        );
-        let body = tidy(c.get("body").and_then(Value::as_str).unwrap_or(""));
-        if reply {
-            let quoted: Vec<String> = body.split('\n').map(|l| format!("> {l}")).collect();
-            format!("> {head}\n>\n{}", quoted.join("\n"))
-        } else {
-            format!("{head}\n\n{body}")
-        }
-    };
-    let parent_of = |c: &Value| name_at(c, "/parent/id");
-    let threads: Vec<String> = comments
-        .iter()
-        .filter(|c| parent_of(c).is_none())
-        .map(|c| {
-            let id = name_at(c, "/id");
-            let mut parts = vec![comment(c, false)];
-            parts.extend(
-                comments
-                    .iter()
-                    .filter(|r| parent_of(r).is_some() && parent_of(r) == id)
-                    .map(|r| comment(r, true)),
-            );
-            parts.join("\n\n")
-        })
-        .collect();
-    let parent = match (
-        name_at(issue, "/parent/identifier"),
-        name_at(issue, "/parent/title"),
-    ) {
-        (Some(id), title) => format!(" · sub-issue of {id} {}", title.unwrap_or_default()),
-        _ => String::new(),
-    };
-    let description = tidy(&text("/description"));
-    let mut out = String::new();
-    out.push_str(&format!("# {}: {}", text("/identifier"), text("/title")));
-    out.push_str(&format!("\n\n_{}_", facts.join(" · ")));
-    out.push_str(&format!(
-        "\n\n_Opened by {} on {}, updated {}{parent}_",
-        name_at(issue, "/creator/name").unwrap_or_else(|| "someone".into()),
-        day(issue.get("createdAt").unwrap_or(&Value::Null)),
-        day(issue.get("updatedAt").unwrap_or(&Value::Null)),
-    ));
-    out.push_str("\n\n---\n\n");
-    out.push_str(if description.trim().is_empty() {
-        "_No description._"
-    } else {
-        &description
-    });
-    out.push_str(&list(
-        "Sub-issues",
-        nodes(issue, "/children/nodes")
-            .iter()
-            .map(|c| format!("- {}", link(c)))
-            .collect(),
-    ));
-    out.push_str(&list(
-        "Related",
-        nodes(issue, "/relations/nodes")
-            .iter()
-            .map(|r| {
-                let kind = r.get("type").and_then(Value::as_str).unwrap_or("");
-                format!(
-                    "- {} {}",
-                    relation(kind),
-                    link(r.get("relatedIssue").unwrap_or(&Value::Null))
-                )
-            })
-            .collect(),
-    ));
-    out.push_str(&list(
-        "Links",
-        nodes(issue, "/attachments/nodes")
-            .iter()
-            .map(|a| {
-                format!(
-                    "- [{}]({})",
-                    name_at(a, "/title").unwrap_or_default(),
-                    name_at(a, "/url").unwrap_or_default()
-                )
-            })
-            .collect(),
-    ));
-    if !threads.is_empty() {
-        out.push_str(&format!(
-            "\n\n## Comments\n\n{}",
-            threads.join("\n\n---\n\n")
-        ));
-    }
-    out
 }
 
 /// A Linear user, for their avatar.
@@ -856,17 +683,9 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
     }
 }
 
-/// What the view shows of a ticket: board 14 with UX 2.0 on, else its
-/// Markdown, as pr-view.js laid it out.
+/// What the view shows of a ticket: board 14.
 fn content(issue: &Value) -> Content {
-    if settings::is_on("ux2") {
-        Content::Board(board(issue, jiff::Timestamp::now()))
-    } else {
-        Content::Markdown {
-            text: markdown(issue),
-            place: PLACE.into(),
-        }
-    }
+    Content::Board(board(issue, jiff::Timestamp::now()))
 }
 
 /// The ticket from Linear, or why it couldn't be read.
@@ -1103,24 +922,6 @@ mod tests {
     }
 
     #[test]
-    fn a_ticket_is_laid_out_as_its_page_in_linear() {
-        let md = markdown(&issue());
-        let expected = "# AB-1: Make it faster\n\n\
-            _In Progress · High · assigned to Jo · project Speed · cycle 7 · estimate 3 · perf, backend_\n\n\
-            _Opened by Sam on 2026-10-01, updated 2026-10-03 · sub-issue of AB-0 Speed it all up_\n\n\
-            ---\n\n\
-            It is slow. See [AB-2](https://linear.app/x/issue/AB-2/slow-thing) for more.\n\n\
-            ## Sub-issues\n\n- **AB-3** Cache it _(Todo)_\n\n\
-            ## Related\n\n- Blocks **AB-4** Ship\n\n\
-            ## Links\n\n- [PR #12](https://github.com/o/r/pull/12)\n\n\
-            ## Comments\n\n\
-            **Bot** · 2026-10-01\n\nWhere is it slow?\n\n\
-            > ↳ **Jo** · 2026-10-02\n>\n> Agreed.\n\n---\n\n\
-            **Sam** · 2026-10-03\n\nFound it.";
-        assert_eq!(md, expected);
-    }
-
-    #[test]
     fn the_board_has_sub_issues_threads_and_the_facts_beside() {
         let mut issue = issue();
         issue["state"] = json!({ "name": "In Review", "type": "started" });
@@ -1180,14 +981,6 @@ mod tests {
             assert!(screen.contains(want), "{want:?} in:\n{screen}");
         }
         assert!(pager.frame().contains("M-l"), "its keys on the footer");
-    }
-
-    #[test]
-    fn a_bare_ticket_with_nothing_else_still_reads() {
-        let md =
-            markdown(&json!({ "identifier": "AB-9", "title": "T", "labels": { "nodes": [] } }));
-        assert!(md.starts_with("# AB-9: T\n\n_unassigned_\n\n_Opened by someone on , updated _"));
-        assert!(md.ends_with("---\n\n_No description._"));
     }
 
     #[test]

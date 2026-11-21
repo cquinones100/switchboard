@@ -1,4 +1,4 @@
-//! With UX 2.0, the Keys view as a board (board 27 of the canvas, "Keys
+//! The Keys view as a board (board 27 of the canvas, "Keys
 //! with a heatmap", new with the port; the tmux version drew the keys only
 //! as the list `list` still draws below `BOARD_AT` columns): a panel of the
 //! groups at the left (the workspace's tags, then each app's own keys, then

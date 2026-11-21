@@ -30,7 +30,7 @@
 //! - `views`: the views after the tabs, Reopen and Settings among them; the Work map is M-j's picker.
 //! - `pane_search`: M-j's picker finding tabs by what their panes show.
 //! - `keymap`: the Keys view, every key Switchboard binds (M-/).
-//! - `keys_board`: with UX 2.0, the Keys view as a board: the groups, the
+//! - `keys_board`: the Keys view as a board: the groups, the
 //!   keyboard as a heatmap of the week's presses, the chosen key, the
 //!   group's table.
 //! - `find_key`: the Find a key box the Keys view's `m` menu opens: a
@@ -42,9 +42,9 @@
 //! - `calendar`: the Calendar view drawn as a day, hours down the side,
 //!   the chosen event beside it with who is going as photos.
 //! - `history`: the Notifications view as a history by day.
-//! - `inbox_board`: with UX 2.0, the Inbox as a board: the notifications
+//! - `inbox_board`: the Inbox as a board: the notifications
 //!   by day with who acted's photos, the chosen one in its ticket beside.
-//! - `nav`: with UX 2.0, the list of its groups and views, in the
+//! - `nav`: the list of its groups and views, in the
 //!   sidebar's place or a column of its own.
 //! - `grid`: several views at once, picked from a view's `m` menu
 //!   (`views_box`).
@@ -56,14 +56,14 @@
 //! - `remind`: a tab's reminder (remind.sh).
 //! - `reminders`: the Reminders view, every tab's reminder on a month.
 //! - `reply_box`: the Slack view's reply box (board 108).
-//! - `remind_box`: with UX 2.0, the reminder's box (board 34): when, what
+//! - `remind_box`: the reminder's box (board 34): when, what
 //!   for, and the reminder set now.
-//! - `resources_board`: with UX 2.0, the Resources view as a board: the
+//! - `resources_board`: the Resources view as a board: the
 //!   whole computer, each tab's figures and sparklines, the chosen one's
 //!   process tree.
 //! - `relay_board`: the Slack relay view (board 53): which of the relay's
 //!   messages reach you, a choice switch a kind, the presets.
-//! - `settings_board`: with UX 2.0, the Settings view as a board: the
+//! - `settings_board`: the Settings view as a board: the
 //!   categories and your files at the left, the category in front's
 //!   options with their switches beside them.
 //! - `diagrams`: the Mermaid diagrams of the description beside the PR and
@@ -120,7 +120,7 @@ pub use serve::Opening;
 pub(crate) use serve::TabMenuFrom;
 pub use views::{Group, Revived, Scope, View, ViewId, Worktree};
 
-/// Where Tab has put the focus: a group's name (with UX 2.0) or a view's
+/// Where Tab has put the focus: a group's name or a view's
 /// in the bar, the filter, the chosen item, or easy mode's × (render.js's
 /// `FOCUS`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,8 +235,6 @@ pub struct Snapshot {
     pub views: Vec<View>,
     pub rules: Rules,
     pub theme: Theme,
-    /// sidebar.json's cardWidth and cardHeight.
-    pub card: (u16, u16),
     pub tab_focus: bool,
     /// Settings' `mission_nav_follow`: moving the list of views' cursor
     /// brings each view to the front, and the list is one Tab stop.
@@ -252,7 +250,7 @@ pub struct Snapshot {
     pub tz: jiff::tz::TimeZone,
     /// The spinner's frame.
     pub frame: usize,
-    /// With UX 2.0, each tab's screen as its cards show it: the last lines
+    /// Each tab's screen as its cards show it: the last lines
     /// of its Claude's pane (else its active one) and its branch.
     pub screens: HashMap<TabId, Screen>,
     /// The line of the note worked continuously, leading the tabs while
@@ -317,12 +315,10 @@ impl Default for Snapshot {
                 now_ms: 0,
                 reminders: true,
                 build_failing: true,
-                ux2: false,
                 panel: false,
                 scroll_bars: false,
             },
             theme: Theme::DARK,
-            card: (56, 13),
             tab_focus: true,
             nav_follow: false,
             side_keys: String::new(),
@@ -412,13 +408,13 @@ pub struct Mission {
     /// The description whose diagrams were last asked for, by its hash and
     /// theme, so a draw asks only once the chosen item's changes.
     pub(crate) diagrams_asked: Option<u64>,
-    /// The screen it was last drawn on: with UX 2.0, the area right of
+    /// The screen it was last drawn on: the area right of
     /// the sidebar.
     pub size: (u16, u16),
-    /// With UX 2.0, the sidebar's columns, which it leaves showing on its
+    /// The sidebar's columns, which it leaves showing on its
     /// left; 0 to cover the whole screen.
     pub left: u16,
-    /// With UX 2.0, whether its groups and views are listed in a column of
+    /// Whether its groups and views are listed in a column of
     /// its own at its left (Settings' `mission_keep_tabs_sidebar`, or the
     /// sidebar hidden) rather than in the sidebar's place (`nav`).
     pub own_column: bool,
@@ -523,10 +519,10 @@ pub struct Mission {
     /// Under a narrow Routines view, the chosen routine shown in the
     /// list's place (`i`).
     pub routines_pane: bool,
-    /// With UX 2.0, the tab whose card shows its screen (`s`), and the
+    /// The tab whose card shows its screen (`s`), and the
     /// cursor it was asked at: moving the cursor puts the card back.
     pub card_screen: Option<(TabId, isize)>,
-    /// With UX 2.0 on a screen with room for one column of cards, whether
+    /// On a screen with room for one column of cards, whether
     /// the shelf's groups show their tabs or only their labels.
     pub shelf_open: bool,
     /// Whether the Tabs view's Other repos shows its tabs, opened by Enter
@@ -549,9 +545,6 @@ pub struct Mission {
     /// these seen while others were never shown; `None` while the board
     /// hasn't been shown (the plain list shows the whole look).
     pub slack_viewed: Option<HashMap<String, Item>>,
-    /// The plain Slack list was shown since the view came to the front,
-    /// which shows the whole look.
-    pub slack_plain_shown: bool,
     /// Every message of the Slack view's look, by item ID, whatever the
     /// filter leaves.
     pub slack_all: std::collections::HashSet<String>,
@@ -663,7 +656,6 @@ impl Mission {
             cell_front: None,
             slack_was_shown: false,
             slack_viewed: Default::default(),
-            slack_plain_shown: false,
             slack_all: Default::default(),
             pane: None,
             window_key: None,
@@ -677,11 +669,7 @@ impl Mission {
     /// The columns of its own list of groups and views, its line beside
     /// it included: none unless it draws that list as a column of its own.
     pub fn nav_cols(&self) -> u16 {
-        if self.own_column && self.groups().is_some() {
-            nav::COLUMN + 1
-        } else {
-            0
-        }
+        if self.own_column { nav::COLUMN + 1 } else { 0 }
     }
 
     /// Where the views are drawn from: right of the sidebar and of its own
@@ -693,7 +681,7 @@ impl Mission {
     /// Whether its list of groups and views is drawn in the sidebar's
     /// place.
     pub fn nav_in_sidebar(&self) -> bool {
-        !self.own_column && self.groups().is_some() && self.left > 1
+        !self.own_column && self.left > 1
     }
 
     /// A column of the screen in the view's own columns; none left of it
@@ -859,8 +847,7 @@ impl Mission {
         let Some(g) = self.grid.as_mut() else {
             return;
         };
-        // Several views at once are UX 2.0's.
-        if shown.len() < 2 || !self.snap.rules.ux2 {
+        if shown.len() < 2 {
             self.grid = None;
             return;
         }
@@ -890,7 +877,7 @@ impl Mission {
     /// says why, so it shows without scrolling.
     fn side_start(&self) -> usize {
         match (self.current(), self.chosen_item()) {
-            (Some(view), Some(item)) if view.id == ViewId::Ci && self.snap.rules.ux2 => {
+            (Some(view), Some(item)) if view.id == ViewId::Ci => {
                 render::ci_why_row(item, self.chosen_check().unwrap_or(0))
                     .map_or(0, |row| row.saturating_sub(render::CI_ABOVE_WHY))
             }
@@ -1009,9 +996,6 @@ impl Mission {
     /// them, as when every one was shown, else those the board's sections
     /// showed.
     pub fn slack_seen(&self) -> Option<Vec<Item>> {
-        if self.slack_plain_shown {
-            return None;
-        }
         let viewed = self.slack_viewed.as_ref()?;
         if self.slack_all.iter().all(|id| viewed.contains_key(id)) {
             return None;
@@ -1029,7 +1013,7 @@ impl Mission {
         }
         let panel = self.current().is_some_and(|v| {
             v.id == ViewId::Settings && render::settings_board_shown(self)
-                || render::slack_board_shown(self, v)
+                || render::slack_board_shown(v)
                     && slack_board::column(self.laid().0 as usize)
                     && !v.data.items.is_empty()
                     // Not while the thread is in the list's place, the
@@ -1070,12 +1054,12 @@ impl Mission {
     fn side_by_side(&self, view: &View) -> bool {
         let cols = self.laid().0 as usize;
         view.columns().is_some()
-            || render::pilot_board_shown(self, view, cols)
+            || render::pilot_board_shown(view, cols)
             || view.id == ViewId::Settings && render::settings_board_shown(self)
-            || render::slack_board_shown(self, view)
+            || render::slack_board_shown(view)
             || render::keys_board_shown(self, view, cols)
-            || view.id == ViewId::Routines && crate::routines::view::is_board(self)
-            || view.id == ViewId::Reminders && reminders::is_month(self)
+            || view.id == ViewId::Routines
+            || view.id == ViewId::Reminders
     }
 
     /// The first item of each group a board stands side by side (the Keys
@@ -1153,7 +1137,7 @@ impl Mission {
             if view.id == ViewId::Usage {
                 return item.id.split_once(':').map(|(kind, _)| kind.to_string());
             }
-            if inbox_board::shown(self, view) {
+            if inbox_board::shown(view) {
                 return inbox_board::day_of(item, &self.snap.tz).map(|d| d.to_string());
             }
             item.group.clone()
@@ -1254,9 +1238,7 @@ impl Mission {
         }
         let now = self.pane_now();
         let lit = |pane: Pane| pane == now || Self::previews(now, pane);
-        let sections = self
-            .current()
-            .is_some_and(|v| render::slack_board_shown(self, v));
+        let sections = self.current().is_some_and(render::slack_board_shown);
         // A pane drawn in the list's place previews nothing shown, so it
         // is greyed while the list has the keys; its board marks it so.
         let list_drawn = !self.hits.iter().any(|h| {
@@ -1331,7 +1313,7 @@ impl Mission {
     /// out, as today's board leaves them (the week's board and the plain
     /// list show them).
     pub fn week_only_hidden(&self) -> bool {
-        !self.usage_week && self.snap.rules.ux2 && self.laid().0 as usize >= usage_board::BOARD_AT
+        !self.usage_week && self.laid().0 as usize >= usage_board::BOARD_AT
     }
 
     /// The view in front as back and forward know it (`View::slug`, the
@@ -1368,10 +1350,9 @@ impl Mission {
             .and_then(|i| self.snap.views.get(i))
     }
 
-    /// With UX 2.0, the bar's groups and the views in each
-    /// (`views::groups`); `None` without it, whose bar is one row.
-    pub fn groups(&self) -> Option<Vec<(Group, Vec<usize>)>> {
-        self.snap.rules.ux2.then(|| views::groups(&self.snap.views))
+    /// The bar's groups and the views in each (`views::groups`).
+    pub fn groups(&self) -> Vec<(Group, Vec<usize>)> {
+        views::groups(&self.snap.views)
     }
 
     /// The tabs in the order the cards show them.
@@ -1409,7 +1390,7 @@ impl Mission {
     pub fn lone_view(&self) -> bool {
         let has_side = self
             .current()
-            .is_some_and(|v| views::has_side(v, self.chosen_item().is_some(), self.snap.rules.ux2));
+            .is_some_and(|v| views::has_side(v, self.chosen_item().is_some()));
         self.grid.is_none() && !has_side
     }
 
@@ -1760,8 +1741,7 @@ pub enum MissionEvent {
     /// showing: `text` in a box, and on mission control's footer while it
     /// is open, `launch` is still the attempt shown last
     /// (`Mission::slack_launch`) and the footer is empty or still says
-    /// `over`, what the choice said there; the footer alone with Settings' `message_boxes` off, where
-    /// the status bar's line would be under it.
+    /// `over`, what the choice said there.
     SlackUnshown {
         client: ClientId,
         launch: u64,

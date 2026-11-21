@@ -125,10 +125,8 @@ pub use reading::Mode;
 use reading::{Hit, Place_, Reader};
 pub use width::ResizeKey;
 
-/// The list's narrow width, and how wide a list must be to head a page
-/// with its whole why (narrower, its first sentence, the rest in the bar).
+/// The list's narrow width.
 const LIST_WIDTH: u16 = 30;
-const SHORT_WHY: u16 = 48;
 /// Lines J and K scroll the diff from the list.
 const SCROLL: usize = 5;
 /// How long the terminal is given to say its colours as the diff starts.
@@ -178,10 +176,6 @@ pub struct Options {
     /// named after them (key_help_line).
     pub easy: bool,
     pub key_help: bool,
-    /// UX 2.0 (ux2): the list under the kit's labels, the page's why over
-    /// the diff, one bar over both sides, a hunk's note as a card under it,
-    /// and the files read as one scroll.
-    pub ux2: bool,
     /// The button under the mouse lit (hover_highlight).
     pub hover: bool,
     /// The light theme's colours (theme).
@@ -241,7 +235,6 @@ impl Options {
             ask: on("diff_ask"),
             easy: on("easy_keys"),
             key_help: on("key_help_line"),
-            ux2: settings::value("ux2") == Some(serde_json::Value::Bool(true)),
             hover: on("hover_highlight"),
             light: settings::value("theme")
                 .is_some_and(|theme| switchboard_ui::theme::light_for(&theme)),
@@ -376,12 +369,7 @@ enum Line {
         first: usize,
         count: usize,
     },
-    /// A note over a hunk, on one side (`new_side`), the other blank.
-    Note {
-        new_side: bool,
-        text: String,
-    },
-    /// With UX 2.0, a row of the card a hunk's note is drawn in under the
+    /// A row of the card a hunk's note is drawn in under the
     /// hunk, across both sides.
     Card(Vec<Span<'static>>),
     /// The line over a hunk a page shows from another, across both
@@ -404,10 +392,10 @@ enum ListRow {
     Loading,
     Heading(String, StoryLook),
     File(usize),
-    /// With UX 2.0: a page's number and title, a section's label in its
+    /// A page's number and title, a section's label in its
     /// tone with its count, and the blank row between pages.
     Page(usize),
-    /// In a story told in chapters, with UX 2.0: a chapter's number and name
+    /// In a story told in chapters,: a chapter's number and name
     /// over its pages, as board 136 lists them.
     Chapter(usize),
     Label(String, Tone, Option<usize>),
@@ -547,11 +535,6 @@ const BUTTONS: [(&str, &str); 9] = [
 /// The label over the pages no chapter holds, in the strip's chip and
 /// Files mode's list.
 const FILES_ONLY: &str = "In the files only";
-
-/// The ● beside a file with changes not yet committed, and its bar's word:
-/// the terminal's yellow, base16's base0A, as diffview.lua linked them to
-/// the colorscheme's Type.
-const UNCOMMITTED: Color = Color::Indexed(3);
 
 /// One of the diff's keys for mission control's Keys view: the keys that do
 /// it, apart by spaces and written as the views write keys (`esc`, `↵`,
@@ -1647,7 +1630,7 @@ impl App {
     /// The view's first line and the cursor kept within their files as
     /// they are laid out now, which reading the change again may shorten.
     fn fit_view(&mut self) {
-        if !self.one_scroll() || self.order.is_empty() {
+        if self.order.is_empty() {
             return;
         }
         self.fix_view();
@@ -2044,7 +2027,7 @@ impl App {
     /// git, which a key or the wheel moving the view does here, as moving
     /// to a file always read the shown one.
     fn read_view(&mut self) {
-        if !self.one_scroll() || self.order.is_empty() {
+        if self.order.is_empty() {
             return;
         }
         // The cursor in the view first, reading the files between them,
@@ -2174,7 +2157,7 @@ impl App {
     /// the diff alone's), which is there instead, nor on a screen too short
     /// to spare it.
     pub(super) fn has_footer(&self) -> bool {
-        self.opts.ux2 && !self.has_buttons() && self.rows >= 5
+        !self.has_buttons() && self.rows >= 5
     }
 
     /// The columns of the old side and the new; one of them 0 for a file
@@ -2204,7 +2187,7 @@ impl App {
         }
     }
 
-    /// The rows over the diff's text: the page's heading with UX 2.0,
+    /// The rows over the diff's text: the page's heading,
     /// then the bar.
     fn head_height(&self) -> usize {
         self.page_head(self.diff_area().width as usize).len() + 1
@@ -2216,21 +2199,11 @@ impl App {
         (self.diff_area().height as usize).saturating_sub(self.head_height())
     }
 
-    /// Whether the files read as one scroll, each following the last (UX
-    /// 2.0).
-    fn one_scroll(&self) -> bool {
-        self.opts.ux2
-    }
-
     /// The rows of the list's file `k` in the scroll: its lines, and while
     /// the files read as one, a rule and the next file's bar after them.
     fn stream_len(&mut self, k: usize) -> usize {
         let n = self.lines_of(k).len();
-        if self.one_scroll() && k + 1 < self.order.len() {
-            n + 2
-        } else {
-            n
-        }
+        if k + 1 < self.order.len() { n + 2 } else { n }
     }
 
     /// The place `by` rows on from row `top` of file `k` in the scroll,
@@ -2352,7 +2325,7 @@ impl App {
             }
         }
         // In the one scroll a binary file says so in its place.
-        if self.opts.ux2 && s.binary {
+        if s.binary {
             let faint = Tone::Faint.style(&self.theme());
             head.push(Line::Card(vec![Span::styled(
                 " A binary file: no text to compare.",
@@ -2362,16 +2335,17 @@ impl App {
         }
         // An empty file, added or deleted, gets a line saying so, for the
         // cursor and ]c to stop on.
-        if self.opts.ux2 && s.rows.is_empty() {
+        if s.rows.is_empty() {
             let faint = Tone::Faint.style(&self.theme());
             head.push(Line::Card(vec![Span::styled(" An empty file.", faint)]));
             return head;
         }
-        // Each note goes over the line its hunk starts at, on the side it
-        // changes: the new, or the old for lines only taken out. A file
-        // changed since its commits has none: its story's hunks are at the
-        // committed lines, which the working tree may have moved. With UX
-        // 2.0 each is a card under the hunk's last line instead.
+        // Each note is a card under the hunk's last line. A file changed
+        // since its commits has none: its story's hunks are at the
+        // committed lines, which the working tree may have moved. A hunk
+        // shown from another page gets a line over its first row instead,
+        // on the side it changes: the new, or the old for lines only taken
+        // out.
         let mut notes: HashMap<(bool, usize), Vec<Line>> = HashMap::new();
         // Each card with the last line of each side its hunk has, both
         // to be passed before the card goes in.
@@ -2435,37 +2409,26 @@ impl App {
                     ));
                     continue;
                 }
-                if self.opts.ux2 {
-                    // A card under the hunk, after the last line of each side
-                    // it has, which a replacement can leave on different rows.
-                    let mut ends = Vec::new();
-                    for (side, start, span) in [
-                        (false, hunk.old_start, hunk.old_count),
-                        (true, hunk.new_start, hunk.new_count),
-                    ] {
-                        let shown = match s.alone {
-                            Some(alone) => alone == side,
-                            None => true,
-                        };
-                        if shown && span > 0 {
-                            ends.push((side, (start + span - 1).max(1) - 1));
-                        }
+                // A card under the hunk, after the last line of each side
+                // it has, which a replacement can leave on different rows.
+                let mut ends = Vec::new();
+                for (side, start, span) in [
+                    (false, hunk.old_start, hunk.old_count),
+                    (true, hunk.new_start, hunk.new_count),
+                ] {
+                    let shown = match s.alone {
+                        Some(alone) => alone == side,
+                        None => true,
+                    };
+                    if shown && span > 0 {
+                        ends.push((side, (start + span - 1).max(1) - 1));
                     }
-                    if ends.is_empty() {
-                        ends.push((new_side, (first.max(1)) - 1));
-                    }
-                    if let Some(card) = self.note_card(story, hunk, home, ow, nw) {
-                        cards.push((ends, card));
-                    }
-                    continue;
                 }
-                let line = (if count == 0 { first + 1 } else { first }).max(1);
-                let cols = if new_side { nw } else { ow }.max(10);
-                if let Some(text) = story::note_lines(story, hunk, home, cols) {
-                    notes
-                        .entry((new_side, line - 1))
-                        .or_default()
-                        .extend(text.into_iter().map(|text| Line::Note { new_side, text }));
+                if ends.is_empty() {
+                    ends.push((new_side, (first.max(1)) - 1));
+                }
+                if let Some(card) = self.note_card(story, hunk, home, ow, nw) {
+                    cards.push((ends, card));
                 }
             }
         }
@@ -3237,7 +3200,7 @@ impl App {
         let to_an_end = by.unsigned_abs() >= (isize::MAX / 4) as usize;
         let stopped_at_the_end_with_a_file_after =
             by > 0 && !to_an_end && self.cur + 1 >= n && self.at + 1 < self.order.len();
-        if stopped_at_the_end_with_a_file_after && self.one_scroll() && !self.said_end {
+        if stopped_at_the_end_with_a_file_after && !self.said_end {
             self.said_end = true;
             let path = self.current().map(|e| e.path.clone()).unwrap_or_default();
             let name = path.rsplit('/').next().unwrap_or_default();
@@ -3254,7 +3217,7 @@ impl App {
     /// was scrolled to, off the cursor's file.
     fn fix_view(&mut self) {
         let past = self.view > self.at && !self.adrift;
-        if !self.one_scroll() || past || self.view >= self.order.len() {
+        if past || self.view >= self.order.len() {
             self.view = self.at;
         }
     }
@@ -3264,23 +3227,15 @@ impl App {
     fn keep_cursor(&mut self) {
         let h = self.body_height().max(1);
         self.fix_view();
-        if self.one_scroll() {
-            if self.adrift {
-                return;
-            }
-            match self.rows_from_view(self.at, self.cur) {
-                None => (self.view, self.top) = (self.at, self.cur),
-                Some(d) if d >= h => {
-                    (self.view, self.top) = self.stream_ahead(self.view, self.top, d + 1 - h);
-                }
-                Some(_) => {}
-            }
+        if self.adrift {
             return;
         }
-        if self.cur < self.top {
-            self.top = self.cur;
-        } else if self.cur >= self.top + h {
-            self.top = self.cur + 1 - h;
+        match self.rows_from_view(self.at, self.cur) {
+            None => (self.view, self.top) = (self.at, self.cur),
+            Some(d) if d >= h => {
+                (self.view, self.top) = self.stream_ahead(self.view, self.top, d + 1 - h);
+            }
+            Some(_) => {}
         }
     }
 
@@ -3320,7 +3275,7 @@ impl App {
     /// last at the bottom, so the files reading as one scroll never takes
     /// it on into another file.
     fn scroll_chosen(&mut self, by: usize, down: bool) {
-        if !self.one_scroll() || self.order.is_empty() {
+        if self.order.is_empty() {
             self.scroll_diff(by, down);
             return;
         }
@@ -3350,10 +3305,6 @@ impl App {
     /// every file's, one not read yet counted by its changed lines, since
     /// the scroll never reads every file.
     fn diff_extent(&mut self) -> (usize, usize) {
-        if !self.one_scroll() {
-            let top = self.top;
-            return (self.screen_lines().len(), top);
-        }
         let (mut total, mut top) = (0, 0);
         for k in 0..self.order.len() {
             if k == self.view {
@@ -3526,7 +3477,7 @@ impl App {
     /// file's first line with the cursor there, whatever the files between
     /// were estimated at.
     fn scroll_diff_to_start(&mut self) {
-        if !self.one_scroll() || self.order.is_empty() {
+        if self.order.is_empty() {
             self.scroll_diff_to(0);
             return;
         }
@@ -3543,7 +3494,7 @@ impl App {
     /// of files, the last file's last rows, with the cursor on its last
     /// line, reading that file alone rather than every file before it.
     fn scroll_diff_to_end(&mut self, h: usize) {
-        if !self.one_scroll() || self.order.is_empty() {
+        if self.order.is_empty() {
             self.scroll_diff(usize::MAX / 2, true);
             return;
         }
@@ -3564,7 +3515,7 @@ impl App {
     /// into the next file and the cursor doesn't.
     fn scroll_diff(&mut self, by: usize, down: bool) {
         let h = self.body_height().max(1);
-        if self.one_scroll() && !self.order.is_empty() {
+        if !self.order.is_empty() {
             self.fix_view();
             (self.view, self.top) = if down {
                 let left = self.rows_left(self.view, self.top, by + h);
@@ -3604,7 +3555,7 @@ impl App {
             };
             match next {
                 Some(i) => self.cur = i,
-                None if self.one_scroll() => {
+                None => {
                     let mut found = None;
                     let mut k = self.at;
                     while found.is_none() {
@@ -3626,7 +3577,6 @@ impl App {
                         None => break,
                     }
                 }
-                None => break,
             }
         }
         self.col = 0;
@@ -3655,7 +3605,7 @@ impl App {
         // In the one scroll every file is a stop: one with no line marked
         // changed (added or deleted, shown on one side; binary; renamed
         // alone; empty) starts at its first line.
-        if self.one_scroll() && starts.is_empty() && !lines.is_empty() {
+        if starts.is_empty() && !lines.is_empty() {
             return vec![0];
         }
         starts
@@ -3828,7 +3778,6 @@ impl App {
                 StoryLook::Comment,
             ));
         }
-        let short = self.list_width < SHORT_WHY;
         let starts = self.starts();
         let apart = self.not_committed_apart();
         // The chapter whose pages are listed last, in a story told in chapters.
@@ -3860,13 +3809,14 @@ impl App {
                     let group = section.map(|s| (s, chapter));
                     (listed_chapter != group).then_some((map, chapter, group))
                 });
-                if !self.opts.ux2
-                    && let Some((map, chapter, group)) = chapter_row
-                {
+                // A page's number and title, the why going over the diff;
+                // what isn't committed yet under a label of its own in the
+                // needs tone.
+                if k > 0 {
+                    rows.push(ListRow::Blank);
+                }
+                if let Some((map, chapter, group)) = chapter_row {
                     listed_chapter = group;
-                    if k > 0 {
-                        rows.push(ListRow::Blank);
-                    }
                     rows.push(match chapter {
                         Some(c) => ListRow::Chapter(c),
                         None => ListRow::Label(
@@ -3876,47 +3826,24 @@ impl App {
                         ),
                     });
                 }
-                if self.opts.ux2 {
-                    // A page's number and title, the why going over the
-                    // diff; what isn't committed yet under a label of its
-                    // own in the needs tone.
-                    if k > 0 {
-                        rows.push(ListRow::Blank);
-                    }
-                    if let Some((map, chapter, group)) = chapter_row {
-                        listed_chapter = group;
-                        rows.push(match chapter {
-                            Some(c) => ListRow::Chapter(c),
-                            None => ListRow::Label(
-                                FILES_ONLY.into(),
-                                Tone::Dim,
-                                Some(self.files_only(map).1),
-                            ),
-                        });
-                    }
-                    if self.uncommitted_page() == Some(n) {
-                        let files = self
-                            .order
-                            .iter()
-                            .filter(|&&j| {
-                                self.entry(j)
-                                    .is_some_and(|e| story.page.get(&e.path) == Some(&n))
-                            })
-                            .count();
-                        rows.push(ListRow::Label(
-                            story::NOT_COMMITTED.into(),
-                            Tone::Needs,
-                            Some(files),
-                        ));
-                    } else if self.generated_page() == Some(n) {
-                        rows.push(ListRow::Label(GENERATED_LAST.into(), Tone::Dim, None));
-                    } else {
-                        rows.push(ListRow::Page(n));
-                    }
+                if self.uncommitted_page() == Some(n) {
+                    let files = self
+                        .order
+                        .iter()
+                        .filter(|&&j| {
+                            self.entry(j)
+                                .is_some_and(|e| story.page.get(&e.path) == Some(&n))
+                        })
+                        .count();
+                    rows.push(ListRow::Label(
+                        story::NOT_COMMITTED.into(),
+                        Tone::Needs,
+                        Some(files),
+                    ));
+                } else if self.generated_page() == Some(n) {
+                    rows.push(ListRow::Label(GENERATED_LAST.into(), Tone::Dim, None));
                 } else {
-                    for (text, look) in story::heading(story, n, cols, short) {
-                        rows.push(ListRow::Heading(text, look));
-                    }
+                    rows.push(ListRow::Page(n));
                 }
             }
             // Without a story, what only the working tree changes under a
@@ -3947,10 +3874,9 @@ impl App {
                     Some(files),
                 ));
             }
-            // With UX 2.0, the generated files the order puts last under a
-            // label saying so.
-            if self.opts.ux2
-                && let Some(e) = self.entry(i)
+            // The generated files the order puts last under a label saying
+            // so.
+            if let Some(e) = self.entry(i)
                 && order::generated(&e.path)
                 && self
                     .story
@@ -3990,7 +3916,7 @@ impl App {
         rows
     }
 
-    /// The files only the working tree changes, which UX 2.0 lists last
+    /// The files only the working tree changes, which the list puts last
     /// under "Not committed yet" while no story is told (a story puts them
     /// in a last page of that name); a file the commits change too
     /// stays among theirs, marked ●, and so does a generated file among
@@ -3999,7 +3925,7 @@ impl App {
         let Some(u) = self.change.as_ref().and_then(|c| c.uncommitted.as_ref()) else {
             return HashSet::new();
         };
-        if !self.opts.ux2 || self.story.is_some() || self.title.is_some() {
+        if self.story.is_some() || self.title.is_some() {
             return HashSet::new();
         }
         let committed: HashSet<&str> = u
@@ -5161,26 +5087,15 @@ impl App {
             return Pointer::Arrow;
         }
         let row = (y - body) as usize;
-        let line = if self.one_scroll() {
-            // A rule or a bar between two files of the scroll is no text.
-            let view = if self.view < self.order.len() {
-                self.view
-            } else {
-                self.at
-            };
-            let (k, t) = self.stream_ahead(view, self.top, row);
-            let on_a_line = self.view == view && self.rows_from_view(k, t) == Some(row);
-            self.lines_of(k).get(t).filter(|_| on_a_line).cloned()
-        } else if self.shown_binary() {
-            // A binary file shows only a line saying so.
-            None
+        // A rule or a bar between two files of the scroll is no text.
+        let view = if self.view < self.order.len() {
+            self.view
         } else {
-            // A click under the file's last line goes to that line, and
-            // opens it when it is a fold, so it has that line's shape.
-            let at = self.top + row;
-            let lines = self.screen_lines();
-            lines.get(at).or(lines.last()).cloned()
+            self.at
         };
+        let (k, t) = self.stream_ahead(view, self.top, row);
+        let on_a_line = self.view == view && self.rows_from_view(k, t) == Some(row);
+        let line = self.lines_of(k).get(t).filter(|_| on_a_line).cloned();
         match line {
             // A fold opens, and an "also in chapter" line goes there.
             Some(Line::Fold { .. } | Line::Also(..)) => Pointer::Hand,
@@ -5538,7 +5453,7 @@ impl App {
         if y >= body && y < area.bottom() {
             // While the files read as one scroll, the file clicked in is
             // shown; a click on a rule or a bar between them does nothing.
-            if self.one_scroll() && !self.order.is_empty() {
+            if !self.order.is_empty() {
                 self.fix_view();
                 let row = (y - body) as usize;
                 let (k, t) = self.stream_ahead(self.view, self.top, row);
@@ -5557,10 +5472,6 @@ impl App {
             } else {
                 self.main_side()
             };
-            if !self.one_scroll() {
-                let n = self.screen_lines().len();
-                self.cur = (self.top + (y - body) as usize).min(n.saturating_sub(1));
-            }
             let side_x = if self.focus == Focus::Old {
                 area.x
             } else {
@@ -5574,18 +5485,11 @@ impl App {
                 .map_or(0, |s| s.gutter(side_w as usize));
             self.col = (x.saturating_sub(side_x) as usize).saturating_sub(gutter);
             let cur = self.cur;
-            // A binary file shown alone shows no lines, so no fold of it
-            // is opened.
-            if !self.binary_alone()
-                && matches!(self.screen_lines().get(cur), Some(Line::Fold { .. }))
-            {
+            if matches!(self.screen_lines().get(cur), Some(Line::Fold { .. })) {
                 self.open_fold();
             }
-            // Gone to as the mouse is let go, so a drag from it selects;
-            // a binary file shown alone shows no such line.
-            if !self.binary_alone()
-                && let Some(also) = self.also_under()
-            {
+            // Gone to as the mouse is let go, so a drag from it selects.
+            if let Some(also) = self.also_under() {
                 self.also_on_up = Some(also);
             }
         }
@@ -5645,20 +5549,6 @@ impl App {
             .nth(i)
             .map(|(_, k)| *k)
             .unwrap_or("")
-    }
-
-    /// Whether the file shown is binary and shown alone, a line saying
-    /// so in place of its rows (`draw_diff_body`); in the one scroll of
-    /// UX 2.0 its rows are drawn as built.
-    fn binary_alone(&self) -> bool {
-        !self.one_scroll() && self.shown_binary()
-    }
-
-    /// Whether the file shown is binary.
-    fn shown_binary(&self) -> bool {
-        self.current()
-            .and_then(|e| self.files.get(&e.key()))
-            .is_some_and(|s| s.binary)
     }
 
     /// The button at a cell, as a click and the pointer's shape find it:
@@ -6165,7 +6055,6 @@ mod tests {
             ask: true,
             easy: false,
             key_help: true,
-            ux2: false,
             hover: true,
             light: false,
             pane_arrows: true,
@@ -6280,9 +6169,9 @@ mod tests {
     }
 
     /// A change of the files given, with no text to show.
-    fn app_of(entries: Vec<Entry>, ux2: bool) -> App {
+    fn app_of(entries: Vec<Entry>) -> App {
         let (tx, _rx) = channel();
-        let mut app = App::new(Options { ux2, ..opts() }, 100, 16, tx);
+        let mut app = App::new(opts(), 100, 16, tx);
         app.loaded(Change {
             top: PathBuf::from("/repo"),
             base: "origin/main".into(),
@@ -6300,11 +6189,11 @@ mod tests {
 
     #[test]
     fn the_list_heads_with_the_whole_changes_files_lines_and_bar() {
-        for ux2 in [false, true] {
-            let mut app = app_of(
-                vec![entry("src/a.rs", 'M', 10, 2), entry("src/b.rs", 'A', 3, 0)],
-                ux2,
-            );
+        {
+            let mut app = app_of(vec![
+                entry("src/a.rs", 'M', 10, 2),
+                entry("src/b.rs", 'A', 3, 0),
+            ]);
             let shown = screen(&mut app);
             let at = line_with(&shown, "2 files  +13 −2");
             assert!(shown[at].contains("■■■■■"), "{shown:?}");
@@ -6324,20 +6213,17 @@ mod tests {
     fn a_binary_file_adds_a_file_to_the_totals_and_no_lines() {
         let mut bin = entry("logo.png", 'A', 0, 0);
         bin.binary = true;
-        let mut app = app_of(vec![entry("src/a.rs", 'M', 10, 2), bin], true);
+        let mut app = app_of(vec![entry("src/a.rs", 'M', 10, 2), bin]);
         line_with(&screen(&mut app), "2 files  +10 −2");
     }
 
     #[test]
     fn the_totals_count_only_the_files_the_path_filter_leaves() {
-        let mut app = app_of(
-            vec![
-                entry("src/a.rs", 'M', 10, 2),
-                entry("src/b.rs", 'A', 3, 0),
-                entry("tests/c.rs", 'A', 7, 1),
-            ],
-            true,
-        );
+        let mut app = app_of(vec![
+            entry("src/a.rs", 'M', 10, 2),
+            entry("src/b.rs", 'A', 3, 0),
+            entry("tests/c.rs", 'A', 7, 1),
+        ]);
         line_with(&screen(&mut app), "3 files  +20 −3");
         press(&mut app, "/src");
         let shown = list(&screen(&mut app));
@@ -6359,7 +6245,7 @@ mod tests {
         staged.section = Section::Staged;
         let mut unstaged = entry("a.txt", 'M', 1, 0);
         unstaged.section = Section::Unstaged;
-        let mut app = app_of(vec![staged, unstaged, entry("b.txt", 'M', 4, 0)], true);
+        let mut app = app_of(vec![staged, unstaged, entry("b.txt", 'M', 4, 0)]);
         line_with(&screen(&mut app), "2 files  +7 −1");
         press(&mut app, "/a.txt");
         let shown = list(&screen(&mut app));
@@ -6373,7 +6259,6 @@ mod tests {
             (0..10)
                 .map(|n| entry(&format!("src/f{n}.rs"), 'M', 18, 4))
                 .collect(),
-            true,
         );
         app.path_filter = "f1".into();
         app.sort();
@@ -6389,7 +6274,6 @@ mod tests {
             (0..20)
                 .map(|n| entry(&format!("f{n}.rs"), 'M', 184, 36))
                 .collect(),
-            true,
         );
         app.path_filter = "f1".into();
         app.sort();
@@ -6651,7 +6535,7 @@ mod tests {
         let bar = &shown[1];
         assert!(bar.starts_with("  ←   →"), "{bar:?}");
         // The diff under them.
-        assert!(shown[2].contains("Changes (3)"), "{:?}", shown[2]);
+        assert!(shown[2].contains("CHANGES"), "{:?}", shown[2]);
         let (settings, close) = (bar.find("Settings").unwrap(), bar.find("Close").unwrap());
         assert!(settings < close, "{bar:?}");
         assert!(
@@ -6971,19 +6855,11 @@ mod tests {
         story::parse(answer, &paths, order::generated, &hunks).unwrap()
     }
 
-    /// With UX 2.0, a change adding a file of `lines` lines at each of
+    /// A change adding a file of `lines` lines at each of
     /// `paths`, the list on the second.
     fn added_files(paths: &[&str], lines: usize) -> App {
         let (tx, _rx) = channel();
-        let mut app = App::new(
-            Options {
-                ux2: true,
-                ..opts()
-            },
-            120,
-            24,
-            tx,
-        );
+        let mut app = App::new(Options { ..opts() }, 120, 24, tx);
         let mut diff = String::new();
         let mut entries = Vec::new();
         for p in paths {
@@ -7062,8 +6938,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_an_added_files_lines_are_numbered_and_tinted_as_added_and_a_footer_names_the_keys()
-    {
+    fn an_added_files_lines_are_numbered_and_tinted_as_added_and_a_footer_names_the_keys() {
         let mut app = added_files(&["src/one.js", "src/two.js"], 3);
         // With the keys in the file.
         app.focus = app.main_side();
@@ -7099,10 +6974,8 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_and_no_story_what_only_the_working_tree_changes_is_listed_last_under_not_committed_yet()
-     {
+    fn with_no_story_what_only_the_working_tree_changes_is_listed_last_under_not_committed_yet() {
         let mut app = working_app_with(Options {
-            ux2: true,
             story: false,
             ..opts()
         });
@@ -7115,21 +6988,12 @@ mod tests {
         assert!(line_with(&names, "new.js") > heading, "{names:?}");
     }
 
-    /// With UX 2.0, a change to the working tree whose commits change a.js
+    /// A change to the working tree whose commits change a.js
     /// and Cargo.lock, and whose working tree alone new.js and
     /// package-lock.json; told as a story with `story`.
     fn generated_and_apart(story: bool) -> App {
         let (tx, _rx) = channel();
-        let mut app = App::new(
-            Options {
-                ux2: true,
-                story,
-                ..opts()
-            },
-            100,
-            16,
-            tx,
-        );
+        let mut app = App::new(Options { story, ..opts() }, 100, 16, tx);
         for (side, text) in [("L", "x = 1\n"), (git::WORK_TREE, "x = 2\n")] {
             for p in ["src/a.js", "Cargo.lock", "src/new.js", "package-lock.json"] {
                 app.give_text(side, p, Some(text.into()));
@@ -7182,7 +7046,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_lists_shift_j_and_k_scroll_the_chosen_file_and_stop_at_its_ends() {
+    fn the_lists_shift_j_and_k_scroll_the_chosen_file_and_stop_at_its_ends() {
         let mut app = added_files(&["a.js", "b.js", "c.js"], 40);
         let h = app.body_height();
         assert!(h < 40, "{h}");
@@ -7211,7 +7075,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_cursor_stays_in_its_file_and_the_view_scrolls_on_past_it() {
+    fn the_cursor_stays_in_its_file_and_the_view_scrolls_on_past_it() {
         let mut app = added_files(&["a.js", "b.js", "c.js"], 40);
         let h = app.body_height();
         let n = app.lines_of(1).len();
@@ -7282,18 +7146,10 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_list_sets_whats_not_committed_apart_the_why_heads_the_diff_and_the_files_read_as_one_scroll()
+    fn the_list_sets_whats_not_committed_apart_the_why_heads_the_diff_and_the_files_read_as_one_scroll()
      {
         let (tx, _rx) = channel();
-        let mut app = App::new(
-            Options {
-                ux2: true,
-                ..opts()
-            },
-            160,
-            30,
-            tx,
-        );
+        let mut app = App::new(Options { ..opts() }, 160, 30, tx);
         app.give_text("L", "src/a.js", Some("a = 1\n".into()));
         app.give_text(git::WORK_TREE, "src/a.js", Some("a = 2\n".into()));
         app.give_text("L", "src/b.js", Some("b = 1\n".into()));
@@ -7355,7 +7211,7 @@ mod tests {
         // or what happened to the file.
         let long = entry("src/components/settings/placeholder.png", 'A', 0, 0);
         let bar: String = app
-            .bar_ux2(&long, 40)
+            .bar(&long, 40)
             .iter()
             .map(|s| s.content.to_string())
             .collect();
@@ -7473,9 +7329,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{text} in {names:?}"))
         };
         assert!(
-            at(&names, "1/2 Committed") < at(&names, "a.js")
-                && at(&names, "b.js") < at(&names, "2/2 Not committed yet")
-                && at(&names, "2/2 Not committed yet") < at(&names, "new.js"),
+            at(&names, "1 Committed") < at(&names, "a.js")
+                && at(&names, "b.js") < at(&names, "NOT COMMITTED YET")
+                && at(&names, "NOT COMMITTED YET") < at(&names, "new.js"),
             "{names:?}"
         );
         // The story told of the commits: its pages, then the files only
@@ -7484,25 +7340,29 @@ mod tests {
         let shown = screen(&mut app);
         let names = list(&shown);
         assert!(
-            at(&names, "1/3 Bump a") < at(&names, "a.js")
-                && at(&names, "2/3 Bump b") < at(&names, "b.js")
-                && at(&names, "b.js") < at(&names, "3/3 Not committed yet")
-                && at(&names, "3/3 Not committed yet") < at(&names, "new.js"),
+            at(&names, "1 Bump a") < at(&names, "a.js")
+                && at(&names, "2 Bump b") < at(&names, "b.js")
+                && at(&names, "b.js") < at(&names, "NOT COMMITTED YET")
+                && at(&names, "NOT COMMITTED YET") < at(&names, "new.js"),
             "{names:?}"
         );
         let marked: Vec<&String> = names.iter().filter(|l| l.contains('●')).collect();
         assert_eq!(marked.len(), 2, "b.js and new.js marked: {names:?}");
         assert!(!names[at(&names, "a.js")].contains('●'));
         assert_eq!(app.current().unwrap().path, "src/a.js");
-        assert!(!shown[0].contains("uncommitted"), "{:?}", shown[0]);
         assert!(
-            shown.iter().any(|l| l.contains("▎ Check a.")),
+            shown.iter().any(|l| l.contains("│ Check a.")),
             "a file changed only in its commits keeps its notes"
         );
         press(&mut app, "j");
         let shown = screen(&mut app);
         assert_eq!(app.current().unwrap().path, "src/b.js");
-        assert!(shown[0].contains("● uncommitted"), "{:?}", shown[0]);
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.contains("src/b.js") && l.contains("working tree")),
+            "its bar compares it with the working tree: {shown:?}"
+        );
         assert!(
             !shown.iter().any(|l| l.contains("Check b.")),
             "no note at the committed lines of a file changed since: {shown:?}"
@@ -7613,7 +7473,7 @@ mod tests {
         assert_eq!(app.cover, None, "no story to wait for under a cover");
         let names = list(&screen(&mut app));
         assert!(
-            names.iter().any(|l| l.contains("1/1 Not committed yet")),
+            names.iter().any(|l| l.contains("NOT COMMITTED YET")),
             "{names:?}"
         );
         // Nothing to show: outside the workspace, the diff's own screen
@@ -7675,7 +7535,7 @@ mod tests {
         let shown = screen(&mut app);
         let names = list(&shown);
         let at = |name: &str| names.iter().position(|l| l.contains(name)).unwrap();
-        assert!(names[0].contains("Changes (3)"), "{names:?}");
+        assert!(names[0].contains("CHANGES"), "{names:?}");
         assert!(
             at("README.md") < at("a.js") && at("a.js") < at("new.js"),
             "{names:?}"
@@ -7744,7 +7604,7 @@ mod tests {
         let shown = screen(&mut app);
         let names = list(&shown);
         let at = |text: &str| names.iter().position(|l| l.contains(text)).unwrap();
-        assert!(at("Changes (1)") < at("Staged changes (1)"), "{names:?}");
+        assert!(at("CHANGES") < at("STAGED CHANGES"), "{names:?}");
         assert_eq!(names.iter().filter(|l| l.contains("a.txt")).count(), 2);
         let row = shown
             .iter()
@@ -7824,7 +7684,7 @@ mod tests {
         // c goes back to the whole branch, and so does q, rather than close.
         press(&mut app, "c");
         assert!(app.history.is_none());
-        assert!(list(&screen(&mut app))[0].contains("Changes (3)"));
+        assert!(list(&screen(&mut app))[0].contains("CHANGES"));
         app.open_commits(vec![("c3".repeat(20), "One".into())]);
         assert_eq!(
             app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
@@ -7903,9 +7763,9 @@ mod tests {
         let shown = screen(&mut app);
         let names = list(&shown);
         let at = |name: &str| names.iter().position(|l| l.contains(name)).unwrap();
-        assert!(at("1/2 Return two") < at("a.js"), "{names:?}");
+        assert!(at("1 Return two") < at("a.js"), "{names:?}");
         assert!(
-            at("a.js") < at("2/2 Say so") && at("2/2 Say so") < at("README.md"),
+            at("a.js") < at("2 Say so") && at("2 Say so") < at("README.md"),
             "{names:?}"
         );
         assert_eq!(
@@ -7914,12 +7774,12 @@ mod tests {
             "the story's first file shown"
         );
         assert!(
-            shown.iter().any(|l| l.contains("▎ Check the callers.")),
-            "the hunk's note over it: {shown:?}"
+            shown.iter().any(|l| l.contains("│ Check the callers.")),
+            "the hunk's note in a card under it: {shown:?}"
         );
         assert!(
-            shown[0].contains("1/2 Return two · "),
-            "the page in the bar: {:?}",
+            shown[0].contains("Page 1 of 2  Return two"),
+            "the page over the diff: {:?}",
             shown[0]
         );
         press(&mut app, "]c");
@@ -8053,7 +7913,7 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         };
-        click(&mut app, MouseEventKind::Down(MouseButton::Left), 15);
+        click(&mut app, MouseEventKind::Down(MouseButton::Left), 14);
         assert!(app.list_top > 0, "a press below the thumb pages down");
         click(&mut app, MouseEventKind::Drag(MouseButton::Left), 0);
         assert_eq!(app.list_top, 0, "dragged back to the top");
@@ -8925,7 +8785,7 @@ mod tests {
       "runs": [{"step": "page()", "page": "c4"}, {"step": "count_signups", "page": "c2"}, {"step": "store_outline", "page": "c1"}]}"#;
 
     /// A change of six files told in chapters (`MAP_ANSWER`), on a screen
-    /// large enough for the Story view, with UX 2.0.
+    /// large enough for the Story view,.
     fn map_app_with(opts: Options) -> App {
         map_app_told(opts, MAP_ANSWER)
     }
@@ -8993,10 +8853,7 @@ mod tests {
     }
 
     fn map_app() -> App {
-        map_app_with(Options {
-            ux2: true,
-            ..opts()
-        })
+        map_app_with(Options { ..opts() })
     }
 
     fn enter(app: &mut App) {
@@ -9034,7 +8891,6 @@ mod tests {
     fn talk_app_told(answer: &str) -> App {
         map_app_told(
             Options {
-                ux2: true,
                 talk: true,
                 ..opts()
             },
@@ -9405,13 +9261,7 @@ mod tests {
                 "store_outline keeps each ZIP's outline in the store once, keyed by the ZIP, and the page reads it back from there for every map it draws, never fetching it again.",
                 1,
             );
-        let mut app = map_app_told(
-            Options {
-                ux2: true,
-                ..opts()
-            },
-            &answer,
-        );
+        let mut app = map_app_told(Options { ..opts() }, &answer);
         for cols in [250, 110] {
             app.resize(cols, 60);
             let shown = screen(&mut app);
@@ -9461,13 +9311,7 @@ mod tests {
             page("c5", "Topics", "src/topics.rs#1", false, ""),
             page("c6", "Format", "src/fmt.rs#1", false, ""),
         );
-        let mut app = map_app_told(
-            Options {
-                ux2: true,
-                ..opts()
-            },
-            &answer,
-        );
+        let mut app = map_app_told(Options { ..opts() }, &answer);
         press(&mut app, "gm");
         assert!(app.on_map());
         let shown = screen(&mut app);
@@ -9660,7 +9504,6 @@ mod tests {
     #[test]
     fn with_pages_a_time_off_the_page_keys_do_nothing_here_too() {
         let mut app = map_app_with(Options {
-            ux2: true,
             pages_alone: false,
             ..opts()
         });
@@ -10025,13 +9868,7 @@ mod tests {
             )
             .unwrap()];
         let old = format!("{old}}}");
-        let mut app = map_app_told(
-            Options {
-                ux2: true,
-                ..opts()
-            },
-            &old,
-        );
+        let mut app = map_app_told(Options { ..opts() }, &old);
         assert!(app.on_story());
         let shown = screen(&mut app);
         assert!(
@@ -10063,13 +9900,7 @@ mod tests {
              "hunks": [{"id": "src/count.test.rs#1", "note": ""}], "files": []},
             {"id": "c3", "title": "Draw the topics""#,
             );
-        let mut app = map_app_told(
-            Options {
-                ux2: true,
-                ..opts()
-            },
-            &answer,
-        );
+        let mut app = map_app_told(Options { ..opts() }, &answer);
         let shown = screen(&mut app);
         let row = |text: &str| line_with(&shown, text);
         // No step of its own, the outline still listing it.
@@ -10080,27 +9911,6 @@ mod tests {
         );
         assert!(row("5  Wire the page") < row("Tested  the count (3)"));
         assert!(row("Tested  the count (3)") < row("Also in this change: Side work"));
-    }
-
-    #[test]
-    fn a_hunk_of_another_chapter_is_named_by_its_chapter_and_page() {
-        let app = map_app();
-        let story = app.story.as_ref().unwrap();
-        let hunk = story::HunkNote {
-            id: "src/fmt.rs#1".into(),
-            run: 1,
-            old_start: 1,
-            old_count: 1,
-            new_start: 1,
-            new_count: 1,
-            page: 5,
-            note: String::new(),
-        };
-        let lines = story::note_lines(story, &hunk, 2, 80).unwrap();
-        assert!(
-            lines[0].contains("chapter 2, 1/1 Format the helpers"),
-            "{lines:?}"
-        );
     }
 
     #[test]
@@ -10171,7 +9981,6 @@ mod tests {
     #[test]
     fn easy_mode_leads_its_buttons_with_the_story_and_files_switch() {
         let mut app = map_app_with(Options {
-            ux2: true,
             easy: true,
             ..opts()
         });
@@ -10230,7 +10039,6 @@ mod tests {
     #[test]
     fn with_the_setting_off_there_is_no_story_view() {
         let mut app = map_app_with(Options {
-            ux2: true,
             map: false,
             ..opts()
         });
@@ -10266,7 +10074,6 @@ mod tests {
     #[test]
     fn the_diff_opens_in_the_view_used_last() {
         let kept = Options {
-            ux2: true,
             keep: true,
             ..opts()
         };
@@ -10361,14 +10168,15 @@ mod tests {
         assert_eq!(app.list_width, LIST_WIDTH, "no file is the default");
         // The edge is the column after the list's last, lit under the mouse.
         assert_eq!(mouse(&mut app, MouseEventKind::Moved, 30, 3), Act::Redraw);
-        assert_eq!(draw(&mut app)[(30, 3)].symbol(), "│");
+        let accent = Tone::Accent.fg(&app.theme());
+        assert_eq!(draw(&mut app)[(30, 3)].fg, accent);
         assert_eq!(mouse(&mut app, MouseEventKind::Moved, 40, 3), Act::Redraw);
-        assert_ne!(draw(&mut app)[(30, 3)].symbol(), "│");
+        assert_ne!(draw(&mut app)[(30, 3)].fg, accent);
         mouse(&mut app, DOWN, 30, 3);
         assert_eq!(mouse(&mut app, DRAG, 42, 5), Act::Redraw);
         assert_eq!(app.list_width, 42);
         assert_eq!(app.diff_area().x, 43);
-        assert_eq!(draw(&mut app)[(42, 3)].symbol(), "│", "lit while dragged");
+        assert_eq!(draw(&mut app)[(42, 3)].fg, accent, "lit while dragged");
         assert!(!file.exists(), "nothing is kept as the mouse moves");
         // No wider than half the screen, no narrower than 24 columns.
         mouse(&mut app, DRAG, 90, 5);
@@ -10523,16 +10331,14 @@ mod tests {
         app.keep_width_in(file.clone());
         assert_eq!(app.list_width, LIST_WIDTH, "the width kept is passed over");
         // Its edge takes no drag and doesn't light.
-        assert_eq!(mouse(&mut app, MouseEventKind::Moved, 30, 3), Act::Same);
+        mouse(&mut app, MouseEventKind::Moved, 30, 3);
+        assert_ne!(draw(&mut app)[(30, 3)].fg, Tone::Accent.fg(&app.theme()));
         mouse(&mut app, DOWN, 30, 3);
         mouse(&mut app, DRAG, 42, 3);
         mouse(&mut app, UP, 42, 3);
         assert_eq!(app.list_width, LIST_WIDTH);
         // The resize keys aren't the list's there.
-        assert_eq!(
-            app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE)),
-            Act::Same
-        );
+        app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE));
         assert_eq!(app.list_width, LIST_WIDTH);
         press(&mut app, "m");
         assert!(

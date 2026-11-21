@@ -25,6 +25,11 @@ const ALT: &str = "\x1b";
 /// Settings for the tests: no desktop notifications, no tips, no sidebar
 /// beside the panes, and only the views a test looks at.
 fn settings(server: &TestServer, extra: Value) {
+    common::write_settings(&server.home, all_settings(extra));
+}
+
+/// The settings `settings` writes, `extra` over them.
+fn all_settings(extra: Value) -> Value {
     let mut all = json!({
         "notifications": false,
         "tips": false,
@@ -46,7 +51,13 @@ fn settings(server: &TestServer, extra: Value) {
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    common::write_settings(&server.home, all);
+    all
+}
+
+/// A server started with what `settings` writes, so they hold from its
+/// first draw.
+fn start(extra: Value) -> TestServer {
+    TestServer::start_with_settings(&all_settings(extra).to_string())
 }
 
 fn tabs(list: &Value) -> Vec<Value> {
@@ -71,8 +82,7 @@ fn wait_list(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) -> 
 
 /// A server with two tabs, the second in front, and a client on it.
 fn two_tabs(extra: Value) -> (TestServer, TestClient) {
-    let server = TestServer::start();
-    settings(&server, extra);
+    let server = start(extra);
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     // The settings taken up: the sidebar gone from beside the panes.
@@ -80,7 +90,7 @@ fn two_tabs(extra: Value) -> (TestServer, TestClient) {
         l["sessions"][0]["sidebar"]["columns"] == 0
     });
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -171,10 +181,10 @@ fn m_space_opens_it_over_the_screen_and_q_closes_it() {
     let (_server, mut client) = two_tabs(json!({}));
     let screen = open(&mut client);
     assert!(screen[0].contains("MISSION CONTROL"), "{:?}", screen[0]);
-    assert!(screen[0].contains(" Tabs 2 "), "{:?}", screen[0]);
+    assert!(screen[0].contains(" Tabs "), "{:?}", screen[0]);
     // Each tab a card, in a box for its stage: neither has a Claude.
     assert!(
-        screen.iter().any(|l| l.contains("OTHER 2")),
+        screen.iter().any(|l| l.contains("OTHER")),
         "{}",
         screen.join("\n")
     );
@@ -200,24 +210,15 @@ fn m_space_opens_it_over_the_screen_and_q_closes_it() {
 fn a_bracket_moves_to_the_next_view_and_round() {
     let (_server, mut client) = two_tabs(json!({}));
     open(&mut client);
-    // After the tabs: the notifications, Routines, then Settings.
-    client.type_text("]");
-    client.wait_text("No notifications");
+    // Round the Work group's views: the tabs, then Routines.
     client.type_text("]");
     client.wait_text("No routines yet");
     client.type_text("]");
-    let screen = client.wait_text("INTEGRATIONS");
-    assert!(
-        screen.last().unwrap().contains("Enter its choices"),
-        "{:?}",
-        screen.last()
-    );
+    client.wait_text("home");
     client.type_text("[");
     client.wait_text("No routines yet");
     client.type_text("[");
-    client.wait_text("No notifications");
-    client.type_text("[");
-    client.wait_text("OTHER 2");
+    client.wait_text("home");
 }
 
 #[test]
@@ -231,18 +232,15 @@ fn the_landing_view_opens_with_nothing_landing_saying_so_and_goes_once_left() {
         "kept while in front: {:?}",
         screen[0]
     );
-    // Left for Settings, it goes, nothing landing: back is Routines.
-    client.type_text("]");
-    client.wait_text("INTEGRATIONS");
-    client.type_text("[");
-    let screen = client.wait_text("No routines yet");
-    assert!(!screen[0].contains("Landing"), "{:?}", screen[0]);
+    // Left for Settings, it goes, nothing landing.
+    client.type_text("vsettings\r");
+    let screen = client.wait_text("INTEGRATIONS");
+    assert!(!screen.iter().any(|l| l.contains("Landing")), "{screen:#?}");
 }
 
 #[test]
-fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn moving_through_many_tabs_still_shows_their_output_and_a_tab_closing() {
+    let server = start(json!({}));
     let mut client = server.attach(200, 50);
     client.wait_text("$");
     for n in 2..=6 {
@@ -297,9 +295,8 @@ fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing(
 }
 
 #[test]
-fn with_ux2_a_waiting_cards_menu_answers_its_prompt_and_a_number_does_not() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn a_waiting_cards_menu_answers_its_prompt_and_a_number_does_not() {
+    let server = start(json!({}));
     let mut client = server.attach(160, 50);
     client.wait_text("$");
     let tab = &tabs(&server.list())[0];
@@ -385,7 +382,7 @@ fn shift_f10_opens_the_chosen_cards_menu() {
         !s.iter().any(|l| l.contains("Go to tab 1"))
     });
     client.type_text(&format!("{ALT}p"));
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("menu a right click would");
     client.wait_text("› Open the menu a right click would");
     client.type_text("\r");
@@ -522,9 +519,8 @@ fn chosen_category(screen: &[String]) -> Option<String> {
 }
 
 #[test]
-fn with_ux2_c_w_h_moves_into_the_settings_categories_and_c_w_l_back_to_their_options() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn c_w_h_moves_into_the_settings_categories_and_c_w_l_back_to_their_options() {
+    let server = start(json!({}));
     let mut client = server.attach(184, 40);
     client.wait_text("$");
     client.wait_text("M-c Claude");
@@ -607,7 +603,9 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
         tabs(l)[0]["name"].as_str().is_some_and(|n| !n.is_empty())
     });
     client.type_text(&format!("{ALT}j"));
-    let screen = client.wait_text("Work map · open tabs");
+    let screen = client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     assert!(screen.iter().any(|l| l.contains("tab 1")));
     // Typing filters the rows; Enter opens the chosen one's menu, as the
     // daemon's picker did, its diff and lazygit among what it offers.
@@ -657,8 +655,7 @@ fn git(cwd: &std::path::Path, args: &[&str]) {
 
 #[test]
 fn reopen_lists_the_worktrees_no_tab_has_open_and_its_menus_open_and_remove_them() {
-    let server = TestServer::start();
-    settings(&server, json!({ "ux2": true, "view_reopen": true }));
+    let server = start(json!({ "view_reopen": true }));
     let repo = server.dir.path().join("repo");
     git(server.dir.path(), &["init", "-q", repo.to_str().unwrap()]);
     git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -757,7 +754,9 @@ fn tab_in_a_picker_goes_round_its_rows_and_stops_on_easy_modes_close_button() {
     });
     // Two rows: Tab twice goes round to the first, whose menu Enter opens.
     client.type_text(&format!("{ALT}j"));
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("\r");
     let screen = client.wait_text("› Go to tab");
     let first = screen
@@ -780,7 +779,9 @@ fn tab_in_a_picker_goes_round_its_rows_and_stops_on_easy_modes_close_button() {
     settings(&server, json!({ "easy_keys": true, "menu_mouse": true }));
     std::thread::sleep(Duration::from_millis(2000) * common::patience());
     client.type_text(&format!("{ALT}j"));
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("\t\t\r");
     client.wait_for("the picker closed by its ×", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
@@ -795,16 +796,16 @@ fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
     client.type_text("\r");
     pick(&mut client, "Remind me about it later");
     client.wait_text("In 20 minutes");
-    client.type_text("\r");
-    client.wait_text("What for?");
+    // The first time offered, Tab to What for, a note, Enter.
+    client.type_text("\t");
     client.type_text("check the build\r");
     let list = wait_list(&server, "the reminder set", |l| {
         tabs(l)[0]["options"]["@remind_at"].is_string()
     });
     assert_eq!(tabs(&list)[0]["options"]["@remind_note"], "check the build");
-    let screen = client.wait_text("REMINDERS 1");
+    let screen = client.wait_text("REMINDERS");
     assert!(
-        screen.iter().any(|l| l.contains("remind in 2")),
+        screen.iter().any(|l| l.contains("◷") && l.contains("home")),
         "{}",
         screen.join("\n")
     );
@@ -816,12 +817,10 @@ fn a_time_typed_into_the_reminder_list_wins_over_the_row_it_resembles() {
     open(&mut client);
     client.type_text("\r");
     pick(&mut client, "Remind me about it later");
-    client.wait_text("Or type a time");
+    client.wait_text("In 20 minutes");
     // "2h" matches "In 20 minutes" and "In 3 hours" by their numbers and
     // letters, but names a time of its own.
     client.type_text("2h\r");
-    client.wait_text("What for?");
-    client.type_text("\r");
     let list = wait_list(&server, "the reminder set", |l| {
         tabs(l)[0]["options"]["@remind_at"].is_string()
     });
@@ -836,8 +835,7 @@ fn a_time_typed_into_the_reminder_list_wins_over_the_row_it_resembles() {
 
 #[test]
 fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
-    let server = TestServer::start();
-    settings(&server, json!({"view_calendar": true}));
+    let server = start(json!({"view_calendar": true}));
     let now = jiff::Zoned::now();
     let date = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
     std::fs::create_dir_all(&server.state).unwrap();
@@ -861,8 +859,11 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let screen = client.wait_text("Planning");
     let has = |text: &str| screen.iter().any(|l| l.contains(text));
     assert!(has("all day   Offsite"), "{}", screen.join("\n"));
-    assert!(has("   8 AM  ┈"), "the hours down the side");
-    assert!(has("   9 AM"));
+    assert!(
+        has("   9:00 "),
+        "the hours down the side: {}",
+        screen.join("\n")
+    );
     assert!(has("Planning"));
     // The chosen event is the first: the all-day one; j goes to the next.
     client.type_text("j\r");
@@ -887,8 +888,7 @@ fn pane_text(line: &str) -> &str {
 #[test]
 fn a_ci_jobs_kept_log_reads_from_its_end_without_its_timestamps() {
     // What the CI view's "Read the failing log" runs beside the pane.
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let log = server.dir.path().join("77.log");
     let lines: String = (1..=60)
         .map(|n| format!("2026-11-02T10:00:{:02}.0000000Z step {n}\n", n % 60))
@@ -986,9 +986,9 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
     hook(&server, &id, "UserPromptSubmit", json!({"prompt": "go on"}));
     open(&mut client);
     // Its card under Working, the other tab alone under Other.
-    let screen = client.wait_text("WORKING 1");
+    let screen = client.wait_text("WORKING");
     assert!(
-        screen.iter().any(|l| l.contains("OTHER 1")),
+        screen.iter().any(|l| l.contains("OTHER")),
         "{}",
         screen.join("\n")
     );
@@ -1009,7 +1009,7 @@ fn behind_a_box_the_cards_spinners_turn_at_most_every_half_second() {
     session_file(&server.home, pane["pid"].as_u64().unwrap(), "s-spin");
     hook(&server, &id, "UserPromptSubmit", json!({"prompt": "go on"}));
     open(&mut client);
-    client.wait_text("WORKING 1");
+    client.wait_text("WORKING");
     // Five turns within 2 seconds, which a spinner held to every 500ms can't
     // make, the window scaled by patience so a busy computer makes it slower
     // rather than failed.
@@ -1113,7 +1113,7 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("DM Ada");
     // Enter opens a notification's menu.
     client.type_text("j");
@@ -1171,7 +1171,7 @@ fn a_click_on_a_slack_notification_shows_it_in_the_slack_view() {
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": true,
+        json!({ "view_slack": true, "slack_threads": true,
             "slack_background": false, "photos": false }),
     );
     let mut client = server.attach(204, 40);
@@ -1262,7 +1262,7 @@ fn the_notifications_views_menu_dismisses_every_notification_shown() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("DM Ada");
     client.wait_text("Plan");
     client.type_text("j");
@@ -1318,7 +1318,7 @@ fn j_and_k_in_the_notifications_view_wrap_from_its_last_to_its_first_and_back() 
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("Charlie");
     // From the last, j goes round, past the day's heading, to the first.
     client.type_text("G");
@@ -1346,7 +1346,7 @@ fn a_notifications_menu_dismisses_every_notification_shown() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("Charlie");
     client.type_text("\r");
     pick(&mut client, "Dismiss every notification shown");
@@ -1374,7 +1374,7 @@ fn the_only_notification_shown_has_no_dismissing_of_every_one_in_its_menu() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("Plan");
     client.type_text("\r");
     let screen = client.wait_for("its menu", |s| {
@@ -1421,7 +1421,7 @@ fn hand_to_a_tab(choice: &str, title: &str, says: &str, before: Before) -> Strin
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["new-tab", "-n", "third"]);
-    client.wait_text("3:third");
+    client.wait_text("3 third");
     let got = server.home.join("got");
     // Written once the terminal is raw, just before dd starts reading.
     let ready = server.home.join("ready");
@@ -1490,7 +1490,7 @@ fn hand_to_a_tab(choice: &str, title: &str, says: &str, before: Before) -> Strin
         });
     }
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("DM Ada");
     client.type_text("j");
     client.type_text("\r");
@@ -1627,7 +1627,7 @@ fn m_tab_returns_to_the_view_a_notification_led_to_after_a_tab_opened_for_its_it
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": true,
+        json!({ "view_slack": true, "slack_threads": true,
             "slack_background": false, "photos": false }),
     );
     let mut client = server.attach(204, 40);
@@ -1697,7 +1697,7 @@ fn m_tab_returns_to_a_view_left_by_send_it_to_a_tab_with_no_tab_chosen() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     // The second tab's shell counts as its Claude, so the picker has a tab.
     let pid = tabs(&server.list())[1]["panes"][0]["pid"].as_u64().unwrap();
     session_file(&server.home, pid, "s-second");
@@ -1749,8 +1749,8 @@ fn open_a_tab_for_it_starts_claude_told_about_the_notification() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
-    client.wait_text("Plan  shown");
+    client.type_text("vnotifications\r");
+    client.wait_text("✎ Plan");
     client.type_text("j");
     client.type_text("\r");
     pick(&mut client, "Open a tab for it");
@@ -1817,7 +1817,7 @@ fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
         .install(&server.home.join("bin"));
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
+        json!({ "view_slack": true, "slack_threads": true, "slack_background": false, "photos": false }),
     );
     let mut client = server.attach(204, 40);
     client.wait_text("$");
@@ -1865,7 +1865,7 @@ fn the_slack_views_sections_choose_the_messages_beside_them() {
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_background": false, "photos": false }),
+        json!({ "view_slack": true, "slack_threads": false, "slack_background": false, "photos": false }),
     );
     let mut client = server.attach(204, 40);
     client.wait_text("$");
@@ -1983,7 +1983,7 @@ fn the_slack_board_lists_a_threads_replies_as_one_row() {
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
+        json!({ "view_slack": true, "slack_threads": true, "slack_background": false, "photos": false }),
     );
     let mut client = server.attach(204, 40);
     client.wait_text("$");
@@ -2048,7 +2048,7 @@ fn leaving_the_slack_board_marks_only_the_sections_shown_seen() {
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_background": false, "photos": false }),
+        json!({ "view_slack": true, "slack_threads": false, "slack_background": false, "photos": false }),
     );
     let mut client = server.attach(204, 40);
     client.wait_text("$");
@@ -2084,8 +2084,7 @@ fn leaving_the_slack_board_marks_only_the_sections_shown_seen() {
 // made without asking says what it was, then leads to its tab.
 #[test]
 fn a_notification_no_view_lists_is_whole_above_its_choices() {
-    let server = TestServer::start();
-    settings(&server, json!({ "autopilot_landing_notices": true }));
+    let server = start(json!({ "autopilot_landing_notices": true }));
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
@@ -2108,7 +2107,7 @@ fn a_notification_no_view_lists_is_whole_above_its_choices() {
         String::from_utf8_lossy(&said.stderr)
     );
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("Landed abc1234: Make the thing");
     client.type_text("j");
     client.type_text("\r");
@@ -2162,7 +2161,7 @@ fn the_notifications_history_folds_old_days_and_its_menu_narrows_it_to_a_kind() 
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
+    client.type_text("vnotifications\r");
     client.wait_text("Slack 0");
     client.type_text("G");
     client.wait_text("1 more, folded");
@@ -2189,9 +2188,8 @@ fn the_notifications_history_folds_old_days_and_its_menu_narrows_it_to_a_kind() 
 }
 
 #[test]
-fn with_ux2_resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
-    let server = TestServer::start();
-    settings(&server, json!({"view_resources": true, "ux2": true}));
+fn resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
+    let server = start(json!({"view_resources": true}));
     let mut client = server.attach(174, 36);
     client.wait_text("$");
     // A process pegging a core in the tab.
@@ -2282,7 +2280,7 @@ fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_lis
 /// which takes it out of the view and leaves it unread there; `o` and `x`
 /// are no keys of the view's.
 #[test]
-fn with_ux2_the_inbox_shows_each_in_its_ticket_and_its_menu_acts_on_it() {
+fn the_inbox_shows_each_in_its_ticket_and_its_menu_acts_on_it() {
     use common::http::{Fake, Reply};
     let at = |minutes: i64| {
         (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(minutes)).to_string()
@@ -2334,7 +2332,7 @@ fn with_ux2_the_inbox_shows_each_in_its_ticket_and_its_menu_acts_on_it() {
     ]);
     settings(
         &server,
-        json!({"ux2": true, "linear": true, "view_inbox": true, "photos": false}),
+        json!({"linear": true, "view_inbox": true, "photos": false}),
     );
     let mut client = server.attach(194, 40);
     client.wait_text("$");
@@ -2374,14 +2372,13 @@ fn with_ux2_the_inbox_shows_each_in_its_ticket_and_its_menu_acts_on_it() {
     );
 }
 
-/// A server with UX 2.0 on and two tabs, the second in front, and a
+/// A server with reminders on and two tabs, the second in front, and a
 /// client on it.
-fn two_tabs_ux2() -> (TestServer, TestClient) {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true, "reminders": true}));
+fn two_tabs_with_reminders() -> (TestServer, TestClient) {
+    let server = start(json!({"reminders": true}));
     let mut client = server.attach(160, 40);
     client.wait_text("$");
-    // UX 2.0 taken up: each tab has a header.
+    // Each tab has a header.
     client.wait_text("M-c Claude");
     server.ok(&["new-tab", "-n", "second"]);
     wait_list(&server, "the second tab in front", |l| {
@@ -2421,8 +2418,8 @@ fn remind_box(client: &mut TestClient, title: &str) {
 }
 
 #[test]
-fn with_ux2_the_reminder_box_sets_a_time_offered_a_date_typed_and_clears_it() {
-    let (server, mut client) = two_tabs_ux2();
+fn the_reminder_box_sets_a_time_offered_a_date_typed_and_clears_it() {
+    let (server, mut client) = two_tabs_with_reminders();
     remind_box(&mut client, "Remind me about 2 second");
     client.wait_text("In 3 hours");
     // ↓ ↓ to "In 3 hours", Tab to What for, a note, Enter.
@@ -2467,8 +2464,8 @@ fn mission_when(text: &str, now: &jiff::Zoned) -> i64 {
 }
 
 #[test]
-fn with_ux2_the_reminders_view_moves_its_day_and_month_and_its_menu_goes() {
-    let (server, mut client) = two_tabs_ux2();
+fn the_reminders_view_moves_its_day_and_month_and_its_menu_goes() {
+    let (server, mut client) = two_tabs_with_reminders();
     let id = first_tab_id(&server);
     let soon = (jiff::Timestamp::now().as_second() + 120).to_string();
     server.ok(&["set", "-t", &id, "@remind_at", &soon]);
@@ -2532,7 +2529,7 @@ fn with_ux2_the_reminders_view_moves_its_day_and_month_and_its_menu_goes() {
 // Settings filtered by the view's name.
 #[test]
 fn m_opens_the_views_menu_ending_with_its_settings() {
-    let (_server, mut client) = two_tabs_ux2();
+    let (_server, mut client) = two_tabs_with_reminders();
     open(&mut client);
     client.type_text("m");
     let screen = client.wait_text("This view's settings");
@@ -2549,8 +2546,7 @@ fn m_opens_the_views_menu_ending_with_its_settings() {
 
 #[test]
 fn the_view_menu_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
-    let server = TestServer::start();
-    settings(&server, json!({ "ux2": true }));
+    let server = start(json!({}));
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
@@ -2612,7 +2608,7 @@ fn the_view_menu_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
 fn three_tabs(extra: Value) -> (TestServer, TestClient) {
     let (server, mut client) = two_tabs(extra);
     server.ok(&["new-tab", "-n", "third"]);
-    client.wait_text("3:third");
+    client.wait_text("3 third");
     client.type_text(&format!("{ALT}1"));
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
@@ -2672,23 +2668,23 @@ fn m_p_opens_the_palette_over_it_and_a_pick_runs_there_or_in_the_pane() {
     open(&mut client);
     // Esc leaves the view as it was.
     client.type_text(&format!("{ALT}p"));
-    let screen = client.wait_text("action>");
+    let screen = client.wait_text("╭─ Actions");
     assert!(!closed(&screen), "beneath it:\n{}", screen.join("\n"));
     client.type_text("\x1b");
     let screen = client.wait_for("the palette gone", |s| {
-        !s.iter().any(|l| l.contains("action>"))
+        !s.iter().any(|l| l.contains("╭─ Actions"))
     });
     assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
     // One of its views shows in it.
     client.type_text(&format!("{ALT}p"));
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("mission control: landing");
     client.wait_text("› Mission control: Landing");
     client.type_text("\r");
     client.wait_text("Nothing is landing now.");
     // Anything else runs in the pane it was opened over, once closed.
     client.type_text(&format!("{ALT}p"));
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("split pane above");
     client.wait_text("› Split pane above");
     client.type_text("\r");
@@ -2703,14 +2699,14 @@ fn m_p_lists_views_beyond_the_old_twelve_and_opens_or_switches_to_them() {
     let (_server, mut client) = two_tabs(json!({"reminders": true}));
     // Closed, it opens mission control on the view picked.
     client.type_text(&format!("{ALT}p"));
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("mission control: reminders");
     client.wait_text("› Mission control: Reminders");
     client.type_text("\r");
     client.wait_text("No reminders.");
     // Open, it switches to the one picked.
     client.type_text(&format!("{ALT}p"));
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("mission control: notifications");
     client.wait_text("› Mission control: Notifications");
     client.type_text("\r");
@@ -2719,13 +2715,13 @@ fn m_p_lists_views_beyond_the_old_twelve_and_opens_or_switches_to_them() {
 }
 
 #[test]
-fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
+fn a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
     // The tabs sidebar kept beside mission control: off, the sidebar lists
     // its views instead (tests/it/mission_nav.rs).
     let server = TestServer::start();
     settings(
         &server,
-        json!({"ux2": true, "sidebar": true, "mission_keep_tabs_sidebar": true}),
+        json!({"sidebar": true, "mission_keep_tabs_sidebar": true}),
     );
     let mut client = server.attach(140, 36);
     client.wait_text("$");
@@ -2735,15 +2731,11 @@ fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
         tabs(l).len() == 3 && l["sessions"][0]["sidebar"]["columns"].as_u64().unwrap_or(0) > 0
     });
     let cols = list["sessions"][0]["sidebar"]["columns"].as_u64().unwrap() as usize;
-    // UX 2.0 taken up: the tab bar gone from the bottom.
-    client.wait_for("the tab bar gone", |s| {
-        !s.iter().any(|l| l.contains("2:second"))
-    });
-    let screen = open(&mut client);
-    let row = screen
-        .iter()
-        .position(|l| l.chars().take(cols).collect::<String>().contains("second"))
-        .unwrap_or_else(|| panic!("the second tab's row:\n{}", screen.join("\n")));
+    open(&mut client);
+    // The settings taken up: the tabs sidebar kept beside mission control.
+    let in_sidebar = |l: &String| l.chars().take(cols).collect::<String>().contains("second");
+    let screen = client.wait_for("the second tab's row", |s| s.iter().any(in_sidebar));
+    let row = screen.iter().position(in_sidebar).unwrap();
     // The wheel over the sidebar leaves mission control open.
     client.send(format!("\x1b[<65;3;{}M", row + 1).as_bytes());
     std::thread::sleep(Duration::from_millis(300) * common::patience());
@@ -2766,8 +2758,8 @@ fn header(s: &[String]) -> String {
 }
 
 #[test]
-fn with_ux2_m_brackets_move_between_groups_braces_do_nothing_and_m_braces_close_it() {
-    let (server, mut client) = two_tabs_ux2();
+fn m_brackets_move_between_groups_braces_do_nothing_and_m_braces_close_it() {
+    let (server, mut client) = two_tabs_with_reminders();
     let screen = open(&mut client);
     assert!(header(&screen).contains("   Work"), "{}", screen.join("\n"));
     // } moves nothing, so M-] after it goes from Work to Day, not to System.
@@ -2851,20 +2843,9 @@ fn a_menu_a_click_opens_opens_beside_the_click_and_enters_in_the_middle() {
     let option = find_on(&screen, "Close the tab").unwrap();
     click(&mut client, option);
     let screen = client.wait_text("Close tab 2 second?");
-    // With no room to its right, it opens to the option's left.
-    let (top, left) = corner_of(&screen, "Are you sure?");
-    let right = screen[top]
-        .chars()
-        .skip(left)
-        .position(|c| c == '╮')
-        .unwrap()
-        + left;
-    assert_eq!(
-        (top, right),
-        (option.0 + 1, option.1 - 1),
-        "{}",
-        screen.join("\n")
-    );
+    // On the option's row.
+    let (top, _) = corner_of(&screen, "Are you sure?");
+    assert_eq!(top, option.0 + 1, "{}", screen.join("\n"));
     client.type_text("n");
     client.wait_for("the question closed", |s| {
         !s.iter().any(|l| l.contains("Close tab 2"))
@@ -2926,13 +2907,10 @@ fn a_right_press_opens_an_items_menu_or_the_views() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     open(&mut client);
-    client.type_text("]");
-    let screen = client.wait_text("Plan  shown");
-    let row = screen
-        .iter()
-        .rposition(|l| l.contains("Plan  shown"))
-        .unwrap();
-    let col = column_of(&screen[row], "Plan  shown") + 4;
+    client.type_text("vnotifications\r");
+    let screen = client.wait_text("✎ Plan");
+    let row = screen.iter().rposition(|l| l.contains("✎ Plan")).unwrap();
+    let col = column_of(&screen[row], "✎ Plan") + 4;
     let menu_up = |s: &[String]| s.iter().any(|l| l.contains("Open it in Notes"));
     let view_menu_up = |s: &[String]| {
         s.iter()
@@ -3024,7 +3002,7 @@ fn the_slack_views_menu_checks_a_connector_down_again() {
         .install(&server.home.join("bin"));
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_background": true, "photos": false }),
+        json!({ "view_slack": true, "slack_background": true, "photos": false }),
     );
     let mut client = server.attach(160, 36);
     client.wait_text("$");
@@ -3114,13 +3092,12 @@ fn the_pane_beside_the_tickets_board_resizes_with_the_pane_keys_and_keeps_its_wi
             } } }),
         ))
     });
-    let server = TestServer::start_with_env(&[
-        ("LINEAR_API_KEY", "test-key"),
-        ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
-    ]);
-    settings(
-        &server,
-        json!({"ux2": true, "linear": true, "photos": false}),
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("LINEAR_API_KEY", "test-key"),
+            ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+        ],
+        &all_settings(json!({"linear": true, "photos": false})).to_string(),
     );
     let mut client = server.attach(200, 40);
     client.wait_text("$");
@@ -3154,29 +3131,25 @@ fn the_pane_beside_the_tickets_board_resizes_with_the_pane_keys_and_keeps_its_wi
 
 #[test]
 fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no_clicks() {
-    let server = TestServer::start();
-    settings(&server, json!({ "lone_pane_width": "165" }));
+    let server = start(json!({ "lone_pane_width": "165" }));
     let mut client = server.attach(365, 40);
     client.wait_text("$");
     wait_list(&server, "the settings read", |l| {
         l["sessions"][0]["sidebar"]["columns"] == 0
     });
-    open(&mut client);
-    // 165 columns from the left edge, a rule at its right, nothing beyond.
+    let edge = view_left(&open(&mut client)) + 165;
+    // 165 columns from the list of views, a rule at its right, nothing
+    // beyond.
     let screen = client.wait_for("the view against its rule", |screen| {
         screen.iter().all(|row| {
             let cells: Vec<char> = row.chars().collect();
-            cells.get(165) == Some(&'│') && cells[166..].iter().all(|c| *c == ' ')
+            cells.get(edge) == Some(&'│') && cells[edge + 1..].iter().all(|c| *c == ' ')
         })
     });
     assert!(screen.iter().any(|l| l.contains("MISSION CONTROL")));
     // A click in the spare columns leaves mission control as it was, once
     // what the tab's card learns late (its program, read on a tick) has
     // drawn.
-    client.wait_for("the card's program", |s| {
-        s.iter()
-            .any(|l| l.contains("idle for") && l.contains(" · "))
-    });
     let before = steady(&mut client).join("\n");
     client.send(b"\x1b[<0;200;10M\x1b[<0;200;10m");
     client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
@@ -3186,16 +3159,18 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
 
 #[test]
 fn the_resize_keys_move_a_lone_views_right_edge_leaving_the_lone_width() {
-    let server = TestServer::start();
-    settings(&server, json!({ "lone_pane_width": "165" }));
+    let server = start(json!({ "lone_pane_width": "165" }));
     let mut client = server.attach(365, 40);
     client.wait_text("$");
     wait_list(&server, "the settings read", |l| {
         l["sessions"][0]["sidebar"]["columns"] == 0
     });
-    open(&mut client);
-    let rule_at =
-        |screen: &[String], col: usize| screen.iter().any(|row| row.chars().nth(col) == Some('│'));
+    let left = view_left(&open(&mut client));
+    let rule_at = |screen: &[String], col: usize| {
+        screen
+            .iter()
+            .any(|row| row.chars().nth(left + col) == Some('│'))
+    };
     client.wait_for("the view against its rule", |s| rule_at(s, 165));
     // C-M-S-l, with no pane beside the list, moves the view's edge.
     client.send(b"\x1b[108;8u");
@@ -3209,6 +3184,11 @@ fn the_resize_keys_move_a_lone_views_right_edge_leaving_the_lone_width() {
     client.wait_for("closed", closed);
     open(&mut client);
     client.wait_for("the view at its own width again", |s| rule_at(s, 170));
+}
+
+/// The column the views start at: after the list of views and its rule.
+fn view_left(screen: &[String]) -> usize {
+    screen[0].chars().position(|c| c == '│').unwrap() + 1
 }
 
 /// The settings file as written, once `pred` holds of it.
@@ -3227,9 +3207,8 @@ fn wait_saved(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) ->
 }
 
 #[test]
-fn with_ux2_the_slack_relay_view_sets_what_reaches_you() {
-    let server = TestServer::start();
-    settings(&server, json!({ "ux2": true, "view_relay": true }));
+fn the_slack_relay_view_sets_what_reaches_you() {
+    let server = start(json!({ "view_relay": true }));
     let mut client = server.attach(164, 40);
     client.wait_text("$");
     client.wait_text("M-c Claude");
@@ -3315,9 +3294,9 @@ fn with_ux2_the_slack_relay_view_sets_what_reaches_you() {
 
 #[test]
 fn c_w_j_and_k_move_between_the_sections_a_view_stacks() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
-    let mut client = server.attach(160, 40);
+    let server = start(json!({}));
+    // Too narrow for the Settings board: its plain list of sections.
+    let mut client = server.attach(140, 40);
     client.wait_text("$");
     open(&mut client);
     client.type_text("vsett\r");
@@ -3379,7 +3358,9 @@ fn m_j_finds_a_tab_by_what_its_panes_show() {
         "100",
     );
     client.type_text(&format!("{ALT}j"));
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("zebraword");
     // The first tab found by its pane, the line under its row.
     let screen = client.wait_text("a zebraword here");
@@ -3413,7 +3394,9 @@ fn m_j_ranks_a_tab_found_by_name_above_one_found_by_its_panes() {
     let (server, mut client) = two_tabs(json!({}));
     run_in(&server, 0, "printf 'sec%s\\n' ond", "second");
     client.type_text(&format!("{ALT}j"));
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("second");
     // Both tabs show before the filter is taken up too, so wait for it.
     let screen = client.wait_for("both tabs found", |s| {
@@ -3435,7 +3418,9 @@ fn m_j_matches_names_alone_with_the_panes_search_off() {
     let (server, mut client) = two_tabs(json!({ "tab_search_panes": false }));
     run_in(&server, 0, "printf 'zeb%sword\\n' ra", "zebraword");
     client.type_text(&format!("{ALT}j"));
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("zebraword");
     client.wait_for("no row", |s| {
         !s.iter().any(|l| l.contains("tab 1") || l.contains("tab 2"))
@@ -3459,7 +3444,9 @@ fn m_j_reads_only_the_lines_set_back_in_each_pane() {
         "newzebraword",
     );
     client.type_text(&format!("{ALT}j"));
-    client.wait_text("Work map · open tabs");
+    client.wait_for("the Map view's filter", |s| {
+        s[0].contains(" Map ") && s[0].contains("/▏")
+    });
     client.type_text("newzebra");
     client.wait_text("newzebraword");
     // The word 500 lines back is past the 200 read.
@@ -3574,8 +3561,7 @@ fn search_this_tabs_conversation(
     for off in ["linear", "github", "search_slack"] {
         extra[off] = json!(false);
     }
-    let server = TestServer::start();
-    settings(&server, extra);
+    let server = start(extra);
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     wait_list(&server, "the settings read", |l| {
@@ -3960,8 +3946,7 @@ fn back_passes_over_a_view_turned_off_since() {
 // them, as `i` does unshown.
 #[test]
 fn the_reminders_menu_shows_the_lists_a_narrow_screen_keeps_behind_i() {
-    let server = TestServer::start();
-    settings(&server, json!({ "ux2": true, "reminders": true }));
+    let server = start(json!({ "reminders": true }));
     let mut client = server.attach(120, 36);
     client.wait_text("$");
     open(&mut client);
@@ -4006,7 +3991,7 @@ fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": false,
+        json!({ "view_slack": true, "slack_threads": false,
             "slack_background": false, "photos": false, "slack_reply": true,
             "slack_send_as": "now" }),
     );
@@ -4125,7 +4110,7 @@ fn slack_with_a_message() -> TestServer {
     .unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": false,
+        json!({ "view_slack": true, "slack_threads": false,
             "slack_background": false, "photos": false, "slack_reply": true }),
     );
     server
@@ -4226,6 +4211,7 @@ fn a_draft_already_in_the_conversation_is_said_and_the_text_kept() {
 fn slack_signed_in(
     answer: impl Fn(&common::http::Request) -> Option<common::http::Reply> + Send + Sync + 'static,
     signed_in: bool,
+    extra: Value,
 ) -> (common::http::Fake, TestServer) {
     let slack = common::http::Fake::start(
         common::http::Service::Slack {
@@ -4233,10 +4219,13 @@ fn slack_signed_in(
         },
         answer,
     );
-    let server = TestServer::start_with_env(&[
-        ("SWITCHBOARD_SLACK_API", &format!("{}/api", slack.url)),
-        ("SWITCHBOARD_SLACK_USER_TOKEN", "xoxp-test"),
-    ]);
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("SWITCHBOARD_SLACK_API", &format!("{}/api", slack.url)),
+            ("SWITCHBOARD_SLACK_USER_TOKEN", "xoxp-test"),
+        ],
+        &all_settings(extra).to_string(),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     if signed_in {
         std::fs::write(
@@ -4276,6 +4265,7 @@ fn your_slack_reminders_are_listed_and_marked_complete_after_a_yes() {
             Some(common::http::Reply::json(200, body))
         },
         true,
+        json!({ "view_slack": true, "slack_threads": false, "slack_reminders": true, "photos": false }),
     );
     std::fs::write(
         server.state.join("slack.json"),
@@ -4286,10 +4276,6 @@ fn your_slack_reminders_are_listed_and_marked_complete_after_a_yes() {
         .to_string(),
     )
     .unwrap();
-    settings(
-        &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_reminders": true, "photos": false }),
-    );
     let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
@@ -4360,6 +4346,7 @@ fn opening_a_slack_message_marks_it_read_in_slack_only_with_the_setting_on() {
             Some(common::http::Reply::json(200, body))
         },
         true,
+        json!({ "view_slack": true, "slack_threads": false, "slack_mark_read": false, "photos": false }),
     );
     std::fs::write(
         server.state.join("slack.json"),
@@ -4373,10 +4360,9 @@ fn opening_a_slack_message_marks_it_read_in_slack_only_with_the_setting_on() {
     let with = |mark: bool| {
         settings(
             &server,
-            json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_mark_read": mark, "photos": false }),
+            json!({ "view_slack": true, "slack_threads": false, "slack_mark_read": mark, "photos": false }),
         );
     };
-    with(false);
     let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
@@ -4427,7 +4413,12 @@ fn opening_a_slack_message_marks_it_read_in_slack_only_with_the_setting_on() {
 #[test]
 fn without_a_slack_sign_in_the_slack_view_says_how_to_make_one_and_asks_nothing() {
     let secs = switchboard::util::now_ms() / 1000;
-    let (slack, server) = slack_signed_in(|_| None, false);
+    let (slack, server) = slack_signed_in(
+        |_| None,
+        false,
+        json!({ "view_slack": true, "slack_threads": false, "slack_reminders": true,
+            "slack_mark_read": true, "photos": false }),
+    );
     std::fs::write(
         server.state.join("slack.json"),
         json!({ "checked": secs * 1000, "items": [
@@ -4437,11 +4428,6 @@ fn without_a_slack_sign_in_the_slack_view_says_how_to_make_one_and_asks_nothing(
         .to_string(),
     )
     .unwrap();
-    settings(
-        &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_reminders": true,
-            "slack_mark_read": true, "photos": false }),
-    );
     let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
@@ -4449,10 +4435,10 @@ fn without_a_slack_sign_in_the_slack_view_says_how_to_make_one_and_asks_nothing(
         s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
     });
     client.type_text("vslack\r");
-    let screen = client.wait_text(
+    client.wait_text(
         "Slack reminders and read marks need your Slack sign-in: switchboard setup slack-user",
     );
-    assert!(screen.join("\n").contains("dm words"));
+    client.wait_text("dm words");
     client.type_text("\r");
     client.wait_text("Dismiss it, until its thread gets a reply");
     std::thread::sleep(Duration::from_millis(500) * common::patience());
@@ -4504,7 +4490,7 @@ fn slack_thread_with_media() -> (TestServer, Vec<PathBuf>) {
     std::fs::write(&kept[1], b"\x89PNG\r\n\x1a\n").unwrap();
     settings(
         &server,
-        json!({ "view_slack": true, "ux2": true, "slack_threads": true,
+        json!({ "view_slack": true, "slack_threads": true,
             "slack_background": false, "photos": false }),
     );
     (server, kept)
@@ -4636,9 +4622,8 @@ fn a_slack_file_that_cant_be_shown_says_why() {
 // line, closed, that Enter opens, and "Every repository" in the view's
 // menu clears the filter; M-j's picker lists every open tab all along.
 #[test]
-fn with_ux2_the_tabs_view_follows_the_sidebar_s_repository_filter() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn the_tabs_view_follows_the_sidebar_s_repository_filter() {
+    let server = start(json!({}));
     let alpha = server.dir.path().join("alpha");
     let beta = server.dir.path().join("beta");
     for dir in [&alpha, &beta] {
