@@ -1324,6 +1324,10 @@ impl Server {
                 reply,
             } => {
                 // Answered once the build it restarts on has taken over.
+                if super::upgrade::asks_latest(&args) {
+                    self.latest_command(reply);
+                    return;
+                }
                 if super::upgrade::asks_upgrade(&args) {
                     self.upgrade_asked(Some(reply), None, None);
                     return;

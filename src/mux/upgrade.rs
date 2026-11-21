@@ -115,6 +115,11 @@ pub struct Handover {
     /// built, a fetch that failed), else empty.
     #[serde(default)]
     pub note: String,
+    /// The message after the restart is said on the screen as well as to
+    /// the asker: `upgrade --latest`'s command may have gone (a Bash call
+    /// timed out during the build), which its connection can't tell.
+    #[serde(default)]
+    pub say_too: bool,
     /// The listening socket's descriptor.
     pub listener: RawFd,
     /// The server lock's descriptor.
@@ -331,6 +336,9 @@ pub struct Upgrade {
     handing: bool,
     /// M-p's restart is building first (src/mux/latest.rs).
     building: bool,
+    /// The `switchboard upgrade --latest` waiting on that build, answered
+    /// as it ends: by the new build once it has taken over, else here.
+    latest_asker: Option<oneshot::Sender<Answer>>,
     /// What the build row shows (src/mux/build_row.rs): the build under
     /// way, how it failed, or the restart just made.
     pub shown: Option<Shown>,
@@ -356,6 +364,10 @@ struct Pending {
     on: PathBuf,
     /// What M-p's build adds to the message after the restart.
     note: String,
+    /// Why it doesn't restart is said on the screen as well as to the
+    /// asker: `upgrade --latest`'s command may have gone (a Bash call
+    /// timed out during the build), which its connection can't tell.
+    say_too: bool,
 }
 
 /// What the check off the server's task found.
@@ -370,7 +382,7 @@ pub enum UpgradeEvent {
     Tick,
     /// M-p's build for the terminal that asked: the binary to restart on,
     /// `None` when there is nothing new, or why the build failed.
-    Built(ClientId, Result<super::latest::Brought, String>),
+    Built(Option<ClientId>, Result<super::latest::Brought, String>),
     /// The commits main has that this build lacks, and main's commit
     /// (src/mux/behind.rs).
     Behind(Option<(usize, String)>),
@@ -379,11 +391,38 @@ pub enum UpgradeEvent {
 /// How often the build's spinner turns while it builds.
 const BUILD_TICK: Duration = Duration::from_millis(250);
 
-/// Whether a command's arguments ask for an upgrade (and not its usage).
+/// Whether a command's arguments ask for an upgrade: `upgrade` alone, so
+/// its usage, or arguments it doesn't take (`--latest` with another,
+/// which the binary sends as they are), restart nothing.
 pub fn asks_upgrade(args: &[String]) -> bool {
-    args.first().is_some_and(|a| a == "upgrade")
-        && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
+    matches!(args, [upgrade] if upgrade == "upgrade")
 }
+
+/// What `switchboard upgrade --latest` sends the server: a command of
+/// its own, so a server from before it answers that it has no such
+/// command, rather than taking it for a plain `upgrade` and restarting
+/// on the binary on disk with nothing built.
+pub const LATEST_COMMAND: &str = "upgrade-latest";
+
+/// The arguments the binary sends the server for `args`:
+/// `upgrade --latest` as `LATEST_COMMAND`, anything else as it is.
+pub fn on_the_wire(args: Vec<String>) -> Vec<String> {
+    match args.as_slice() {
+        [upgrade, latest] if upgrade == "upgrade" && latest == "--latest" => {
+            vec![LATEST_COMMAND.to_string()]
+        }
+        _ => args,
+    }
+}
+
+/// Whether a command asks for M-p's build first (`switchboard upgrade
+/// --latest`, sent as `LATEST_COMMAND`).
+pub fn asks_latest(args: &[String]) -> bool {
+    args.first().is_some_and(|a| a == LATEST_COMMAND)
+}
+
+/// What `switchboard upgrade --latest` says outside Switchboard's clone.
+pub const LATEST_ONLY_IN_CLONE: &str = "switchboard upgrade --latest is for developing Switchboard: it builds Switchboard's own clone, and this build wasn't made from one.";
 
 impl Server {
     /// An upgrade asked for, by `switchboard upgrade` (answered on `asker`)
@@ -403,6 +442,7 @@ impl Server {
             checked: false,
             on: on.clone().unwrap_or_default(),
             note: String::new(),
+            say_too: false,
         };
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
             self.upgrade_refused(pending, "it is restarting on the new build already");
@@ -428,7 +468,38 @@ impl Server {
     /// restarts as `switchboard upgrade` does, only when the binary on disk
     /// is a new one.
     pub fn latest_asked(&mut self, client: ClientId) {
+        self.latest_build(Some(client), None);
+    }
+
+    /// `switchboard upgrade --latest`: M-p's restart, for a command that
+    /// waits on it, only where M-p offers it (a build made from
+    /// Switchboard's clone). It is answered with the line the new build
+    /// says once it has taken over, or here with why nothing restarted.
+    pub fn latest_command(&mut self, asker: oneshot::Sender<Answer>) {
+        if !crate::dev::build_is_from_clone() {
+            let _ = asker.send(Answer::Reply(Reply::fail(LATEST_ONLY_IN_CLONE.to_string())));
+            return;
+        }
+        self.latest_build(None, Some(asker));
+    }
+
+    fn latest_build(&mut self, client: Option<ClientId>, asker: Option<oneshot::Sender<Answer>>) {
+        let refuse =
+            |server: &mut Server, asker: Option<oneshot::Sender<Answer>>, text: &str| match asker {
+                Some(asker) => {
+                    let _ = asker.send(Answer::Reply(Reply::fail(text.to_string())));
+                }
+                None => server.say(client, text),
+            };
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
+            let Some(client) = client.filter(|_| asker.is_none()) else {
+                refuse(
+                    self,
+                    asker,
+                    "Switchboard is building or restarting already.",
+                );
+                return;
+            };
             // A second press shows the build's steps, where they can show,
             // and a third takes them away again.
             if matches!(self.upgrade.shown, Some(Shown::Building(_))) {
@@ -446,8 +517,9 @@ impl Server {
             return;
         }
         let Some(binary) = binary() else {
-            self.say(
-                Some(client),
+            refuse(
+                self,
+                asker,
                 "Switchboard can't restart on the new build: the binary it was started from isn't known.",
             );
             return;
@@ -461,9 +533,9 @@ impl Server {
                 Instant::now(),
             )));
             self.build_changed();
-            if self.build_row_shows(client) {
+            if let Some(client) = client.filter(|c| self.build_row_shows(*c)) {
                 self.tip("build-row", Some(client));
-            } else {
+            } else if let Some(client) = client {
                 let text = if checkout.main_clone {
                     format!("Updating {}…", paths::tilde(&checkout.dir))
                 } else {
@@ -476,6 +548,7 @@ impl Server {
             return;
         }
         self.upgrade.building = true;
+        self.upgrade.latest_asker = asker;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
             let report = |report: super::latest::Report| {
@@ -485,6 +558,22 @@ impl Server {
                 super::latest::bring_up_to_date(&paths::home(), &binary, build_first, &report);
             let _ = tx.send(Event::Upgrade(UpgradeEvent::Built(client, result)));
         });
+    }
+
+    /// Answers the `switchboard upgrade --latest` waiting on the build, if
+    /// one is, with `text` (exiting 1 unless `ok`). What it is told is
+    /// said on the screen too, since the command may have gone (a Bash
+    /// call timed out during a long build), which its connection can't
+    /// tell.
+    fn latest_answered(&mut self, text: String, ok: bool) {
+        let Some(asker) = self.upgrade.latest_asker.take() else {
+            return;
+        };
+        let reply = match ok {
+            true => Reply::ok(format!("{text}\n")),
+            false => Reply::fail(text),
+        };
+        let _ = asker.send(Answer::Reply(reply));
     }
 
     /// Whether the build row shows on a client's screen: in the sidebar.
@@ -626,9 +715,12 @@ impl Server {
                     Ok(super::latest::Brought {
                         on: Some(on), note, ..
                     }) => {
-                        self.upgrade_asked(None, Some(client), Some(on));
+                        let asker = self.upgrade.latest_asker.take();
+                        let by_command = asker.is_some();
+                        self.upgrade_asked(asker, client, Some(on));
                         if let Some(pending) = self.upgrade.pending.as_mut() {
                             pending.note = note;
+                            pending.say_too = by_command;
                             // Restarting, until the new build takes over.
                             self.upgrade.shown = build.map(|mut b| {
                                 b.restarting = true;
@@ -645,19 +737,36 @@ impl Server {
                             true => note,
                             false => format!("Already on the latest build. {note}"),
                         };
-                        self.say(Some(client), text.trim_end())
+                        let text = text.trim_end().to_string();
+                        self.latest_answered(text.clone(), true);
+                        self.say(client, &text);
                     }
-                    Err(why) => match build.filter(|_| self.build_row_shows(client)) {
+                    Err(why) => {
+                        // A command's failure leaves the row as M-p's does,
+                        // in every sidebar, as well as answering it.
+                        let by_command = self.upgrade.latest_asker.is_some();
+                        let mut text =
+                            format!("Switchboard didn't build: {why}. It goes on as it was.");
+                        for line in &lines {
+                            text.push_str(&format!("\n{line}"));
+                        }
+                        self.latest_answered(text, false);
+                        let row_seen = match client {
+                            Some(c) => self.build_row_shows(c),
+                            None => self.clients.keys().any(|c| self.build_row_shows(*c)),
+                        };
+                        let said =
+                            format!("The build failed: {why}. Switchboard goes on as it was.");
+                        if build.is_none() || !row_seen {
+                            self.say(client, &said);
+                        }
                         // The row says it failed until it is clicked, and
-                        // its steps say why.
-                        Some(build) => {
+                        // its steps say why: kept for a command whether or
+                        // not a sidebar shows it now.
+                        if let Some(build) = build.filter(|_| row_seen || by_command) {
                             self.upgrade.shown = Some(Shown::Failed { build, why, lines })
                         }
-                        None => self.say(
-                            Some(client),
-                            &format!("The build failed: {why}. Switchboard goes on as it was."),
-                        ),
-                    },
+                    }
                 }
                 self.build_changed();
                 return;
@@ -691,11 +800,11 @@ impl Server {
         let text =
             format!("Switchboard can't restart on the new build: {why}. It goes on as it was.");
         eprintln!("switchboard server: {text}");
-        match pending.asker {
-            Some(asker) => {
-                let _ = asker.send(Answer::Reply(Reply::fail(text)));
-            }
-            None => self.say(pending.client, &text),
+        if pending.asker.is_none() || pending.say_too {
+            self.say(pending.client, &text);
+        }
+        if let Some(asker) = pending.asker {
+            let _ = asker.send(Answer::Reply(Reply::fail(text)));
         }
     }
 }
@@ -784,6 +893,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     let pending_note = pending.note.clone();
     server.upgrade.handing = true;
     let client = pending.client;
+    let say_too = pending.say_too;
     let asker = match pending.asker {
         Some(asker) => take_asker(asker).await,
         None => None,
@@ -795,6 +905,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
             server,
             asker,
             client,
+            say_too,
             "its socket couldn't be handed over".into(),
         )
         .await;
@@ -814,7 +925,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     };
     if let Some(why) = why_not {
         resume(server, lp, listener, Vec::new());
-        fail(server, asker, client, why).await;
+        fail(server, asker, client, say_too, why).await;
         return;
     }
     super::persist::finish_writing(server);
@@ -830,6 +941,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         version: VERSION,
         from: crate::update::version_line(),
         note: pending_note,
+        say_too,
         listener: listener.as_raw_fd(),
         lock: super::socket::lock_fd(),
         layout: super::persist::layout_now(server),
@@ -906,7 +1018,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         }
     };
     resume(server, lp, listener, held);
-    fail(server, asker, client, why).await;
+    fail(server, asker, client, say_too, why).await;
 }
 
 /// Every attached terminal's connection, given back by its task once what
@@ -957,16 +1069,24 @@ fn resume(
 }
 
 /// Says why a handover didn't happen, to whoever asked.
-async fn fail(server: &mut Server, asker: Option<OwnedFd>, client: Option<ClientId>, why: String) {
+async fn fail(
+    server: &mut Server,
+    asker: Option<OwnedFd>,
+    client: Option<ClientId>,
+    say_too: bool,
+    why: String,
+) {
     if matches!(server.upgrade.shown, Some(Shown::Building(_))) {
         server.upgrade.shown = None;
         server.build_changed();
     }
     let text = format!("Switchboard can't restart on the new build: {why}. It goes on as it was.");
     eprintln!("switchboard server: {text}");
-    match asker {
-        Some(stream) => answer(stream, Reply::fail(text)).await,
-        None => server.say(client, &text),
+    if asker.is_none() || say_too {
+        server.say(client, &text);
+    }
+    if let Some(stream) = asker {
+        answer(stream, Reply::fail(text)).await;
     }
 }
 
@@ -1115,8 +1235,9 @@ pub fn adopt(server: &mut Server, handover: Handover) {
                 }
             };
             tokio::spawn(answer(stream, reply));
-            // What was lost is said on the screen too, whoever asked.
-            if !lost.is_empty() {
+            // What was lost is said on the screen too, whoever asked, and
+            // everything for `upgrade --latest`, whose command may have gone.
+            if !lost.is_empty() || handover.say_too {
                 server.say(client, &text);
             }
         }
@@ -1169,6 +1290,7 @@ mod tests {
             version: VERSION,
             from: "0.1.0 (abc)".into(),
             note: String::new(),
+            say_too: false,
             listener: 7,
             lock: Some(3),
             layout: Saved {
@@ -1379,6 +1501,13 @@ mod tests {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(asks_upgrade(&args(&["upgrade"])));
         assert!(!asks_upgrade(&args(&["upgrade", "--help"])));
+        assert!(asks_latest(&on_the_wire(args(&["upgrade", "--latest"]))));
+        assert_eq!(on_the_wire(args(&["upgrade"])), args(&["upgrade"]));
+        assert!(!asks_upgrade(&args(&[LATEST_COMMAND])));
+        assert!(!asks_upgrade(&on_the_wire(args(&[
+            "upgrade", "--latest", "--help"
+        ]))));
+        assert!(!asks_upgrade(&args(&["upgrade", "--now"])));
         assert!(!asks_upgrade(&args(&["list"])));
         assert!(!asks_upgrade(&[]));
     }

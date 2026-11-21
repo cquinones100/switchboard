@@ -104,6 +104,7 @@ pub fn bind() -> Result<tokio::net::UnixListener> {
 /// commands that take it (`commands::TAKES_STDIN`); a terminal or
 /// `/dev/null` is not read at all.
 pub fn run_command(args: Vec<String>) -> ExitCode {
+    let args = super::upgrade::on_the_wire(args);
     let cwd = std::env::current_dir()
         .ok()
         .or_else(|| std::env::var_os("PWD").map(PathBuf::from))

@@ -1186,3 +1186,145 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
         "chosen as the menu opens: {all}"
     );
 }
+
+// `switchboard upgrade --latest` reaches the server as `upgrade-latest`
+// (`upgrade::on_the_wire`), which the tests send as the binary does.
+#[test]
+fn upgrade_latest_is_only_for_switchboards_clone() {
+    let server = TestServer::start();
+    let (code, _, err) = server.ask(&["upgrade-latest"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("is for developing Switchboard"), "{err}");
+}
+
+#[test]
+fn upgrade_latest_builds_the_main_clone_and_says_what_happened() {
+    let dir = common::TempDir::new("sbl");
+    let origin = dir.path().join("origin.git");
+    let main = dir.path().join("main");
+    let other = dir.path().join("other");
+    let path = |p: &std::path::Path| p.to_str().unwrap().to_string();
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", &path(&origin)],
+    );
+    git(dir.path(), &["clone", "-q", &path(&origin), &path(&other)]);
+    // Switchboard's sources, as `dev::is_switchboard_clone` reads them.
+    std::fs::write(
+        other.join("Cargo.toml"),
+        "[package]\nname = \"switchboard\"\n",
+    )
+    .unwrap();
+    for sub in ["assets/skills", "src/mux"] {
+        std::fs::create_dir_all(other.join(sub)).unwrap();
+        std::fs::write(other.join(sub).join("keep"), "").unwrap();
+    }
+    std::fs::write(
+        other.join(".gitignore"),
+        "target\nnew\nduring\nduring.err\ngo\n",
+    )
+    .unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "one"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    git(dir.path(), &["clone", "-q", &path(&origin), &path(&main)]);
+    // Its origin GitHub's `switchboard`, fetched from the bare repository.
+    let github = "https://github.com/o/switchboard.git";
+    git(&main, &["remote", "set-url", "origin", github]);
+    git(
+        &main,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", path(&origin)),
+            github,
+        ],
+    );
+    let (server, bin) = TestServer::start_from_copy_with_env(&[
+        ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ]);
+    let trusted = server.home.join(".config/switchboard/trusted-dirs");
+    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
+    std::fs::write(&trusted, format!("{}\n", main.display())).unwrap();
+    let target = main.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    common::stand_in::install(
+        &server.home.join("bin/cargo"),
+        &CARGO.replace("$CARGO_TARGET_DIR", target.to_str().unwrap()),
+    );
+    // Cargo "builds" the binary the server runs: nothing new.
+    std::fs::copy(&bin, target.join("switchboard")).unwrap();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let server_pid = server.pid().unwrap();
+    let latest = || server.ask(&["upgrade-latest"]);
+
+    // Uncommitted changes: said, and nothing built.
+    std::fs::write(main.join("file"), "").unwrap();
+    let (code, _, err) = latest();
+    assert_eq!(code, 1);
+    assert!(err.contains("has uncommitted changes"), "{err}");
+    assert!(!target.join("args").exists(), "cargo wasn't run");
+    std::fs::remove_file(main.join("file")).unwrap();
+
+    // Off the default branch: said, and nothing built.
+    git(&main, &["checkout", "-q", "-b", "side"]);
+    let (code, _, err) = latest();
+    assert_eq!(code, 1);
+    assert!(err.contains("is on side, not main"), "{err}");
+    assert!(!target.join("args").exists(), "cargo wasn't run");
+    git(&main, &["checkout", "-q", "main"]);
+
+    // Nothing new: said, and nothing restarted.
+    let (code, out, err) = latest();
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Already on the latest build"), "{out}");
+    assert!(target.join("args").exists(), "the main clone was built");
+    assert_eq!(server.pid(), Some(server_pid));
+    // Said on the screen too, should the command have gone; put away, so
+    // the wait below takes only M-p's for its own.
+    client.wait_text("Already on the latest build");
+    client.send(b"\x1b");
+    client.wait_for("the message put away", |s| {
+        !s.iter().any(|l| l.contains("Already on the latest build"))
+    });
+
+    // A build under way (M-p's, waiting on `go`): refused.
+    std::fs::write(
+        main.join("during"),
+        "while [ ! -e go ]; do sleep 0.05; done\n",
+    )
+    .unwrap();
+    std::fs::remove_file(target.join("args")).unwrap();
+    server.ok(&["press", "upgrade"]);
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !target.join("args").exists() {
+        assert!(Instant::now() < deadline, "{}", server.log());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let (code, _, err) = latest();
+    assert_eq!(code, 1);
+    assert!(err.contains("building or restarting already"), "{err}");
+    std::fs::write(main.join("go"), "").unwrap();
+    client.wait_text("Already on the latest build");
+    std::fs::remove_file(main.join("during")).unwrap();
+
+    // A new commit on origin: brought in, built, and restarted on, the
+    // new build saying so, every pane kept.
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    let first = dir.path().join("first");
+    common::stand_in::install(
+        &first,
+        &format!("#!/bin/sh\n# first\nexec {} \"$@\"\n", common::BIN),
+    );
+    std::fs::write(main.join("new"), first.to_str().unwrap()).unwrap();
+    let (code, out, err) = latest();
+    assert_eq!(code, 0, "{err}\n{}", server.log());
+    assert!(out.contains("Switchboard restarted on"), "{out}");
+    assert!(out.contains("It was built for this restart."), "{out}");
+    assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "two");
+    assert_eq!(server.pid(), Some(server_pid));
+    assert_eq!(std::fs::read(&bin).unwrap(), std::fs::read(&first).unwrap());
+}
