@@ -1067,7 +1067,6 @@ mod tests {
                 .data(json!({ "title": title, "start": start, "end": end, "you": "going" }))
         };
         let mut m = Mission::new();
-        m.snap.rules.ux2 = true;
         m.snap.now_secs = 1_767_268_800; // 2026-01-01 12:00 UTC
         m.snap.views = vec![
             view(
@@ -1422,14 +1421,6 @@ mod tests {
             t.join("\n")
         );
         assert!(!t.iter().any(|l| l.contains("INBOX")));
-    }
-
-    #[test]
-    fn the_grid_gives_way_once_ux2_is_off() {
-        let mut m = board_11();
-        m.snap.rules.ux2 = false;
-        m.settle_grid();
-        assert!(m.grid.is_none());
     }
 
     #[test]

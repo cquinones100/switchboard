@@ -115,9 +115,9 @@ fn command(
     }
 }
 
-/// The commands for where the palette was opened: the list, or a note;
-/// with UX 2.0 on (`ux2`), its item keys too.
-pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
+/// The commands for where the palette was opened: the list, or a note,
+/// with its item keys.
+pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
     let mut list = vec![
         command(
             "Show or put away the sidebar",
@@ -226,21 +226,19 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
             "tabs",
             Act::WorkOnItem,
         ));
-        if ux2 {
-            list.push(command(
-                "Open this item's plan",
-                "Enter",
-                "note",
-                Act::OpenPlan,
-            ));
-            list.push(command(
-                "Go to the tab working on this item",
-                "o",
-                "tabs",
-                Act::ItemTab,
-            ));
-            list.push(command("Add an item", "ga", "note", Act::AddItem));
-        }
+        list.push(command(
+            "Open this item's plan",
+            "Enter",
+            "note",
+            Act::OpenPlan,
+        ));
+        list.push(command(
+            "Go to the tab working on this item",
+            "o",
+            "tabs",
+            Act::ItemTab,
+        ));
+        list.push(command("Add an item", "ga", "note", Act::AddItem));
         list.push(command("Fold every heading", "zM", "fold", Act::FoldAll));
         list.push(command(
             "Unfold every heading",
@@ -269,7 +267,7 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
     list
 }
 
-/// UX 2.0's command while an item's plan shows beside the note, which
+/// The command while an item's plan shows beside the note, which
 /// has no key of its own.
 pub fn note_or_plan() -> Command {
     command("Show the note beside its plan", "", "view", Act::NoteOrPlan)
@@ -336,7 +334,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("notes-palette-{}", std::process::id()));
         let file = dir.join("recent");
         let _ = std::fs::remove_dir_all(&dir);
-        let from_note = commands(false, true, false);
+        let from_note = commands(false, true);
         assert!(
             from_note
                 .iter()
@@ -357,14 +355,13 @@ mod tests {
             [(Act::AttachNote, "")],
             "once, with no key, the Format menu's left out"
         );
-        assert!(!from_note.iter().any(|c| c.act == Act::AddItem));
         assert!(
-            commands(false, true, true)
+            from_note
                 .iter()
                 .any(|c| c.act == Act::AddItem && c.key == "ga"),
-            "UX 2.0's item keys"
+            "the item keys"
         );
-        let from_list = commands(true, false, false);
+        let from_list = commands(true, false);
         assert!(
             !from_list
                 .iter()

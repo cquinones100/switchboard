@@ -1,6 +1,6 @@
 //! Notes' "Work on this item" box (UX 2.0 board 36), which Enter on an item
 //! whose plan shows beside the note, and `gw`, open in place of
-//! `work_on_item`'s chain of boxes (src/cmd/work.rs) with UX 2.0 on. No
+//! `work_on_item`'s chain of boxes (src/cmd/work.rs). No
 //! tmux-version file is behind it; the tmux version's wtn-open.zsh asked
 //! the repository and the branch in turn.
 //!

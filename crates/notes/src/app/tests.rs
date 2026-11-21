@@ -1800,7 +1800,7 @@ fn a_click_ticks_a_box_and_folds_a_heading_and_moves_the_cursor_elsewhere() {
     let path = store.create("", Some("List"));
     write(
         &path,
-        "# List\n\n- [ ] eggs\n- [ ] milk\n\n## Later\n\nsome text\n",
+        "# List\n\n- [ ] eggs\n- [ ] milk\n\n## Soon\n\nsome text\n",
     );
     let (mut app, _) = app_in(
         store,
@@ -1823,11 +1823,11 @@ fn a_click_ticks_a_box_and_folds_a_heading_and_moves_the_cursor_elsewhere() {
         "a click on the text only moves the cursor"
     );
     assert_eq!((app.editor.doc.row, app.editor.doc.col), (3, 7));
-    let (x, y) = find(&shown, "▾ Later");
+    let (x, y) = find(&shown, "▾ Soon");
     click(&mut app, x, y);
     let shown = screen(&mut app);
     assert!(
-        shown.iter().any(|l| l.contains("▸ Later  (2 lines)")),
+        shown.iter().any(|l| l.contains("▸ Soon  (2 lines)")),
         "folded:\n{}",
         shown.join("\n")
     );
@@ -2271,7 +2271,7 @@ fn renaming_a_new_empty_note_titles_its_first_line_and_a_pasted_id_is_never_styl
     assert_eq!(doc.line(2), line, "the ID line isn't made a checklist item");
 }
 
-// UX 2.0: the background look's tabs matched to the items they are for.
+// The background look's tabs matched to the items they are for.
 #[test]
 fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wt_item() {
     let list = serde_json::json!({ "sessions": [{ "tabs": [
@@ -2358,23 +2358,9 @@ fn the_format_menu_stands_out_over_the_note_with_a_shadow_of_half_blocks() {
     assert_eq!(buf[(outer.right(), outer.y + 1)].symbol(), "▌");
 }
 
-// UX 2.0's item keys and footer (board 7).
-fn started_ux2(name: &str) -> (Dir, App) {
-    let (dir, store) = temp(name);
-    let (mut app, _) = app_in(
-        store,
-        Options {
-            ux2: true,
-            ..options()
-        },
-    );
-    app.start();
-    (dir, app)
-}
-
 #[test]
 fn a_parked_section_opens_folded_to_its_count_and_the_footer_shows_the_item_keys() {
-    let (_dir, mut app) = started_ux2("parked");
+    let (_dir, mut app) = started("parked");
     let path = app.store.create("", Some("Design"));
     write(
         &path,
@@ -2397,7 +2383,7 @@ fn a_parked_section_opens_folded_to_its_count_and_the_footer_shows_the_item_keys
 
 #[test]
 fn ga_adds_an_item_to_the_end_of_the_top_list() {
-    let (_dir, mut app) = started_ux2("add item");
+    let (_dir, mut app) = started("add item");
     let path = app.store.create("", Some("Design"));
     write(
         &path,
@@ -2460,7 +2446,7 @@ fn ga_adds_an_item_to_the_end_of_the_top_list() {
 
 #[test]
 fn enter_on_an_item_ticks_it_and_on_its_plan_link_shows_the_plan_beside() {
-    let (_dir, mut app) = started_ux2("plan");
+    let (_dir, mut app) = started("plan");
     let plan = app.store.create("", Some("Plan - Kit"));
     write(&plan, "# Plan - Kit\n\nThe steps\n");
     let path = app.store.create("", Some("Design"));
@@ -2492,7 +2478,7 @@ fn enter_on_an_item_ticks_it_and_on_its_plan_link_shows_the_plan_beside() {
 
 #[test]
 fn enter_on_a_link_in_an_item_follows_it_and_elsewhere_on_the_line_ticks_it() {
-    let (_dir, mut app) = started_ux2("item link");
+    let (_dir, mut app) = started("item link");
     let path = app.store.create("", Some("Design"));
     write(
         &path,
@@ -2576,7 +2562,7 @@ fn enter_on_a_tag_in_bold_shows_its_notes_rather_than_ticking() {
 
 #[test]
 fn a_paste_while_adding_an_item_goes_into_the_input_not_the_note() {
-    let (_dir, mut app) = started_ux2("paste item");
+    let (_dir, mut app) = started("paste item");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     app.open_note(&path, false, false);
@@ -2588,7 +2574,7 @@ fn a_paste_while_adding_an_item_goes_into_the_input_not_the_note() {
 
 #[test]
 fn o_goes_to_an_items_tab_only_when_the_tab_is_this_notes() {
-    let (_dir, mut app) = started_ux2("item tab");
+    let (_dir, mut app) = started("item tab");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] Fix tests\n");
     app.open_note(&path, false, false);
@@ -2620,7 +2606,7 @@ fn o_goes_to_an_items_tab_only_when_the_tab_is_this_notes() {
 
 #[test]
 fn a_tabs_chip_shows_only_on_the_note_its_item_is_in() {
-    let (_dir, mut app) = started_ux2("chips by id");
+    let (_dir, mut app) = started("chips by id");
     let work = app.store.create("", Some("Work"));
     write(
         &work,
@@ -2680,7 +2666,7 @@ fn chips_note(app: &mut App) -> std::path::PathBuf {
 #[test]
 fn an_items_chips_take_its_plan_lines_place_and_sit_at_its_right_while_the_cursor_is_on_that_line()
 {
-    let (_dir, mut app) = started_ux2("item chips");
+    let (_dir, mut app) = started("item chips");
     chips_note(&mut app);
     app.editor.doc.row = 5;
     let shown = screen(&mut app);
@@ -2741,7 +2727,7 @@ fn an_items_chips_take_its_plan_lines_place_and_sit_at_its_right_while_the_curso
 
 #[test]
 fn a_plan_lines_choice_is_a_chip_under_its_item() {
-    let (_dir, mut app) = started_ux2("choice chips");
+    let (_dir, mut app) = started("choice chips");
     let path = app.store.create("", Some("Choices"));
     write(
         &path,
@@ -2770,7 +2756,7 @@ fn a_plan_lines_choice_is_a_chip_under_its_item() {
 
 #[test]
 fn the_chip_under_the_mouse_is_lit_wherever_the_chips_are_drawn() {
-    let (_dir, mut app) = started_ux2("chip hover");
+    let (_dir, mut app) = started("chip hover");
     chips_note(&mut app);
     app.editor.doc.row = 5;
     let shown = screen(&mut app);
@@ -2798,7 +2784,7 @@ fn the_chip_under_the_mouse_is_lit_wherever_the_chips_are_drawn() {
 
 #[test]
 fn a_click_on_an_items_plan_chip_opens_its_plan_and_on_its_tab_chip_goes_to_the_tab() {
-    let (_dir, mut app) = started_ux2("chip clicks");
+    let (_dir, mut app) = started("chip clicks");
     chips_note(&mut app);
     // Typed into another item, still in Insert mode.
     keys(&mut app, "5GA again");
@@ -2833,7 +2819,7 @@ fn a_click_on_an_items_plan_chip_opens_its_plan_and_on_its_tab_chip_goes_to_the_
 
 #[test]
 fn a_long_draft_in_add_an_item_shows_its_end() {
-    let (_dir, mut app) = started_ux2("long item");
+    let (_dir, mut app) = started("long item");
     app.cols = 80;
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
@@ -2848,7 +2834,7 @@ fn a_long_draft_in_add_an_item_shows_its_end() {
 
 #[test]
 fn m_enter_outside_the_workspace_keeps_the_draft() {
-    let (_dir, mut app) = started_ux2("plan draft");
+    let (_dir, mut app) = started("plan draft");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     app.open_note(&path, false, false);
@@ -2860,7 +2846,7 @@ fn m_enter_outside_the_workspace_keeps_the_draft() {
 
 #[test]
 fn an_item_handed_to_shape_comes_back_until_it_reaches_the_note() {
-    let (_dir, mut app) = started_ux2("plan handed");
+    let (_dir, mut app) = started("plan handed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     app.open_note(&path, false, false);
@@ -2913,7 +2899,7 @@ fn an_item_handed_to_shape_comes_back_until_it_reaches_the_note() {
 
 #[test]
 fn an_item_added_after_typing_is_its_own_step_to_undo() {
-    let (_dir, mut app) = started_ux2("undo item");
+    let (_dir, mut app) = started("undo item");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     app.open_note(&path, false, false);
@@ -2934,7 +2920,7 @@ fn an_item_added_after_typing_is_its_own_step_to_undo() {
 
 #[test]
 fn enter_in_a_folded_section_opens_the_fold_not_a_hidden_items_plan() {
-    let (_dir, mut app) = started_ux2("folded plan");
+    let (_dir, mut app) = started("folded plan");
     let plan = app.store.create("", Some("Plan - Task"));
     write(&plan, "# Plan - Task\n");
     let path = app.store.create("", Some("Work"));
@@ -3130,7 +3116,7 @@ fn a_note_deleted_outside_beside_a_copy_holding_its_id_stays_unsaved() {
 
 #[test]
 fn an_item_handed_to_shape_follows_its_note_renamed_outside() {
-    let (dir, mut app) = started_ux2("plan renamed");
+    let (dir, mut app) = started("plan renamed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     app.open_note(&path, false, false);
@@ -3150,7 +3136,7 @@ fn an_item_handed_to_shape_follows_its_note_renamed_outside() {
 
 #[test]
 fn an_item_handed_to_shape_finds_its_note_renamed_outside_while_closed() {
-    let (dir, mut app) = started_ux2("plan renamed closed");
+    let (dir, mut app) = started("plan renamed closed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     let other = app.store.create("", Some("Other"));
@@ -3214,7 +3200,7 @@ fn a_note_saved_into_a_new_file_unchanged_and_then_renamed_is_followed() {
 
 #[test]
 fn an_item_handed_to_shape_finds_its_note_saved_elsewhere_then_renamed() {
-    let (dir, mut app) = started_ux2("plan saved renamed");
+    let (dir, mut app) = started("plan saved renamed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
     let other = app.store.create("", Some("Other"));
@@ -3305,7 +3291,7 @@ Item: \"a condensed sidebar\"
 ";
 
 fn with_plan(name: &str, cols: u16) -> (Dir, App, PathBuf, PathBuf) {
-    let (dir, mut app) = started_ux2(name);
+    let (dir, mut app) = started(name);
     app.cols = cols;
     let plan = app
         .store
@@ -3640,7 +3626,7 @@ fn a_paste_with_the_plan_focused_and_going_to_the_list_leave_the_note_alone() {
 
 #[test]
 fn choosing_turns_the_item_s_needs_a_choice_past_a_blank_line() {
-    let (_dir, mut app) = started_ux2("beside blank");
+    let (_dir, mut app) = started("beside blank");
     app.cols = 160;
     let plan = app.store.create("", Some("Plan - Condensed sidebar"));
     write(&plan, PLAN_A_B);
@@ -3659,7 +3645,7 @@ fn choosing_turns_the_item_s_needs_a_choice_past_a_blank_line() {
 
 #[test]
 fn choosing_on_the_item_s_own_line_keeps_the_panel_on_the_item() {
-    let (_dir, mut app) = started_ux2("beside first line");
+    let (_dir, mut app) = started("beside first line");
     app.cols = 160;
     let plan = app.store.create("", Some("Plan - Condensed sidebar"));
     write(&plan, PLAN_A_B);
@@ -3692,7 +3678,7 @@ fn only_the_first_open_decision_is_drawn_as_cards() {
 
 #[test]
 fn choosing_passes_a_sub_item_s_own_choice() {
-    let (_dir, mut app) = started_ux2("beside sub item");
+    let (_dir, mut app) = started("beside sub item");
     app.cols = 160;
     let plan = app.store.create("", Some("Plan - Condensed sidebar"));
     write(&plan, PLAN_A_B);
@@ -3769,7 +3755,7 @@ fn an_item_reworded_while_its_plan_shows_is_still_the_one_chosen_for() {
 fn a_palette_command_that_starts_typing_gives_the_note_the_keys() {
     let (_dir, mut app, _path, plan) = with_plan("beside palette typing", 160);
     keys(&mut app, "4G<CR><C-w>l");
-    let bold = palette::commands(false, true, true)
+    let bold = palette::commands(false, true)
         .into_iter()
         .find(|c| c.name.ends_with("Bold"))
         .unwrap()
@@ -3783,7 +3769,7 @@ fn a_palette_command_that_starts_typing_gives_the_note_the_keys() {
     // keys.
     keys(&mut app, "<Esc><C-w>l");
     assert!(app.beside.as_ref().unwrap().focused);
-    let indent = palette::commands(false, true, true)
+    let indent = palette::commands(false, true)
         .into_iter()
         .find(|c| c.act == PaletteAct::Indent)
         .unwrap()
@@ -3809,7 +3795,7 @@ fn an_item_linking_another_plan_since_is_not_chosen_for() {
 
 #[test]
 fn a_plan_whose_title_differs_from_its_file_name_is_chosen_for() {
-    let (_dir, mut app) = started_ux2("beside colon title");
+    let (_dir, mut app) = started("beside colon title");
     app.cols = 160;
     let plan = app.store.create("", Some("Plan - UI: layout"));
     write(
@@ -4630,7 +4616,6 @@ fn add_an_item_is_refused_on_a_note_another_app_has_open() {
         store,
         Options {
             per_note: true,
-            ux2: true,
             ..options()
         },
     );
@@ -4652,8 +4637,8 @@ fn add_an_item_is_refused_on_a_note_another_app_has_open() {
 }
 
 #[test]
-fn with_ux2_the_list_has_its_own_top_line_and_a_click_on_search_searches() {
-    let (_dir, mut app) = started_ux2("top line");
+fn the_list_has_its_own_top_line_and_a_click_on_search_searches() {
+    let (_dir, mut app) = started("top line");
     let shown = screen(&mut app);
     assert!(shown[0].starts_with(" Notes "), "{:?}", shown[0]);
     let list_w = app.geo.list.width as usize;
@@ -4668,17 +4653,11 @@ fn with_ux2_the_list_has_its_own_top_line_and_a_click_on_search_searches() {
     app.draw(&mut buf);
     let all: String = buf.content.iter().map(|c| c.symbol()).collect();
     assert!(all.contains("Search notes"), "the search asked for");
-
-    // Without UX 2.0, the list starts at the top.
-    let (_dir, mut app) = started("no top line");
-    let shown = screen(&mut app);
-    assert!(!shown[0].contains("/ search"), "{:?}", shown[0]);
-    assert_eq!(app.geo.list.y, 0);
 }
 
 #[test]
 fn a_plan_line_too_long_for_its_chips_stays_and_a_sub_item_keeps_the_plan_chip() {
-    let (_dir, mut app) = started_ux2("long choice");
+    let (_dir, mut app) = started("long choice");
     let path = app.store.create("", Some("Long"));
     let long = "keep the sidebar as it is or replace it ".repeat(4);
     write(
@@ -4711,7 +4690,7 @@ fn a_plan_line_too_long_for_its_chips_stays_and_a_sub_item_keeps_the_plan_chip()
 
 #[test]
 fn typing_before_a_click_on_search_is_one_step_to_undo() {
-    let (_dir, mut app) = started_ux2("search undo");
+    let (_dir, mut app) = started("search undo");
     let path = app.store.create("", Some("Typed"));
     write(&path, "# Typed\n\nfirst\n");
     app.open_note(&path, false, false);
@@ -4728,7 +4707,7 @@ fn typing_before_a_click_on_search_is_one_step_to_undo() {
 
 #[test]
 fn a_plan_line_in_a_visual_selection_shows_its_text() {
-    let (_dir, mut app) = started_ux2("visual plan line");
+    let (_dir, mut app) = started("visual plan line");
     chips_note(&mut app);
     app.focus = Focus::Note;
     keys(&mut app, "3GVjj");
@@ -4742,7 +4721,7 @@ fn a_plan_line_in_a_visual_selection_shows_its_text() {
 
 #[test]
 fn a_plan_line_linking_a_picture_keeps_its_text() {
-    let (_dir, mut app) = started_ux2("picture plan line");
+    let (_dir, mut app) = started("picture plan line");
     let path = app.store.create("", Some("Pictured"));
     write(
         &path,
@@ -4759,7 +4738,7 @@ fn a_plan_line_linking_a_picture_keeps_its_text() {
 
 #[test]
 fn the_wheel_moving_the_cursor_onto_a_plan_line_shows_its_text() {
-    let (_dir, mut app) = started_ux2("wheel plan line");
+    let (_dir, mut app) = started("wheel plan line");
     let path = app.store.create("", Some("Many"));
     let items: String = (0..40)
         .map(|k| format!("- [ ] item {k}\n  Plan: [[P {k}]] (chose A)\n"))
@@ -4797,8 +4776,8 @@ fn the_wheel_moving_the_cursor_onto_a_plan_line_shows_its_text() {
 }
 
 #[test]
-fn with_ux2_the_list_top_line_has_commands_which_a_click_opens_the_palette_with() {
-    let (_dir, mut app) = started_ux2("commands");
+fn the_list_top_line_has_commands_which_a_click_opens_the_palette_with() {
+    let (_dir, mut app) = started("commands");
     let shown = screen(&mut app);
     let top: String = shown[0].chars().take(app.geo.list.width as usize).collect();
     assert!(top.contains("⌘ Commands  / search"), "{top:?}");
@@ -4807,7 +4786,7 @@ fn with_ux2_the_list_top_line_has_commands_which_a_click_opens_the_palette_with(
     assert_eq!(app.layers.len(), 1, "the palette open");
 
     // Off in Settings, it isn't drawn.
-    let (_dir, mut app) = started_ux2("no commands");
+    let (_dir, mut app) = started("no commands");
     app.opts.commands = false;
     let shown = screen(&mut app);
     assert!(!shown[0].contains("Commands"), "{:?}", shown[0]);
@@ -4815,7 +4794,7 @@ fn with_ux2_the_list_top_line_has_commands_which_a_click_opens_the_palette_with(
 
 #[test]
 fn with_the_list_put_away_commands_sits_in_the_top_right_corner() {
-    let (_dir, mut app) = started_ux2("corner");
+    let (_dir, mut app) = started("corner");
     let path = app.store.create("", Some("Corner"));
     write(&path, "# Corner\n\nfirst\n");
     app.open_note(&path, false, false);
@@ -4850,7 +4829,7 @@ fn with_the_list_put_away_commands_sits_in_the_top_right_corner() {
 
 #[test]
 fn with_no_note_open_and_the_list_put_away_commands_is_still_drawn() {
-    let (_dir, mut app) = started_ux2("no note");
+    let (_dir, mut app) = started("no note");
     app.open = None;
     app.list_shown = false;
     let shown = screen(&mut app);
@@ -4870,7 +4849,7 @@ fn with_no_workspace_the_palette_leaves_out_what_only_it_does() {
             .collect()
     };
     // Alone, or outside a pane: its own commands, none of the workspace's.
-    let (_dir, app) = started_ux2("palette-alone");
+    let (_dir, app) = started("palette-alone");
     let alone = names(&app);
     assert!(alone.iter().any(|n| n == "Find a note"));
     assert!(
@@ -4893,7 +4872,6 @@ fn with_no_workspace_the_palette_leaves_out_what_only_it_does() {
         store,
         Options {
             server: true,
-            ux2: true,
             ..options()
         },
     );

@@ -553,8 +553,8 @@ pub fn with_slots(
                 target: Target::Tab(tab),
                 group: Some(k.kind.heading().to_string()),
                 // The table's first column holds it all, its figures'
-                // columns left empty, so the plain table (UX 2.0 off, or
-                // a narrow screen) reads it as a line of its own.
+                // columns left empty, so the plain table (on a narrow
+                // screen) reads it as a line of its own.
                 cells: vec![
                     format!(
                         "{title} · {} · {} · {how_long}",

@@ -4,15 +4,12 @@
 //! in the server task.
 //!
 //! M-p's "Autopilot: work a note" opens mission control on its tabs,
-//! then, with the mode off, asks which note (those holding an unticked
-//! item, the one last worked first, then the newest, the rest behind "More
-//! notes…"), how many of its tabs work at once, the most open and a
-//! spend limit, each typed in a box with what it was before, Enter keeping
-//! it; the repository is the main clone of the pane it was asked from. With
-//! the mode on, it opens mission control on the mode and nothing over it, its
-//! menu (`m`) a key away. With UX 2.0 on, setting it up is its settings box
-//! instead (src/autopilot/settings_box.rs), which the view's menu opens while
-//! it is on, checked and written here (`autopilot_box_write`).
+//! then, with the mode off, its settings box (src/autopilot/settings_box.rs)
+//! on the note last worked, the counts as they were, and the main clone of
+//! the pane it was asked from. With the mode on, it opens mission control on
+//! the mode and nothing over it, its menu (`m`) a key away, which opens the
+//! same box. What the box sets is checked and written here
+//! (`autopilot_box_write`).
 //!
 //! Every tick reads `autopilot.json`, gathers the tabs it opened (their
 //! directories from what the server holds and git's files, their state from
@@ -425,24 +422,6 @@ pub fn target_refused(branch: &str, repo: &Path, source: &str) -> String {
     )
 }
 
-/// A whole number, 1 or more, as typed; empty keeps `was`.
-fn whole(text: &str, was: u32) -> Option<u32> {
-    if text.is_empty() {
-        return Some(was);
-    }
-    let n: f64 = text.parse().ok()?;
-    (n.fract() == 0.0 && (1.0..=f64::from(u32::MAX)).contains(&n)).then_some(n as u32)
-}
-
-/// Dollars, as typed, a `$` in front or not; empty for no limit.
-fn dollars(text: &str) -> Option<f64> {
-    if text.is_empty() {
-        return Some(0.0);
-    }
-    let n: f64 = text.strip_prefix('$').unwrap_or(text).trim().parse().ok()?;
-    (n.is_finite() && n >= 0.0).then_some(n)
-}
-
 /// The longest `autopilot-start`'s check may take and still start it:
 /// shorter than the Slack relay waits for its answer
 /// (`relay::mux::START_WAIT`), so the relay never says it didn't start
@@ -610,25 +589,13 @@ impl FieldsCheck {
     }
 }
 
-/// A percent of the week, as typed, a `%` after it or not: a whole number
-/// from 1 to 100; empty, or 0, for no limit.
-fn percent(text: &str) -> Option<u32> {
-    let text = text.trim();
-    let n: f64 = match text.strip_suffix('%').unwrap_or(text).trim() {
-        "" => return Some(0),
-        n => n.parse().ok()?,
-    };
-    (n.fract() == 0.0 && (0.0..=100.0).contains(&n)).then_some(n as u32)
-}
-
 impl Server {
     // ── M-p ─────────────────────────────────────────────────────────────────
 
     /// M-p's command, pressed with `pane` current: mission control on the
     /// Autopilot view, which shows the mode while it is on (its menu and
     /// settings box a key or a click away there, nothing opened over it),
-    /// else the mode set up: its settings box with UX 2.0, its questions
-    /// without.
+    /// else its settings box to set the mode up.
     pub fn autopilot_command(&mut self, client: ClientId, command: Command, pane: Option<PaneId>) {
         match command {
             Command::WorkNote => {
@@ -644,80 +611,16 @@ impl Server {
                 if Mode::read(&paths::state_dir()).on {
                     return;
                 }
-                if crate::sidebar::text::ux2() {
-                    self.autopilot_box(client, Some(dir), None, Part::Note);
-                } else {
-                    self.autopilot_setup(client, &dir);
-                }
+                self.autopilot_box(client, Some(dir), None, Part::Note);
             }
         }
     }
 
-    /// Which note, which branch to land on, how many tabs at once, the most
-    /// open and a spend limit, then the mode on, working the note in the
-    /// main clone of `dir`'s repository. A repository that lands through a
-    /// PR lands on its default branch alone ("Land on:" refuses another).
-    fn autopilot_setup(&mut self, client: ClientId, dir: &Path) {
-        let Some(repo) = main_clone(dir) else {
-            self.mission_note(
-                client,
-                "Ask from a pane in the note's repository: its items are worked there",
-            );
-            return;
-        };
-        let notes = worktree_from_note::notes_dir();
-        let was = Mode::read(&paths::state_dir());
-        let last = was.note.clone();
-        let at = repo.clone();
-        self.off_task(
-            client,
-            move || {
-                let landing = crate::repos::landing_for(&at, false).map(|l| l.landing);
-                (mode::note_choices(&notes, &last), landing)
-            },
-            move |server, client, (notes, landing)| {
-                if let Err(e) = landing {
-                    server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
-                    return;
-                }
-                if notes.open.is_empty() && notes.rest.is_empty() {
-                    server.mission_note(client, "No notes to work");
-                    return;
-                }
-                server.autopilot_pick_note(client, repo, was, notes);
-            },
-        );
-    }
-
     /// Notes' M-p, the repository picked (`Server::work_note`): mission
-    /// control's tabs, then the mode set up for `note` as M-p's command
-    /// sets it up once a note is picked: "Land on:", then the counts.
+    /// control's tabs, then the mode's settings box for `note`.
     pub fn autopilot_work_note(&mut self, client: ClientId, repo: &Path, note: String) {
         self.open_mission(client, super::opening());
-        if crate::sidebar::text::ux2() {
-            self.autopilot_box(client, Some(repo.to_path_buf()), Some(note), Part::Note);
-            return;
-        }
-        let Some(repo) = main_clone(repo) else {
-            self.mission_note(client, "That isn't a repository");
-            return;
-        };
-        let was = Mode::read(&paths::state_dir());
-        let at = repo.clone();
-        self.off_task(
-            client,
-            move || crate::repos::landing_for(&at, false).map(|l| l.landing),
-            move |server, client, landing| {
-                if let Err(e) = landing {
-                    server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
-                    return;
-                }
-                let at = repo.clone();
-                server.autopilot_pick_target(client, at, move |server, client, target| {
-                    server.autopilot_ask_counts(client, repo, note, target, was)
-                });
-            },
-        );
+        self.autopilot_box(client, Some(repo.to_path_buf()), Some(note), Part::Note);
     }
 
     /// The mode, on and working another note, switched to `note` (M-p's
@@ -742,53 +645,6 @@ impl Server {
                 server.autopilot_box_write(client, fields, was);
             },
         );
-    }
-
-    /// Which note: those holding an unticked item, the rest behind "More
-    /// notes…", so the list stays short; with none of them, the rest at
-    /// once.
-    fn autopilot_pick_note(
-        &mut self,
-        client: ClientId,
-        repo: PathBuf,
-        was: Mode,
-        notes: mode::NoteChoices,
-    ) {
-        let (shown, rest) = if notes.open.is_empty() {
-            (notes.rest, Vec::new())
-        } else {
-            (notes.open, notes.rest)
-        };
-        // A note's value is its path, never empty.
-        const MORE: &str = "";
-        let mut items: Vec<PickItem> = shown
-            .iter()
-            .map(|n| PickItem::new(n.strip_suffix(".md").unwrap_or(n), n.clone()))
-            .collect();
-        if !rest.is_empty() {
-            items.push(PickItem::new("More notes…", MORE));
-        }
-        let picker = Picker::new("Work which note continuously?", items)
-            .named("notes")
-            .prompt("note> ")
-            .keep_order();
-        self.pick(client, picker, move |server, client, picked| match picked {
-            Some(p) if p.value == MORE => {
-                let rest = mode::NoteChoices {
-                    open: Vec::new(),
-                    rest,
-                };
-                server.autopilot_pick_note(client, repo, was, rest);
-            }
-            Some(p) => {
-                let note = p.value;
-                let at = repo.clone();
-                server.autopilot_pick_target(client, at, move |server, client, target| {
-                    server.autopilot_ask_counts(client, repo, note, target, was)
-                });
-            }
-            None => {}
-        });
     }
 
     /// "Land on:": the branches picked here before, the most recent first
@@ -911,354 +767,9 @@ impl Server {
         );
     }
 
-    /// The setup's slots and cap, each typed in starting from what it was,
-    /// then its spend limit; while the mode is on (its menu's "Change its
-    /// note…"), the three kept as they are, since the menu sets each alone.
-    fn autopilot_ask_counts(
-        &mut self,
-        client: ClientId,
-        repo: PathBuf,
-        note: String,
-        target: String,
-        was: Mode,
-    ) {
-        let (slots_were, cap_was, limit_was) = (was.slots, was.cap, was.spend_limit);
-        if was.on {
-            self.autopilot_begin(
-                client,
-                repo,
-                (note, target),
-                (slots_were, cap_was, limit_was),
-            );
-            return;
-        }
-        self.autopilot_number(
-            client,
-            "Tabs working at once",
-            "How many of its tabs work at once; one waiting on you doesn't count.",
-            slots_were,
-            move |server, client, slots| {
-                server.autopilot_number(
-                    client,
-                    "Tabs open at most",
-                    "The most of its tabs open at once, those waiting on you included.",
-                    cap_was.max(slots),
-                    move |server, client, cap| {
-                        if cap < slots {
-                            server.mission_note(
-                                client,
-                                format!("Tabs open at most: at least {slots}"),
-                            );
-                            return;
-                        }
-                        server.autopilot_ask_limit(
-                            client,
-                            limit_was,
-                            move |server, client, limit| {
-                                server.autopilot_begin(
-                                    client,
-                                    repo,
-                                    (note, target),
-                                    (slots, cap, limit),
-                                )
-                            },
-                        );
-                    },
-                );
-            },
-        );
-    }
-
-    /// A whole number asked for in a box, `was` typed in already.
-    fn autopilot_number(
-        &mut self,
-        client: ClientId,
-        title: &'static str,
-        hint: &'static str,
-        was: u32,
-        then: impl FnOnce(&mut Server, ClientId, u32) + Send + 'static,
-    ) {
-        let ask = Ask::new(title, hint).text(was.to_string()).empty_ok();
-        self.open(
-            client,
-            Box::new(ask),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Picked(p) = outcome else {
-                    return;
-                };
-                match whole(&p.value, was) {
-                    Some(n) => then(server, client, n),
-                    None => {
-                        server.mission_note(client, format!("{title}: a whole number, 1 or more"))
-                    }
-                }
-            })),
-        );
-    }
-
-    /// The spend limit asked for in a box, `was` typed in already (empty
-    /// for none); `then` given it, 0 for none.
-    fn autopilot_ask_limit(
-        &mut self,
-        client: ClientId,
-        was: f64,
-        then: impl FnOnce(&mut Server, ClientId, f64) + Send + 'static,
-    ) {
-        let ask = Ask::new(
-            "Spend limit",
-            "Open no more tabs once today's Claude spend passes this many dollars, as the Usage view counts it; empty for none.",
-        )
-        .text(if was > 0.0 { was.to_string() } else { String::new() })
-        .empty_ok();
-        self.open(
-            client,
-            Box::new(ask),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Picked(p) = outcome else {
-                    return;
-                };
-                match dollars(&p.value) {
-                    Some(limit) => then(server, client, limit),
-                    None => server.mission_note(client, "Spend limit: dollars, or empty for none"),
-                }
-            })),
-        );
-    }
-
-    /// The weekly limit asked for in a box, `was` typed in already (empty
-    /// for none); `then` given it, 0 for none.
-    fn autopilot_ask_weekly(
-        &mut self,
-        client: ClientId,
-        was: u32,
-        then: impl FnOnce(&mut Server, ClientId, u32) + Send + 'static,
-    ) {
-        let ask = Ask::new(
-            "Weekly limit",
-            "Open no more tabs once this percent of Claude Code's weekly rate limit is used, as the statusline last read it; empty for none.",
-        )
-        .text(if was > 0 { was.to_string() } else { String::new() })
-        .empty_ok();
-        self.open(
-            client,
-            Box::new(ask),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Picked(p) = outcome else {
-                    return;
-                };
-                match percent(&p.value) {
-                    Some(limit) => then(server, client, limit),
-                    None => server.mission_note(
-                        client,
-                        "Weekly limit: a percent from 1 to 100, or empty for none",
-                    ),
-                }
-            })),
-        );
-    }
-
-    /// The note by its ID too, which the mode follows it by, given one when
-    /// it has none, then the mode on; off the task, since that writes the
-    /// note.
-    fn autopilot_begin(
-        &mut self,
-        client: ClientId,
-        repo: PathBuf,
-        (note, target): (String, String),
-        counts: (u32, u32, f64),
-    ) {
-        let notes = worktree_from_note::notes_dir();
-        let file = notes.join(&note);
-        self.off_task(
-            client,
-            move || crate::notes::id::ensure_id(&file, &notes).ok(),
-            move |server, client, note_id| {
-                server.autopilot_start(client, repo, (note, target), counts, note_id)
-            },
-        );
-    }
-
-    /// Its menu's "Tabs working at once", "Most tabs open", "Spend limit"
-    /// and "Weekly limit": that one box, what it was typed in, and only that count
-    /// written. The cap is never below the slots: slots past it raise it,
-    /// and a cap typed below them is taken as the slots, each said.
-    fn autopilot_set_count(&mut self, client: ClientId, act: Act) {
-        let was = Mode::read(&paths::state_dir());
-        let set = |server: &mut Server, client, change: Box<dyn FnOnce(&mut Mode) -> String>| {
-            let mut said = String::new();
-            match Mode::update(&paths::state_dir(), |m| said = change(m)) {
-                Ok(_) => {
-                    server.autopilot.pilot.reset();
-                    server.autopilot_tick();
-                    server.mission_note(client, said);
-                }
-                Err(e) => server.mission_note(client, format!("Couldn't save it: {e}")),
-            }
-        };
-        match act {
-            Act::Slots => self.autopilot_number(
-                client,
-                "Tabs working at once",
-                "How many of its tabs work at once; one waiting on you doesn't count.",
-                was.slots,
-                move |server, client, slots| {
-                    set(
-                        server,
-                        client,
-                        Box::new(move |m| {
-                            m.slots = slots;
-                            if m.cap < slots {
-                                m.cap = slots;
-                                format!(
-                                    "Tabs working at once: {slots}, and most tabs open: {slots}"
-                                )
-                            } else {
-                                format!("Tabs working at once: {slots}")
-                            }
-                        }),
-                    )
-                },
-            ),
-            Act::Cap => self.autopilot_number(
-                client,
-                "Tabs open at most",
-                "The most of its tabs open at once, those waiting on you included.",
-                was.cap,
-                move |server, client, cap| {
-                    set(
-                        server,
-                        client,
-                        Box::new(move |m| {
-                            m.cap = cap.max(m.slots);
-                            if cap < m.slots {
-                                format!("Most tabs open: {}, as many as work at once", m.cap)
-                            } else {
-                                format!("Most tabs open: {cap}")
-                            }
-                        }),
-                    )
-                },
-            ),
-            Act::WeeklyLimit => {
-                self.autopilot_ask_weekly(client, was.weekly_limit, move |server, client, limit| {
-                    set(
-                        server,
-                        client,
-                        Box::new(move |m| {
-                            // What it said of the limit before no longer
-                            // holds once the limit is another.
-                            if m.weekly_limit != limit {
-                                m.said = super::pilot::unsay(&m.said, super::pilot::WEEKLY);
-                            }
-                            m.weekly_limit = limit;
-                            if limit > 0 {
-                                format!("Weekly limit: {limit}% of the week")
-                            } else {
-                                "Weekly limit: none".to_string()
-                            }
-                        }),
-                    )
-                })
-            }
-            _ => self.autopilot_ask_limit(client, was.spend_limit, move |server, client, limit| {
-                set(
-                    server,
-                    client,
-                    Box::new(move |m| {
-                        // What it said of the limit before no longer
-                        // holds once the limit is another.
-                        if m.spend_limit != limit {
-                            m.said = super::pilot::unsay(&m.said, super::pilot::SPENT);
-                        }
-                        m.spend_limit = limit;
-                        if limit > 0.0 {
-                            format!("Spend limit: ${limit} a day")
-                        } else {
-                            "Spend limit: none".to_string()
-                        }
-                    }),
-                )
-            }),
-        }
-    }
-
-    /// The mode on, as set up.
-    fn autopilot_start(
-        &mut self,
-        client: ClientId,
-        repo: PathBuf,
-        (note, target): (String, String),
-        (slots, cap, limit): (u32, u32, f64),
-        note_id: Option<String>,
-    ) {
-        if let Err(why) = mode::source_of(&repo) {
-            self.mission_note(client, why);
-            return;
-        }
-        let written = Mode::update(&paths::state_dir(), |m| {
-            // Skipped items keep their note's ID, so another note's stay
-            // skipped in that note alone; one from before notes had IDs,
-            // of the note worked before, goes.
-            if m.note != note {
-                m.skipped.retain(|x| !x.note.is_empty());
-            }
-            m.on = true;
-            m.paused = false;
-            m.said.clear();
-            m.note = note.clone();
-            m.note_id = note_id.unwrap_or_default();
-            m.repo = repo.clone();
-            m.slots = slots;
-            m.cap = cap;
-            m.spend_limit = limit;
-            m.target = target.clone();
-        });
-        match written {
-            Ok(_) => {
-                self.autopilot.pilot.reset();
-                self.autopilot_tick();
-                self.mission_note(
-                    client,
-                    format!(
-                        "Working {}: {slots} at a time, up to {cap} tabs, in {}, landing on {}",
-                        note_title(&note),
-                        paths::tilde(&repo),
-                        if target.is_empty() {
-                            "the default branch"
-                        } else {
-                            &target
-                        }
-                    ),
-                );
-            }
-            Err(e) => self.mission_note(client, format!("Couldn't save it: {e}")),
-        }
-    }
-
-    /// Its menu's "Change the target branch…": "Land on:" asked again, for
-    /// the tabs it opens from now; those open land where they were cut from.
-    fn autopilot_change_target(&mut self, client: ClientId) {
-        let repo = Mode::read(&paths::state_dir()).repo;
-        self.autopilot_pick_target(client, repo, |server, client, target| {
-            let said = if target.is_empty() {
-                "Its new tabs land on the default branch".to_string()
-            } else {
-                format!("Its new tabs land on {target}")
-            };
-            match Mode::update(&paths::state_dir(), |m| m.target = target) {
-                Ok(_) => {
-                    server.autopilot.pilot.reset();
-                    server.autopilot_tick();
-                    server.mission_note(client, said);
-                }
-                Err(e) => server.mission_note(client, format!("Couldn't save it: {e}")),
-            }
-        });
-    }
-
     // ── Its settings in one box (board 35) ──────────────────────────────────
 
-    /// Its settings box, with UX 2.0 on, in place of the chain of boxes and
+    /// Its settings box, in place of the chain of boxes and
     /// the menu: the mode's settings, and while it is off the repository of
     /// `dir` and the last note worked (else the first with an unticked
     /// item); `note` in place of the mode's when given (Notes' M-p). The
@@ -1683,17 +1194,12 @@ impl Server {
     /// in mission control opens, moved through
     /// with j and k as mission control's other menus are.
     pub fn autopilot_menu(&mut self, client: ClientId) {
-        if crate::sidebar::text::ux2() {
-            self.autopilot_box(client, None, None, Part::Note);
-        } else {
-            self.autopilot_menu_list(client);
-        }
+        self.autopilot_box(client, None, None, Part::Note);
     }
 
     /// Its menu itself, which the box's `m` opens for the options it
     /// doesn't have (skipping the next item, closing landed tabs).
     fn autopilot_menu_list(&mut self, client: ClientId) {
-        let ux2 = crate::sidebar::text::ux2();
         let mode = Mode::read(&paths::state_dir());
         let close = settings::current_settings()
             .into_iter()
@@ -1709,9 +1215,7 @@ impl Server {
         let options = list
             .iter()
             .map(|(_, label, act)| match act {
-                Act::Change if ux2 => {
-                    MenuOption::new("Change its note, slots, cap or spend limit…")
-                }
+                Act::Change => MenuOption::new("Change its note, slots, cap or spend limit…"),
                 _ => MenuOption::new(label.clone()),
             })
             .collect();
@@ -1725,37 +1229,14 @@ impl Server {
 
     /// Does what an option of its menu, or of its notification's, says.
     pub fn autopilot_act(&mut self, client: ClientId, act: Act) {
-        let state = paths::state_dir();
-        // With UX 2.0, its settings box, on the field the option names.
-        let field = match act {
-            Act::Change => Some(Part::Note),
-            Act::ChangeTarget => Some(Part::Target),
-            Act::Slots => Some(Part::Slots),
-            Act::Cap => Some(Part::Cap),
-            Act::SpendLimit => Some(Part::Limit),
-            Act::WeeklyLimit => Some(Part::Weekly),
-            _ => None,
-        };
-        if let Some(focus) = field
-            && crate::sidebar::text::ux2()
-        {
-            self.autopilot_box(client, None, None, focus);
-            return;
-        }
         match act {
-            Act::Change => {
-                let repo = Mode::read(&state).repo;
-                let dir = if repo.as_os_str().is_empty() {
-                    paths::home()
-                } else {
-                    repo
-                };
-                self.autopilot_setup(client, &dir);
-            }
-            Act::ChangeTarget => self.autopilot_change_target(client),
-            Act::Slots | Act::Cap | Act::SpendLimit | Act::WeeklyLimit => {
-                self.autopilot_set_count(client, act)
-            }
+            // Its settings box, on the field the option names.
+            Act::Change => self.autopilot_box(client, None, None, Part::Note),
+            Act::ChangeTarget => self.autopilot_box(client, None, None, Part::Target),
+            Act::Slots => self.autopilot_box(client, None, None, Part::Slots),
+            Act::Cap => self.autopilot_box(client, None, None, Part::Cap),
+            Act::SpendLimit => self.autopilot_box(client, None, None, Part::Limit),
+            Act::WeeklyLimit => self.autopilot_box(client, None, None, Part::Weekly),
             Act::ToTabs => self.open_mission(client, super::opening()),
             Act::Dismiss => {
                 self.autopilot_dismiss();
@@ -1902,7 +1383,7 @@ impl Server {
         })
     }
 
-    /// Its own view in mission control (`view`), with UX 2.0 and the
+    /// Its own view in mission control (`view`), and the
     /// view_autopilot setting on: while the mode is on, or `keep` (a client
     /// has it in front). `landing` is the Landing view's items, whose
     /// entries say where each tab's worktree is in its landing queue; then
@@ -3664,27 +3145,5 @@ mod tests {
         assert!(next(6, false).unwrap_err().contains("needs a choice"));
         assert!(next(8, false).is_err());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn counts_and_dollars_as_typed() {
-        assert_eq!(whole("", 3), Some(3), "empty keeps what it was");
-        assert_eq!(whole("4", 3), Some(4));
-        assert_eq!(whole("4.0", 3), Some(4));
-        for bad in ["0", "-1", "2.5", "two"] {
-            assert_eq!(whole(bad, 3), None, "{bad}");
-        }
-        assert_eq!(dollars(""), Some(0.0), "empty for none");
-        assert_eq!(dollars("$20"), Some(20.0));
-        assert_eq!(dollars("7.5"), Some(7.5));
-        assert_eq!(dollars("-1"), None);
-        assert_eq!(dollars("lots"), None);
-        assert_eq!(percent(""), Some(0), "empty for none");
-        assert_eq!(percent("80"), Some(80));
-        assert_eq!(percent("80%"), Some(80));
-        assert_eq!(percent(" 85 % "), Some(85));
-        for bad in ["101", "-5", "82.5", "most"] {
-            assert_eq!(percent(bad), None, "{bad}");
-        }
     }
 }

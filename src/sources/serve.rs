@@ -260,8 +260,7 @@ impl Server {
                 let view = self.sources.views.entry(TICKETS).or_default();
                 match result {
                     Ok(issues) => {
-                        view.items =
-                            tickets::board_from(&issues, &tabs, crate::settings::is_on("ux2"));
+                        view.items = tickets::board_from(&issues, &tabs);
                         self.sources.kept.ticket_issues = Some(issues);
                         setup::answered(view);
                     }
@@ -969,7 +968,7 @@ impl Server {
             self.sources.views.get_mut(TICKETS),
             &self.sources.kept.ticket_issues,
         ) {
-            view.items = tickets::board_from(issues, tabs, crate::settings::is_on("ux2"));
+            view.items = tickets::board_from(issues, tabs);
         }
         self.redraw_everywhere();
     }

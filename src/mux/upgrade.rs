@@ -337,7 +337,7 @@ pub struct Upgrade {
     /// Cargo's error lines, told as the build failed, kept for its row.
     failed: Vec<String>,
     /// The build's own spinner frame, turned by its timer (`Tick`) while
-    /// it builds, for the status line and the steps box, which nothing
+    /// it builds, for the sidebar's row and the steps box, which nothing
     /// else redraws.
     pub frame: usize,
     ticking: bool,
@@ -462,9 +462,7 @@ impl Server {
             )));
             self.build_changed();
             if self.build_row_shows(client) {
-                if settings::is_on("ux2") {
-                    self.tip("build-row", Some(client));
-                }
+                self.tip("build-row", Some(client));
             } else {
                 let text = if checkout.main_clone {
                     format!("Updating {}…", paths::tilde(&checkout.dir))
@@ -489,31 +487,14 @@ impl Server {
         });
     }
 
-    /// Whether the build row shows on a client's screen: in the sidebar
-    /// with UX 2.0, on the status line without it.
+    /// Whether the build row shows on a client's screen: in the sidebar.
     fn build_row_shows(&self, client: ClientId) -> bool {
-        if !settings::is_on("ux2") {
-            return crate::status::lines() > 0;
-        }
         self.clients
             .get(&client)
             .is_some_and(|c| self.sidebar_shown(&c.session))
     }
 
-    /// Whether a click on the build row shows its steps: in the sidebar
-    /// with UX 2.0, which a failure's row waits on; the status line's
-    /// words take no click, so a failure there is said in a box.
-    fn build_row_clicks(&self, client: ClientId) -> bool {
-        settings::is_on("ux2") && self.build_row_shows(client)
-    }
-
-    /// The build row in words, for the status line, turning with the
-    /// build's own timer.
-    pub fn build_words(&self) -> Option<String> {
-        self.build_row().map(|r| r.words(self.upgrade.frame))
-    }
-
-    /// The build row as of now, for the sidebar and the status line.
+    /// The build row as of now, for the sidebar.
     pub fn build_row(&self) -> Option<super::build_row::Row> {
         self.upgrade.shown.as_ref()?.row(Instant::now())
     }
@@ -666,7 +647,7 @@ impl Server {
                         };
                         self.say(Some(client), text.trim_end())
                     }
-                    Err(why) => match build.filter(|_| self.build_row_clicks(client)) {
+                    Err(why) => match build.filter(|_| self.build_row_shows(client)) {
                         // The row says it failed until it is clicked, and
                         // its steps say why.
                         Some(build) => {

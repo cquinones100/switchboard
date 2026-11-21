@@ -9,7 +9,7 @@
 //! here, as it does anywhere. If Notes has been quit, Enter or a click
 //! starts it again here, in this pane, which is marked Notes' then.
 //!
-//! With UX 2.0, Notes' own tab has no header (`Session::headerless`), so
+//! Notes' own tab has no header (`Session::headerless`), so
 //! this draws the header's "⌘ Commands" at its top right, a click there
 //! opening the palette as M-p does.
 
@@ -62,7 +62,7 @@ fn where_notes() -> Option<Where> {
 }
 
 /// "⌘ Commands", and the columns it takes on the top row, when Settings
-/// draw it: UX 2.0 and palette_button on.
+/// draw it: palette_button on.
 const COMMANDS: &str = "⌘ Commands";
 
 fn commands_at(cols: u16) -> Option<(u16, u16)> {
@@ -70,8 +70,7 @@ fn commands_at(cols: u16) -> Option<(u16, u16)> {
     // shows on the next draw.
     let all = crate::settings::read_settings();
     let value = |key: &str| all.iter().find(|s| s.key == key).map(|s| s.value.clone());
-    let on = value("ux2") == Some(serde_json::Value::Bool(true))
-        && value("palette_button") != Some(serde_json::Value::Bool(false));
+    let on = value("palette_button") != Some(serde_json::Value::Bool(false));
     let w = crate::ui::draw::width(COMMANDS) as u16;
     (on && cols > w + 2).then(|| (cols - w - 1, cols - 1))
 }

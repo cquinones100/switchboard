@@ -14,9 +14,6 @@ pub struct Config {
     pub width: u16,
     /// The narrowest window that gets a sidebar.
     pub min_window_width: u16,
-    /// Mission control's cards.
-    pub card_width: u16,
-    pub card_height: u16,
     /// Plugin name to its options; only plugins named here load.
     pub plugins: serde_json::Map<String, Value>,
 }
@@ -39,8 +36,6 @@ impl Default for Config {
         Config {
             width: WIDTH,
             min_window_width: 90,
-            card_width: 56,
-            card_height: 13,
             plugins: serde_json::Map::new(),
         }
     }
@@ -65,8 +60,6 @@ impl Config {
         Config {
             width: num("width", d.width),
             min_window_width: num("minWindowWidth", d.min_window_width),
-            card_width: num("cardWidth", d.card_width),
-            card_height: num("cardHeight", d.card_height),
             plugins: v
                 .get("plugins")
                 .and_then(Value::as_object)

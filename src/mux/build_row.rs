@@ -1,7 +1,6 @@
 //! M-p's "Restart Switchboard on the latest main" as the workspace
 //! shows it while it goes (UX 2.0 board 56, "A build running without
-//! blocking"): the sidebar's build row, the same words on the status line
-//! with UX 2.0 off, and its steps in a box a click on the row (or a second
+//! blocking"): the sidebar's build row, and its steps in a box a click on the row (or a second
 //! press) opens beside it. Nothing here blocks: the row is drawn from what
 //! the server keeps of the build (`Build`, told by src/mux/latest.rs's
 //! `Report`s), and the steps box takes no keys, so what you type still
@@ -312,32 +311,6 @@ impl Row {
         }
         kit::fit(line, cols, Style::default())
     }
-
-    /// The same in words, for the status line with UX 2.0 off.
-    pub fn words(&self, frame: usize) -> String {
-        match self {
-            Row::Working {
-                what,
-                meter,
-                secs,
-                note,
-            } => {
-                let mut out = format!("{} {what}", SPINNER[frame % SPINNER.len()]);
-                if let Some((done, of)) = meter {
-                    out.push_str(&format!(" {done}/~{of}"));
-                }
-                if !note.is_empty() {
-                    out.push_str(&format!(", {note}"));
-                }
-                if let Some(s) = secs {
-                    out.push_str(&format!(" · {}", took(*s)));
-                }
-                out
-            }
-            Row::Restarted(hash) => format!("✓ Restarted on {hash}"),
-            Row::Failed { cargo } => format!("✕ {}", Row::failed_words(*cargo)),
-        }
-    }
 }
 
 /// The steps box's lines: where the build is, each step's mark, words and
@@ -588,7 +561,6 @@ mod tests {
         assert!(line.starts_with(" ⠹ Building ▰▰▰▰▰▱▱▱▱▱"), "{line:?}");
         assert!(line.trim_end().ends_with("41s"), "{line:?}");
         assert!(row.spins());
-        assert_eq!(row.words(2), "⠹ Building 212/~415 · 41s");
         // Narrow, the meter goes first.
         let narrow = text(&row.spans(16, 0, &T));
         assert!(!narrow.contains('▰'), "{narrow:?}");
@@ -626,13 +598,9 @@ mod tests {
         };
         let line = text(&failed.row(now).unwrap().spans(40, 0, &T));
         assert_eq!(line.trim_end(), " ✕ Build failed · click for why");
-        assert_eq!(
-            failed
-                .row(now + Duration::from_secs(3600))
-                .unwrap()
-                .words(0),
-            "✕ Build failed · click for why"
-        );
+        let later = failed.row(now + Duration::from_secs(3600)).unwrap();
+        let line = text(&later.spans(40, 0, &T));
+        assert_eq!(line.trim_end(), " ✕ Build failed · click for why");
     }
 
     #[test]

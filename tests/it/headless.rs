@@ -26,7 +26,7 @@ fn a_headless_client_reads_the_whole_screen_and_types_keys() {
         }
     };
     assert!(screen.contains("MISSION CONTROL"), "{screen}");
-    assert!(screen.contains("1 home"), "its tab's card: {screen}");
+    assert!(screen.contains("home"), "its tab's card: {screen}");
     assert_eq!(screen.lines().count(), 32, "{screen}");
 
     let (_, ansi, _) = server.run_binary(&["headless-screen", &id, "--ansi"]);

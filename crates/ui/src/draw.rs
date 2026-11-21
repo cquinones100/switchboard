@@ -361,8 +361,7 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
     let close_w = if close { width(CLOSE) } else { 0 };
     let keys_line = spec.keys.map(|k| format!(" {k}"));
     let keys_rows = if keys_line.is_some() { 2 } else { 0 };
-    // A row clear above and below, as modalBox kept, so the status line
-    // stays in sight.
+    // A row clear above and below, as modalBox kept.
     let room = (rows as usize).saturating_sub(4 + keys_rows).max(1);
     let (inner_w, shown) = match spec.place {
         Place::Share { cols_pct, rows_pct } => {

@@ -57,7 +57,6 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::mux::compose::Frame;
@@ -100,8 +99,7 @@ pub(crate) struct Layer {
     pub about: Option<String>,
 }
 
-/// A client's overlays, the top one taking its input, and what the status
-/// line says in place of a message box when message_boxes is off.
+/// A client's overlays, the top one taking its input.
 #[derive(Default)]
 pub struct Stack {
     pub(crate) layers: Vec<Layer>,
@@ -109,15 +107,13 @@ pub struct Stack {
     /// The tab the next box opened is about, while `Server::about_tab`
     /// opens it.
     pub(crate) about_next: Option<String>,
-    /// The status line's message (tmux's `display-message`) and when it goes.
-    pub(crate) note: Option<(String, Instant)>,
     /// Whether the client's terminal was asked for every mouse movement
     /// (1003), for hover.
     pub(crate) motion: bool,
 }
 
 impl Stack {
-    /// Whether no overlay is up (the status line's message doesn't count).
+    /// Whether no overlay is up.
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
@@ -164,53 +160,20 @@ impl Stack {
         &self.look
     }
 
-    /// The soonest an overlay closes by itself, or the status line's
-    /// message goes.
+    /// The soonest an overlay closes by itself.
     pub fn deadline(&self) -> Option<Instant> {
         self.layers
             .iter()
             .filter_map(|l| l.overlay.deadline())
-            .chain(self.note.as_ref().map(|(_, at)| *at))
             .min()
     }
 
-    /// Draws the overlays over the frame, bottom first, and the status
-    /// line's message over the status line. A box about the tab that goes
+    /// Draws the overlays over the frame, bottom first. A box about the tab that goes
     /// in the middle is drawn as a pane in `beside` instead, the empty
     /// columns beside a narrow lone pane, when it fits there and nothing
     /// under it fills the screen; every other box stays in the middle of
     /// the screen (UX 2.0 boards 111 and 112).
     pub fn draw(&mut self, frame: &mut Frame, beside: Option<Rect>) {
-        // A message kept from before the status line went (UX 2.0 turned on
-        // while one was up) has no row to go in, and is left undrawn.
-        if let Some((text, _)) = &self.note
-            && crate::status::lines() > 0
-            && frame.area().height > 0
-        {
-            let area = frame.area();
-            let row = Rect::new(
-                0,
-                area.height.saturating_sub(crate::status::lines()),
-                area.width,
-                1,
-            );
-            frame.buf.set_style(
-                row,
-                Style::new()
-                    .bg(crate::status::theme::palette().status_bg)
-                    .fg(crate::mux::compose::colors::ACCENT),
-            );
-            for x in row.left()..row.right() {
-                frame.buf[(x, row.y)].set_symbol(" ");
-            }
-            draw::put_line(
-                &mut frame.buf,
-                0,
-                row.y,
-                row.width,
-                &ratatui::text::Line::from(Span::raw(text.clone())),
-            );
-        }
         if self.layers.is_empty() {
             return;
         }

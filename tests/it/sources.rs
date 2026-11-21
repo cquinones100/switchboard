@@ -403,8 +403,7 @@ fn the_description_beside_the_pr_board_draws_its_diagram_as_a_picture_where_the_
             ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
             ("SWITCHBOARD_GITHUB_API", &fake.url),
         ],
-        &json!({"notifications": false, "linear": false, "pause_when_away": false, "ux2": true})
-            .to_string(),
+        &json!({"notifications": false, "linear": false, "pause_when_away": false}).to_string(),
     );
     // The diagram as Mermaid would have drawn it, kept in the image cache
     // under its source and theme, so no Chrome runs.
@@ -488,8 +487,7 @@ fn j_and_k_scroll_the_description_beside_the_pr_board() {
             ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
             ("SWITCHBOARD_GITHUB_API", &fake.url),
         ],
-        &json!({"notifications": false, "linear": false, "pause_when_away": false, "ux2": true})
-            .to_string(),
+        &json!({"notifications": false, "linear": false, "pause_when_away": false}).to_string(),
     );
     let work = server.dir.path().join("widgets");
     std::fs::create_dir_all(&work).unwrap();
@@ -740,11 +738,11 @@ fn m_a_visits_a_build_failing_tab_after_those_that_need_you() {
     );
     // A pinned tab needs you; a third, plain, is where the walk starts.
     server.ok(&["new-tab", "-n", "pinned"]);
-    client.wait_text("2:pinned");
+    client.wait_text("2 pinned");
     let pinned = tabs()[1]["id"].as_str().unwrap().to_string();
     server.ok(&["set", "-t", &pinned, "@pinned", "1"]);
     server.ok(&["new-tab", "-n", "plain"]);
-    client.wait_text("3:plain");
+    client.wait_text("3 plain");
 
     let at = |n: usize| move |t: &Value| t[n]["current"] == true;
     client.type_text("\x1ba");

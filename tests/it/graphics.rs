@@ -183,7 +183,7 @@ fn the_check_leaves_out_tests_and_sees_every_spelling_of_esc() {
 /// pixels.
 fn sixel_server(cols: u16, rows: u16) -> (TestServer, common::TestClient) {
     let server = TestServer::start_with_settings(
-        r#"{"ux2": true, "image_protocol": "sixel", "notifications": false, "tips": false, "sidebar": false}"#,
+        r#"{"image_protocol": "sixel", "notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut client = server.attach(cols, rows);
     client.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -457,7 +457,7 @@ fn with_sixel_the_pills_rounded_ends_are_one_cell_sixels_in_ghostty_too() {
 fn by_default_a_terminal_that_answers_sixel_gets_it_and_windows_terminal_its_colors() {
     // No image protocol chosen: by the terminal.
     let server = TestServer::start_with_settings(
-        r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
+        r#"{"notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut wt = server.attach_as("xterm-256color WindowsTerminal", 140, 30);
     wt.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -685,7 +685,7 @@ fn with_sixel_a_program_s_half_circles_are_its_own_and_switchboard_s_apps_become
 fn the_apps_ask_what_the_session_s_terminals_get_and_one_that_gets_neither_shows_blanks() {
     // By the terminal, as by default.
     let server = TestServer::start_with_settings(
-        r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
+        r#"{"notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut first = server.attach_as("xterm-256color", 100, 30);
     // Its session made before its pane is looked for.

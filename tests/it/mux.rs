@@ -21,14 +21,14 @@ fn tabs(list: &serde_json::Value) -> usize {
 }
 
 #[test]
-fn attaching_shows_a_shell_and_the_status_line() {
+fn attaching_shows_a_shell_under_the_tabs_header() {
     let server = TestServer::start();
     let mut client = server.attach(80, 24);
     let screen = client.wait_text("$");
     assert!(
-        screen[23].contains("main"),
-        "the status line names the session: {:?}",
-        screen[23]
+        screen[0].contains("1 home"),
+        "the header names the tab: {:?}",
+        screen[0]
     );
     client.type_text("echo hello-$((40+2))\r");
     client.wait_text("hello-42");
@@ -48,7 +48,7 @@ fn splitting_tabs_and_closing() {
     assert!(screen.iter().filter(|l| l.contains('$')).count() >= 1);
     // A new tab from a command, then M-{ back to the first.
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     assert_eq!(tabs(&server.list()), 2);
     client.type_text(&format!("{ALT}{{"));
     client.wait_for("the first tab current", |_| {
@@ -71,7 +71,7 @@ fn alt_shift_bracket_in_the_kitty_form_goes_back_and_forward() {
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     let current = |i: usize| server.list()["sessions"][0]["tabs"][i]["current"] == true;
     // Ghostty's Alt+Shift+[ without the alternate key: Shift and `[`.
     client.type_text("\x1b[91;4u");
@@ -207,7 +207,7 @@ fn tmux_s_own_prefix_keys_move_between_tabs_and_panes_and_close_a_tab_after_aski
     });
     // n, p and the numbers between tabs.
     server.ok(&["new-tab", "-n", "second"]);
-    client.wait_text("2:second");
+    client.wait_text("2 second");
     client.type_text(&format!("{prefix}1"));
     client.wait_for("the first tab", |_| current(&server.list()) == Some(0));
     client.type_text(&format!("{prefix}n"));
@@ -712,8 +712,8 @@ fn ctrl_shift_p_reaches_a_program_that_asked_for_it_and_a_shell_gets_ctrl_p() {
     server.ok(&["new-tab", "-n", "notes", "--", common::BIN, "notes"]);
     client.wait_text("Plan");
     client.type_text("\x1b[112;6u");
-    client.wait_text("action>");
-    client.wait_text("Notes: Find a note");
+    client.wait_text("╭─ Actions");
+    client.wait_text("Notes: Start work on this");
 }
 
 /// Stand-ins for the desktop's clipboard tools, first on the PATH, so a
@@ -1061,7 +1061,12 @@ fn a_pane_scrolled_back_shows_a_scroll_bar_until_it_is_at_the_bottom() {
     );
     // Dragging the thumb to the bottom ends the wheel's copy mode, so what
     // is typed reaches the shell again.
-    client.send(b"\x1b[<0;80;3M\x1b[<32;80;23M\x1b[<0;80;23m");
+    let thumb = screen
+        .iter()
+        .position(|l| l.trim_end_matches(' ').ends_with('┃'))
+        .unwrap()
+        + 1;
+    client.send(format!("\x1b[<0;80;{thumb}M\x1b[<32;80;24M\x1b[<0;80;24m").as_bytes());
     client.wait_for("the bar gone at the bottom", |s| thumb_rows(s) == 0);
     client.type_text("echo typed-$((40+2))\r");
     client.wait_text("typed-42");
@@ -1214,8 +1219,8 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
     server.ok(&["press", "read-link"]);
     let screen = client.wait_text("Read a link beside this pane");
     let (x, y) = cell_of(&screen, "Read a link beside this pane").unwrap();
-    assert!(x > rule && y == 0, "at {x},{y}:\n{}", screen.join("\n"));
-    assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
+    assert!(x > rule && y == 4, "at {x},{y}:\n{}", screen.join("\n"));
+    assert!(screen[4].contains("tab 1 · "), "{}", screen[4]);
     let (kx, ky) = cell_of(&screen, "esc close").unwrap();
     assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
     assert!(cell_of(&screen, "SIDE PANEL").is_none());
@@ -1258,11 +1263,11 @@ fn the_tabs_menu_opens_beside_a_narrow_pane_as_a_pane() {
     let screen = client.wait_text(title);
     let (x, y) = cell_of(&screen, title).unwrap();
     assert!(
-        x > rule && y == 0,
+        x > rule && y == 4,
         "{press} at {x},{y}:\n{}",
         screen.join("\n")
     );
-    assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
+    assert!(screen[4].contains("tab 1 · "), "{}", screen[4]);
     assert!(
         !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
         "{press}: no box edge or shadow:\n{}",
@@ -1385,7 +1390,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     server.ok(&["look", &shot]);
     let screen = client.wait_text("shot.png   tab 1 · ");
     let (x, y) = cell_of(&screen, "shot.png   tab 1 · ").unwrap();
-    assert!(x > rule && y == 0, "at {x},{y}:\n{}", screen.join("\n"));
+    assert!(x > rule && y == 4, "at {x},{y}:\n{}", screen.join("\n"));
     assert!(cell_of(&screen, "SIDE PANEL").is_none());
     let (kx, ky) = cell_of(&screen, "M-Esc close").unwrap();
     assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
@@ -1437,7 +1442,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     // Shown while a box is up, they go under it: the box keeps its keys.
     server.ok(&["press", "palette"]);
     client.wait_for("the palette with its list", |s| {
-        cell_of(s, "action>").is_some() && s.iter().any(|l| l.contains("› "))
+        cell_of(s, "╭─ Actions").is_some() && s.iter().any(|l| l.contains("› "))
     });
     server.ok(&["look", &shot]);
     client.wait_text("shot.png   tab 1 · ");

@@ -7,7 +7,7 @@
 //! match (the notes holding the words typed as written, then those matched
 //! only as scattered letters, newest first in each). Above them, under
 //! "Suggested" (the list itself under "Every note", with how many there
-//! are: board 126, the labels the kit's with UX 2.0 on), are at most three
+//! are: board 126, the labels the kit's), are at most three
 //! notes the tab is likely about, so Enter takes the first: the note last shown beside it,
 //! then notes that mention its ticket or PR number, those whose title
 //! shares words with the tab's name, and those that mention its
@@ -26,7 +26,6 @@ use regex::Regex;
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Server};
 use crate::notes::store::{self, NoteEntry, Store};
-use crate::settings;
 use crate::ui::{PickItem, Picker};
 
 /// Words too common to say what a tab is about.
@@ -251,12 +250,12 @@ impl Server {
                 if !server.clients.contains_key(&client) || !server.tabs.contains_key(&tab) {
                     return;
                 }
-                let kit = settings::is_on("ux2").then(|| {
+                let kit = Some(
                     server
                         .clients
                         .get(&client)
-                        .is_some_and(|c| crate::mux::graphics::round_ends(&c.term))
-                });
+                        .is_some_and(|c| crate::mux::graphics::round_ends(&c.term)),
+                );
                 let picker = picker(&label, listed, kit);
                 server.about_tab(client, tab, move |s| {
                     s.pick(client, picker, move |server, _, picked| {
@@ -360,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_list_is_drawn_as_board_126() {
+    fn the_list_is_drawn_as_board_126() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
         let notes = vec![

@@ -328,7 +328,8 @@ impl Server {
 
     /// Runs `switchboard <args>` in a pane to the right of `pane`, taking
     /// `percent` of its width, focused and marked with `mark`, as the views'
-    /// `split-window -h` did. Gives the new pane, or says why there is none.
+    /// `split-window -h` did, the PR and the ticket in its place instead.
+    /// Gives the new pane, or says why there is none.
     pub fn open_beside(
         &mut self,
         pane: PaneId,
@@ -339,10 +340,10 @@ impl Server {
         let mut command = vec![exe()];
         let tool = args.first().cloned().unwrap_or_default();
         command.extend(args);
-        // UX 2.0 shows the PR and the ticket in Claude's place, as M-d
+        // The PR and the ticket show in Claude's place, as M-d
         // shows the diff (src/diff/in_place.rs), the key closing it giving
         // the place back; the header names what is shown.
-        if crate::settings::is_on("ux2") && (mark == PR_VIEW || mark == TICKET_VIEW) {
+        if mark == PR_VIEW || mark == TICKET_VIEW {
             return match self.open_in_place(pane, &tool, command, None) {
                 Ok(view) => {
                     if let Some(slot) = self.panes.get_mut(&view) {
@@ -410,8 +411,8 @@ impl Server {
         }
     }
 
-    /// M-v: the PR view to the right, or closed. With UX 2.0 beside a
-    /// narrow lone pane, it takes the place of whatever is beside the pane
+    /// M-v: the PR view in Claude's place, or closed. Beside a narrow
+    /// lone pane, it takes the place of whatever is beside the pane
     /// (`clear_beside`), the pane keeping its width; closed, it leaves the
     /// columns empty.
     fn toggle_pr_view(&mut self, client: ClientId) {
@@ -447,9 +448,7 @@ impl Server {
             Some(pr) => command.extend(["--pr".into(), pr.key()]),
             None => command.push(dir),
         }
-        let replaced = crate::settings::is_on("ux2")
-            .then(|| self.clear_beside(tab))
-            .flatten();
+        let replaced = self.clear_beside(tab);
         let opened = if let Some((lone, width)) = replaced {
             let mut full = vec![exe()];
             full.extend(command);
@@ -579,7 +578,7 @@ impl Server {
                     .is_some())
     }
 
-    /// M-i: the tab's ticket in a view to the right, or closed; with none
+    /// M-i: the tab's ticket in Claude's place, or closed; with none
     /// found, yours to choose one from.
     fn toggle_ticket_view(&mut self, client: ClientId) {
         let Some((pane, tab, dir)) = self.here(client) else {
@@ -929,7 +928,7 @@ impl Server {
             return;
         }
         let shown_now = self.message_shown(client);
-        // The status line shows it with its spaces run together.
+        // Its spaces run together, as a message shows them.
         let one_line = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
         let ours = shown_now.as_deref().map(one_line) == Some(one_line(words));
         let nothing_else = ours || shown_now.is_none();
@@ -1286,7 +1285,7 @@ impl Server {
             );
             return;
         }
-        // Claude parked behind the PR view (in its place with UX 2.0) is
+        // Claude parked behind the PR view (in its place) is
         // given its place back first, as M-c would.
         let claude = self
             .panes_with_parked(tab)

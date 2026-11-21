@@ -52,13 +52,6 @@
     "default": "look"
   },
   {
-    "key": "ux2",
-    "category": "Appearance",
-    "label": "UX 2.0",
-    "description": "No status line: each tab has a header naming it, with the keys of what it can show in Claude's place (M-c Claude, M-d Diff, M-v PR, M-i Ticket, M-e Note); the sidebar starts with its notifications; M-v and M-i show the PR and the ticket in Claude's place rather than beside it, laid out as their pages are with a panel of their facts beside the description; and M-d's diff reads as one scroll of files under its story's chapters, the chapter's why over the diff and each hunk's note in a card under it. Off, the status line, the sidebar and those keys are as before",
-    "default": false
-  },
-  {
     "key": "sidebar",
     "category": "Sidebar",
     "label": "Sidebar",
@@ -188,7 +181,7 @@
     "key": "keep_awake",
     "category": "Sessions",
     "label": "Keep the computer awake while tabs work",
-    "description": "While a tab's Claude works (background work and watches too, not a /loop between its runs) or autopilot, on and not paused, has tabs open, the computer doesn't sleep when idle (caffeinate on macOS, a logind inhibitor on Linux), shown by a ☕ on the status line, or with UX 2.0 at the top of the sidebar; it lets go two minutes after everything is idle, the display still sleeps, and a laptop closed with no display on it sleeps anyway. M-p's 'Keep the computer awake until I say' holds it whatever runs. Off, the computer sleeps on its own schedule unless held from M-p",
+    "description": "While a tab's Claude works (background work and watches too, not a /loop between its runs) or autopilot, on and not paused, has tabs open, the computer doesn't sleep when idle (caffeinate on macOS, a logind inhibitor on Linux), shown by a ☕ at the top of the sidebar; it lets go two minutes after everything is idle, the display still sleeps, and a laptop closed with no display on it sleeps anyway. M-p's 'Keep the computer awake until I say' holds it whatever runs. Off, the computer sleeps on its own schedule unless held from M-p",
     "default": true
   },
   {
@@ -399,21 +392,21 @@
     "key": "mission_nav_follow",
     "category": "Mission control",
     "label": "Show views as the list moves",
-    "description": "With UX 2.0, moving the cursor through mission control's list of views with j, k or the arrows brings each view to the front as it lands on it, the list keeping the keys; Enter then moves into the view, a view joins back and forward's trail once the cursor rests on it a second, and the list is one Tab stop, Tab going into the view in front and Shift-Tab back. Off, j and k only move the cursor, Enter opens the view, and Tab stops on each view's row",
+    "description": "Moving the cursor through mission control's list of views with j, k or the arrows brings each view to the front as it lands on it, the list keeping the keys; Enter then moves into the view, a view joins back and forward's trail once the cursor rests on it a second, and the list is one Tab stop, Tab going into the view in front and Shift-Tab back. Off, j and k only move the cursor, Enter opens the view, and Tab stops on each view's row",
     "default": true
   },
   {
     "key": "hover_highlight",
     "category": "Mission control",
     "label": "Highlight on hover",
-    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of the PR view's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, status line, mission control and boxes, and in M-d's diff its buttons, its list's rows, the story map's chapters, a fold and a path:line in an answer) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
+    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of the PR view's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, mission control and boxes, and in M-d's diff its buttons, its list's rows, the story map's chapters, a fold and a path:line in an answer) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
     "default": true
   },
   {
     "key": "mission_keep_tabs_sidebar",
     "category": "Mission control",
     "label": "Keep the tabs sidebar in mission control",
-    "description": "With UX 2.0, mission control keeps the tabs sidebar and lists its groups and views in a column of its own beside it, the view to its right; off, while mission control is open the sidebar itself lists its groups and views, the tabs coming back as it closes",
+    "description": "Mission control keeps the tabs sidebar and lists its groups and views in a column of its own beside it, the view to its right; off, while mission control is open the sidebar itself lists its groups and views, the tabs coming back as it closes",
     "default": false
   },
   {
@@ -441,7 +434,7 @@
     "key": "turn_summaries",
     "category": "Mission control: Tabs",
     "label": "Summaries of each turn",
-    "description": "With UX 2.0, each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line",
+    "description": "Each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line",
     "default": false
   },
   {
@@ -469,7 +462,7 @@
     "key": "reminders",
     "category": "Mission control: Reminders",
     "label": "Reminders",
-    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone",
+    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder on a month; off, reminders are neither set nor shown, and the view is gone",
     "default": true
   },
   {
@@ -519,7 +512,7 @@
     "key": "slack_threads",
     "category": "Mission control: Slack",
     "label": "Slack threads and pictures",
-    "description": "With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through your own Slack sign-in while \"Read Slack through your own token\" is on, else through Claude's Slack connector (a few more headless Haiku calls a look), and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
+    "description": "The Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through your own Slack sign-in while \"Read Slack through your own token\" is on, else through Claude's Slack connector (a few more headless Haiku calls a look), and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
     "default": true
   },
   {
@@ -585,7 +578,7 @@
     "key": "view_ci",
     "category": "Mission control: CI",
     "label": "CI",
-    "description": "Mission control's CI view: your pull requests failing, running and passing, each failed check with the line of its log that says why and, with UX 2.0, its failing step beside the list, asked of GitHub every two minutes #github",
+    "description": "Mission control's CI view: your pull requests failing, running and passing, each failed check with the line of its log that says why and its failing step beside the list, asked of GitHub every two minutes #github",
     "default": true
   },
   {
@@ -599,7 +592,7 @@
     "key": "view_autopilot",
     "category": "Mission control: Autopilot",
     "label": "Autopilot view",
-    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Blocked while an item waits on another, Working, Waiting on you, Landing, Landed, and Skipped while an item is skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
+    "description": "While autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Blocked while an item waits on another, Working, Waiting on you, Landing, Landed, and Skipped while an item is skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
     "default": true
   },
   {
@@ -694,7 +687,7 @@
     "key": "view_resources",
     "category": "Mission control: Resources",
     "label": "Resources",
-    "description": "Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front; with UX 2.0 a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone",
+    "description": "Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front, as a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone",
     "default": true
   },
   {
@@ -715,7 +708,7 @@
     "key": "view_keys",
     "category": "Mission control: Keys",
     "label": "Keys",
-    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter's menu to press a workspace key and m's to find a key by pressing it; with UX 2.0, a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane",
+    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter's menu to press a workspace key and m's to find a key by pressing it, on a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane",
     "default": true
   },
   {
@@ -825,28 +818,28 @@
   },
   {
     "key": "idle_walk",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "M-A cycles idle tabs",
     "description": "M-A goes to the next idle tab, in the sidebar's Idle order, wrapping at the end, as M-a walks the tabs that need you; off, M-A reaches the pane",
     "default": true
   },
   {
     "key": "tab_history",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Tab history",
     "description": "M-h shows a tab's history: its Claude session on a timeline (its state, your turns, commits, review rounds and context) under its screen as it was at the moment you move to, the screens kept in the server's memory only, never on disk, and the rest read from the session's transcript; off, nothing is kept, M-h says it is off and the header has no History key",
     "default": true
   },
   {
     "key": "tab_age",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Tab age and stage times",
-    "description": "Shows how long each tab has been open, as 'opened 1h12m' in the UX 2.0 tab header and on mission control's cards, and how long each stage of an autopilot tab took (or has taken so far) on its board; off, none of them is shown, while a landed item's Done line still says how long it took, since the landing writes it",
+    "description": "Shows how long each tab has been open, as 'opened 1h12m' in the tab header and on mission control's cards, and how long each stage of an autopilot tab took (or has taken so far) on its board; off, none of them is shown, while a landed item's Done line still says how long it took, since the landing writes it",
     "default": true
   },
   {
     "key": "tab_search_panes",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Search what panes show",
     "description": "M-j's picker (and M-b w) finds a tab by what its panes show as well as by its name: each pane's screen and the last lines of its scrollback (Lines searched in each pane) are read in the server's memory as you type, never written anywhere, and each tab found that way shows its matching lines under its row, the tabs found by name first; its row's menu can go to the match in copy mode. Search everything (M-S-f) finds tabs by what their panes show the same way. Off, the picker and search everything match the tabs' names alone",
     "default": true
@@ -860,7 +853,7 @@
   },
   {
     "key": "tab_search_lines",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Lines searched in each pane",
     "description": "How far back Search what panes show reads each pane's scrollback, above its screen: 200 lines, 1000, or all the pane keeps",
     "choices": [
@@ -881,7 +874,7 @@
   },
   {
     "key": "lone_pane_width",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Widest a lone pane gets",
     "description": "A tab with one pane (or zoomed into one), and mission control showing one view with no pane beside its list, is drawn at most this wide, against the sidebar, its program given that width and the columns at its right the sidebar's sunken surface with a rule at the pane's right edge; with two or more panes they share the whole width and may be wider, and several views at once fill it too. Besides the widths listed, Columns… takes any number from 80 typed in, as `switchboard setting lone_pane_width <n>` does. A drag of the rule at a lone pane's right edge, or the pane resize keys (C-M-S-h and C-M-S-l), gives that tab alone a width of its own, kept through restarts and cleared with M-p's or the tab's menu's \"Use the default width\", and the keys in mission control with one view give mission control one, leaving this setting, which every other tab takes, as it is. Off, as it is unless you choose a width, a lone pane fills the width",
     "choices": [
@@ -919,14 +912,14 @@
   },
   {
     "key": "spare_hints",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Hints in the side panel",
-    "description": "The side panel, the columns right of a lone pane narrowed by Widest a lone pane gets, lists, centered in it, what the pane can open, each its key and a click that does what the key does: the tab's note, a split to the right, the PR and the ticket when the tab has one (in Claude's place with UX 2.0 on), and a link read beside the pane, with how to widen the pane under them; nothing shows where they don't fit. Off, the side panel is the plain sunken surface",
+    "description": "The side panel, the columns right of a lone pane narrowed by Widest a lone pane gets, lists, centered in it, what the pane can open, each its key and a click that does what the key does: the tab's note, a split to the right, the PR and the ticket when the tab has one (in Claude's place), and a link read beside the pane, with how to widen the pane under them; nothing shows where they don't fit. Off, the side panel is the plain sunken surface",
     "default": true
   },
   {
     "key": "views_beside_narrow_pane",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Open views in the side panel",
     "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in the side panel instead, the pane keeping its width beside it (the diff takes Diff's share in the side panel, narrowing the pane while it is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already in the side panel, they open in its place, but for the PR view (M-v), which closes what is there and takes its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
     "default": true
@@ -940,7 +933,7 @@
   },
   {
     "key": "diff_beside_share",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Diff's share in the side panel",
     "description": "How much of the width beside the sidebar M-d's diff takes when it opens in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives the diff more, it takes it. Dragging the line between them resizes for that diff alone",
     "choices": [
@@ -965,49 +958,42 @@
   },
   {
     "key": "boxes_beside_narrow_pane",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Open boxes in the side panel",
     "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, naming or renaming it, its menu and its full title, sending its Claude's last reply on, Work on this item) opens as a pane in the side panel, the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
     "default": true
   },
   {
     "key": "images_beside_pane",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Show images in the side panel",
     "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the side panel, the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or a click on them closes them, and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. Asked for from a tab not in front, they wait for its side panel until the tab is. With too few columns spare, a split, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
     "default": true
   },
   {
     "key": "tab_back_forward",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "M-{ and M-} go back and forward",
     "description": "M-{ and M-} go back and forward through the tabs and mission control views you visited, as a browser's back and forward do, and do nothing with nowhere further to go, the ← and → buttons before mission control's ⊞ do the same, and M-Tab goes to the tab or view before; off, they go to the tab on the left and right, as the prefix's p and n always do, the buttons are left out, and M-Tab goes to the tab before",
     "default": true
   },
   {
     "key": "one_claude_per_tab",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "One Claude to a tab",
     "description": "A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and the PR view's /resolve-conflicts each take a tab's Claude to be one pane",
     "default": true
   },
   {
     "key": "name_new_tabs",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Name new tabs",
     "description": "M-t and M-n ask what to call the tab they open: a name typed in, its ticket and the ticket's title, or shaping a ticket, each optional; off, the tab is named after its directory",
     "default": true
   },
   {
-    "key": "message_boxes",
-    "category": "Tabs and status bar",
-    "label": "Messages in a box",
-    "description": "What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment",
-    "default": true
-  },
-  {
     "key": "link_opening_message",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Opening-link message",
     "description": "Opening a link says where it is going (the site, Chrome and its profile) in a box until the browser comes to the front, since a profile's Chrome can take seconds to start. Off, links open with nothing said",
     "default": true
@@ -1093,7 +1079,7 @@
     "key": "notes_item_chips",
     "category": "Notes",
     "label": "Chips on checklist items",
-    "description": "With UX 2.0 on, each checklist item shows chips: the tab working on it (its number in the tab's color, a click going there), \"landed <hash>\" once ticked with its commit named under it, \"plan\" where it links its plan (a click opening it), \"needs a choice\" while one waits and \"chose\" once made; with a Plan: line under the item they are drawn in that line's place, its text shown while the cursor is on it, else at the item's right, its text cut with … before them except on the cursor's line; off, items are their text alone",
+    "description": "Each checklist item shows chips: the tab working on it (its number in the tab's color, a click going there), \"landed <hash>\" once ticked with its commit named under it, \"plan\" where it links its plan (a click opening it), \"needs a choice\" while one waits and \"chose\" once made; with a Plan: line under the item they are drawn in that line's place, its text shown while the cursor is on it, else at the item's right, its text cut with … before them except on the cursor's line; off, items are their text alone",
     "default": true
   },
   {
@@ -1160,38 +1146,31 @@
     "default": false
   },
   {
-    "key": "second_status",
-    "category": "Tabs and status bar",
-    "label": "Second status line",
-    "description": "The line under the tabs with the tab's name, branch, PR and Claude session",
-    "default": false
-  },
-  {
     "key": "tab_lookups",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "PRs and tickets in tab names",
     "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, or its GitHub issue's title, in the background",
     "default": true
   },
   {
     "key": "tab_prs",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Follow every PR a tab's session opens",
     "description": "A tab follows each pull request its Claude opens or looks at (gh pr create or view), from any branch or repository, as well as its branch's: its label leads with the current one, the sidebar and its Tabs card list each with where it stands, and \"Show another of this tab's PRs\" makes another current for M-v and M-d. A merged or closed one leaves the list once you have looked at the tab. Off, a tab has only its branch's PR",
     "default": true
   },
   {
     "key": "accent_colors",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Project colors",
     "description": "A color of its own for each project's tab, made from its directory; off, every tab is gray",
     "default": true
   },
   {
     "key": "tab_colors",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Tab colors",
-    "description": "The colors tabs take from their project, in the tab bar, the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each tab keeps its own hue either way",
+    "description": "The colors tabs take from their project, in the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each tab keeps its own hue either way",
     "choices": [
       {
         "value": "soft",
@@ -1206,14 +1185,14 @@
   },
   {
     "key": "tab_colors_apart",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "A color a tab",
     "description": "Each tab gets the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart. Off, a tab wears its directory's color, the same for every tab of one checkout",
     "default": true
   },
   {
     "key": "new_tab_home",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Folder for new tabs instead of home",
     "description": "A new tab, or a split, that would start in your home folder starts in this folder instead, as does the first tab when the workspace starts, while it is a folder: Claude Code asks whether to trust the home folder every time a session starts there, and a folder here is asked about once. A tab opened from a pane in another folder keeps that folder. Home, the default, starts them at home",
     "choices": [
@@ -1227,13 +1206,6 @@
       "label": "Folder…"
     },
     "default": ""
-  },
-  {
-    "key": "health_light",
-    "category": "Tabs and status bar",
-    "label": "Health light",
-    "description": "A red mark in the status bar when saves, the sidebar or the Slack relay quietly stop",
-    "default": true
   },
   {
     "key": "server_images",
@@ -1274,7 +1246,7 @@
     "key": "theme",
     "category": "Appearance",
     "label": "Theme",
-    "description": "The status line's, the pane borders' and the boxes' colors, dark drawn in the UX 2.0 canvas's colors on a terminal that shows truecolor and in the 256-color palette elsewhere; system follows the terminal's own background, which it is asked for as it attaches",
+    "description": "The header's, the pane borders' and the boxes' colors, dark drawn in the UX 2.0 canvas's colors on a terminal that shows truecolor and in the 256-color palette elsewhere; system follows the terminal's own background, which it is asked for as it attaches",
     "choices": [
       {
         "value": "dark",
@@ -1342,14 +1314,14 @@
   },
   {
     "key": "tab_title",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "Show a tab's full title",
-    "description": "M-p's \"Show this tab's full title\", the sidebar's i and a tab's menu in mission control (and M-T, with \"M-T reopens the last closed tab\" off) show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the status line cut; off, M-T reaches the pane",
+    "description": "M-p's \"Show this tab's full title\", the sidebar's i and a tab's menu in mission control (and M-T, with \"M-T reopens the last closed tab\" off) show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the header cut; off, M-T reaches the pane",
     "default": true
   },
   {
     "key": "reopen_tab_key",
-    "category": "Tabs and status bar",
+    "category": "Tabs and header",
     "label": "M-T reopens the last closed tab",
     "description": "M-T reopens the tab closed most recently, in its directory with its Claude resumed; pressed again, the one before. Off, M-T shows the tab's full title as before",
     "default": true
@@ -1386,7 +1358,7 @@
     "key": "statusline_context",
     "category": "Sessions",
     "label": "Context in Claude's status line",
-    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with UX 2.0 and mission control's Usage view on, the status line inside the workspace shows the model alone and the Usage view's Sessions show the context; without both of those it shows the context anyway",
+    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with mission control's Usage view on, the status line inside the workspace shows the model alone and the Usage view's Sessions show the context; without it, it shows the context anyway",
     "default": true
   },
   {
@@ -1574,7 +1546,7 @@
     "key": "palette_button",
     "category": "Palette",
     "label": "Commands button",
-    "description": "A ⌘ Commands button that opens M-p when clicked: in the status bar after the session name, or with UX 2.0 at the right end of the tab header's keys, where a click while the palette is open closes it, and on the notes list's top line in Notes' own tab, which has no header",
+    "description": "A ⌘ Commands button that opens M-p when clicked: at the right end of the tab header's keys, where a click while the palette is open closes it, and on the notes list's top line in Notes' own tab, which has no header",
     "default": true
   },
   {

@@ -1,7 +1,7 @@
 //! The settings the drawing follows, asked of the program that draws:
-//! whether UX 2.0 is on, the theme, the scroll bars, and what a box's look
-//! reads (`Look::read`). This crate knows no settings file; the program
-//! says where its settings are (`install`), once, as it starts:
+//! the theme, the scroll bars, and what a box's look reads (`Look::read`).
+//! This crate knows no settings file; the program says where its settings
+//! are (`install`), once, as it starts:
 //! `switchboard` gives its own (`~/.config/switchboard/settings.json` over
 //! `assets/settings.json`), an app alone in a terminal whatever it reads.
 //! Until one does, each key answers its default (`DEFAULTS`, which a test
@@ -47,7 +47,6 @@ impl Default {
 
 /// Every setting this crate reads, with its default.
 pub const DEFAULTS: &[(&str, Default)] = &[
-    ("ux2", Default::Off),
     ("scroll_bars", Default::On),
     ("theme", Default::Choice("dark")),
     ("terminal_colors", Default::Off),

@@ -81,13 +81,10 @@ fn m_t_lists_the_directory_youre_in_first_and_opens_claude_in_the_one_picked() {
     let screen = client.wait_text("Open in >");
     let first = screen
         .iter()
-        .position(|l| l.contains("~/repo"))
+        .position(|l| l.contains("│ › ~/repo") || l.contains("│   ~/repo"))
         .expect("the repository is listed");
     assert!(
-        screen
-            .iter()
-            .position(|l| l.trim_start().contains("› ~"))
-            .is_some_and(|at| at == first),
+        screen[first].contains("› ~/repo") && screen[first + 1].contains("   ~ "),
         "the directory you are in first, chosen: {screen:#?}"
     );
     client.send(b"\r");
@@ -187,7 +184,7 @@ fn m_o_lists_a_past_session_and_resumes_it_in_a_new_tab() {
     client.send(b"\x1bo");
     client.wait_for("the session's row", |s| {
         s.iter()
-            .any(|l| l.contains("repo") && l.contains("a past session"))
+            .any(|l| l.contains("make the lonely thing work again"))
     });
     // Enter opens its menu, resuming it first.
     client.send(b"\r");
@@ -273,110 +270,6 @@ fn tab_marks_a_few_of_a_note_s_items_and_each_marked_gets_a_tab() {
 }
 
 #[test]
-fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_time() {
-    let (server, repo, mut client) = world();
-    let notes = server.home.join("Notes");
-    std::fs::create_dir_all(&notes).unwrap();
-    std::fs::write(
-        notes.join("Plan.md"),
-        "# Plan\n\n- [ ] Fix the login\n- [ ] Speed up the build\n- [x] Done\n",
-    )
-    .unwrap();
-    let refused = server.run(&["press", "work-on-item", "../Plan.md", "4"]);
-    assert_ne!(refused.0, 0, "a note outside the notes folder");
-    server.ok(&["press", "work-on-item", "Plan.md", "5"]);
-    client.wait_text("Line 5 of Plan is ticked");
-    client.send(b"\r");
-    // The key reaches the server on the client's connection and the next
-    // press on a command's own, so one could overtake the other and the
-    // key answer the next box.
-    client.wait_for("the box closed", |s| {
-        !s.iter().any(|l| l.contains("Line 5 of Plan is ticked"))
-    });
-
-    let before = tabs(&server).len();
-    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
-    client.wait_text("Work on “Speed up the build”: the repository");
-    client.send(b"\r");
-    client.wait_text("Land on");
-    client.send(b"\r");
-    // The server names the tab, gives it its note and brings it to the front
-    // after the tab opens, so wait for all three rather than reading them as
-    // soon as it appears.
-    let deadline = common::deadline(Duration::from_secs(15));
-    loop {
-        let now = tabs(&server);
-        let tab = now.get(before);
-        let ready = now.len() == before + 1
-            && tab.is_some_and(|t| {
-                t["options"]["@tab_name"] == "Speed up the build"
-                    && t["options"]["@tab_note"] == "Plan.md"
-                    && t["current"] == true
-            });
-        if ready {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for the item's tab, named for the item, with its note and in front; \
-             the tabs last seen: {now:#?}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    wait("the note's repository kept", || {
-        std::fs::read_to_string(server.state.join("work-recent.json"))
-            .is_ok_and(|t| t.contains("\"Plan.md\"") && t.contains(repo.to_str().unwrap()))
-    });
-
-    // Pressed again, the tab it has is offered rather than a second one.
-    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
-    client.wait_text("“Speed up the build” has a tab already. Go to it?");
-    client.send(b"n");
-    assert_eq!(tabs(&server).len(), before + 1);
-
-    // The item's tab runs wt, which writes the repository's git config as
-    // it claims the item: done (Claude started, or wt stopped) before the
-    // config is written here, so the two never race for its lock.
-    let pane = tabs(&server)[before]["panes"][0]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    wait("the item's wt to finish", || {
-        std::fs::read_to_string(server.home.join("claude-ran"))
-            .is_ok_and(|t| t.contains("note-speed-up-the-build"))
-            || server.ok(&["capture-pane", "-t", &pane]).contains("Error:")
-    });
-
-    // A tab /wt opened sets no title: its branch's wtnItem names the item.
-    let worktree = server.home.join("wt-login");
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "note/fix-the-login",
-            worktree.to_str().unwrap(),
-        ],
-    );
-    git(
-        &repo,
-        &[
-            "config",
-            "branch.note/fix-the-login.wtnItem",
-            "Plan.md: Fix the login",
-        ],
-    );
-    let out = server.ok(&["new-tab", "-c", worktree.to_str().unwrap()]);
-    let tab = out.split_whitespace().next().unwrap().to_string();
-    server.ok(&["set", "-t", &tab, "@tab_note", "Plan.md"]);
-    server.ok(&["press", "work-on-item", "Plan.md", "3"]);
-    client.wait_text("“Fix the login” has a tab already. Go to it?");
-    client.send(b"n");
-}
-
-#[test]
 fn land_on_lists_the_branch_picked_last_time_first() {
     let (server, repo, mut client) = world();
     lands(&server, &repo, "direct");
@@ -439,88 +332,6 @@ fn lands(server: &TestServer, repo: &Path, way: &str) {
         serde_json::json!({ repo.join(".git").to_str().unwrap(): { "landing": way } }).to_string(),
     )
     .unwrap();
-}
-
-/// In a repository landing through PRs, which go to the default branch, a
-/// hand-started item is refused any other branch to land on, through M-I's
-/// "Start work on a note's checklist items" and Notes' `gw` alike, and
-/// opens no tab; the default branch opens one as before.
-#[test]
-fn a_repository_landing_by_pr_refuses_a_target_other_than_the_default_branch() {
-    let (server, repo, mut client) = world();
-    lands(&server, &repo, "pr");
-    git(&repo, &["branch", "team/dev"]);
-    let notes = server.home.join("Notes");
-    std::fs::create_dir_all(&notes).unwrap();
-    std::fs::write(
-        notes.join("Plan.md"),
-        "# Plan\n\n- [ ] Fix the login\n- [ ] Write the docs\n",
-    )
-    .unwrap();
-    let before = tabs(&server).len();
-    server.ok(&["press", "work-on-note"]);
-    client.wait_text("Open in >");
-    client.send(b"\r");
-    client.wait_text("note>");
-    client.send(b"\r");
-    client.wait_text("Every item listed (2)");
-    client.send(b"\x1b[B");
-    client.send(b"\r");
-    client.wait_text("Land on");
-    client.type_text("team/dev");
-    client.wait_text("branch> team/dev");
-    client.send(b"\r");
-    client.wait_text("team/dev can't be landed on");
-    client.send(b"\r");
-    assert_eq!(tabs(&server).len(), before, "no tab for a refused branch");
-    assert!(
-        !std::fs::read_to_string(server.state.join("work-recent.json"))
-            .unwrap_or_default()
-            .contains("team/dev"),
-        "a refused branch isn't kept to list first"
-    );
-
-    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
-    client.wait_text("Work on “Write the docs”: the repository");
-    client.send(b"\r");
-    client.wait_text("Land on");
-    client.type_text("team/dev");
-    client.wait_text("branch> team/dev");
-    client.send(b"\r");
-    client.wait_text("team/dev can't be landed on");
-    client.send(b"\r");
-    assert_eq!(tabs(&server).len(), before, "no tab for a refused branch");
-
-    // Nor is the default branch typed by name for "Another branch…".
-    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
-    client.wait_text("Work on “Write the docs”: the repository");
-    client.send(b"\r");
-    client.wait_text("Land on");
-    client.type_text("Another");
-    client.wait_text("branch> Another");
-    client.send(b"\r");
-    client.wait_text("Land on which branch?");
-    client.type_text("main");
-    client.send(b"\r");
-    wait("the item's tab", || tabs(&server).len() == before + 1);
-}
-
-/// In a repository landing by PR, the default branch picked from "Land on:"
-/// opens the item's tab.
-#[test]
-fn a_repository_landing_by_pr_takes_the_default_branch_from_the_list() {
-    let (server, repo, mut client) = world();
-    lands(&server, &repo, "pr");
-    let notes = server.home.join("Notes");
-    std::fs::create_dir_all(&notes).unwrap();
-    std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] Write the docs\n").unwrap();
-    let before = tabs(&server).len();
-    server.ok(&["press", "work-on-item", "Plan.md", "3"]);
-    client.wait_text("Work on “Write the docs”: the repository");
-    client.send(b"\r");
-    client.wait_text("Land on");
-    client.send(b"\r");
-    wait("the item's tab", || tabs(&server).len() == before + 1);
 }
 
 /// Waits for the tab just opened to be in front, its row `row` in the
@@ -673,9 +484,9 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
 
     // With no skill, it isn't listed.
-    in_front_at(&server, &mut client, "▌ ○  2 repo", &repo);
+    in_front_at(&server, &mut client, "▌○ 2 repo", &repo);
     client.type_text("\x1bp");
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("a PR in a new tab");
     let screen = client.wait_text("Start work on a PR");
     assert!(
@@ -684,7 +495,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     );
     client.type_text("\x1b");
     client.wait_for("the palette to close", |s| {
-        !s.iter().any(|l| l.contains("action>"))
+        !s.iter().any(|l| l.contains("╭─ Actions"))
     });
 
     // In a worktree of a repository whose main clone has it, it is.
@@ -703,14 +514,14 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
         ],
     );
     server.ok(&["new-tab", "-c", worktree.to_str().unwrap()]);
-    in_front_at(&server, &mut client, "▌ ○  3 w", &worktree);
+    in_front_at(&server, &mut client, "▌○ 3 w", &worktree);
     client.type_text("\x1bp");
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("a PR in a new tab");
     client.wait_text("› Review a contributor's PR");
     client.type_text("\x1b");
     client.wait_for("the palette to close", |s| {
-        !s.iter().any(|l| l.contains("action>"))
+        !s.iter().any(|l| l.contains("╭─ Actions"))
     });
 
     let before = tabs(&server).len();
@@ -817,12 +628,9 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
 /// opens the item's tab; and with a tab on the item, the box offers to go
 /// there.
 #[test]
-fn with_ux2_gw_opens_the_work_on_this_item_box() {
+fn gw_opens_the_work_on_this_item_box() {
     let (server, repo, mut client) = world();
-    common::write_settings(
-        &server.home,
-        serde_json::json!({ "ux2": true, "tips": false }),
-    );
+    common::write_settings(&server.home, serde_json::json!({ "tips": false }));
     let notes = server.home.join("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
@@ -969,7 +777,7 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
     let mut client = server.attach(120, 40);
     client.wait_text("$");
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
-    in_front_at(&server, &mut client, "▌ ○  2 repo", &repo);
+    in_front_at(&server, &mut client, "▌○ 2 repo", &repo);
     let repo_tab = tabs(&server)
         .into_iter()
         .find(|t| t["current"] == true)
@@ -980,12 +788,12 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
 
     // Listed in the palette while GitHub is on.
     client.type_text("\x1bp");
-    client.wait_text("action>");
+    client.wait_text("╭─ Actions");
     client.type_text("GitHub issue in a new tab");
     client.wait_text("› Start work on a GitHub issue");
     client.type_text("\x1b");
     client.wait_for("the palette to close", |s| {
-        !s.iter().any(|l| l.contains("action>"))
+        !s.iter().any(|l| l.contains("╭─ Actions"))
     });
 
     let before = tabs(&server).len();

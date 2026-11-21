@@ -1,4 +1,4 @@
-//! With UX 2.0, the list of mission control's groups and views (boards 64
+//! The list of mission control's groups and views (boards 64
 //! and 65 of the design): each group a section's label, each view a row
 //! with what it holds at its right, the view in front lit as a list's
 //! chosen row. With Settings' `mission_keep_tabs_sidebar` off it is drawn
@@ -28,9 +28,7 @@ pub const COLUMN: u16 = 23;
 /// leaving out the views whose name doesn't hold it and the groups left
 /// with none.
 pub fn listed(m: &Mission) -> Vec<(Group, Vec<usize>)> {
-    let Some(groups) = m.groups() else {
-        return Vec::new();
-    };
+    let groups = m.groups();
     let text = m
         .nav_filter
         .as_ref()
@@ -80,7 +78,7 @@ pub fn title(m: &Mission, place: usize) -> &str {
 
 /// The group a place is in.
 pub fn group_of(m: &Mission, place: usize) -> Option<Group> {
-    m.groups()?
+    m.groups()
         .into_iter()
         .find(|(_, held)| held.contains(&place))
         .map(|(g, _)| g)

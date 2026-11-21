@@ -79,10 +79,10 @@ use crate::mux::server::ClientId;
 /// multiplexer's (`mux::keys::Action::View`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
-    /// M-v: the branch's PR description in a pane to the right, or closed.
+    /// M-v: the branch's PR description in Claude's place, or closed.
     PrView,
     /// M-i: the tab's ticket (its Linear ticket or project, or its GitHub
-    /// issue) in a pane to the right, or closed.
+    /// issue) in Claude's place, or closed.
     TicketView,
     /// M-r: the branch's PR in the browser.
     OpenPr,
@@ -212,11 +212,9 @@ impl Command {
     /// What it does, as tmux.conf described its binding.
     pub fn about(self) -> &'static str {
         match self {
-            Command::PrView => {
-                "View the branch's PR description in a pane to the right, or close it"
-            }
+            Command::PrView => "View the branch's PR description in Claude's place, or close it",
             Command::TicketView => {
-                "View the tab's ticket (its Linear ticket or project, or its GitHub issue), with its comments, in a pane to the right, or close it"
+                "View the tab's ticket (its Linear ticket or project, or its GitHub issue), with its comments, in Claude's place, or close it"
             }
             Command::OpenPr => "Open the branch's PR in the browser",
             Command::OpenRepo => "Open the repository in the browser",
@@ -265,10 +263,10 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::PrView => {
-                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again, with whether it can merge in its head and m opening its menu. With UX 2.0 on, it opens in this pane's place, or in the side panel beside a narrow lone pane in place of what is there. With no PR, it shows the branch's CI on GitHub."
+                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again, with whether it can merge in its head and m opening its menu. It opens in this pane's place, or in the side panel beside a narrow lone pane in place of what is there. With no PR, it shows the branch's CI on GitHub."
             }
             Command::TicketView => {
-                "The ticket is one chosen for the tab, else the GitHub issue its branch was started for or the Linear ticket its branch names (repos.json's tickets saying which), else a ticket or project in a name you gave the tab. The copy last read shows while it is asked again; with UX 2.0 on, it opens in this pane's place. With none found, you choose one of your Linear tickets and projects."
+                "The ticket is one chosen for the tab, else the GitHub issue its branch was started for or the Linear ticket its branch names (repos.json's tickets saying which), else a ticket or project in a name you gave the tab. The copy last read shows while it is asked again, and it opens in this pane's place. With none found, you choose one of your Linear tickets and projects."
             }
             Command::OpenPr => {
                 "A branch with no PR yet opens its repository instead, and a box says why. The link opens in the Chrome profile browser.json gives GitHub, and what went wrong is said in a box."

@@ -1117,11 +1117,10 @@ impl Server {
 
     /// After a look, the threads it found something new in, for the board's
     /// pane and reply counts, read in a task of their own, one such read at
-    /// a time; only while UX 2.0 draws the board, and not while you're
+    /// a time; not while you're
     /// away (the next look on your return reads them).
     fn read_wanted_threads(&mut self) {
         if !settings::is_on("slack_threads")
-            || !settings::is_on("ux2")
             || self.away()
             || self.day.slack_wanted_busy
             || tokio::runtime::Handle::try_current().is_err()

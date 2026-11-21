@@ -3,7 +3,7 @@
 //! then those that ran once, each carrying in its data what the board
 //! draws, so drawing reads nothing but the snapshot.
 //!
-//! With UX 2.0 it is drawn as the board draws it (`board`): on the left,
+//! It is drawn as the board draws it (`board`): on the left,
 //! Recurring, Once and Ran once, each routine a two-line row (its mark,
 //! its name, its schedule dim and when it runs next at the right; under
 //! it a chip for the tools it may use and one for its last run in its
@@ -14,7 +14,7 @@
 //! schedule and directory, Enter's keycap for its menu (board 76), its
 //! prompt on a panel, its allowed tools, how it runs, today's runs
 //! (earlier ones folded with their spend) and its next runs. Narrower than `BESIDE_AT`, the pane is behind `i`, in
-//! the list's place. Without UX 2.0 the view is a plain list.
+//! the list's place.
 
 use std::collections::HashMap;
 
@@ -231,11 +231,6 @@ fn tone_of(outcome: &str) -> Tone {
         "Missed" | "Busy" => Tone::Dim,
         _ => Tone::Failed,
     }
-}
-
-/// Whether the board is drawn: UX 2.0 on.
-pub fn is_board(m: &Mission) -> bool {
-    m.snap.rules.ux2
 }
 
 /// The routine chosen: the cursor's.

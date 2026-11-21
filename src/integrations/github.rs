@@ -268,8 +268,8 @@ fn note_limit(response: &Response, protocol: &str) {
 /// The hour's limit with the least left, GraphQL's or REST's (`core`; the
 /// search API's own limit is a minute's), of those GitHub's answers
 /// reported that haven't reset since: what slows the lookups down
-/// (`sources::schedule::Budget`), the health light's line and the Usage
-/// view's. None while every one has reset, or none was read.
+/// (`sources::schedule::Budget`) and the Usage view's line. None while
+/// every one has reset, or none was read.
 pub fn tightest_limit() -> Option<Limit> {
     let now = util::now_secs();
     let limits = LIMITS.lock().unwrap_or_else(|e| e.into_inner());

@@ -21,9 +21,8 @@ use super::{in_columns, ms_of, text};
 use crate::integrations::github;
 use crate::items::{Item, State, Target};
 
-pub const COLUMNS: [&str; 5] = ["Draft", "In review", "Approved", "In merge queue", "Merged"];
-/// UX 2.0's columns: a PR with changes asked for in a column of its own.
-pub const COLUMNS_UX2: [&str; 6] = [
+/// The board's columns: a PR with changes asked for in a column of its own.
+pub const COLUMNS: &[&str] = &[
     "Draft",
     "In review",
     "Changes asked",
@@ -32,23 +31,19 @@ pub const COLUMNS_UX2: [&str; 6] = [
     "Merged",
 ];
 
-/// The board's columns, with UX 2.0 on or off.
-pub fn columns(ux2: bool) -> &'static [&'static str] {
-    if ux2 { &COLUMNS_UX2 } else { &COLUMNS }
-}
 pub const MERGED_DAYS: i64 = 7;
 pub const MERGED_EVERY: Duration = Duration::from_secs(10 * 60);
 
 const FIELDS: &str = "... on PullRequest { number title url headRefName isCrossRepository headRepositoryOwner { login } isDraft state reviewDecision mergedAt mergedBy { login } body additions deletions author { login } repository { nameWithOwner } mergeQueueEntry { position } commitCount: commits { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } latestReviews(first: 10) { nodes { author { login } } } }";
 
-fn column_of(pr: &Value, ux2: bool) -> &'static str {
+fn column_of(pr: &Value) -> &'static str {
     if text(pr, "/state") == "MERGED" {
         "Merged"
     } else if pr.get("mergeQueueEntry").is_some_and(|e| !e.is_null()) {
         "In merge queue"
     } else if pr.get("isDraft").and_then(Value::as_bool) == Some(true) {
         "Draft"
-    } else if ux2 && text(pr, "/reviewDecision") == "CHANGES_REQUESTED" {
+    } else if text(pr, "/reviewDecision") == "CHANGES_REQUESTED" {
         "Changes asked"
     } else if text(pr, "/reviewDecision") == "APPROVED" {
         "Approved"
@@ -59,10 +54,10 @@ fn column_of(pr: &Value, ux2: bool) -> &'static str {
 
 /// A board card: the PR and its title, then its repository, its checks, its
 /// review and its place in the queue. Failing checks or changes asked for
-/// need you. With UX 2.0 on, a PR with changes asked for has a column of
-/// its own, and the card carries its reviewers and what its description
-/// beside the board shows.
-pub fn item_of(pr: &Value, ux2: bool) -> Option<Item> {
+/// need you. A PR with changes asked for has a column of its own, and the
+/// card carries its reviewers and what its description beside the board
+/// shows.
+pub fn item_of(pr: &Value) -> Option<Item> {
     let number = pr.get("number").and_then(Value::as_u64)?;
     let url = text(pr, "/url");
     let repo = text(pr, "/repository/nameWithOwner");
@@ -131,7 +126,7 @@ pub fn item_of(pr: &Value, ux2: bool) -> Option<Item> {
         .detail(marks.join(" · "))
         .state(state)
         .target(Target::Url(url.to_string()))
-        .group(column_of(pr, ux2))
+        .group(column_of(pr))
         .data(json!({
             "pr": {
                 "number": number, "repo": repo, "branch": text(pr, "/headRefName"),
@@ -156,11 +151,11 @@ pub fn item_of(pr: &Value, ux2: bool) -> Option<Item> {
 
 /// Lays out search results as the board: each PR once, column by column,
 /// the merged ones newest first.
-pub fn board_from(prs: &[Value], ux2: bool) -> Vec<Item> {
+pub fn board_from(prs: &[Value]) -> Vec<Item> {
     let mut seen = std::collections::HashSet::new();
     let mut items: Vec<Item> = prs
         .iter()
-        .filter_map(|pr| item_of(pr, ux2))
+        .filter_map(item_of)
         .filter(|i| seen.insert(i.id.clone()))
         .collect();
     // A stable sort, so only the merged column changes order.
@@ -171,7 +166,7 @@ pub fn board_from(prs: &[Value], ux2: bool) -> Vec<Item> {
             0
         }
     });
-    in_columns(columns(ux2), items)
+    in_columns(COLUMNS, items)
 }
 
 /// The merged PRs as last searched for: the repositories asked about, when,
@@ -207,7 +202,7 @@ impl Board {
         if let Some((_, _, merged)) = &self.merged {
             all.extend(merged.iter().cloned());
         }
-        board_from(&all, crate::settings::is_on("ux2"))
+        board_from(&all)
     }
 }
 
@@ -307,7 +302,6 @@ mod tests {
                     "isCrossRepository": !repo.starts_with(&format!("{head}/")),
                     "headRepositoryOwner": { "login": head },
                     "repository": { "nameWithOwner": repo } }),
-                false,
             )
             .unwrap()
         };
@@ -365,28 +359,25 @@ mod tests {
         // lib/sidebar's "the PR board puts each PR in the column for where
         // it stands".
         let failing = json!({ "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] } });
-        let items = board_from(
-            &[
-                pr(1, json!({ "isDraft": true })),
-                pr(2, failing),
-                pr(3, json!({ "reviewDecision": "CHANGES_REQUESTED" })),
-                pr(4, json!({ "reviewDecision": "APPROVED" })),
-                pr(
-                    5,
-                    json!({ "reviewDecision": "APPROVED", "mergeQueueEntry": { "position": 2 } }),
-                ),
-                pr(
-                    6,
-                    json!({ "state": "MERGED", "mergedAt": "2026-10-20T10:00:00Z" }),
-                ),
-                pr(
-                    7,
-                    json!({ "state": "MERGED", "mergedAt": "2026-10-21T10:00:00Z" }),
-                ),
-                pr(2, json!({})),
-            ],
-            false,
-        );
+        let items = board_from(&[
+            pr(1, json!({ "isDraft": true })),
+            pr(2, failing),
+            pr(3, json!({ "reviewDecision": "CHANGES_REQUESTED" })),
+            pr(4, json!({ "reviewDecision": "APPROVED" })),
+            pr(
+                5,
+                json!({ "reviewDecision": "APPROVED", "mergeQueueEntry": { "position": 2 } }),
+            ),
+            pr(
+                6,
+                json!({ "state": "MERGED", "mergedAt": "2026-10-20T10:00:00Z" }),
+            ),
+            pr(
+                7,
+                json!({ "state": "MERGED", "mergedAt": "2026-10-21T10:00:00Z" }),
+            ),
+            pr(2, json!({})),
+        ]);
         let laid: Vec<(String, String)> = items
             .iter()
             .map(|i| (i.group.clone().unwrap(), i.title.clone()))
@@ -394,7 +385,7 @@ mod tests {
         let want = [
             ("Draft", "#1 PR 1"),
             ("In review", "#2 PR 2"),
-            ("In review", "#3 PR 3"),
+            ("Changes asked", "#3 PR 3"),
             ("Approved", "#4 PR 4"),
             ("In merge queue", "#5 PR 5"),
             ("Merged", "#7 PR 7"),
@@ -427,24 +418,21 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_changes_asked_for_have_a_column_and_the_card_its_reviewers_and_description() {
-        let items = board_from(
-            &[
-                pr(1, json!({})),
-                pr(
-                    2,
-                    json!({
-                        "reviewDecision": "CHANGES_REQUESTED",
-                        "author": { "login": "ana" }, "additions": 214, "deletions": 88,
-                        "commitCount": { "totalCount": 3 }, "body": "Lay it out.",
-                        "reviewRequests": { "nodes": [{ "requestedReviewer": { "login": "sam" } }, { "requestedReviewer": { "name": "core" } }] },
-                        "latestReviews": { "nodes": [{ "author": { "login": "ben" } }, { "author": { "login": "sam" } }] }
-                    }),
-                ),
-                pr(3, json!({ "reviewDecision": "APPROVED" })),
-            ],
-            true,
-        );
+    fn changes_asked_for_have_a_column_and_the_card_its_reviewers_and_description() {
+        let items = board_from(&[
+            pr(1, json!({})),
+            pr(
+                2,
+                json!({
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "author": { "login": "ana" }, "additions": 214, "deletions": 88,
+                    "commitCount": { "totalCount": 3 }, "body": "Lay it out.",
+                    "reviewRequests": { "nodes": [{ "requestedReviewer": { "login": "sam" } }, { "requestedReviewer": { "name": "core" } }] },
+                    "latestReviews": { "nodes": [{ "author": { "login": "ben" } }, { "author": { "login": "sam" } }] }
+                }),
+            ),
+            pr(3, json!({ "reviewDecision": "APPROVED" })),
+        ]);
         let groups: Vec<_> = items.iter().map(|i| i.group.clone().unwrap()).collect();
         assert_eq!(groups, ["In review", "Changes asked", "Approved"]);
         let d = &items[1].data;

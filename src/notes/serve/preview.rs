@@ -91,12 +91,12 @@ impl Server {
                     server.say(Some(client), "There is no note to preview yet.");
                     return;
                 }
-                let kit = settings::is_on("ux2").then(|| {
+                let kit = Some(
                     server
                         .clients
                         .get(&client)
-                        .is_some_and(|c| crate::mux::graphics::round_ends(&c.term))
-                });
+                        .is_some_and(|c| crate::mux::graphics::round_ends(&c.term)),
+                );
                 server.pick(client, picker(rows, kit), move |server, _, picked| {
                     if let Some(picked) = picked.filter(|p| !p.value.is_empty()) {
                         server.open_preview(client, pane, &picked.value);

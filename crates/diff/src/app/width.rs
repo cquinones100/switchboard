@@ -153,18 +153,17 @@ fn ui_key(key: &KeyEvent) -> Option<Key> {
 }
 
 /// What a screen line of the diff is part of, the same for each of its
-/// wrapped lines: a row of the diff, a fold, or a note, a note's card or
-/// an "also in" line after the row or fold before it.
+/// wrapped lines: a row of the diff, a fold, or a note's card or an
+/// "also in" line after the row or fold before it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Spot {
     Row(usize),
     Fold(usize),
-    Note(Option<After>),
     Card(Option<After>),
     Also(Option<After>),
 }
 
-/// The row or the fold a note, a card or an "also in" line comes after, so
+/// The row or the fold a card or an "also in" line comes after, so
 /// a card after a fold isn't taken for one after the row before the fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum After {
@@ -186,7 +185,6 @@ fn spots_of(lines: &[Line]) -> Vec<Spot> {
                 last = Some(After::Fold(*first));
                 Spot::Fold(*first)
             }
-            Line::Note { .. } => Spot::Note(last),
             Line::Card(_) => Spot::Card(last),
             Line::Also(..) => Spot::Also(last),
         })
@@ -200,12 +198,11 @@ fn blank_on(line: &Line, new_side: bool) -> bool {
         if matches!(if new_side { new } else { old }, Cell::Gap))
 }
 
-/// A note, card or "also in" line whose row or fold has opened or closed
+/// A card or "also in" line whose row or fold has opened or closed
 /// since: the same kind of line after the first row past an opened fold's
 /// start, or after the fold now closed over its row.
 fn after_moved(spot: Spot, spots: &[Spot], lines: &[Line]) -> Spot {
     let (kind, after): (fn(Option<After>) -> Spot, After) = match spot {
-        Spot::Note(Some(a)) => (Spot::Note, a),
         Spot::Card(Some(a)) => (Spot::Card, a),
         Spot::Also(Some(a)) => (Spot::Also, a),
         _ => return spot,
@@ -213,11 +210,7 @@ fn after_moved(spot: Spot, spots: &[Spot], lines: &[Line]) -> Spot {
     let moved = match after {
         After::Fold(start) => spots.iter().find_map(|s| {
             let candidate = match *s {
-                Spot::Note(Some(After::Row(r)))
-                | Spot::Card(Some(After::Row(r)))
-                | Spot::Also(Some(After::Row(r)))
-                    if r >= start =>
-                {
+                Spot::Card(Some(After::Row(r))) | Spot::Also(Some(After::Row(r))) if r >= start => {
                     kind(Some(After::Row(r)))
                 }
                 _ => return None,

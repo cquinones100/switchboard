@@ -21,7 +21,7 @@
 //!   Space k            link                   [[       link to a note
 //! ```
 //!
-//! With UX 2.0 on, a note's unticked checklist items have keys of their
+//! A note's unticked checklist items have keys of their
 //! own, each falling back to Vim's where it has nothing to do: Enter shows
 //! the item's plan (its `Plan: [[...]]` line) in a panel beside the note
 //! (app/beside.rs), and again starts work on it, o goes to the tab working
@@ -184,9 +184,7 @@ pub struct Options {
     pub clipboard: bool,
     /// The workspace's server is told of notes moving (a pane of it).
     pub server: bool,
-    /// UX 2.0 (ux2): board 7's item keys and footer.
-    pub ux2: bool,
-    /// With UX 2.0, chips at the right of a checklist item saying what is
+    /// Chips at the right of a checklist item saying what is
     /// happening with it (notes_item_chips).
     pub item_chips: bool,
     /// The terminal draws the kit's half-circle ends itself (Ghostty).
@@ -227,7 +225,6 @@ impl Default for Options {
             pane_arrows: true,
             clipboard: false,
             server: false,
-            ux2: false,
             item_chips: true,
             caps: false,
             scroll_bars: true,
@@ -252,7 +249,6 @@ impl Options {
             "notes_mermaid",
             "theme",
             "pane_arrows",
-            "ux2",
             "notes_item_chips",
             "scroll_bars",
             "notes_recent",
@@ -278,7 +274,6 @@ impl Options {
             pane_arrows: on("pane_arrows"),
             clipboard: true,
             server: crate::host::socket::in_pane(),
-            ux2: all.set_on("ux2"),
             item_chips: on("notes_item_chips"),
             scroll_bars: on("scroll_bars"),
             recent: on("notes_recent"),
@@ -573,23 +568,20 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
     ),
     (
         "Enter",
-        "with UX 2.0, on an unticked item with a plan: its plan beside the note; again, start work on it",
+        "on an unticked item with a plan: its plan beside the note; again, start work on it",
     ),
     (
         "M-e",
-        "with UX 2.0, in Notes' own tab: the plan of the item under the cursor beside the note, or put away",
+        "in Notes' own tab: the plan of the item under the cursor beside the note, or put away",
     ),
     (
         "C-w l  C-w h",
-        "with UX 2.0, the plan beside the note or the note: a, b choose an option, e opens the plan, Esc closes it",
+        "the plan beside the note or the note: a, b choose an option, e opens the plan, Esc closes it",
     ),
-    (
-        "o",
-        "with UX 2.0, on an item a tab works on: go to that tab",
-    ),
+    ("o", "on an item a tab works on: go to that tab"),
     (
         "ga",
-        "with UX 2.0: Add an item, Enter adding it to the top list, M-Enter having a new tab plan it",
+        "Add an item, Enter adding it to the top list, M-Enter having a new tab plan it",
     ),
     ("Ctrl-F", "find a note"),
     ("Ctrl-B", "show or put away the sidebar"),
@@ -1211,9 +1203,7 @@ impl App {
             Some(kept) => self.editor.take_back(shown, kept),
             None => {
                 self.editor.load(shown);
-                if self.opts.ux2 {
-                    self.fold_parked();
-                }
+                self.fold_parked();
             }
         }
         self.jumps_seen = self.editor.seen().clone();
@@ -2624,8 +2614,8 @@ impl App {
 
     // ── UX 2.0's item keys ────────────────────────────────────────────────
 
-    /// A parked section (`## Defered`, `## Later`) folded, as a note opens
-    /// with UX 2.0 on, to one line with its count of items.
+    /// A parked section (`## Defered`, `## Later`) folded, as a note opens,
+    /// to one line with its count of items.
     fn fold_parked(&mut self) {
         let lines = self.editor.doc.text.lines();
         let kinds = render::kinds(&lines);
@@ -2720,7 +2710,7 @@ impl App {
 
     /// `ga`, or a click on it: the "Add an item" input, typed into.
     fn start_adding(&mut self) {
-        if self.open.is_none() || !self.opts.ux2 {
+        if self.open.is_none() {
             return;
         }
         // Another app has the note open: nothing is added to it here, nor
@@ -3135,7 +3125,7 @@ impl App {
     /// applies: a web address, an image (under the cursor or just right of
     /// it, its markup hidden) or a #tag under the cursor followed, on a
     /// folded line too; a closed fold opened; a checklist item ticked or
-    /// unticked; on an item's plan link with UX 2.0, its plan beside the
+    /// unticked; on an item's plan link, its plan beside the
     /// note, and while it shows, work started on the item; any other note
     /// link followed; a heading's section folded. Whether it did
     /// something; when not, Enter moves down a line.
@@ -3165,9 +3155,7 @@ impl App {
         if matches!(k, Kind::Check { .. }) {
             return self.toggle_item(row);
         }
-        if self.opts.ux2
-            && let Some(item) = render::item_of_plan_line(&lines, &kinds, row)
-        {
+        if let Some(item) = render::item_of_plan_line(&lines, &kinds, row) {
             if self.beside_is_of(item) {
                 self.editor.doc.row = item;
                 self.editor.doc.col = 0;
@@ -3577,12 +3565,7 @@ impl App {
         if self.message.is_some() && self.focus == Focus::Note && self.editor.mode == Mode::Normal {
             self.message = None;
         }
-        if self.opts.ux2
-            && key.mods.alt
-            && !key.mods.ctrl
-            && key.code == KeyCode::Char('e')
-            && self.open.is_some()
-        {
+        if key.mods.alt && !key.mods.ctrl && key.code == KeyCode::Char('e') && self.open.is_some() {
             return self.toggle_beside();
         }
         if let Some(dir) = alt_arrow(&key) {
@@ -3802,8 +3785,7 @@ impl App {
     /// The palette's commands, the Diagram item named as the Format menu
     /// names it for the note.
     fn palette_commands(&self, from_list: bool) -> Vec<palette::Command> {
-        let mut commands =
-            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        let mut commands = palette::commands(from_list, !from_list && self.open.is_some());
         if self.beside.is_some() {
             commands.push(palette::note_or_plan());
         }
@@ -4237,10 +4219,8 @@ impl App {
                         None => self.close_beside(),
                     }
                 }
-                // UX 2.0: an item's tab.
-                KeyCode::Char('o')
-                    if key.mods.is_empty() && self.opts.ux2 && self.go_to_item_tab() =>
-                {
+                // An item's tab.
+                KeyCode::Char('o') if key.mods.is_empty() && self.go_to_item_tab() => {
                     return;
                 }
                 KeyCode::Enter if key.mods.is_empty() => {
@@ -5476,14 +5456,13 @@ pub fn run(program: &str, store: Store) -> ExitCode {
             libc::signal(signal, on_signal as *const () as libc::sighandler_t);
         }
     }
-    let term =
-        match Term::enter(opts.hover && (opts.toolbar || opts.easy || opts.ux2 || opts.resize)) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("{program}: can't take the terminal: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let term = match Term::enter(opts.hover) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{program}: can't take the terminal: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     // The terminal's background, for the `system` theme, which Neovim
     // followed through Ghostty's; a key typed meanwhile is read as typed.
     let (colors, typed) = switchboard_ui::terminal::ask(Duration::from_millis(200));
@@ -5556,9 +5535,7 @@ pub fn run(program: &str, store: Store) -> ExitCode {
             }
         });
     }
-    if app.opts.ux2 {
-        look_at_tabs(tx.clone());
-    }
+    look_at_tabs(tx.clone());
     let mut screen = Screen::default();
     let mut size = (cols, rows);
     let mut dirty = true;

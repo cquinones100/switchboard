@@ -4,9 +4,8 @@
 //! the comments with people's photos) and beside it a panel of what GitHub
 //! and Linear keep at the right of the page (the PR's checks, reviewers,
 //! open review threads and files; the ticket's facts, pull requests and
-//! related tickets). New with UX 2.0, with no tmux-version file behind it:
-//! pr-view.js laid both out as one Markdown text, which the views still do
-//! with UX 2.0 off.
+//! related tickets). New, with no tmux-version file behind it:
+//! pr-view.js laid both out as one Markdown text.
 //!
 //! A board is plain data (`Board`, its `Part`s and `Piece`s), which
 //! `super::pr` and `super::ticket` build from what GitHub and Linear

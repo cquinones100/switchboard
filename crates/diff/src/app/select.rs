@@ -293,9 +293,6 @@ impl App {
         if from.0 == to.0 {
             return Some((to.1 - from.1) as i64);
         }
-        if !self.one_scroll() {
-            return None;
-        }
         let mut rows = 0;
         let mut t = from.1;
         for k in from.0..to.0 {

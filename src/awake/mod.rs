@@ -18,8 +18,8 @@
 //!
 //! The rule is here, on plain data; `serve` puts it on the server: the
 //! counts on its tick, the hold taken and let go off its task (taking it
-//! starts a process), the palette's command, the ☕ on the status line (the
-//! sidebar's top line with UX 2.0) while it holds, its tip, `list`'s
+//! starts a process), the palette's command, the ☕ on the sidebar's top line
+//! while it holds, its tip, `list`'s
 //! `awake`, and the hold let go before an upgrade's exec, since
 //! `caffeinate -w` waits on the server's pid, which the new build keeps.
 

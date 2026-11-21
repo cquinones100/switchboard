@@ -79,11 +79,11 @@
 //!   the note's items while its `tickets` in repos.json are `github`.
 //! - `pilot`: what it keeps between checks, and what each check decides.
 //! - `line`: its line in mission control and the menu Enter opens on it.
-//! - `settings_box`: its settings in one box with UX 2.0 on (board 35),
+//! - `settings_box`: its settings in one box (board 35),
 //!   which starts it while it is off and saves what changed while it is on.
 //! - `landed`: the landings its tabs made without asking, for the
 //!   notifications.
-//! - `view`: its own view in mission control, with UX 2.0 on.
+//! - `view`: its own view in mission control.
 //! - `serve`: the server's side: setting it up, the check on every tick,
 //!   opening the tabs, the notifications.
 
@@ -106,12 +106,12 @@ pub use serve::{
     NUDGED, OPENED, PUSHED, REFUSED, START_LIMIT, YOURS, landed_at, said_by, target_refused,
 };
 
-/// Whether the mode has its own view in mission control (UX 2.0 and the
+/// Whether the mode has its own view in mission control (the
 /// view_autopilot setting on), which then takes the place of its line
 /// leading the Tabs view.
 pub fn has_view() -> bool {
     let on = crate::settings::is_on;
-    on("ux2") && on("view_autopilot") && on("autopilot")
+    on("view_autopilot") && on("autopilot")
 }
 
 /// Where mission control opens to show the mode: its own view while it has
@@ -160,7 +160,7 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With UX 2.0 on, those are its settings box, which starts it. While it is on, it opens mission control on the mode's board and nothing over it: its menu (m) changes or stops it, and with UX 2.0 opens the settings box."
+                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. Those are its settings box, which starts it. While it is on, it opens mission control on the mode's board and nothing over it: its menu (m) changes or stops it, and opens the settings box."
             }
         }
     }

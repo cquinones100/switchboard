@@ -781,8 +781,11 @@ mod tests {
     #[test]
     fn what_is_said_reads_as_the_json_it_is_documented_as() {
         assert_eq!(
-            serde_json::to_value(Message::new(Action::Setting { key: "ux2".into() })).unwrap(),
-            json!({"protocol": 1, "body": {"ask": "setting", "key": "ux2"}})
+            serde_json::to_value(Message::new(Action::Setting {
+                key: "theme".into()
+            }))
+            .unwrap(),
+            json!({"protocol": 1, "body": {"ask": "setting", "key": "theme"}})
         );
         assert_eq!(
             serde_json::to_value(Answer::Flag { on: false }).unwrap(),

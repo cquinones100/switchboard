@@ -6,10 +6,10 @@
 //! Notifications (the sidebar's, whole), the Work map, the Calendar,
 //! Reminders (while `reminders` is on), Slack,
 //! Reopen, the PR board, CI, Landing (while something lands), Autopilot
-//! (with UX 2.0, while it is on, src/autopilot/view.rs), Routines (while
+//! (while it is on, src/autopilot/view.rs), Routines (while
 //! `routines` is on, src/routines/view.rs), the ticket
 //! board, the Inbox, Resources, Usage, Keys (`keymap`), Settings,
-//! then each plugin's. With UX 2.0 the bar shows them by feature in groups
+//! then each plugin's. The bar shows them by feature in groups
 //! (`groups`): Work, Code, Day and System.
 //!
 //! Two are put together here. The Work map is every piece of work in the
@@ -59,7 +59,7 @@ pub enum ViewId {
     Prs,
     Ci,
     Landing,
-    /// Autopilot's own view, with UX 2.0 on (src/autopilot/view.rs).
+    /// Autopilot's own view (src/autopilot/view.rs).
     Autopilot,
     /// Your prompts run on a schedule (src/routines/view.rs).
     Routines,
@@ -86,12 +86,8 @@ impl View {
     /// A board's columns, in their order (the PR and ticket boards).
     pub fn columns(&self) -> Option<&'static [&'static str]> {
         match self.id {
-            ViewId::Prs => Some(crate::sources::prboard::columns(crate::settings::is_on(
-                "ux2",
-            ))),
-            ViewId::Tickets => Some(crate::sources::tickets::columns(crate::settings::is_on(
-                "ux2",
-            ))),
+            ViewId::Prs => Some(crate::sources::prboard::COLUMNS),
+            ViewId::Tickets => Some(crate::sources::tickets::COLUMNS),
             _ => None,
         }
     }
@@ -140,13 +136,13 @@ impl View {
 /// ticket's or plan's description, a message's thread while Settings'
 /// `slack_threads` is on, a closed tab's turns, a check's step, a
 /// landing's output, a day's reminders, the Calendar day's event) with
-/// an item `chosen`, as each does only with UX 2.0 on (`ux2`): such a view
+/// an item `chosen`: such a view
 /// is two panes, so it is never capped at a lone pane's width
 /// (`Mission::view_area`), and the pane has the room to sit beside it.
-pub fn has_side(view: &View, chosen: bool, ux2: bool) -> bool {
+pub fn has_side(view: &View, chosen: bool) -> bool {
     let calendar_day = view.id == ViewId::Calendar && super::calendar::is_day(view);
     let slack_threads = view.id == ViewId::Slack && crate::settings::is_on("slack_threads");
-    ux2 && chosen
+    chosen
         && (calendar_day
             || slack_threads
             || matches!(
@@ -256,7 +252,7 @@ impl ViewId {
         match self {
             ViewId::Notifications => on("sidebar_notifications"),
             ViewId::Reminders => on("reminders"),
-            ViewId::Autopilot => on("ux2") && on("view_autopilot") && on("autopilot"),
+            ViewId::Autopilot => on("view_autopilot") && on("autopilot"),
             ViewId::Settings | ViewId::Plugin(_) => true,
             built_in => crate::usage::habits::VIEWS
                 .iter()
@@ -306,7 +302,7 @@ impl ViewId {
                 "Today laid out as Google Calendar's Day view, read from its iCal feed every five minutes, else from what /today last saved. Enter joins a call or answers an invitation. Settings' \"Calendar\" (view_calendar)."
             }
             ViewId::Reminders => {
-                "Each tab M-p's \"Remind me about this tab later\" set, with the time left, on a month with UX 2.0. Enter goes to the tab. Settings' \"Reminders\" (reminders)."
+                "Each tab M-p's \"Remind me about this tab later\" set, with the time left, on a month. Enter goes to the tab. Settings' \"Reminders\" (reminders)."
             }
             ViewId::Slack => {
                 "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json; with your own Slack sign-in (switchboard setup slack-user), your reminders that are due too. Enter opens one in Slack or a tab for its thread, or marks a reminder complete. Settings' \"Slack\" (view_slack)."
@@ -315,25 +311,25 @@ impl ViewId {
                 "Whether the relay runs and what it sent today, then each kind of message it sends (prompts, finished turns, stuck tabs, commits and pushes, failures, full context, notices) with where it goes: Notify, Thread only or Off, three presets, autopilot's tabs and quiet hours. Settings' \"Slack relay\" (view_relay)."
             }
             ViewId::Reopen => {
-                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and, with UX 2.0, the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
+                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
             }
             ViewId::Prs => {
-                "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
+                "Columns Draft, In review, Changes asked, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
             }
             ViewId::Ci => {
-                "Failing, running and passing, each failed check with the log line that says why; with UX 2.0 the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
+                "Failing, running and passing, each failed check with the log line that says why; the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
             }
             ViewId::Landing => {
                 "There only while something lands. A landing queue's row moves up, down or out from its menu; merge queues are asked of GitHub and hold everyone's PRs. Settings' \"Landing view\" (view_landing)."
             }
             ViewId::Autopilot => {
-                "With UX 2.0, the note's tabs working and open against its slots and cap, today's spend, and a card for each item in the column where it stands. Settings' \"Autopilot\" (autopilot) and \"Autopilot view\" (view_autopilot)."
+                "The note's tabs working and open against its slots and cap, today's spend, and a card for each item in the column where it stands. Settings' \"Autopilot\" (autopilot) and \"Autopilot view\" (view_autopilot)."
             }
             ViewId::Routines => {
                 "Each routine with when it runs next, where it runs and how its last run went, then this week's runs by day; beside, the chosen one's prompt, today's runs and its next ones. n makes one, r runs it now, e changes it, p pauses it. Settings' \"Routines\" (routines)."
             }
             ViewId::Tickets => {
-                "Columns Todo, In progress, In review and Done in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
+                "Columns Todo, In progress, In review and Done, then the tickets canceled, in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
             }
             ViewId::Inbox => {
                 "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."
@@ -383,7 +379,7 @@ impl ViewId {
     }
 }
 
-/// With UX 2.0, the bar's groups of views by feature, in its order.
+/// The bar's groups of views by feature, in its order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
     Work,
@@ -744,21 +740,20 @@ pub fn loaded(data: &ViewData) -> bool {
 /// name, the value and what it does (an option at "off" drawn as idle), then
 /// your own files' settings under a heading each.
 /// Mission control's Settings view: every option under a heading for its
-/// category (named as `settings::category_name` gives it), each heading
+/// category, each heading
 /// counting its options and how many of them differ from their defaults,
 /// each option with its value and default in words and whether it
 /// changed; then your own files' rows under a heading for each.
-pub fn settings_items(own: &[Item], ux2: bool) -> Vec<Item> {
-    settings_items_of(&settings::shown_settings(), own, ux2)
+pub fn settings_items(own: &[Item]) -> Vec<Item> {
+    settings_items_of(&settings::shown_settings(), own)
 }
 
-pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item], ux2: bool) -> Vec<Item> {
+pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item]) -> Vec<Item> {
     let mut items = Vec::new();
     for category in settings::categories(all) {
         let members: Vec<&settings::Setting> =
             all.iter().filter(|o| o.category == category).collect();
-        let name = settings::category_name(category, ux2);
-        let mut heading = header(category, name, members.len());
+        let mut heading = header(category, category, members.len());
         heading.data["changed"] = json!(members.iter().filter(|o| o.changed()).count());
         items.push(heading);
         for o in members {
@@ -775,7 +770,7 @@ pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item], ux2: bo
                         "changed": o.changed(),
                         "choice": o.choices.is_some(),
                         "next": settings::Setting { value: o.next_value(), ..(*o).clone() }.value_words(),
-                        "search": format!("{category} {name} {} {words}", o.key),
+                        "search": format!("{category} {} {words}", o.key),
                     })),
             );
         }
@@ -954,7 +949,7 @@ fn ticket_of_branch(branch: &str, github: bool, linear: bool) -> Option<String> 
 }
 
 /// Where a PR stands, in a few words: `#12 merged`, `#12 ✕ 2 failing`; none
-/// with the github setting off. Without UX 2.0, the row's PR cell.
+/// with the github setting off.
 fn pr_words(tab: &TabModel) -> String {
     if !settings::is_on("github") {
         return String::new();
@@ -1960,7 +1955,7 @@ mod tests {
 
     #[test]
     fn settings_are_listed_by_category_and_a_filter_keeps_only_categories_with_a_match() {
-        let items = settings_items(&[], false);
+        let items = settings_items(&[]);
         assert!(is_header(&items[0]));
         assert_eq!(items[0].title, "Integrations");
         assert_eq!(items[1].title, "GitHub");
@@ -2025,7 +2020,7 @@ mod tests {
 
         // The groups come after the categories with none, what belongs to
         // mission control as a whole first, each view's category after it.
-        let headings: Vec<String> = settings_items_of(&all, &[], true)
+        let headings: Vec<String> = settings_items_of(&all, &[])
             .into_iter()
             .filter(is_header)
             .map(|h| h.title)
@@ -2053,7 +2048,7 @@ mod tests {
             id: ViewId::Settings,
             title: "Settings".into(),
             data: ViewData {
-                items: settings_items(&[], false),
+                items: settings_items(&[]),
                 ..ViewData::default()
             },
             loaded: true,
@@ -2087,28 +2082,12 @@ mod tests {
         let mut all = settings::schema();
         let github = all.iter_mut().find(|o| o.key == "github").unwrap();
         github.value = serde_json::Value::Bool(false);
-        let items = settings_items_of(&all, &[], false);
+        let items = settings_items_of(&all, &[]);
         assert_eq!(items[0].data["changed"], 1);
         assert_eq!(items[1].data["changed"], true);
         assert_eq!(items[1].data["default"], "on");
         assert_eq!(items[1].data["value"], "off");
         assert_eq!(items[2].data["changed"], false);
-
-        let named = |ux2: bool| {
-            settings_items_of(&all, &[], ux2)
-                .into_iter()
-                .filter(is_header)
-                .map(|h| h.title)
-                .collect::<Vec<_>>()
-        };
-        assert!(named(true).contains(&"Tabs and header".to_string()));
-        assert!(!named(true).contains(&"Tabs and status bar".to_string()));
-        assert!(named(false).contains(&"Tabs and status bar".to_string()));
-        // Either name finds the category's options.
-        let tabs = settings_items_of(&all, &[], true)
-            .into_iter()
-            .find(|i| search_text(i).contains("tabs and status bar") && !is_header(i));
-        assert!(tabs.is_some_and(|i| search_text(&i).contains("tabs and header")));
     }
 
     #[test]
@@ -2217,7 +2196,7 @@ mod tests {
         assert!(!linear_off.contains(&"Tickets") && !linear_off.contains(&"Inbox"));
         assert!(linear_off.contains(&"PRs"));
         assert!(!shown(&off(&["reminders"])).contains(&"Reminders"));
-        assert!(!shown(&off(&["ux2"])).contains(&"Autopilot"));
+        assert!(!shown(&off(&["view_autopilot"])).contains(&"Autopilot"));
         assert!(!shown(&off(&["sidebar_notifications"])).contains(&"Notifications"));
         assert!(ViewId::Plugin("deploys".into()).shows_with(|_| false));
         assert_eq!(ViewId::Plugin("deploys".into()).title(), "deploys");

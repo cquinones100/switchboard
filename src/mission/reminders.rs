@@ -3,7 +3,7 @@
 //! tabs with a reminder set (`items`), in time order, each its tab's
 //! target, so Enter opens the tab's menu as anywhere else.
 //!
-//! With UX 2.0 on, it is drawn as the board draws it (`month`): the month's
+//! It is drawn as the board draws it (`month`): the month's
 //! name, the weekdays across, six weeks each a band headed by a dashed rule
 //! with each day's number on it (today's red, the chosen day's lit, days of
 //! the months around faint), each reminder an event in its day in its tab's
@@ -14,7 +14,7 @@
 //! twelve months ahead as chips counting their reminders. The keys move a
 //! chosen day (`Mission::reminders_day`), the month following it. Narrower
 //! than `BESIDE_AT`, the pane goes under the month and its lists behind
-//! `i`; without UX 2.0 the view is a plain list. Drawing reads nothing but
+//! `i`. Drawing reads nothing but
 //! the items and the tabs the snapshot holds.
 
 use jiff::Timestamp;
@@ -167,11 +167,6 @@ pub fn step(day: Date, days: i64, months: i32) -> Date {
     moved
         .checked_add(jiff::Span::new().days(days))
         .unwrap_or(moved)
-}
-
-/// Whether the view is drawn as a month: UX 2.0 on.
-pub fn is_month(m: &Mission) -> bool {
-    m.snap.rules.ux2
 }
 
 /// A row of the month: its spans and where clicks on it land.

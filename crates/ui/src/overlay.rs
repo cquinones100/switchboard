@@ -182,7 +182,7 @@ pub trait Overlay: AsAny + Send {
 const KEPT_BEHIND: f32 = 0.45;
 
 /// Makes the box at `outer` stand out over what is behind it: everything
-/// else in the buffer dimmed, the sidebar and the status line too, and the
+/// else in the buffer dimmed, the sidebar and the header too, and the
 /// box's own cells on the surface one step from the base (`Surface::Sunken`,
 /// which stays apart from the shades of a row under the mouse and the
 /// chosen one, so both still show on it) where it drew no background of

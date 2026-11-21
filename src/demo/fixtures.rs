@@ -962,7 +962,6 @@ mod tests {
                 .as_array()
                 .unwrap(),
             &[],
-            true,
         );
         assert!(items.iter().any(|i| i.id == "ABC-20"));
         let (_, inbox) = post(

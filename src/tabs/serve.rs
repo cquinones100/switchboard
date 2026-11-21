@@ -1,7 +1,7 @@
 //! Naming the tabs on the server: what tmux/window-names.sh did for every
 //! window on every pane focus, done in the server task from `Names`, on a
 //! focus, a tab switch and every tick. Each tab's label and color are kept
-//! for the status line, `switchboard list` and later parts (the sidebar, the
+//! for the header, `switchboard list` and later parts (the sidebar, the
 //! Slack relay) to read, as the window's `@tab_label` was, and the lookups a
 //! directory needs run in background tasks that answer with
 //! `Event::TabLookup`, so neither a focus nor a draw ever waits on the
@@ -67,7 +67,7 @@ pub struct Shown {
 impl Server {
     /// Works out what a tab shows from the directory of the pane it is named
     /// after, starting any lookup that directory needs, and redraws the
-    /// session's status line when it changed.
+    /// session when it changed.
     pub fn name_tab(&mut self, tab_id: TabId) {
         // The PRs and titles the last server found, before anything is
         // asked for again.
@@ -671,8 +671,8 @@ impl Server {
         self.tab_names.finished_seen = seen;
     }
 
-    /// Redraws whatever shows a tab: its session's status line, the
-    /// sidebars and mission control.
+    /// Redraws whatever shows a tab: its session's header, the sidebars and
+    /// mission control.
     fn dirty_tab_everywhere(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
             self.dirty_session(&name);

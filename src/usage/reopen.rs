@@ -111,7 +111,7 @@ fn ago(ms: i64, now_ms: i64) -> String {
     super::sessions::ago(ms.div_euclid(1000), now_ms.div_euclid(1000))
 }
 
-/// A plain row's detail (UX 2.0 off): when, what reopening does, where,
+/// A plain row's detail: when, what reopening does, where,
 /// and what became of the work.
 fn detail(parts: &[String]) -> String {
     parts

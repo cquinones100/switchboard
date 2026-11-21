@@ -46,7 +46,7 @@ Then follow that source's section: "Linear" for `linear`, "GitHub issues" for `g
 
 ## Name the tab
 
-In Switchboard, the tab says what is being shaped, the way `/wt` names a ticket's tab, so it is easy to find in the tab bar, `M-j` and Slack. Name it as soon as the skill starts, from the arguments: `Shaping: <the first four or five words>` for a description, or `Shaping <ID>` for a ticket. Name it again once there is a ticket or an issue, from its ID (`#<number>` for an issue) and title: after reading the ticket you were given, and after creating one, as `Shaping <ID>: <title>`. `/wt` clears the name when it hands the tab over, and the tab then takes the ticket's own name. A note's item keeps the tab's name: Notes' M-Enter names its tab itself.
+In Switchboard, the tab says what is being shaped, the way `/wt` names a ticket's tab, so it is easy to find in the sidebar, `M-j` and Slack. Name it as soon as the skill starts, from the arguments: `Shaping: <the first four or five words>` for a description, or `Shaping <ID>` for a ticket. Name it again once there is a ticket or an issue, from its ID (`#<number>` for an issue) and title: after reading the ticket you were given, and after creating one, as `Shaping <ID>: <title>`. `/wt` clears the name when it hands the tab over, and the tab then takes the ticket's own name. A note's item keeps the tab's name: Notes' M-Enter names its tab itself.
 
 Only when `$SWITCHBOARD_PANE` is set, and with the name cut to 60 characters and kept to letters, digits, spaces and `. , : - ( ) / #` (drop anything else, quotes included, since it goes into a shell command):
 

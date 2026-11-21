@@ -1,7 +1,7 @@
 //! A tab's history (M-h): UX 2.0's board 6, a timeline under the tab's
 //! screen of its Claude session from its start to now, with lanes for its
 //! state, your turns, commits, review rounds and context, and the screen
-//! above showing the pane as it was at the moment chosen. New with UX 2.0,
+//! above showing the pane as it was at the moment chosen. New,
 //! with no tmux-version file behind it, since tmux kept nothing of a pane
 //! but its scrollback.
 //!

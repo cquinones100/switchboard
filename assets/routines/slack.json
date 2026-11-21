@@ -13,7 +13,6 @@
     "mcp__claude_ai_Slack__slack_read_thread",
     "mcp__claude_ai_Slack__slack_read_user_profile",
     "Bash(switchboard slack-updates-save:*)",
-    "Bash(switchboard setting slack_threads)",
-    "Bash(switchboard setting ux2)"
+    "Bash(switchboard setting slack_threads)"
   ]
 }

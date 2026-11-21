@@ -182,19 +182,18 @@ impl Server {
         let Some(c) = self.clients.get(&client) else {
             return false;
         };
-        let below = c.rows.saturating_sub(crate::status::lines());
         self.session(&c.session).is_some_and(|s| {
-            // With UX 2.0 mission control is drawn from the sidebar's edge,
+            // Mission control is drawn from the sidebar's edge,
             // its list of views in the sidebar's place, whose edge drags as
             // the keys move it there; as a column of its own beside the tabs
             // sidebar, which has no keys in mission control, the edge waits
             // for mission control to close, so the mouse does no more than
-            // the keys. Without UX 2.0 it covers the whole screen.
+            // the keys.
             let shown = match c.overlays.find::<crate::mission::Mission>() {
-                Some(m) => settings::is_on("ux2") && !m.own_column,
+                Some(m) => !m.own_column,
                 None => self.sidebar_shown(&s.name),
             };
-            shown && s.sidebar > 0 && col == s.sidebar - 1 && row < below
+            shown && s.sidebar > 0 && col == s.sidebar - 1 && row < c.rows
         })
     }
 
@@ -351,11 +350,11 @@ impl Server {
     /// Asks Haiku for a sentence on each pane's last turn that has ended
     /// (a reply, no call waiting, its Claude neither working nor waiting),
     /// once a turn, in a task of its own, with Settings' `turn_summaries`
-    /// and `ux2` on, the cards that show it being UX 2.0's
-    /// (src/mission/summary.rs). A turn begun over a day ago is left as
-    /// it is, so a server starting doesn't send every old tab's.
+    /// on, for the cards that show it (src/mission/summary.rs). A turn begun
+    /// over a day ago is left as it is, so a server starting doesn't send
+    /// every old tab's.
     fn summarize_turns(&mut self, reads: &std::collections::HashMap<PaneId, PaneRead>) {
-        if !settings::is_on("turn_summaries") || !settings::is_on("ux2") {
+        if !settings::is_on("turn_summaries") {
             return;
         }
         let day_ago = util::now_ms() - 86_400_000;
@@ -1245,11 +1244,7 @@ impl Server {
         if !self.sidebar_shown(&s.name) {
             return None;
         }
-        let status = crate::status::lines();
-        let rows = s
-            .rows
-            .saturating_sub(status)
-            .min(buf.area.height.saturating_sub(status));
+        let rows = s.rows.min(buf.area.height);
         let width = (s.sidebar - 1).min(buf.area.width);
         let area = Rect::new(0, 0, width, rows).intersection(buf.area);
         if area.is_empty() {
@@ -1277,7 +1272,7 @@ impl Server {
             .map(|p| render::Section::of(&p.title, &p.items, p.error.as_deref(), p.sidebar))
             .collect();
         let build = self.build_row();
-        let buttons = r.ux2.then(|| self.sidebar_buttons(s, client, &r));
+        let buttons = Some(self.sidebar_buttons(s, client, &r));
         let view = View {
             focused,
             cursor: side.and_then(|x| x.cursor.as_ref()),
@@ -1303,7 +1298,6 @@ impl Server {
             side.and_then(|x| x.frozen.as_ref()),
             &notices,
             &sections,
-            &s.name,
             area.width as usize,
             area.height as usize,
             &view,
@@ -1870,12 +1864,12 @@ impl Server {
         }
     }
 
-    /// j and k with UX 2.0, whose notifications sit above the tabs: up
+    /// j and k, the notifications sitting above the tabs: up
     /// from the first tab onto the last kind of notification, down from the
     /// last kind onto the first tab, a kind's row at a time, the
     /// Notifications window on that kind's first; past the top or the
     /// bottom round to the other end (sidebar_wrap), else no further.
-    fn sidebar_step_ux2(
+    fn sidebar_step_rows(
         &mut self,
         session: &str,
         tabs: usize,
@@ -2068,7 +2062,6 @@ impl Server {
             }
         }
 
-        let ux2 = settings::is_on("ux2");
         let up_down = match k.code {
             KeyCode::Char('j') | KeyCode::Down if none => Some(1),
             KeyCode::Char('n') if ctrl => Some(1),
@@ -2076,8 +2069,8 @@ impl Server {
             KeyCode::Char('p') if ctrl => Some(-1),
             _ => None,
         };
-        if ux2 && let Some(by) = up_down {
-            self.sidebar_step_ux2(session, stops, on_notice, at, by);
+        if let Some(by) = up_down {
+            self.sidebar_step_rows(session, stops, on_notice, at, by);
             return;
         }
         // On a group's heading, Enter or Space folds or unfolds it, as a
@@ -2096,16 +2089,6 @@ impl Server {
             return;
         }
         match k.code {
-            // On the notifications, j and k step a kind at a time, the
-            // Notifications window following onto the kind's first.
-            KeyCode::Char('j') | KeyCode::Down if none => {
-                self.sidebar_step(session, at, 1, stops + notices.len())
-            }
-            KeyCode::Char('n') if ctrl => self.sidebar_step(session, at, 1, stops + notices.len()),
-            KeyCode::Char('k') | KeyCode::Up if none => {
-                self.sidebar_step(session, at, -1, stops + notices.len())
-            }
-            KeyCode::Char('p') if ctrl => self.sidebar_step(session, at, -1, stops + notices.len()),
             KeyCode::Char('g') | KeyCode::Home if none => self.sidebar_move(session, 0),
             KeyCode::Char('G') | KeyCode::End if none => {
                 self.sidebar_move(session, stops as isize - 1)

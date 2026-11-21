@@ -22,11 +22,22 @@ use {common::TestServer, serde_json::Value, std::path::Path};
 
 /// Settings for the tests: no desktop notifications or tips, and these.
 fn settings(server: &TestServer, extra: Value) {
+    common::write_settings(&server.home, all_settings(extra));
+}
+
+/// The settings `settings` writes, `extra` over them.
+fn all_settings(extra: Value) -> Value {
     let mut all = json!({"notifications": false, "tips": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    common::write_settings(&server.home, all);
+    all
+}
+
+/// A server started with what `settings` writes, so they hold from its
+/// first draw.
+fn start(extra: Value) -> TestServer {
+    TestServer::start_with_settings(&all_settings(extra).to_string())
 }
 
 /// Runs git in `dir` with an identity of its own.
@@ -115,14 +126,16 @@ mod with_github {
     }
 
     #[test]
-    fn m_v_opens_the_pr_to_the_right_and_closes_it_again() {
+    fn m_v_opens_the_pr_and_closes_it_again() {
         let fake = fake_github();
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &fake.url),
-        ]);
-        settings(&server, json!({"linear": false}));
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &fake.url),
+            ],
+            &all_settings(json!({"linear": false})).to_string(),
+        );
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
         git(&work, &["init", "-q"]);
@@ -159,30 +172,13 @@ mod with_github {
         }
 
         client.send(b"\x1bv");
-        let screen = client.wait_text("Fix the login #12");
-        let row = screen
-            .iter()
-            .find(|l| l.contains("Fix the login #12"))
-            .unwrap();
-        let col = row[..row.find("Fix the login").unwrap()].chars().count();
-        assert!(col > 70, "drawn in a pane on the right: {row:?}");
+        client.wait_text("#12 Fix the login");
         client.wait_text("jo wants to merge");
-        client.wait_text("Why");
-        client.wait_text("│ Login ├");
-        let shown = wait_panes(&server, 2);
-        assert_eq!(shown[1]["options"]["@pr_view"], "1", "{shown:?}");
-        assert_eq!(shown[1]["active"], true, "the view has the focus");
-        assert!(
-            shown[1]["cols"].as_u64().unwrap() < shown[0]["cols"].as_u64().unwrap(),
-            "it takes less than half: {shown:?}"
-        );
         // Kept for the next time, at once.
         let cache = server.home.join(".cache/switchboard/pr-view");
         assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
 
         client.send(b"\x1bv");
-        let shown = wait_panes(&server, 1);
-        assert!(shown[0]["options"].get("@pr_view").is_none());
         // The view's own words, since the tab is named by the PR's title.
         client.wait_for("the view gone", |s| {
             !s.iter().any(|l| l.contains("jo wants to merge"))
@@ -190,7 +186,7 @@ mod with_github {
     }
 
     #[test]
-    fn with_ux2_m_v_shows_the_pr_s_board_in_claude_s_place() {
+    fn m_v_shows_the_pr_s_board_in_claude_s_place() {
         let fake = fake_github();
         // Set from the start, so M-v never finds the server still without it.
         let server = TestServer::start_with_env_and_settings(
@@ -199,7 +195,7 @@ mod with_github {
                 ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
                 ("SWITCHBOARD_GITHUB_API", &fake.url),
             ],
-            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false, "photos": false}).to_string(),
+            &json!({"notifications": false, "tips": false, "linear": false, "sidebar": false, "photos": false}).to_string(),
         );
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
@@ -315,8 +311,9 @@ mod with_github {
                 ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
                 ("SWITCHBOARD_GITHUB_API", &fake.url),
             ],
-            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false,
-                "photos": false, "pause_when_away": false, "poll_fast": false}).to_string(),
+            &json!({"notifications": false, "tips": false, "linear": false, "sidebar": false,
+                "photos": false, "pause_when_away": false, "poll_fast": false})
+            .to_string(),
         );
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
@@ -517,21 +514,21 @@ mod with_github {
     }
 
     /// A server with UX 2.0 on, asking `fake` for GitHub.
-    fn ux2_server(fake: &Fake) -> TestServer {
+    fn board_server(fake: &Fake) -> TestServer {
         TestServer::start_with_env_and_settings(
             &[
                 ("GH_TOKEN", "test-token"),
                 ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
                 ("SWITCHBOARD_GITHUB_API", &fake.url),
             ],
-            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false, "photos": false}).to_string(),
+            &json!({"notifications": false, "tips": false, "linear": false, "sidebar": false, "photos": false}).to_string(),
         )
     }
 
     #[test]
     fn m_v_counts_a_required_check_failing_past_the_first_page_and_shows_the_failing_ones() {
         let fake = paged_github();
-        let server = ux2_server(&fake);
+        let server = board_server(&fake);
         let work = widgets(&server);
         let mut client = server.attach(140, 36);
         client.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -595,7 +592,7 @@ mod with_github {
     #[test]
     fn m_v_with_no_pr_shows_the_branch_s_ci() {
         let fake = branch_github();
-        let server = ux2_server(&fake);
+        let server = board_server(&fake);
         let work = widgets(&server);
         let mut client = server.attach(140, 36);
         client.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -644,7 +641,7 @@ mod with_github {
     #[test]
     fn m_v_says_a_pr_has_conflicts_and_offers_resolve_conflicts() {
         let fake = conflicting_github();
-        let server = ux2_server(&fake);
+        let server = board_server(&fake);
         let work = widgets(&server);
         let mut client = server.attach(140, 36);
         client.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -697,7 +694,7 @@ mod with_github {
                 ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
                 ("SWITCHBOARD_GITHUB_API", &fake.url),
             ],
-            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false, "photos": false}).to_string(),
+            &json!({"notifications": false, "tips": false, "linear": false, "sidebar": false, "photos": false}).to_string(),
         );
         let work = widgets(&server);
         let mut client = server.attach(140, 36);
@@ -718,13 +715,15 @@ mod with_github {
     #[test]
     fn the_branch_s_ticket_and_pr_are_copied_and_its_merge_queue_opened() {
         let fake = fake_github();
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &fake.url),
-            ("LINEAR_WORKSPACE", "acme"),
-        ]);
-        settings(&server, json!({"sidebar": false}));
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &fake.url),
+                ("LINEAR_WORKSPACE", "acme"),
+            ],
+            &all_settings(json!({"sidebar": false})).to_string(),
+        );
         let did = server.dir.path().join("did");
         desktop_stand_ins(&server.home, &did);
         let work = server.dir.path().join("widgets");
@@ -823,8 +822,9 @@ fn an_open_ticket_view_follows_the_ticket_as_the_lookup_sees_it_change() {
             ("LINEAR_API_KEY", "test-key"),
             ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
         ],
-        &json!({"notifications": false, "tips": false, "github": false, "ux2": true, "sidebar": false,
-            "photos": false, "pause_when_away": false, "poll_fast": false}).to_string(),
+        &json!({"notifications": false, "tips": false, "github": false, "sidebar": false,
+            "photos": false, "pause_when_away": false, "poll_fast": false})
+        .to_string(),
     );
     let mut client = server.attach(140, 36);
     client.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -876,7 +876,7 @@ fn an_open_ticket_view_follows_the_ticket_as_the_lookup_sees_it_change() {
     let before = asked(&linear);
     common::write_settings(
         &server.home,
-        json!({"notifications": false, "tips": false, "github": false, "linear": false, "ux2": true,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false,
             "sidebar": false, "photos": false, "pause_when_away": false, "poll_fast": false}),
     );
     *now.lock().unwrap() = ("Done", "2026-11-17T13:00:00Z");
@@ -973,8 +973,7 @@ fn open_url_opens_a_link_in_its_sites_chrome_profile() {
 
 #[test]
 fn a_link_a_program_writes_reaches_the_terminal_as_a_link() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let mut client = server.attach(100, 20);
     client.wait_text("$");
     client.type_text(
@@ -1007,8 +1006,7 @@ fn desktop_stand_ins(home: &Path, did: &Path) {
 
 #[test]
 fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let did = server.dir.path().join("did");
     desktop_stand_ins(&server.home, &did);
     let work = server.dir.path().join("work");
@@ -1119,8 +1117,7 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
 
 #[test]
 fn the_link_and_tab_commands_read_the_note_open_in_the_tab_too() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     for _ in 0..2 {
@@ -1298,8 +1295,7 @@ fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
 
 #[test]
 fn the_link_commands_list_the_links_you_gave_the_panes_claude() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let pane = panes(&server)[0]["id"].as_str().unwrap().to_string();
@@ -1362,8 +1358,7 @@ fn the_link_commands_list_the_links_you_gave_the_panes_claude() {
 
 #[test]
 fn the_link_commands_list_the_newest_link_first_across_the_pane_and_prompts() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let pane = panes(&server)[0]["id"].as_str().unwrap().to_string();
@@ -1406,8 +1401,7 @@ fn the_link_commands_list_the_newest_link_first_across_the_pane_and_prompts() {
 
 #[test]
 fn with_prompt_links_off_the_link_commands_list_only_what_the_pane_shows() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false, "prompt_links": false}));
+    let server = start(json!({"sidebar": false, "prompt_links": false}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let pane = panes(&server)[0]["id"].as_str().unwrap().to_string();
@@ -1443,8 +1437,7 @@ fn with_prompt_links_off_the_link_commands_list_only_what_the_pane_shows() {
 /// What the image views keep, under a test's home.
 #[test]
 fn m_m_does_nothing_now_that_m_v_answers_it() {
-    let server = TestServer::start();
-    settings(&server, json!({"linear": false}));
+    let server = start(json!({"linear": false}));
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     let (code, _, said) = server.run(&["press", "pr-ready"]);
@@ -1469,8 +1462,7 @@ fn image_cache(home: &Path) -> switchboard::views::image::cache::Cache {
 
 #[test]
 fn the_palette_clears_the_image_cache_after_a_yes() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let cache = image_cache(&server.home);
     let picture = cache
         .keep_asset("https://example.com/a.png", "png", b"picture")
@@ -1580,8 +1572,7 @@ fn a_ticket_drawn_before_shows_from_the_cache_without_chrome() {
 
 #[test]
 fn opening_a_link_says_where_it_is_going_until_the_browser_shows_it() {
-    let server = TestServer::start();
-    settings(&server, json!({}));
+    let server = start(json!({}));
     let did = server.dir.path().join("did");
     let tools: Vec<&str> = stand_in::OPENERS
         .iter()
@@ -1687,8 +1678,7 @@ fn current_number(server: &TestServer) -> i64 {
 
 #[test]
 fn the_tab_commands_go_to_or_copy_the_open_tabs_a_pane_names() {
-    let server = TestServer::start();
-    settings(&server, json!({"sidebar": false}));
+    let server = start(json!({"sidebar": false}));
     let did = server.dir.path().join("did");
     desktop_stand_ins(&server.home, &did);
     let mut client = server.attach(120, 30);
@@ -1799,8 +1789,7 @@ mod tickets {
                 ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
                 ("SWITCHBOARD_GITHUB_API", &github.url),
             ],
-            &json!({"notifications": false, "tips": false, "linear": false, "ux2": false})
-                .to_string(),
+            &json!({"notifications": false, "tips": false, "linear": false}).to_string(),
         );
         repos(&server, json!({ "landing": "pr" }));
         let work = server.dir.path().join("widgets");
@@ -1837,9 +1826,10 @@ mod tickets {
         client.wait_text("#12  Make the widget blue");
         client.wait_text("It is red.");
         client.wait_text("Which widget?");
-        let shown = wait_panes(&server, 2);
+        // In the pane's place.
+        let shown = wait_panes(&server, 1);
         assert_eq!(
-            shown[1]["options"]["@ticket_view_id"], "acme/widgets#12",
+            shown[0]["options"]["@ticket_view_id"], "acme/widgets#12",
             "{shown:?}"
         );
     }
@@ -1884,7 +1874,7 @@ mod tickets {
                 ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
                 ("SWITCHBOARD_GITHUB_API", &github.url),
             ],
-            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true,
+            &json!({"notifications": false, "tips": false, "linear": false,
                 "sidebar": false, "photos": false, "lone_pane_width": "80"})
             .to_string(),
         );
@@ -1973,12 +1963,14 @@ mod tickets {
                     )
                 })
         });
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &github.url),
-        ]);
-        settings(&server, json!({"linear": false, "ux2": false}));
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+            ],
+            &all_settings(json!({"linear": false})).to_string(),
+        );
         repos(&server, json!({ "tickets": "github" }));
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
@@ -2057,7 +2049,7 @@ mod tickets {
                 ("LINEAR_API_KEY", "test-key"),
                 ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
             ],
-            &json!({"notifications": false, "tips": false, "github": false, "ux2": false,
+            &json!({"notifications": false, "tips": false, "github": false,
                 "sidebar": false, "photos": false})
             .to_string(),
         )
@@ -2180,7 +2172,7 @@ mod tickets {
                 ("LINEAR_API_KEY", "test-key"),
                 ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
             ],
-            &json!({"notifications": false, "tips": false, "ux2": false,
+            &json!({"notifications": false, "tips": false,
                 "sidebar": false, "photos": false})
             .to_string(),
         );

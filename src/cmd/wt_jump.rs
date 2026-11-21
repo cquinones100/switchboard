@@ -23,9 +23,9 @@
 //! The tabs and panes come from the server (`switchboard list`) where tmux's
 //! `list-panes` gave them, and a jump is `select-tab` and `select-pane`, or,
 //! for a tab in another session, `switch-client`, which takes the terminal
-//! you used last there as tmux's did. A row is the tab's label, as the tab
-//! bar shows it, where the tmux version ran the second status line's script
-//! for each.
+//! you used last there as tmux's did. A row is the tab's label, as the
+//! header shows it, where the tmux version ran the second status line's
+//! script for each.
 
 use std::collections::HashMap;
 use std::path::Path;

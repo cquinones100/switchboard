@@ -4,7 +4,7 @@
 //! a choice made: the option ticked and the headings renamed, as the
 //! sessions that build a plan read it (`open_choice`, which wt and
 //! autopilot read a plan's open choices by too).
-//! New with UX 2.0; the tmux version opened a plan as any other note.
+//! New; the tmux version opened a plan as any other note.
 //!
 //! A plan is the shape `/shape` writes for a note's item: `# Plan - <name>`, then `## `
 //! sections (`Today`, `Decision needed` or `Decision`, `Steps`). An option

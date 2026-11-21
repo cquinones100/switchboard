@@ -2,8 +2,8 @@
 //! the issue its branch was started for (`views::ticket::Ticket::Issue`):
 //! its number and title, who opened it and when, its body, then its
 //! comments, oldest first, drawn as the PR view draws a PR's; with its
-//! state, labels, assignees and milestone beside them, as UX 2.0's board
-//! for a ticket, with UX 2.0 off too.
+//! state, labels, assignees and milestone beside them, as the board for a
+//! ticket.
 //!
 //! As a Linear ticket's view does, it shows the copy last read at once
 //! (`~/.cache/switchboard/ticket-view/`) and reads it again in the
@@ -178,8 +178,8 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
     }
 }
 
-/// What the view shows of an issue: its board, with or without UX 2.0,
-/// since it reads each person's words apart: an issue's comments are
+/// What the view shows of an issue: its board, since it reads each
+/// person's words apart: an issue's comments are
 /// anyone's, and Markdown read as one document would let one comment's
 /// links reach into the next.
 fn content(issue: &Value) -> Content {

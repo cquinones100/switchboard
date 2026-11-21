@@ -12,7 +12,7 @@
 //!
 //! Its rows are the view's items (`items`), so the cursor, the filter,
 //! Enter and Space work on them as on any list, and narrower than
-//! `BOARD_AT` or without UX 2.0 the plain list draws them. Enter opens a
+//! `BOARD_AT` the plain list draws them. Enter opens a
 //! row's menu (`choices`): a setting's other values, a preset applied, the
 //! relay started or stopped; a click on a switch's part sets it at once
 //! (`part_value`). The counts are the relay's own file of what it sent
@@ -918,7 +918,6 @@ mod tests {
 
     fn drawn(items: Vec<Item>, cols: usize, cursor: isize) -> (Vec<String>, Vec<HitBox>) {
         let mut m = Mission::new();
-        m.snap.rules.ux2 = true;
         m.cursor = cursor;
         let (mut lines, mut hits) = (Vec::new(), Vec::new());
         board(&view(items), &m, cols, 60, &mut lines, &mut hits);
@@ -1024,7 +1023,6 @@ mod tests {
             .position(|i| setting_of(i) == Some("relay_send_finished"))
             .unwrap();
         let mut m = Mission::new();
-        m.snap.rules.ux2 = true;
         m.cursor = at as isize;
         let (mut lines, mut hits) = (Vec::new(), Vec::new());
         board(&view(items), &m, 160, 60, &mut lines, &mut hits);

@@ -169,8 +169,6 @@ pub enum Event {
     Update(crate::update::UpdateEvent),
     /// What a look at your files' repository found (src/files).
     Files(crate::files::FilesEvent),
-    /// The status line's counts answered (src/status).
-    Status(crate::status::StatusEvent),
     /// The rest of what a Notes key does, back from off the task
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::NotesEvent),
@@ -265,9 +263,8 @@ pub struct Session {
 }
 
 impl Session {
-    /// The area panes are laid out in: all but the status line (its one or
-    /// two rows, src/status), the sidebar, and with UX 2.0 the tab's header
-    /// at the top (src/mux/header.rs).
+    /// The area panes are laid out in: all but the sidebar and the tab's
+    /// header at the top (src/mux/header.rs).
     pub fn main_area(&self) -> Rect {
         self.main_area_with(true)
     }
@@ -276,26 +273,20 @@ impl Session {
     /// rows at the top.
     fn main_area_with(&self, header: bool) -> Rect {
         let side = self.sidebar.min(self.cols.saturating_sub(1));
-        let below = crate::status::lines();
-        let top = if header { crate::status::top() } else { 0 };
-        let top = top.min(self.rows.saturating_sub(below + 1));
+        let top = if header { super::header::ROWS } else { 0 };
+        let top = top.min(self.rows.saturating_sub(1));
         Rect::new(
             side,
             top,
             self.cols.saturating_sub(side).max(1),
-            self.rows.saturating_sub(below + top).max(1),
+            self.rows.saturating_sub(top).max(1),
         )
     }
 
-    /// All but the status line: a zoomed pane takes it, covering the
-    /// sidebar, as a zoomed tmux pane covered the sidebar's.
+    /// The whole screen: a zoomed pane takes it, covering the sidebar, as a
+    /// zoomed tmux pane covered the sidebar's.
     pub fn full_area(&self) -> Rect {
-        Rect::new(
-            0,
-            0,
-            self.cols.max(1),
-            self.rows.saturating_sub(crate::status::lines()).max(1),
-        )
+        Rect::new(0, 0, self.cols.max(1), self.rows.max(1))
     }
 
     /// What a tab's panes have to fill: the whole of it when zoomed, and
@@ -308,7 +299,7 @@ impl Session {
         }
     }
 
-    /// Whether a tab goes without UX 2.0's header: Notes' own tab (`@notes`)
+    /// Whether a tab goes without its header: Notes' own tab (`@notes`)
     /// while the sidebar shows, whose app draws its own top line (board 7),
     /// the header's keys of what shows in Claude's place meaning nothing in
     /// a tab with no Claude. With the sidebar hidden it keeps the header,
@@ -475,8 +466,6 @@ pub struct Client {
     pub dirty: bool,
     drag: Option<Drag>,
     last_click: Option<(Instant, u16, u16, u8)>,
-    /// Where the status line's button and tabs were drawn, for clicks.
-    status_hits: crate::status::Hits,
     /// Where UX 2.0's header drew its keys, for clicks, and the one under
     /// the mouse (src/mux/header.rs).
     pub header_keys: super::header::Keys,
@@ -620,8 +609,6 @@ pub struct Server {
     pub mission: crate::mission::MissionState,
     /// Each client's search everything, as its sources answer (src/views).
     pub views: crate::views::Views,
-    /// What the health light says (src/status).
-    pub status: crate::status::Status,
     /// The look for a new release, and its box (src/update).
     pub update: crate::update::Updates,
     /// Your files' repository: a question waiting (src/files).
@@ -760,7 +747,7 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
     server.note_at_start(&problems);
     server.sidebar_load();
     server.notice_history_load();
-    // The status line's rows, before any tab is laid out.
+    // The headers' ages, before any tab is laid out.
     server.status_tick();
     match handed {
         Some(handed) => super::upgrade::adopt(&mut server, handed),
@@ -1278,7 +1265,6 @@ impl Server {
             sidebar: Default::default(),
             mission: Default::default(),
             views: Default::default(),
-            status: Default::default(),
             update: Default::default(),
             files: Default::default(),
             extras: Default::default(),
@@ -1398,7 +1384,6 @@ impl Server {
             Event::Views(event) => self.views_event(event),
             Event::Update(event) => self.update_event(event),
             Event::Files(event) => self.files_event(event),
-            Event::Status(event) => self.status_event(event),
             Event::Notes(event) => self.notes_event(event),
             Event::Autopilot(event) => self.autopilot_event(event),
             Event::Upgrade(event) => self.upgrade_event(event),
@@ -2584,7 +2569,6 @@ impl Server {
             dirty: true,
             drag: None,
             last_click: None,
-            status_hits: Default::default(),
             header_keys: Default::default(),
             header_hover: None,
             pointer: None,
@@ -2674,7 +2658,6 @@ impl Server {
             dirty: true,
             drag: None,
             last_click: None,
-            status_hits: Default::default(),
             header_keys: Default::default(),
             header_hover: None,
             pointer: None,
@@ -3076,8 +3059,8 @@ impl Server {
     }
 
     /// The pointer's shape over a cell of a client's screen: the overlays'
-    /// from the top down, then the sidebar's rows, the header's keys, the
-    /// status line's button and tabs, over a pane the shape its app names
+    /// from the top down, then the sidebar's rows, the header's keys, over
+    /// a pane the shape its app names
     /// for it (`@pointer`, as the diff does) and else the beam, and a
     /// resizing arrow over a line between panes (or while one is dragged).
     fn pointer_at(&self, id: ClientId, col: u16, row: u16) -> crate::ui::pointer::Pointer {
@@ -3118,15 +3101,6 @@ impl Server {
             .any(|(r, _)| row == r.y && col >= r.x && col < r.right())
         {
             return Pointer::Hand;
-        }
-        let status_row = c.rows.saturating_sub(crate::status::lines());
-        if row >= status_row {
-            let on_a_tab = row == status_row && c.status_hits.at(col).is_some();
-            return if on_a_tab {
-                Pointer::Hand
-            } else {
-                Pointer::Arrow
-            };
         }
         if let Some((pane, col, row)) = self.pane_at(id, col, row) {
             // The Notifications window is the server's own drawing.
@@ -3794,8 +3768,7 @@ impl Server {
         let Some(c) = self.clients.get(&id) else {
             return;
         };
-        let status_row = c.rows.saturating_sub(crate::status::lines());
-        // UX 2.0's header: a click on a key or the ⌘ Commands button does
+        // The header: a click on a key or the ⌘ Commands button does
         // what it does, and the one under the mouse is lit (hover_highlight).
         let dragging = c.drag.is_some();
         let header_hit = c
@@ -3841,57 +3814,6 @@ impl Server {
         let Some(c) = self.clients.get(&id) else {
             return;
         };
-        // The wheel over the status line goes to the tab before or after,
-        // as tmux's WheelUpStatus and WheelDownStatus did.
-        if m.row >= status_row
-            && m.kind == MouseKind::Press
-            && matches!(m.button, MouseButton::WheelUp | MouseButton::WheelDown)
-        {
-            let next = m.button == MouseButton::WheelDown;
-            self.act(
-                id,
-                if next {
-                    Action::NextTab
-                } else {
-                    Action::PrevTab
-                },
-            );
-            return;
-        }
-        // A right click on the status line's ← or → opens the trail, on
-        // ⊞ mission control's views, as on the sidebar's.
-        if m.row == status_row
-            && m.kind == MouseKind::Press
-            && m.button == MouseButton::Right
-            && crate::settings::is_on("menu_mouse")
-            && let Some(crate::status::Hit::Nav(button)) = c.status_hits.at(m.col)
-        {
-            let session = c.session.clone();
-            match button {
-                super::header::Button::Mission => self.sidebar_views_menu(id),
-                _ => self.sidebar_trail_menu(id, &session),
-            }
-            return;
-        }
-        if m.row >= status_row && m.kind == MouseKind::Press && m.button == MouseButton::Left {
-            // The tabs' row: the ⌘ Commands button opens the palette, a tab
-            // is gone to; the second status line takes no clicks.
-            let hit = (m.row == status_row)
-                .then(|| c.status_hits.at(m.col))
-                .flatten();
-            let session = c.session.clone();
-            if self.status_button(id, hit) {
-                return;
-            }
-            let hit = match hit {
-                Some(crate::status::Hit::Tab(i)) => Some(i),
-                _ => None,
-            };
-            if let Some(tab) = hit.and_then(|n| self.tab_numbered(n)) {
-                self.select_tab(&session, tab);
-            }
-            return;
-        }
         let drag = c.drag;
         match (m.kind, drag) {
             (MouseKind::Drag, Some(Drag::Scrollbar(pane, grab))) => {
@@ -4437,7 +4359,7 @@ impl Server {
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
         frame.graphics = self.graphics_of(c);
         let session = c.session.clone();
-        let (hits, side, header_keys, panes) = match self.session(&c.session) {
+        let (side, header_keys, panes) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
@@ -4458,7 +4380,6 @@ impl Server {
         let beside = self.boxes_beside(&session);
         let c = self.clients.get_mut(&id).expect("checked above");
         frame.cover_links(|frame| c.overlays.draw(frame, beside));
-        c.status_hits = hits;
         c.header_keys = header_keys;
         c.dirty = false;
         // Pictures as sixel where their placeholders still show (the
@@ -4495,16 +4416,14 @@ impl Server {
         super::beside::spare_of(s.spread_for(tab), s.area_for(tab))
     }
 
-    /// Draws a client's session into `frame`; gives where the status line's
-    /// parts went, what the sidebar drew, where UX 2.0's header put its
-    /// keys, and each pane drawn and where.
+    /// Draws a client's session into `frame`; gives what the sidebar drew,
+    /// where the header put its keys, and each pane drawn and where.
     fn compose(
         &self,
         frame: &mut Frame,
         s: &Session,
         c: &Client,
     ) -> (
-        crate::status::Hits,
         Option<crate::sidebar::Drawn>,
         super::header::Keys,
         Vec<(PaneId, Rect)>,
@@ -4660,7 +4579,7 @@ impl Server {
         // UX 2.0's header over the tab's panes (src/mux/header.rs); a
         // zoomed pane covers it, as it covers the sidebar, and Notes' own
         // tab goes without it.
-        let top = crate::status::top();
+        let top = super::header::ROWS;
         let header_at = self
             .tabs
             .get(&s.current)
@@ -4696,17 +4615,14 @@ impl Server {
                 .map(|(r, b)| (r, super::header::Button::Beside(b))),
         );
         let side = self.sidebar_draw(&mut frame.buf, s, c.id);
-        let hits = self.draw_status_rows(frame, s);
-        // The prefix's mark at the status line's right end, or with none
-        // (UX 2.0), at the header's.
+        // The prefix's mark at the header's right end; a tab without its
+        // header (Notes' own, a zoomed pane) has it at the top right.
         let status = match header_at {
-            Some(area) if crate::status::lines() == 0 => Rect::new(area.x, 0, area.width, 1),
-            // A tab without its header (Notes' own) has it at the top right.
-            None if crate::status::lines() == 0 && top > 0 => {
+            Some(area) => Rect::new(area.x, 0, area.width, 1),
+            None => {
                 let main = s.main_area();
                 Rect::new(main.x, 0, main.width, 1)
             }
-            _ => Rect::new(0, rows.saturating_sub(crate::status::lines()), cols, 1),
         };
         if c.prefix && status.y < rows {
             compose::put(
@@ -4720,7 +4636,7 @@ impl Server {
             );
         }
         frame.cursor = cursor;
-        (hits, side, header_keys, drawn)
+        (side, header_keys, drawn)
     }
 }
 

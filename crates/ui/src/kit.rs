@@ -1,6 +1,6 @@
 //! UX 2.0's kit of atoms: the pieces of text every part draws with in
 //! place of its own, as board 0 of the UX 2.0 canvas ("The kit") draws
-//! them. New with UX 2.0, with no tmux-version file behind it.
+//! them. New, with no tmux-version file behind it.
 //!
 //! Tones (`Tone`) and surfaces (`Surface`) are the colors, one mark per
 //! state (`mark`), and the atoms: a section's `label`, the `rule`s, a
@@ -254,11 +254,11 @@ impl Mark {
     }
 }
 
-/// Whether a tab's badge is drawn turning: the spinner's own states, and
-/// with UX 2.0 every state the kit marks as working (a loop between its
+/// Whether a tab's badge is drawn turning: the spinner's own states and
+/// every state the kit marks as working (a loop between its
 /// ticks, Monitor watches), so whatever draws it keeps the spinner going.
-pub fn spins(b: Badge, ux2: bool) -> bool {
-    b.spins() || (ux2 && Mark::of_badge(b) == Mark::Working)
+pub fn spins(b: Badge) -> bool {
+    b.spins() || Mark::of_badge(b) == Mark::Working
 }
 
 /// A state's mark in its tone; working's turns with the spinner's frame.
@@ -2389,8 +2389,7 @@ mod tests {
         assert_eq!(Mark::of_badge(Badge::Pinned), Mark::Pinned);
         assert_eq!(Mark::of_badge(Badge::Review), Mark::Working);
         assert_eq!(Mark::of_badge(Badge::Merged), Mark::Passed);
-        assert!(spins(Badge::Scheduled, true) && !spins(Badge::Scheduled, false));
-        assert!(spins(Badge::Working, false) && !spins(Badge::Idle, true));
+        assert!(spins(Badge::Scheduled) && spins(Badge::Working) && !spins(Badge::Idle));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! gives a project's ID (`Shaping P-ABC-4: ...`) or one chosen for it
 //! (`views::ticket::Ticket::Project`): its name, its description, and its
 //! tickets with their states, with its status, lead and target date beside
-//! them, as UX 2.0's board for a ticket, with UX 2.0 off too.
+//! them, as the board for a ticket.
 //!
 //! As a ticket's view does, it shows the copy last read at once
 //! (`~/.cache/switchboard/ticket-view/`) and reads it again through
@@ -144,8 +144,8 @@ pub fn board(project: &Value) -> Board {
     }
 }
 
-/// What the view shows of a project: its board, with or without UX 2.0,
-/// so its description is read apart from the tickets listed under it.
+/// What the view shows of a project: its board, so its description is
+/// read apart from the tickets listed under it.
 fn content(project: &Value) -> Content {
     Content::Board(board(project))
 }

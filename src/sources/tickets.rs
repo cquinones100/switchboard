@@ -4,7 +4,7 @@
 //! in the last `DONE_DAYS`), from one GraphQL query with the key the ticket
 //! scripts use (`integrations::linear`). Todo is by priority, urgent first,
 //! the rest most recently changed first, and each card names the tab working
-//! on its ticket, when a tab's name has it. With UX 2.0 a fifth group,
+//! on its ticket, when a tab's name has it. A fifth group,
 //! Closed, holds the tickets canceled in the same days, which the board
 //! draws in a row under its columns; the query brings each ticket's
 //! description and estimate for the card and the pane beside the board.
@@ -22,14 +22,8 @@ use super::{TabInfo, in_columns, ms_of, text};
 use crate::integrations::linear;
 use crate::items::{Item, State, Target};
 
-pub const COLUMNS: [&str; 4] = ["Todo", "In progress", "In review", "Done"];
-/// UX 2.0's groups: the tickets canceled this week after the columns.
-pub const COLUMNS_UX2: [&str; 5] = ["Todo", "In progress", "In review", "Done", "Closed"];
-
-/// The board's groups, with UX 2.0 on or off.
-pub fn columns(ux2: bool) -> &'static [&'static str] {
-    if ux2 { &COLUMNS_UX2 } else { &COLUMNS }
-}
+/// The board's groups: the tickets canceled this week after the columns.
+pub const COLUMNS: &[&str] = &["Todo", "In progress", "In review", "Done", "Closed"];
 pub const DONE_DAYS: i64 = 7;
 
 const QUERY: &str = "query($since: DateTimeOrDuration!) {
@@ -120,16 +114,16 @@ pub fn item_of(issue: &Value, tabs: &[TabInfo]) -> Option<Item> {
     Some(item)
 }
 
-/// Lays out the issues as the board, with UX 2.0's groups or without.
-pub fn board_from(issues: &[Value], tabs: &[TabInfo], ux2: bool) -> Vec<Item> {
+/// Lays out the issues as the board.
+pub fn board_from(issues: &[Value], tabs: &[TabInfo]) -> Vec<Item> {
     let mut items: Vec<Item> = issues.iter().filter_map(|i| item_of(i, tabs)).collect();
     // Column by column, so the order is a total one; in Todo by priority
     // first.
     items.sort_by_key(|i| {
-        let column = COLUMNS_UX2
+        let column = COLUMNS
             .iter()
             .position(|c| i.group.as_deref() == Some(c))
-            .unwrap_or(COLUMNS_UX2.len());
+            .unwrap_or(COLUMNS.len());
         let rank = if column == 0 {
             i.data["priority"].as_u64().unwrap_or(5)
         } else {
@@ -137,7 +131,7 @@ pub fn board_from(issues: &[Value], tabs: &[TabInfo], ux2: bool) -> Vec<Item> {
         };
         (column, rank, -i.time.unwrap_or(0))
     });
-    in_columns(columns(ux2), items)
+    in_columns(COLUMNS, items)
 }
 
 /// Your assigned issues, as Linear has them.
@@ -284,7 +278,6 @@ mod tests {
                 issue("AB-5", 0, "Done", "completed", "2026-10-04T00:00:00Z"),
             ],
             &tabs,
-            false,
         );
         let laid: Vec<(&str, &str)> = items
             .iter()
@@ -312,15 +305,14 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_tickets_canceled_this_week_are_closed_after_the_columns_with_their_description()
-    {
+    fn the_tickets_canceled_this_week_are_closed_after_the_columns_with_their_description() {
         let mut canceled = issue("AB-6", 0, "Duplicate", "canceled", "2026-10-05T00:00:00Z");
         canceled["canceledAt"] = json!("2026-10-05T00:00:00Z");
         let mut todo = issue("AB-1", 2, "Todo", "unstarted", "2026-10-01T00:00:00Z");
         todo["description"] = json!("## Steps\nOpen the menu.");
         todo["estimate"] = json!(2);
         let issues = [canceled, todo];
-        let items = board_from(&issues, &[], true);
+        let items = board_from(&issues, &[]);
         let groups: Vec<_> = items.iter().map(|i| i.group.clone().unwrap()).collect();
         assert_eq!(groups, ["Todo", "Closed"]);
         assert_eq!(items[0].data["description"], "## Steps\nOpen the menu.");
@@ -328,7 +320,5 @@ mod tests {
         assert_eq!(items[0].data["title"], "Work on AB-1");
         assert_eq!(items[1].state, State::Idle);
         assert_eq!(items[1].time, ms_of(Some("2026-10-05T00:00:00Z")));
-        let without = board_from(&issues, &[], false);
-        assert_eq!(without.len(), 1, "UX 2.0 off leaves the canceled out");
     }
 }

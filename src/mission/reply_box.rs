@@ -11,7 +11,7 @@
 //! 109) or, with Settings' `slack_send_as` at once, asks before sending,
 //! coming back here with the text kept on a no, and on a draft or a send
 //! that failed, saying why in the box for a send. Its last row says which
-//! of the two Send does. New with UX 2.0, with no
+//! of the two Send does. New, with no
 //! tmux-version file behind it.
 
 use ratatui::buffer::Buffer;

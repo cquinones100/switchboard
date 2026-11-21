@@ -1,5 +1,5 @@
 //! M-T: a tab's whole title in a box, since the sidebar cuts it at three
-//! lines and the status line at its width: the title as the tab bar has it
+//! lines and the header at its width: the title as `@tab_label` has it
 //! (`@tab_label`, its PR number in front), wrapped, and under it the
 //! branch, the directory, the PR and the Linear ticket, as far as they are
 //! known. Copy the title (or `y`) copies it; Close, Esc or a click off the
@@ -13,8 +13,8 @@
 //!
 //! A tab opened for a note's item (the palette's wt list, autopilot)
 //! is named with the item's first 50 characters cut back to a word
-//! and ending in … (`short_name`), for the tab bar and the second status
-//! line, and keeps the item's whole first line as its full title
+//! and ending in … (`short_name`), for the header and the sidebar, and
+//! keeps the item's whole first line as its full title
 //! (`@tab_title`), which this box, the sidebar and mission control show in
 //! its place, its PR number in front, only while the tab's name is still
 //! that item cut short (`cut_of`), so a tab renamed since shows its new

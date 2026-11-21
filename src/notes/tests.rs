@@ -69,7 +69,6 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
     std::fs::write(&path, &text).unwrap();
     let opts = Options {
         images: true,
-        ux2: true,
         list: false,
         ..Options::default()
     };

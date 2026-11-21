@@ -13,7 +13,7 @@
 //! When there is none to show, it says plainly why, as gh-open.sh's box
 //! did: not a repository, no remote on GitHub, no token, no PR yet.
 //!
-//! With UX 2.0 on, the PR is laid out as board 13 draws it (`board`,
+//! The PR is laid out as board 13 draws it (`board`,
 //! through `super::board`): the description and the conversation's comments
 //! with the PR's checks, reviewers, open review threads and files beside
 //! them, all from the same query.
@@ -30,7 +30,7 @@ use super::ready;
 use crate::integrations::github;
 use crate::photos::{Service, Who};
 use crate::ui::kit::{Mark, Tone};
-use crate::{paths, settings, util};
+use crate::{paths, util};
 
 /// What asked, for the request audit.
 const SOURCE: &str = "M-v PR view";
@@ -651,26 +651,12 @@ pub fn branch_board(copy: &Value) -> Board {
     }
 }
 
-/// What the view shows of a PR: board 13 with UX 2.0 on, else its
-/// Markdown, as pr-view.js laid it out.
+/// What the view shows of a PR: board 13.
 fn content(pr: &Value) -> Content {
-    if settings::is_on("ux2") && ready::is_branch(pr) {
+    if ready::is_branch(pr) {
         Content::Board(branch_board(pr))
-    } else if settings::is_on("ux2") {
-        Content::Board(board(pr, jiff::Timestamp::now()))
     } else {
-        // The board's menu, which Markdown has too.
-        let menued = if ready::is_branch(pr) {
-            branch_board(pr)
-        } else {
-            board(pr, jiff::Timestamp::now())
-        };
-        Content::MarkdownMenu {
-            text: markdown(pr),
-            place: PLACE.into(),
-            title: menued.title,
-            actions: menued.actions,
-        }
+        Content::Board(board(pr, jiff::Timestamp::now()))
     }
 }
 
@@ -1175,23 +1161,5 @@ mod tests {
             10,
         );
         assert_eq!(plain.key(key(KeyCode::Char('m'))), pager::Act::Same);
-        // With UX 2.0 off, the PR's Markdown has the same menu.
-        let menued = board(&pr, now);
-        let mut md = pager::Pager::new(
-            Content::MarkdownMenu {
-                text: markdown(&pr),
-                place: String::new(),
-                title: menued.title,
-                actions: menued.actions,
-            },
-            80,
-            20,
-        );
-        assert!(md.frame().contains("view actions"), "on its prompt line");
-        md.key(key(KeyCode::Char('m')));
-        assert_eq!(
-            md.key(key(KeyCode::Enter)),
-            pager::Act::Press(super::super::Command::ResolveConflicts.name().into())
-        );
     }
 }

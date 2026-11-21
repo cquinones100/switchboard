@@ -304,24 +304,6 @@ pub struct Try {
 // (`@palette copy-pr` was tmux's `@palette p`), so they count once they are
 // bound.
 pub const TRIES: &[Try] = &[
-    Try {
-        key: "second_status",
-        keys: &[
-            "M-v",
-            "M-i",
-            "M-r",
-            "M-l",
-            "@palette copy-pr",
-            "@palette copy-ticket",
-        ],
-        times: 10,
-        title: "Turn on the second status line?",
-        body: |n| {
-            format!(
-                "You looked up a tab's PR or ticket {n} times this week. The second status line shows the tab's branch, PR and Claude session under the tabs all the time."
-            )
-        },
-    },
     // On by default; suggested to one who turned it off and keeps setting
     // reminders to come back to the same work.
     Try {
@@ -768,7 +750,7 @@ mod tests {
     #[test]
     fn a_feature_that_is_off_is_suggested_once_what_it_helps_with_is_done_often() {
         let now = now();
-        let value = |k: &str| Some(Value::Bool(!["routines", "second_status"].contains(&k)));
+        let value = |k: &str| Some(Value::Bool(k != "routines"));
         let empty = Tally::of(&[], 3);
         let notes = IndexMap::new();
         let none = HashMap::new();
@@ -798,10 +780,9 @@ mod tests {
         assert!(routines[0].body.contains("set a reminder 5 times"));
         let on = |_: &str| Some(Value::Bool(true));
         assert!(
-            run(&[("key\tM-v", 10)], &on).is_empty(),
+            run(&[("palette\t@palette remind-tab", 5)], &on).is_empty(),
             "not once it is on"
         );
-        assert_eq!(run(&[("key\tM-v", 10)], &value)[0].id, "on:second_status");
     }
 
     #[test]

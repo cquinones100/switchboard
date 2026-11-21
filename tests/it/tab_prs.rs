@@ -114,7 +114,7 @@ fn start(github: &Fake) -> TestServer {
     ]);
     common::write_settings(
         &server.home,
-        json!({"notifications": false, "linear": false, "ux2": true}),
+        json!({"notifications": false, "linear": false}),
     );
     server
 }
@@ -302,7 +302,7 @@ fn a_tab_follows_every_pr_its_session_opens() {
     // Off, only the branch's PR.
     common::write_settings(
         &server.home,
-        json!({"notifications": false, "linear": false, "ux2": true, "tab_prs": false}),
+        json!({"notifications": false, "linear": false, "tab_prs": false}),
     );
     let t = wait_tab(&server, "only the branch's PR", |t| prs(t).len() == 1);
     assert_eq!(t["pr"], 2040);

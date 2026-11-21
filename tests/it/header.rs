@@ -1,38 +1,62 @@
-//! UX 2.0 as someone sees it, against a server of the test's own: with its
-//! setting on, no status line, and a header over the tab's panes naming it
-//! with the keys of what it can show in Claude's place; with it off again,
-//! the status line back and the panes the whole height. Its keys are the
-//! kit's keycaps, ending in half circles on a terminal that draws them.
-//! With pictures drawn as sixel (src/mux/sixel), never over the header or
-//! on the last row a pane now reaches, never from mission control's copy of
-//! a tab's screen, and drawn by the image view in Claude's place. Mission
-//! control's Settings is a board of categories beside the options of the
-//! one in front.
+//! The workspace as someone sees it, against a server of the test's own: a
+//! header over the tab's panes naming it with the keys of what it can show
+//! in Claude's place, the kit's keycaps ending in half circles on a
+//! terminal that draws them, and its ⌘ Commands button opening and closing
+//! the palette. With pictures drawn as sixel (src/mux/sixel), never over the
+//! header or on the last row a pane now reaches, never from mission
+//! control's copy of a tab's screen, and drawn by the image view in
+//! Claude's place. M-h's history of a tab, mission control's Settings as a
+//! board of categories beside the options of the one in front, and the
+//! palette's theme toggle setting the theme.
 
 use crate::common;
 
-use common::TestServer;
+use common::{TestClient, TestServer};
 use serde_json::{Value, json};
+
+const ALT: &str = "\x1b";
 
 /// Settings for the tests: no sidebar, desktop notifications or tips, and
 /// these.
 fn settings(server: &TestServer, extra: Value) {
+    common::write_settings(&server.home, all_settings(extra));
+}
+
+/// The settings `settings` writes, `extra` over them.
+fn all_settings(extra: Value) -> Value {
     let mut all = json!({"notifications": false, "tips": false, "sidebar": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    common::write_settings(&server.home, all);
+    all
+}
+
+/// A server started with what `settings` writes, so they hold from its
+/// first draw.
+fn start(extra: Value) -> TestServer {
+    TestServer::start_with_settings(&all_settings(extra).to_string())
+}
+
+/// A left click at a cell (0-based), pressed and let go, as SGR mouse.
+fn click(client: &mut TestClient, col: usize, row: usize) {
+    client.send(format!("\x1b[<0;{};{}M", col + 1, row + 1).as_bytes());
+    client.send(format!("\x1b[<0;{};{}m", col + 1, row + 1).as_bytes());
+}
+
+/// The column `text` starts at in a line, counted in characters.
+fn column(line: &str, text: &str) -> usize {
+    let at = line
+        .find(text)
+        .unwrap_or_else(|| panic!("{text:?} in {line:?}"));
+    line[..at].chars().count()
 }
 
 #[test]
-fn with_ux2_a_header_names_the_tab_in_place_of_the_status_line() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn a_header_names_the_tab_over_its_panes() {
+    let server = start(json!({}));
     let mut client = server.attach(90, 24);
     client.wait_text("$");
-    let screen = client.wait_for("the header and no status line", |s| {
-        s[2].contains("M-c Claude") && !s[23].contains("main")
-    });
+    let screen = client.wait_for("the header", |s| s[2].contains("M-c Claude"));
     assert!(
         screen[2].contains("M-d  Diff") && screen[2].contains("M-v  PR"),
         "every view's key: {:?}",
@@ -47,20 +71,11 @@ fn with_ux2_a_header_names_the_tab_in_place_of_the_status_line() {
     client.wait_for("the pane under the header", |_| {
         server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 20
     });
-    // Off again: the status line back, the pane the whole height but it.
-    settings(&server, json!({}));
-    client.wait_for("the status line back", |s| {
-        s[23].contains("main") && !s[2].contains("M-c Claude")
-    });
-    client.wait_for("the pane the whole height", |_| {
-        server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 23
-    });
 }
 
 #[test]
-fn with_ux2_the_header_says_the_tabs_number_before_its_name() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true, "sidebar": false}));
+fn the_header_says_the_tabs_number_before_its_name() {
+    let server = start(json!({"sidebar": false}));
     let mut client = server.attach(120, 24);
     client.wait_for("the first tab's number", |s| s[0].contains("○ 1 "));
     server.ok(&["new-tab"]);
@@ -68,24 +83,8 @@ fn with_ux2_the_header_says_the_tabs_number_before_its_name() {
 }
 
 #[test]
-fn with_ux2_and_message_boxes_off_a_message_is_said_in_a_box() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true, "message_boxes": false}));
-    let mut client = server.attach(90, 24);
-    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
-    let pid = server.pid();
-    // With no status line to put it on, the message goes in a box, and the
-    // server goes on.
-    server.ok(&["say", "Nothing needs you."]);
-    client.wait_text("Nothing needs you.");
-    assert_eq!(server.pid(), pid);
-    server.list();
-}
-
-#[test]
-fn with_ux2_a_ghostty_terminal_gets_half_circles_and_another_gets_spaces() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn a_ghostty_terminal_gets_half_circles_and_another_gets_spaces() {
+    let server = start(json!({}));
     let mut ghostty = server.attach_as("xterm-ghostty", 90, 24);
     let screen = ghostty.wait_for("the header's keycaps", |s| s[2].contains("M-d"));
     assert!(
@@ -119,7 +118,7 @@ fn pictures(raw: &[u8]) -> Vec<((usize, usize), (u32, u32))> {
 /// pane, allowed to send pictures.
 fn sixel_server(cols: u16, rows: u16) -> (TestServer, common::TestClient, String) {
     let server = TestServer::start_with_settings(
-        r#"{"ux2": true, "image_protocol": "sixel", "notifications": false, "tips": false, "sidebar": false}"#,
+        r#"{"image_protocol": "sixel", "notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut client = server.attach(cols, rows);
     client.wait_for("the header", |s| s[2].contains("M-c Claude"));
@@ -180,7 +179,7 @@ fn picture_at(
 }
 
 #[test]
-fn with_ux2_a_picture_drawn_as_sixel_is_cut_under_the_header_and_short_of_the_last_row() {
+fn a_picture_drawn_as_sixel_is_cut_under_the_header_and_short_of_the_last_row() {
     let (server, mut client, pane) = sixel_server(100, 30);
     // The picture's first row scrolled up out of the pane: its second is
     // the pane's top row, the screen's fifth, under the header's four, and
@@ -224,7 +223,7 @@ fn with_ux2_a_picture_drawn_as_sixel_is_cut_under_the_header_and_short_of_the_la
 }
 
 #[test]
-fn with_ux2_mission_control_s_cards_show_a_picture_s_cells_blank_and_draw_no_piece_of_it() {
+fn mission_control_s_cards_show_a_picture_s_cells_blank_and_draw_no_piece_of_it() {
     let (server, mut client, pane) = sixel_server(140, 36);
     client.wait_text("$");
     let (line, col) = server.show_picture(&mut client, &pane);
@@ -257,16 +256,15 @@ fn with_ux2_mission_control_s_cards_show_a_picture_s_cells_blank_and_draw_no_pie
 }
 
 #[test]
-fn with_ux2_the_ticket_image_view_in_claude_s_place_draws_its_page_as_sixel() {
+fn the_ticket_image_view_in_claude_s_place_draws_its_page_as_sixel() {
     use switchboard::views::image::page::Parts;
     use switchboard::views::image::render::{Shot, View};
     // Linear moved to a port nothing listens on: the view shows the
     // ticket as last read and drawn, from the cache, and its read again
     // fails quietly.
-    let server = TestServer::start_with_env(&[("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9")]);
-    settings(
-        &server,
-        json!({"ux2": true, "image_protocol": "sixel", "github": false}),
+    let server = TestServer::start_with_env_and_settings(
+        &[("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9")],
+        &all_settings(json!({"image_protocol": "sixel", "github": false})).to_string(),
     );
     let parts = Parts {
         title: "Fix the login".into(),
@@ -346,9 +344,8 @@ fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
 }
 
 #[test]
-fn with_ux2_m_h_shows_the_tabs_history_under_its_screen_and_moves_through_time() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn m_h_shows_the_tabs_history_under_its_screen_and_moves_through_time() {
+    let server = start(json!({}));
     let mut client = server.attach(120, 40);
     client.wait_for("the header", |s| s[2].contains("M-h  History"));
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
@@ -405,9 +402,8 @@ fn wait_session(server: &TestServer, session: &str) {
 }
 
 #[test]
-fn with_ux2_m_h_opens_the_history_of_a_claude_that_has_run_no_hook() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn m_h_opens_the_history_of_a_claude_that_has_run_no_hook() {
+    let server = start(json!({}));
     let mut client = server.attach(120, 40);
     client.wait_for("the header", |s| s[2].contains("M-h  History"));
     let pane = &server.list()["sessions"][0]["tabs"][0]["panes"][0];
@@ -445,9 +441,8 @@ fn with_ux2_m_h_opens_the_history_of_a_claude_that_has_run_no_hook() {
 }
 
 #[test]
-fn with_ux2_m_h_says_a_tab_with_no_claude_session_has_no_history() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn m_h_says_a_tab_with_no_claude_session_has_no_history() {
+    let server = start(json!({}));
     let mut client = server.attach(120, 40);
     client.wait_for("the header", |s| s[2].contains("M-h  History"));
     client.send(b"\x1bh");
@@ -458,9 +453,8 @@ fn with_ux2_m_h_says_a_tab_with_no_claude_session_has_no_history() {
 }
 
 #[test]
-fn with_ux2_m_h_brings_a_claude_parked_behind_a_tool_back_beside_it() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn m_h_brings_a_claude_parked_behind_a_tool_back_beside_it() {
+    let server = start(json!({}));
     common::stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(120, 40);
     client.wait_for("the header", |s| s[2].contains("M-h  History"));
@@ -516,11 +510,11 @@ fn with_ux2_m_h_brings_a_claude_parked_behind_a_tool_back_beside_it() {
 }
 
 #[test]
-fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
+fn settings_moves_by_category_flips_an_option_and_opens_the_file() {
     let server = TestServer::start();
     settings(
         &server,
-        json!({"ux2": true, "notifications": false, "github": false, "linear": false}),
+        json!({"notifications": false, "github": false, "linear": false}),
     );
     // The editor the view's menu starts: one that says what it was given
     // and waits.
@@ -581,11 +575,10 @@ fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
 }
 
 #[test]
-fn with_ux2_the_header_says_how_full_the_context_is_once_the_statusline_draws() {
+fn the_header_says_how_full_the_context_is_once_the_statusline_draws() {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+    let server = start(json!({}));
     let mut client = server.attach(120, 24);
     client.wait_for("the header", |s| s[2].contains("M-c Claude"));
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
@@ -624,9 +617,8 @@ fn with_ux2_the_header_says_how_full_the_context_is_once_the_statusline_draws() 
 }
 
 #[test]
-fn with_ux2_the_header_says_how_long_the_tab_has_been_open() {
-    let server = TestServer::start();
-    settings(&server, json!({"ux2": true}));
+fn the_header_says_how_long_the_tab_has_been_open() {
+    let server = start(json!({}));
     let mut client = server.attach(120, 24);
     client.wait_for("the header", |s| s[2].contains("M-c Claude"));
     let tab = server.list()["sessions"][0]["tabs"][0]["id"]
@@ -645,8 +637,96 @@ fn with_ux2_the_header_says_how_long_the_tab_has_been_open() {
     client.wait_for("its age in the header", |s| s[0].contains("opened 1h12m"));
     assert_eq!(server.ok(&["show", "-t", &tab, "@tab_age"]).trim(), "1h12m");
     // Off, the header says nothing of it.
-    settings(&server, json!({"ux2": true, "tab_age": false}));
+    settings(&server, json!({"tab_age": false}));
     client.wait_for("its age gone", |s| {
         s[2].contains("M-c Claude") && !s[0].contains("opened")
     });
+}
+
+#[test]
+fn the_headers_commands_button_opens_the_palette_and_closes_it() {
+    let server = start(json!({}));
+    let mut client = server.attach(120, 30);
+    let screen = client.wait_for("the button after the keys", |s| {
+        s[2].contains("M-e") && s[2].contains("Commands")
+    });
+    let line = screen[2].clone();
+    assert!(
+        column(&line, "Commands") > column(&line, "M-e"),
+        "at the end of the keys: {line:?}"
+    );
+    click(&mut client, column(&line, "Commands"), 2);
+    client.wait_text("Actions");
+    click(&mut client, column(&line, "Commands"), 2);
+    client.wait_for("the palette closed", |s| {
+        !s.iter().any(|l| l.contains("Actions"))
+    });
+    settings(&server, json!({"palette_button": false}));
+    client.wait_for("no button", |s| {
+        s[2].contains("M-e") && !s[2].contains("Commands")
+    });
+}
+
+#[test]
+fn the_palette_toggles_the_theme() {
+    let server = start(json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("╭─ Actions");
+    client.type_text("Toggle light");
+    client.wait_for("the toggle listed", |s| {
+        s.iter()
+            .any(|l| l.contains("› Toggle light and dark theme"))
+    });
+    client.type_text("\r");
+    let file = server.home.join(".config/switchboard/settings.json");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    loop {
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        if saved["theme"] == "light" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the theme never turned light: {saved}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Every file under `dir`, its folders' too.
+fn files_in(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files_in(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+// The header is the only look: nothing reads, writes or mentions the
+// setting that once switched between it and the status line.
+#[test]
+fn no_source_names_the_old_looks_setting() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for dir in ["src", "crates", "assets"] {
+        files_in(&root.join(dir), &mut files);
+    }
+    let setting = ["ux", "2"].concat();
+    let naming: Vec<String> = files
+        .iter()
+        .filter(|f| {
+            std::fs::read(f).is_ok_and(|bytes| {
+                String::from_utf8_lossy(&bytes)
+                    .to_lowercase()
+                    .contains(&setting)
+            })
+        })
+        .map(|f| f.strip_prefix(root).unwrap().display().to_string())
+        .collect();
+    assert!(naming.is_empty(), "{naming:#?}");
 }

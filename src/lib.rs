@@ -52,8 +52,8 @@
 //! - `views`: reading things beside your work: the PR description, the
 //!   ticket, any link, a pane's links and images, search everything, and
 //!   whether the PR can merge.
-//! - `status`: the status line's button, health light and second line, and
-//!   dark and light.
+//! - `status`: dark and light, and the tick that keeps the tab headers'
+//!   ages current.
 //! - `setup`: what `switchboard setup` puts in place for Claude Code:
 //!   Switchboard's plugin (its hooks, skills and instructions, for the
 //!   Claude in its panes) or the same in `~/.claude`, the statusline and
