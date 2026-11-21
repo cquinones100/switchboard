@@ -97,6 +97,9 @@ struct Data {
     live: bool,
     /// How many questions and images were made, for their names.
     made: u64,
+    /// How many times the tabs were reset, so a reply due from before a
+    /// reset changes nothing after it.
+    resets: u64,
 }
 
 impl Data {
@@ -108,6 +111,7 @@ impl Data {
             images: HashMap::new(),
             live: true,
             made: 0,
+            resets: 0,
         }
     }
 
@@ -189,9 +193,10 @@ impl Preview {
     /// if it still works on it.
     fn reply_later(self: &Arc<Self>, n: String) {
         let preview = self.clone();
+        let resets = self.data().resets;
         tokio::spawn(async move {
             tokio::time::sleep(REPLY_AFTER).await;
-            preview.change(|d| reply(d, &n));
+            preview.change(|d| d.resets == resets && reply(d, &n));
         });
     }
 }
@@ -494,7 +499,9 @@ async fn control(State(preview): State<Arc<Preview>>, UrlPath(what): UrlPath<Str
             said("The server is back")
         }),
         "reset" => preview.change(|d| {
+            let resets = d.resets + 1;
             *d = Data::new();
+            d.resets = resets;
             said("The made-up tabs are as they started")
         }),
         _ => (StatusCode::NOT_FOUND, "Not here").into_response(),
