@@ -1,4 +1,4 @@
-/* The phone app (src/phone), drawn as boards 164 to 169 draw it: the
+/* The phone app (src/phone), drawn as boards 164 to 169 and 174 draw it: the
    kit's tones, marks and chips, in a phone's portrait. */
 :root {
   --bg: #11121a;
@@ -189,7 +189,53 @@ button {
   border-top: 1px solid var(--line);
   background: var(--bg);
 }
-.composer .plus { color: var(--faint); font-weight: 700; font-size: 18px; padding: 6px 4px; }
+.composer .plus { color: var(--accent); font-weight: 700; font-size: 18px; padding: 6px 4px; min-width: 28px; min-height: 38px; }
+.composer .plus:disabled { color: var(--faint); cursor: default; }
+.composing { border-top: 1px solid var(--line); background: var(--bg); }
+.composing .composer { border-top: 0; }
+.composing .error { color: var(--red); padding: 6px 16px 0; font-size: 12px; }
+
+/* ── Images (board 174) ── */
+.tray { display: flex; gap: 10px; overflow-x: auto; padding: 12px 16px 2px; }
+.tray .shot { position: relative; flex: none; width: 64px; height: 64px; }
+.tray img, .shots img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block; background: var(--surface); }
+.tray .drop {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--chosen);
+  color: var(--text);
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.msg .shots { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.msg .shot { width: 64px; height: 64px; }
+.full {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: #000;
+  display: grid;
+  place-items: center;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+.full img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.full .close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--chosen);
+  color: var(--text);
+  font-weight: 700;
+}
 .composer textarea {
   flex: 1;
   resize: none;

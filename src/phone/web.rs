@@ -15,7 +15,10 @@
 //! Three things change anything, each asked of the server over its
 //! socket, which refuses a pane not running Claude: answering a tab's
 //! prompt, sending its Claude a message, and marking it seen. A pane is
-//! taken only when the server's own `watch` lists it as a Claude tab.
+//! taken only when the server's own `watch` lists it as a Claude tab. An
+//! image from the phone's photo library is kept on the computer first
+//! (`images`, for that tab alone, under a name made here), and the message
+//! names it, its path typed after the text.
 //! What the drawer shows comes from that stream (`follow`), passed on as
 //! server-sent events, and a tab starting to wait sends a Web Push naming
 //! it.
@@ -29,7 +32,7 @@ use anyhow::{Context, Result, anyhow};
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use aws_lc_rs::signature::EcdsaKeyPair;
 use axum::Router;
-use axum::extract::{Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -43,6 +46,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::{self, ServerConfig};
 
 use super::guard::{self, Refusal, Rules, WhoisCache};
+use super::images;
 use super::pairing;
 use super::push;
 use super::tailnet::{Peer, Status, peer_from};
@@ -55,7 +59,7 @@ use crate::{assets, platform, settings, util};
 /// can't be reached.
 const RETRY: Duration = Duration::from_secs(2);
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 /// What every request shares.
 pub struct App {
@@ -154,6 +158,7 @@ fn cert_and_key(
 /// Serves until the process is stopped.
 pub async fn serve(status: Status, config: super::config::Config) -> Result<()> {
     let acceptor = tls(&status.name)?;
+    images::prune(&images::dir(), std::time::SystemTime::now());
     let listeners = bind(&status, config.port).await?;
     let (tx, rx) = watch::channel(json!({"tabs": [], "live": false}));
     let push_key = match push::key() {
@@ -237,6 +242,11 @@ fn routes(app: Arc<App>) -> Router {
         .route("/api/tabs/{pane}/turns", get(turns_of))
         .route("/api/tabs/{pane}/answer", post(answer))
         .route("/api/tabs/{pane}/message", post(message))
+        .route(
+            "/api/tabs/{pane}/image",
+            post(image).layer(DefaultBodyLimit::max(images::MAX_BYTES)),
+        )
+        .route("/api/images/{name}", get(image_of))
         .route("/api/tabs/{pane}/seen", post(seen))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(subscribe))
@@ -268,7 +278,9 @@ async fn headers(req: Request, next: Next) -> Response {
         header::STRICT_TRANSPORT_SECURITY,
         HeaderValue::from_static("max-age=31536000"),
     );
-    if api {
+    // An image's name is never reused, so it alone may be kept, by the
+    // phone's browser alone.
+    if api && !h.contains_key(header::CACHE_CONTROL) {
         h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     res
@@ -670,7 +682,25 @@ async fn message(
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
     let pane = pane_of(&tab);
-    let text = text_of(&body, "text");
+    let names: Vec<String> = body["images"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|n| n.as_str().unwrap_or("").to_string())
+        .collect();
+    let dir = images::dir();
+    let mut paths = Vec::new();
+    for name in &names {
+        let Some(path) = images::path_of(&dir, name) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error": "an image sent isn't on the computer"})),
+            )
+                .into_response();
+        };
+        paths.push(path);
+    }
+    let text = images::typed(&text_of(&body, "text"), &paths);
     ask(vec![
         "answer".into(),
         "-t".into(),
@@ -682,6 +712,55 @@ async fn message(
         text,
     ])
     .await
+}
+
+/// An image for a tab's Claude, kept until a message names it; answers
+/// with its name.
+async fn image(
+    State(app): State<Arc<App>>,
+    Path(pane): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    if claude_tab(&app, &pane).is_none() {
+        return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
+    }
+    let Some(random) = random_bytes(16) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "no randomness").into_response();
+    };
+    let saved = tokio::task::spawn_blocking(move || images::save(&images::dir(), &body, &random))
+        .await
+        .map_err(|e| anyhow!("{e}"))
+        .and_then(|r| r);
+    match saved {
+        Ok(name) => axum::Json(json!({"id": name})).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// An image the phone sent, for its channel.
+async fn image_of(Path(name): Path<String>) -> Response {
+    let read = tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || images::path_of(&images::dir(), &name).and_then(|p| std::fs::read(p).ok())
+    })
+    .await
+    .ok()
+    .flatten();
+    match read {
+        Some(bytes) => (
+            [
+                (header::CONTENT_TYPE, images::content_type(&name)),
+                (header::CACHE_CONTROL, "private, max-age=2592000, immutable"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "Not here").into_response(),
+    }
 }
 
 async fn seen(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response {

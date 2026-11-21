@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod config;
 pub mod guard;
+pub mod images;
 pub mod pairing;
 #[cfg(feature = "net")]
 pub mod push;
