@@ -17,13 +17,13 @@ const state = {
   open: null, // the pane's number of the tab open, or null for the drawer
   messages: [],
   answered: null, // what was answered last, for the folded card
-  draft: "", // what is typed in the composer, kept across the page's redraws
   search: "", // what is typed in the drawer's search, kept while a tab is open
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   chosen: [], // { file, url }: the images chosen from the photo library, waiting over the composer
   full: null, // the name of the image shown whole, or null
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
+  unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), kept across redraws
 };
 
 function el(tag, attrs, ...kids) {
@@ -307,7 +307,7 @@ async function openTab(n) {
   state.messages = [];
   state.answered = null;
   state.error = "";
-  state.draft = "";
+  state.unfolded = new Set();
   while (state.chosen.length) drop(0);
   state.full = null;
   history.replaceState(null, "", "#" + n);
@@ -330,13 +330,16 @@ async function loadTurns() {
   render(true);
 }
 
+const messageKey = (m) => m.who + ":" + m.at + ":" + m.text.length;
+
 function message(m, i, all) {
   if (m.who === "tool") return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, m.text));
   const prev = all[i - 1];
   const same = prev && prev.who === m.who && prev.who !== "tool";
   const who = m.who === "you" ? "You" : "Claude";
-  const long = m.text.split("\n").length > 10 || m.text.length > 700;
-  const body = m.text ? el("div", { class: "body" + (long ? " folded" : "") }, m.text) : null;
+  const key = messageKey(m);
+  const folded = (m.text.split("\n").length > 10 || m.text.length > 700) && !state.unfolded.has(key);
+  const body = m.text ? el("div", { class: "body" + (folded ? " folded" : "") }, m.text) : null;
   const images = (m.images || []).length
     ? el(
         "div",
@@ -350,8 +353,15 @@ function message(m, i, all) {
         ),
       )
     : null;
-  const more = long
-    ? el("button", { class: "more", onclick: (e) => { body.classList.remove("folded"); e.target.remove(); } }, "Show all")
+  const more = folded
+    ? el("button", {
+        class: "more",
+        onclick: (e) => {
+          state.unfolded.add(key);
+          body.classList.remove("folded");
+          e.target.remove();
+        },
+      }, "Show all")
     : null;
   return el(
     "div",
@@ -481,15 +491,11 @@ async function answer(reply) {
   render();
 }
 
-function composer(tab) {
-  const p = tab.prompt;
-  const free = p && p.free;
-  const blocked = p && !free;
-  const field = el("textarea", {
-    rows: 1,
-    placeholder: blocked ? "Answer the question above" : free ? "Your own answer" : "Message " + tab.index + " " + tab.name,
-    disabled: blocked,
-  });
+// The composer, made as a tab opens and kept until another does, so its
+// field keeps its focus, what is typed and the cursor through the redraws;
+// `sync` follows the prompt the tab waits on, the images chosen and the error.
+function composer() {
+  const field = el("textarea", { rows: 1 });
   const send = el("button", { class: "send", "aria-label": "Send" }, "➤");
   // The photo library alone: images, several at once, no camera.
   const picker = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp", multiple: true, hidden: true });
@@ -498,47 +504,33 @@ function composer(tab) {
     picker.value = "";
     render();
   });
-  const plus = el(
-    "button",
-    { class: "plus", "aria-label": "Add images from your photos", disabled: !!p, onclick: () => picker.click() },
-    "+",
-  );
-  const tray = state.chosen.length
-    ? el(
-        "div",
-        { class: "tray" },
-        state.chosen.map((c, i) =>
-          el(
-            "div",
-            { class: "shot" },
-            el("img", { src: c.url, alt: "An image to send" }),
-            el("button", { class: "drop", "aria-label": "Drop this image", onclick: () => { drop(i); render(); } }, "×"),
-          ),
-        ),
-      )
-    : null;
-  const ready = () => field.value.trim() !== "" || (!free && state.chosen.length > 0);
-  send.classList.toggle("lit", ready());
-  field.addEventListener("input", () => {
-    state.draft = field.value;
+  const plus = el("button", { class: "plus", "aria-label": "Add images from your photos", onclick: () => picker.click() }, "+");
+  const free = () => {
+    const tab = current();
+    return !!(tab && tab.prompt && tab.prompt.free);
+  };
+  const ready = () => field.value.trim() !== "" || (!free() && state.chosen.length > 0);
+  const resize = () => {
     send.classList.toggle("lit", ready());
     field.style.height = "auto";
     field.style.height = field.scrollHeight + "px";
-  });
+  };
+  field.addEventListener("input", resize);
   send.addEventListener("click", async () => {
     const text = field.value.trim();
     if (!ready()) return;
+    const answering = free();
     send.disabled = true;
     state.error = "";
-    // Taken out of the composer as it is sent, so no redraw puts it back
-    // for a second tap to send again; given back if it fails.
-    const chosen = free ? [] : state.chosen;
-    state.draft = "";
+    // Taken out of the composer as it is sent, so a second tap can't send
+    // it again; given back if it fails.
+    const chosen = answering ? [] : state.chosen;
     field.value = "";
-    if (!free) state.chosen = [];
+    resize();
+    if (!answering) state.chosen = [];
     const n = state.open;
     try {
-      if (free) await answer(text);
+      if (answering) await answer(text);
       else {
         const images = [];
         for (const c of chosen) images.push(await upload(n, c.file));
@@ -549,21 +541,65 @@ function composer(tab) {
       }
     } catch (e) {
       state.error = String(e.message || e);
-      state.draft = text;
+      field.value = text;
+      resize();
       if (state.open === n) state.chosen = chosen.concat(state.chosen);
       render();
     } finally {
       send.disabled = false;
     }
   });
+  let tray = el("div");
+  let error = el("div");
+  const box = el("div", { class: "composing" }, tray, error, el("div", { class: "composer" }, plus, picker, field, send));
+  box.sync = (tab) => {
+    const p = tab.prompt;
+    const free = p && p.free;
+    field.placeholder = p && !free ? "Answer the question above" : free ? "Your own answer" : "Message " + tab.index + " " + tab.name;
+    field.disabled = !!(p && !free);
+    plus.disabled = !!p;
+    const newTray = state.chosen.length
+      ? el(
+          "div",
+          { class: "tray" },
+          state.chosen.map((c, i) =>
+            el(
+              "div",
+              { class: "shot" },
+              el("img", { src: c.url, alt: "An image to send" }),
+              el("button", { class: "drop", "aria-label": "Drop this image", onclick: () => { drop(i); render(); } }, "×"),
+            ),
+          ),
+        )
+      : el("div");
+    tray.replaceWith(newTray);
+    tray = newTray;
+    const newError = state.error && !p ? el("div", { class: "error" }, state.error) : el("div");
+    error.replaceWith(newError);
+    error = newError;
+    send.classList.toggle("lit", ready());
+  };
+  return box;
+}
+
+function channelHead(tab) {
+  const [m, kind] = markOf(tab);
+  const chip = tab.state === "waiting" ? ["waiting", "y"] : tab.state === "done" ? ["done", "g"] : tab.state === "idle" ? ["idle", ""] : ["working", "b"];
   return el(
     "div",
-    { class: "composing" },
-    tray,
-    state.error && !p ? el("div", { class: "error" }, state.error) : null,
-    el("div", { class: "composer" }, plus, picker, field, send),
+    { class: "head" },
+    el("button", { class: "menu", "aria-label": "Tabs", onclick: () => { state.open = null; history.replaceState(null, "", "#"); render(); } }, "☰"),
+    el("span", { class: "mark " + kind }, m),
+    el("span", { class: "title" }, el("span", { class: "num " + hue(tab) }, tab.index), " ", tab.name),
+    el("span", { class: "chip " + chip[1] }, chip[0]),
   );
 }
+
+// The open tab's screen, kept while it is open: a redraw puts in a new head,
+// prompt card, "doing" line and image shown whole, the messages only when
+// the turns changed, and leaves the composer where it is, since taking a
+// focused field out of the page closes the keyboard.
+let shown = null; // { open, screen, head, list, messages, drawn, count, now, composer, full }
 
 function channel(stick) {
   const tab = current();
@@ -571,42 +607,34 @@ function channel(stick) {
     state.open = null;
     return drawer();
   }
-  const [m, kind] = markOf(tab);
-  const old = app.querySelector(".channel");
-  const atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 40;
-  const kept = old ? old.scrollTop : 0;
-  const typed = state.draft;
-  const list = el(
-    "div",
-    { class: "channel" },
-    state.messages.map(message),
-    card(tab),
-    tab.state === "working" || tab.state === "background" ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null,
-  );
-  const chip = tab.state === "waiting" ? ["waiting", "y"] : tab.state === "done" ? ["done", "g"] : tab.state === "idle" ? ["idle", ""] : ["working", "b"];
-  app.replaceChildren(
-    el(
-      "div",
-      { class: "screen" },
-      el(
-        "div",
-        { class: "head" },
-        el("button", { class: "menu", "aria-label": "Tabs", onclick: () => { state.open = null; history.replaceState(null, "", "#"); render(); } }, "☰"),
-        el("span", { class: "mark " + kind }, m),
-        el("span", { class: "title" }, el("span", { class: "num " + hue(tab) }, tab.index), " ", tab.name),
-        el("span", { class: "chip " + chip[1] }, chip[0]),
-      ),
-      list,
-      composer(tab),
-      full(),
-    ),
-  );
-  const field = app.querySelector(".composer textarea");
-  if (typed && field && !field.disabled) {
-    field.value = typed;
-    field.dispatchEvent(new Event("input"));
+  const kept = shown && shown.open === state.open && shown.screen.parentNode === app ? shown : null;
+  const atEnd = !kept || kept.list.scrollTop + kept.list.clientHeight >= kept.list.scrollHeight - 40;
+  const top = kept ? kept.list.scrollTop : 0;
+  if (!kept) {
+    const messages = el("div", { class: "messages" });
+    const now = el("div", { class: "now" });
+    const list = el("div", { class: "channel" }, messages, now);
+    const head = el("div", { class: "head" });
+    const box = composer();
+    const whole = el("div");
+    shown = { open: state.open, screen: el("div", { class: "screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, now, composer: box, full: whole };
+    app.replaceChildren(shown.screen);
   }
-  list.scrollTop = stick || atEnd ? list.scrollHeight : kept;
+  const head = channelHead(tab);
+  shown.head.replaceWith(head);
+  shown.head = head;
+  if (shown.drawn !== state.messages || shown.count !== state.messages.length) {
+    shown.messages.replaceChildren(...state.messages.map(message));
+    shown.drawn = state.messages;
+    shown.count = state.messages.length;
+  }
+  const working = tab.state === "working" || tab.state === "background";
+  shown.now.replaceChildren(...[card(tab), working ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null].filter(Boolean));
+  shown.composer.sync(tab);
+  const whole = full() || el("div");
+  shown.full.replaceWith(whole);
+  shown.full = whole;
+  shown.list.scrollTop = stick || atEnd ? shown.list.scrollHeight : top;
 }
 
 function render(stick) {
