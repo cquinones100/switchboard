@@ -55,7 +55,7 @@ impl Beside {
             Beside::Split => "Split to the right",
             Beside::Pr => "The PR",
             Beside::Ticket => "The ticket",
-            Beside::Link => "Read a link beside it",
+            Beside::Link => "Read a link",
         }
     }
 }
@@ -175,7 +175,7 @@ pub fn draw(
     };
     let x = spare.x + (spare.width - widest as u16) / 2;
     let top = spare.y + (spare.height - height as u16) / 2;
-    let label = kit::label("Beside this pane", Tone::Dim, None, widest + 1, theme);
+    let label = kit::label("Side panel", Tone::Dim, None, widest + 1, theme);
     crate::ui::draw::put_line(buf, x - 1, top, widest as u16 + 1, &on_sunken(label));
     for (i, (beside, key)) in keyed.iter().enumerate() {
         let y = top + 2 + 2 * i as u16;

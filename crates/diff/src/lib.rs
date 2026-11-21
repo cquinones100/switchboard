@@ -171,8 +171,8 @@ pub fn manifest() -> Manifest {
                 .only(Scope::Workspace),
             Setting::new("diff_beside_share", json!("75"))
                 .said(
-                    "Diff's share beside a narrow pane",
-                    "How much of the width beside the sidebar M-d's diff takes when it opens beside a narrow lone pane: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the spare columns alone, the pane keeping its width. Where the spare columns already give the diff more, it takes them. Dragging the line between them resizes for that diff alone",
+                    "Diff's share in the side panel",
+                    "How much of the width beside the sidebar M-d's diff takes when it opens in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives the diff more, it takes them. Dragging the line between them resizes for that diff alone",
                 )
                 .only(Scope::Workspace),
             Setting::new(UPDATE_CHECK, true)

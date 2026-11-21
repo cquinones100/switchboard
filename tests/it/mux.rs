@@ -1146,8 +1146,8 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
         .unwrap_or(0) as usize;
     // Centered right of the rule, each row its bound key; the tab has no
     // PR or ticket, so neither row shows.
-    let screen = client.wait_text("BESIDE THIS PANE");
-    let (x, _) = cell_of(&screen, "BESIDE THIS PANE").unwrap();
+    let screen = client.wait_text("SIDE PANEL");
+    let (x, _) = cell_of(&screen, "SIDE PANEL").unwrap();
     let spare = 365 - (side + 166);
     let middle = side + 166 + spare / 2;
     assert!(
@@ -1159,7 +1159,7 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
     assert!(screen[note_y].contains("M-e"), "{}", screen[note_y]);
     assert!(note_x > side + 166);
     assert!(cell_of(&screen, "The PR").is_none());
-    let (_, link_y) = cell_of(&screen, "Read a link beside it").unwrap();
+    let (_, link_y) = cell_of(&screen, "Read a link").unwrap();
     assert!(screen[link_y].contains("M-u"), "{}", screen[link_y]);
     assert!(cell_of(&screen, "C-M-S-l to widen").is_some());
     // A click on a row does what its key does.
@@ -1167,14 +1167,14 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
     let (col, row) = (sx + 1, sy + 1);
     client.send(format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").as_bytes());
     client.wait_for("split, the hints gone", |s| {
-        widths(&server.list()).len() == 2 && cell_of(s, "BESIDE THIS PANE").is_none()
+        widths(&server.list()).len() == 2 && cell_of(s, "SIDE PANEL").is_none()
     });
     let second = server.list()["sessions"][0]["tabs"][0]["panes"][1]["id"]
         .as_str()
         .unwrap()
         .to_string();
     server.ok(&["kill-pane", "-t", &second]);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     // A ticket the tab's name gives, as M-i finds it, gets its row.
     let tab = server.list()["sessions"][0]["tabs"][0]["id"]
         .as_str()
@@ -1197,14 +1197,14 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
         &server.home,
         serde_json::json!({"lone_pane_width": "165", "spare_hints": false}),
     );
-    client.wait_for("no hints", |s| cell_of(s, "BESIDE THIS PANE").is_none());
+    client.wait_for("no hints", |s| cell_of(s, "SIDE PANEL").is_none());
 }
 
 #[test]
 fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let side = server.list()["sessions"][0]["sidebar"]["columns"]
         .as_u64()
         .unwrap_or(0) as usize;
@@ -1218,7 +1218,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
     assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
     let (kx, ky) = cell_of(&screen, "esc close").unwrap();
     assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
-    assert!(cell_of(&screen, "BESIDE THIS PANE").is_none());
+    assert!(cell_of(&screen, "SIDE PANEL").is_none());
     assert!(
         !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
         "no box edge or shadow:\n{}",
@@ -1228,7 +1228,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
     client.send(b"\x1b");
     client.wait_for("the hints back", |s| {
         cell_of(s, "Read a link beside this pane").is_none()
-            && cell_of(s, "BESIDE THIS PANE").is_some()
+            && cell_of(s, "SIDE PANEL").is_some()
     });
     // Off, it goes in the middle of the screen, over the pane.
     drop(client);
@@ -1236,7 +1236,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
         r#"{"lone_pane_width": "165", "boxes_beside_narrow_pane": false}"#,
     );
     let mut client = server.attach(365, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     server.ok(&["press", "read-link"]);
     let screen = client.wait_text("Read a link beside this pane");
     let (x, _) = cell_of(&screen, "Read a link beside this pane").unwrap();
@@ -1247,7 +1247,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
 fn the_tabs_menu_opens_beside_a_narrow_pane_as_a_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let side = server.list()["sessions"][0]["sidebar"]["columns"]
         .as_u64()
         .unwrap_or(0) as usize;
@@ -1271,7 +1271,7 @@ fn the_tabs_menu_opens_beside_a_narrow_pane_as_a_pane() {
     );
     client.send(b"\x1b");
     client.wait_for("the hints back", |s| {
-        cell_of(s, title).is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+        cell_of(s, title).is_none() && cell_of(s, "SIDE PANEL").is_some()
     });
 }
 
@@ -1296,7 +1296,7 @@ fn the_tabs_menu_goes_in_the_middle_with_too_few_columns_beside_the_pane() {
 fn a_box_not_about_the_tab_goes_in_the_middle_beside_a_narrow_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let side = server.list()["sessions"][0]["sidebar"]["columns"]
         .as_u64()
         .unwrap_or(0) as usize;
@@ -1308,7 +1308,7 @@ fn a_box_not_about_the_tab_goes_in_the_middle_beside_a_narrow_pane() {
     let screen = client.wait_text("Something to say");
     let (x, _) = cell_of(&screen, "Something to say").unwrap();
     assert!(x < rule, "at {x}:\n{}", screen.join("\n"));
-    assert!(cell_of(&screen, "BESIDE THIS PANE").is_some());
+    assert!(cell_of(&screen, "SIDE PANEL").is_some());
     client.send(b"\x1b");
     client.wait_for("the message gone", |s| {
         cell_of(s, "Something to say").is_none()
@@ -1375,7 +1375,7 @@ fn real(file: &std::path::Path) -> String {
 fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let side = server.list()["sessions"][0]["sidebar"]["columns"]
         .as_u64()
         .unwrap_or(0) as usize;
@@ -1387,7 +1387,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     let screen = client.wait_text("shot.png   tab 1 · ");
     let (x, y) = cell_of(&screen, "shot.png   tab 1 · ").unwrap();
     assert!(x > rule && y == 0, "at {x},{y}:\n{}", screen.join("\n"));
-    assert!(cell_of(&screen, "BESIDE THIS PANE").is_none());
+    assert!(cell_of(&screen, "SIDE PANEL").is_none());
     let (kx, ky) = cell_of(&screen, "M-Esc close").unwrap();
     assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
     assert!(
@@ -1408,7 +1408,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     // M-Esc closes them and brings the hints back.
     client.send(b"\x1b\x1b");
     client.wait_for("the hints back", |s| {
-        cell_of(s, "M-Esc close").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+        cell_of(s, "M-Esc close").is_none() && cell_of(s, "SIDE PANEL").is_some()
     });
     // Two, named by their place in the directory the command runs in:
     // stacked, each under its name, the first above the second, headed
@@ -1433,11 +1433,11 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     let click = format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m");
     client.send(click.as_bytes());
     client.wait_for("the pictures gone", |s| {
-        cell_of(s, "Before and after").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+        cell_of(s, "Before and after").is_none() && cell_of(s, "SIDE PANEL").is_some()
     });
     // Shown while a box is up, they go under it: the box keeps its keys.
     server.ok(&["press", "palette"]);
-    client.wait_for("the palette", |s| cell_of(s, "BESIDE THIS PANE").is_some());
+    client.wait_for("the palette", |s| cell_of(s, "SIDE PANEL").is_some());
     server.ok(&["look", &shot]);
     client.wait_text("shot.png   tab 1 · ");
     client.type_text("zzqq");
@@ -1465,7 +1465,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
 fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let shot = picture_at(&server, "shot.png");
     let other = picture_at(&server, "other.png");
     // A video always goes to the desktop's viewer.
@@ -1502,7 +1502,7 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     // With a split there are no columns beside the pane: each is opened.
     server.ok(&["split", "-R"]);
     client.wait_for("the hints gone", |s| {
-        cell_of(s, "BESIDE THIS PANE").is_none()
+        cell_of(s, "SIDE PANEL").is_none()
     });
     server.ok(&["look", &shot, &other]);
     assert_eq!(
@@ -1517,7 +1517,7 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
         r#"{"lone_pane_width": "80", "images_beside_pane": false}"#,
     );
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let shot = picture_at(&server, "shot.png");
     server.ok(&["look", &shot]);
     assert_eq!(wait_opened(&server, 1), [shot]);
@@ -1527,7 +1527,7 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     // And so does one for a terminal that draws none of the server's images.
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach(240, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let shot = picture_at(&server, "shot.png");
     server.ok(&["look", &shot]);
     assert_eq!(wait_opened(&server, 1), [shot]);
@@ -1538,7 +1538,7 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
 fn look_from_a_tab_behind_waits_beside_its_pane_until_the_tab_is_in_front() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
-    client.wait_text("BESIDE THIS PANE");
+    client.wait_text("SIDE PANEL");
     let shot = picture_at(&server, "shot.png");
     let tab = |i: usize| {
         server.list()["sessions"][0]["tabs"][i]["id"]

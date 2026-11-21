@@ -56,7 +56,7 @@ When I name one of these, I mean what Switchboard shows me:
 
 # Showing me an image
 
-To show me an image for feedback (a screenshot, a rendering, a chart), run `switchboard look <file>...` (`switchboard look --before-after <before> <after>` for a before and after, and the files alone for any others) rather than `open`: it shows them beside this tab's pane where there is room, without taking me out of the workspace, and in the desktop's viewer otherwise, as it does a video or a PDF.
+To show me an image for feedback (a screenshot, a rendering, a chart), run `switchboard look <file>...` (`switchboard look --before-after <before> <after>` for a before and after, and the files alone for any others) rather than `open`: it shows them in this tab's side panel, beside its pane, where there is room, without taking me out of the workspace, and in the desktop's viewer otherwise, as it does a video or a PDF.
 
 # The Slack relay
 
