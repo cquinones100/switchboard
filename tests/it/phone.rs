@@ -1,7 +1,9 @@
 //! The phone app's commands (src/phone/serve.rs) against a server of the
 //! test's own: `prompt` reading a prompt off a Claude pane's screen,
 //! `answer` pressing its option or typing a message, `watch` streaming the
-//! Claude tabs as they change, and each refusing a pane not running Claude.
+//! Claude tabs as they change, with each one's repository and branch, and
+//! each refusing a pane not running Claude; and the app's drawer search,
+//! run in Node.
 //! The shell stands in for Claude (a session file for its pid, as Claude
 //! Code writes one), and prints a prompt as Claude Code draws one; `cat`
 //! then shows what was pressed.
@@ -210,4 +212,103 @@ fn watch_streams_the_claude_tabs_as_they_change() {
     let waiting = next_line(&mut stream, |v| v["tabs"][0]["state"] == "waiting");
     assert_eq!(waiting["tabs"][0]["needs"], true);
     assert_eq!(waiting["tabs"][0]["prompt"]["options"][0]["label"], "Yes");
+}
+
+#[test]
+fn the_tabs_the_phone_reads_carry_their_repository_and_branch() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // The first tab's directory made a repository on a branch, by git's
+    // own files, which the tab's name is read from.
+    let git = server.home.join(".git");
+    std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+    std::fs::write(git.join("HEAD"), "ref: refs/heads/phone-search\n").unwrap();
+    std::fs::write(
+        git.join("refs/heads/phone-search"),
+        "0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .unwrap();
+    let pane = claude_pane(&server);
+
+    let mut stream = UnixStream::connect(server.socket()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let msg = ClientMsg::Command {
+        args: vec!["watch".into()],
+        cwd: server.home.clone(),
+        pane: None,
+        stdin: None,
+        by_hand: false,
+    };
+    stream.write_all(&proto::encode_client(&msg)).unwrap();
+    let seen = next_line(&mut stream, |v| v["tabs"][0]["branch"] == "phone-search");
+    let tab = &seen["tabs"][0];
+    assert_eq!(tab["pane"], pane);
+    let home_name = server.home.canonicalize().unwrap();
+    let home_name = home_name.file_name().unwrap().to_string_lossy();
+    assert_eq!(tab["repo"], *home_name, "{seen}");
+}
+
+/// The drawer's search (assets/phone/app.js's `groups`), run in Node over
+/// tabs as the phone reads them; skipped without Node.
+#[test]
+fn the_drawers_search_keeps_the_tabs_matching_in_their_groups() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    // The page's own globals stood in for, its start left waiting on a
+    // fetch that never answers, so only its functions run.
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const ctx = vm.createContext({
+  document: { getElementById: () => null },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const run = (q) => vm.runInContext(`
+  state.tabs = [
+    { index: 2, name: "stable note IDs", repo: "switchboard", branch: "stable-note-ids", state: "waiting", needs: true, wait: "Bash: git push" },
+    { index: 3, name: "M-d uncommitted", repo: "switchboard", branch: "diff-uncommitted", state: "working", wait: "Edit diff.rs" },
+    { index: 8, name: "handoff", repo: "notes-sync", branch: "main", state: "idle" },
+  ];
+  JSON.stringify(groups(wordsOf(${JSON.stringify(q)})).map(([name, , tabs]) => [name, tabs.map((t) => t.index)]));
+`, ctx);
+for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"]) console.log(q + "=" + run(q));
+"#;
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            r#"=[["Needs you",[2]],["Working",[3]],["Idle",[8]]]"#,
+            // By name, case aside: the other groups, left with none, dropped.
+            r#"HANDOFF=[["Idle",[8]]]"#,
+            // By number.
+            r#"3=[["Working",[3]]]"#,
+            // By branch.
+            r#"diff-UNCOMMITTED=[["Working",[3]]]"#,
+            // Every word typed: "note" alone would keep tab 2 too.
+            r#"note sync=[["Idle",[8]]]"#,
+            "deploy=[]",
+        ],
+        "{stdout}"
+    );
 }

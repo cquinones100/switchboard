@@ -339,8 +339,9 @@ impl Server {
         }
     }
 
-    /// Every Claude tab, those that need you first: its state, what it waits
-    /// on, its last turn, and the prompt it shows while waiting.
+    /// Every Claude tab, those that need you first: its repository and
+    /// branch (for the drawer's search), its state, what it waits on, its
+    /// last turn, and the prompt it shows while waiting.
     pub(crate) fn phone_snapshot(&self) -> Value {
         let r = Rules::now();
         let mut tabs: Vec<_> = self
@@ -369,11 +370,17 @@ impl Server {
                     .get(&pane)
                     .and_then(|r| r.transcript.as_ref())
                     .map(|p| p.to_string_lossy().into_owned());
+                let branch = self
+                    .tab_names
+                    .shown
+                    .get(&t.id)
+                    .and_then(|shown| shown.branch.clone());
                 Some(json!({
                     "tab": t.id.to_string(),
                     "index": t.index,
                     "name": t.name,
                     "repo": t.repo_dir.as_ref().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()),
+                    "branch": branch,
                     "state": t.state.name(),
                     "needs": needs_tab(t, &r),
                     "since": t.since,
