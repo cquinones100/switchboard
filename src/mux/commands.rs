@@ -578,7 +578,9 @@ impl Server {
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
                 .map_err(|e| format!("{e:#}")),
             // Taken before it reaches here, by the server's loop.
-            "upgrade" => Err("upgrade is answered by the server's loop".to_string()),
+            // `upgrade` alone is answered by the server's loop, and
+            // `--latest` reaches it as `upgrade-latest`.
+            "upgrade" => Err("usage: switchboard upgrade [--latest]".to_string()),
             "restore-layout" => Err("restore-layout is answered by the server's loop".to_string()),
             other => Err(format!("no command named {other}")),
         };

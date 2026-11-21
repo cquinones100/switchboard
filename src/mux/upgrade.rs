@@ -386,10 +386,11 @@ pub enum UpgradeEvent {
 /// How often the build's spinner turns while it builds.
 const BUILD_TICK: Duration = Duration::from_millis(250);
 
-/// Whether a command's arguments ask for an upgrade (and not its usage).
+/// Whether a command's arguments ask for an upgrade: `upgrade` alone, so
+/// its usage, or arguments it doesn't take (`--latest` with another,
+/// which the binary sends as they are), restart nothing.
 pub fn asks_upgrade(args: &[String]) -> bool {
-    args.first().is_some_and(|a| a == "upgrade")
-        && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
+    matches!(args, [upgrade] if upgrade == "upgrade")
 }
 
 /// What `switchboard upgrade --latest` sends the server: a command of
@@ -751,7 +752,7 @@ impl Server {
                         };
                         let said =
                             format!("The build failed: {why}. Switchboard goes on as it was.");
-                        if !row_seen {
+                        if build.is_none() || !row_seen {
                             self.say(client, &said);
                         }
                         // The row says it failed until it is clicked, and
@@ -1495,6 +1496,10 @@ mod tests {
         assert!(asks_latest(&on_the_wire(args(&["upgrade", "--latest"]))));
         assert_eq!(on_the_wire(args(&["upgrade"])), args(&["upgrade"]));
         assert!(!asks_upgrade(&args(&[LATEST_COMMAND])));
+        assert!(!asks_upgrade(&on_the_wire(args(&[
+            "upgrade", "--latest", "--help"
+        ]))));
+        assert!(!asks_upgrade(&args(&["upgrade", "--now"])));
         assert!(!asks_upgrade(&args(&["list"])));
         assert!(!asks_upgrade(&[]));
     }
