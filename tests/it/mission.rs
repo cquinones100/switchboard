@@ -838,6 +838,14 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let server = start(json!({"view_calendar": true}));
     let now = jiff::Zoned::now();
     let date = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
+    // In the hour now falls in, which a day longer than the screen shows
+    // whatever the time the test runs at.
+    let hour = now.hour();
+    let (start, end) = (
+        format!("{date}T{hour:02}:00:00"),
+        format!("{date}T{hour:02}:59:00"),
+    );
+    let label = format!("{:>4}:00 ", (hour + 11) % 12 + 1);
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("calendar.json"),
@@ -845,7 +853,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
             "date": date,
             "updated": now.timestamp().as_millisecond(),
             "events": [
-                { "title": "Planning", "start": format!("{date}T09:00:00"), "end": format!("{date}T10:00:00"), "you": "going", "link": "https://calendar.example/1" },
+                { "title": "Planning", "start": start, "end": end, "you": "going", "link": "https://calendar.example/1" },
                 { "title": "Offsite", "allDay": true, "you": "going" },
             ],
         })
@@ -860,7 +868,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let has = |text: &str| screen.iter().any(|l| l.contains(text));
     assert!(has("all day   Offsite"), "{}", screen.join("\n"));
     assert!(
-        has("   9:00 "),
+        has(&label),
         "the hours down the side: {}",
         screen.join("\n")
     );
