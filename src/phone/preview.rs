@@ -66,16 +66,26 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 /// The phone app's files in the Switchboard clone `dir` is in, or why
-/// there are none.
+/// there are none. The app's code runs in your browser, so a checkout
+/// holding someone else's code is refused as `switchboard try` refuses it:
+/// a PR `wtpr --untrusted` set up always, another unless it is yours or in
+/// trusted-dirs.
 pub fn assets_dir(dir: &Path) -> Result<PathBuf, String> {
     let top = dir.ancestors().find(|d| d.join(".git").exists());
-    match top {
-        Some(top) if crate::dev::is_switchboard_clone(dir) => Ok(top.join("assets/phone")),
-        _ => Err(
+    let Some(top) = top.filter(|_| crate::dev::is_switchboard_clone(dir)) else {
+        return Err(
             "the phone preview is for Switchboard's clone: run it in a checkout of Switchboard"
                 .into(),
-        ),
+        );
+    };
+    if crate::trust::is_untrusted(top) {
+        return Err(format!(
+            "{} holds a PR wtpr --untrusted set up, whose code runs only sealed",
+            top.display()
+        ));
     }
+    crate::trust::yours_or_listed(&crate::paths::home(), top)?;
+    Ok(top.join("assets/phone"))
 }
 
 /// The made-up workspace.
@@ -228,28 +238,20 @@ pub async fn serve(listener: tokio::net::TcpListener, dir: PathBuf) -> Result<()
     Ok(())
 }
 
-/// Each file's name, size and modified time.
-fn files_now(dir: &Path) -> Vec<(String, u64, Option<SystemTime>)> {
-    let mut files: Vec<_> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let meta = e.metadata().ok()?;
-            meta.is_file().then(|| {
-                (
-                    e.file_name().to_string_lossy().into_owned(),
-                    meta.len(),
-                    meta.modified().ok(),
-                )
-            })
+/// Each file served's name, size and modified time: only those, so an
+/// editor's swap or autosave file beside them reloads nothing.
+fn files_now(dir: &Path) -> Vec<(&'static str, u64, Option<SystemTime>)> {
+    FILES
+        .iter()
+        .map(|(name, _)| match std::fs::metadata(dir.join(name)) {
+            Ok(meta) => (*name, meta.len(), meta.modified().ok()),
+            Err(_) => (*name, 0, None),
         })
-        .collect();
-    files.sort();
-    files
+        .collect()
 }
 
-/// The frame told the name of each file saved, added or removed.
+/// The frame told the name of each file served that is saved, added or
+/// removed.
 async fn look_at_files(preview: Arc<Preview>) {
     let mut before = files_now(&preview.dir);
     loop {
@@ -260,7 +262,7 @@ async fn look_at_files(preview: Arc<Preview>) {
                 .iter()
                 .find(|f| !before.contains(f))
                 .or_else(|| before.iter().find(|f| !now.contains(f)))
-                .map(|f| f.0.clone())
+                .map(|f| f.0.to_string())
                 .unwrap_or_default();
             let _ = preview.reload.send(changed);
             before = now;
