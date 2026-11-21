@@ -436,10 +436,9 @@ impl Server {
         }
         let shown = self.tab_names.shown.get(&tab);
         // Origin's, or in a fork's clone upstream's too, where its PRs open.
-        let repos = self
-            .tab_path(tab)
-            .and_then(|p| self.sources.repos_kept(p))
-            .filter(|r| !r.is_empty());
+        // Unknown only until the lookups have read the directory's remotes;
+        // read with no GitHub repository among them, it is another's.
+        let repos = self.tab_path(tab).and_then(|p| self.sources.repos_kept(p));
         let same_repo = match (repos, &pr.repo) {
             (Some(repos), Some(repo)) => {
                 let repo = repo.to_string();

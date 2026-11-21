@@ -154,7 +154,7 @@ pub struct Place<'a> {
 /// Whether a merged PR the session made, `head` its branch, may still be
 /// the tab's current PR: while the tab is in the PR's repository, on that
 /// branch (before the landing's cleanup) or on the default branch with no
-/// other PR it follows open (the worktree removed, the tab back in the main
+/// other PR its session made open (the worktree removed, the tab back in the main
 /// clone), so the tab stays under Merged with the PR leading its label until
 /// it takes up other work.
 pub fn merged_stays_current(head: &str, at: &Place) -> bool {
