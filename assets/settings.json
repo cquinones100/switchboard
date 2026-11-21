@@ -143,6 +143,13 @@
     "default": true
   },
   {
+    "key": "pr_merge_queue",
+    "category": "Sessions",
+    "label": "Land PRs through Switchboard's merge queue",
+    "description": "In a repository that lands through PRs with no merge queue of GitHub's, and whose CI runs on a push to ci/train-* branches, queue-and-clean adds a PR whose checks passed to Switchboard's own queue, which tests up to four together on a ci/train branch and squash-merges them in order once its CI passes, so no PR has to be brought up to date with the default branch first; off, queue-and-clean turns on GitHub's auto-merge for each PR, and what is queued waits",
+    "default": true
+  },
+  {
     "key": "sweep_landed_worktrees",
     "category": "Sessions",
     "label": "Remove landed worktrees",

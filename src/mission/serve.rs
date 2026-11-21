@@ -4709,6 +4709,53 @@ impl Server {
                     }
                 });
             }
+            Do::PrMove {
+                common,
+                number,
+                way,
+            } => {
+                self.mission_busy(client, label, None, async move {
+                    let moved = tokio::task::spawn_blocking(move || {
+                        crate::merge_queue::change(&common, |q| {
+                            crate::merge_queue::move_pr(q, number, way)
+                        })
+                    })
+                    .await;
+                    match moved {
+                        Ok(Ok(true)) => None,
+                        Ok(Ok(false)) => {
+                            Some(format!("#{number} isn't waiting in the merge queue."))
+                        }
+                        Ok(Err(e)) => Some(format!("Couldn't move it: {e}")),
+                        Err(e) => Some(format!("Couldn't move it: {e}")),
+                    }
+                });
+            }
+            Do::PrLeave { common, number } => {
+                let label = label.to_string();
+                self.ask(
+                    client,
+                    Confirm::new(format!("Take #{number} out of the merge queue?")),
+                    move |server, client, yes| {
+                        if !yes {
+                            return;
+                        }
+                        server.mission_busy(client, &label, None, async move {
+                            let out = tokio::task::spawn_blocking(move || {
+                                crate::merge_queue::change(&common, |q| {
+                                    crate::merge_queue::dequeue_pr(q, number)
+                                })
+                            })
+                            .await;
+                            Some(match out {
+                                Ok(Ok(_)) => format!("Took #{number} out of the merge queue."),
+                                Ok(Err(e)) => format!("Couldn't take it out: {e}"),
+                                Err(e) => format!("Couldn't take it out: {e}"),
+                            })
+                        });
+                    },
+                );
+            }
             Do::LeaveQueue(root) => {
                 let Ok(exe) = crate::util::exe() else {
                     return;
