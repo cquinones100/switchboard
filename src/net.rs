@@ -262,6 +262,37 @@ pub async fn request_json(
     .into())
 }
 
+/// A POST of raw bytes (a Web Push message, already encrypted), its answer
+/// read as `request_json` reads one. Counted in the request audit as it is
+/// sent, and failing only when no answer comes.
+#[cfg(feature = "net")]
+pub async fn post_bytes(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+    audit: Audit<'_>,
+) -> Result<Response> {
+    let mut request = client()?.post(url).body(body);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    requests::count(audit.service, audit.protocol, audit.source);
+    let response = request.send().await.map_err(|e| {
+        ServiceError::new(
+            ErrorKind::Unreachable,
+            audit.service,
+            format!("Couldn't reach {}: {e}", audit.service),
+        )
+    })?;
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.unwrap_or_default();
+    Ok(Response {
+        status,
+        headers: Vec::new(),
+        body: parse_body(&bytes),
+    })
+}
+
 /// A file fetched whole: its status, the type the server gave it (its
 /// `Content-Type`), and its bytes.
 #[derive(Clone, Debug)]

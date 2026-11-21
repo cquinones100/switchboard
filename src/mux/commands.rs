@@ -56,9 +56,22 @@
 //!                                        several; in the desktop's viewer
 //!                                        with no room there, and a video
 //!                                        or a PDF always (src/ui/pictures.rs)
-//! seen [-t tab]                          the tab seen, as if looked at: its
+//! seen [-t tab] [-s from]                the tab seen, as if looked at: its
 //!                                        finished Claude and a reminder come
-//!                                        due (the Slack relay's Open)
+//!                                        due (the Slack relay's Open); -s
+//!                                        names who asked (src/phone)
+//! prompt [-t pane]                       the prompt a Claude pane waits on,
+//!                                        as JSON, null with none (src/phone)
+//! answer [-t pane] [-m] [-h id] [-s from] reply
+//!                                        the prompt (the one -h names) answered as mission
+//!                                        control answers it, or with -m a
+//!                                        message typed to its Claude; never
+//!                                        typed in a pane (src/phone)
+//! watch                                  every Claude tab's state and last
+//!                                        turn, a JSON line each time they
+//!                                        change, until it hangs up
+//! phone-pair <device>                    a box asking for the code the
+//!                                        phone shows, which pairs it
 //! tip <name> | tip seen <name> | tip reset
 //!                                        a tip, once; marked shown; all again
 //! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
@@ -107,6 +120,10 @@ pub const NAMES: &[&str] = &[
     "picture",
     "look",
     "seen",
+    "prompt",
+    "answer",
+    "watch",
+    "phone-pair",
     "ready",
     "tip",
     "press",
@@ -199,7 +216,23 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "seen",
-        "seen [-t tab]: the tab seen, as if looked at: its finished Claude and a reminder come due",
+        "seen [-t tab] [-s from]: the tab seen, as if looked at: its finished Claude and a reminder come due; -s names who asked (phone), logged and shown in the notifications",
+    ),
+    (
+        "prompt",
+        "prompt [-t pane]: the prompt the pane's Claude waits on, as JSON (its question, options, whether it takes several, its free option), null with none; refused for a pane not running Claude",
+    ),
+    (
+        "answer",
+        "answer [-t pane] [-m] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; -s names who asked (phone), logged and shown in the notifications; refused for a pane not running Claude, and typed in a pane",
+    ),
+    (
+        "watch",
+        "watch: every Claude tab's state, last turn and waiting prompt, a line of JSON now and each time they change, until the reader hangs up",
+    ),
+    (
+        "phone-pair",
+        "phone-pair <device>: from switchboard phone, a box asking you to type the code the phone app shows on <device>, which pairs it; Esc refuses it",
     ),
     (
         "ready",
@@ -470,12 +503,29 @@ impl Server {
             "say" => Ok(self.cmd_say(rest, caller)),
             "picture" => Ok(self.cmd_picture(rest, caller)),
             "look" => Ok(self.cmd_look(rest, cwd, caller)),
-            "seen" => Args::parse(rest, "t")
-                .and_then(|a| self.tab_from(&a, caller))
-                .map(|tab| {
-                    self.mark_seen(tab);
-                    Reply::ok("")
-                }),
+            "seen" => Args::parse(rest, "ts").and_then(|a| {
+                let tab = self.tab_from(&a, caller)?;
+                self.mark_seen(tab);
+                if let Some(from) = a.value('s') {
+                    self.phone_did(from, tab, "Marked seen");
+                }
+                Ok(Reply::ok(""))
+            }),
+            "prompt" => Args::parse(rest, "t")
+                .and_then(|a| self.pane_from(&a, caller))
+                .and_then(|pane| self.phone_prompt(pane)),
+            "answer" => Args::parse(rest, "tsh").and_then(|a| {
+                let pane = self.pane_from(&a, caller)?;
+                let reply = a.rest.join(" ");
+                self.phone_answer(pane, &reply, a.has('m'), a.value('h'), a.value('s'))
+            }),
+            // Asked alone, it is answered by `Server::handle` keeping its
+            // connection.
+            "watch" => Err("watch takes nothing".into()),
+            "phone-pair" => match rest.first() {
+                Some(device) => self.phone_pair_ask(device),
+                None => Err("phone-pair takes the device asking".into()),
+            },
             "ready" => Args::parse(rest, "t").and_then(|a| {
                 let tab = self.tab_from(&a, caller)?;
                 let what = a.rest.join(" ");
@@ -940,6 +990,14 @@ impl Server {
         let own_tab = caller.and_then(|p| self.panes.get(&p)).map(|slot| slot.tab);
         let tab_of = |pane: PaneId| self.panes.get(&pane).map(|slot| slot.tab);
         match name {
+            // `answer` presses a prompt's option for whoever asks, so it
+            // isn't one more way for a Claude to approve what it asked
+            // permission for; send-keys typed in a pane still reaches any
+            // pane, as before.
+            "answer" => Err(
+                "switchboard answer is asked by Switchboard's own programs, not typed in a pane"
+                    .into(),
+            ),
             "set" => {
                 let Ok(a) = Args::parse(rest, "t") else {
                     return Ok(());
