@@ -921,7 +921,7 @@
     "key": "diff_beside_share",
     "category": "Tabs and status bar",
     "label": "Diff's share in the side panel",
-    "description": "How much of the width beside the sidebar M-d's diff takes when it opens in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives the diff more, it takes them. Dragging the line between them resizes for that diff alone",
+    "description": "How much of the width beside the sidebar M-d's diff takes when it opens in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives the diff more, it takes it. Dragging the line between them resizes for that diff alone",
     "choices": [
       {
         "value": "50",
