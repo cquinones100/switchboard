@@ -318,7 +318,7 @@ impl Server {
         let ask = crate::mission::ask::Ask::new(
             "Pair a phone?",
             format!(
-                "{device}, signed in to Tailscale as you, wants to answer, message and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
+                "{device}, signed in to Tailscale as you, wants to answer, message, set reminders on and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
             ),
         );
         self.open(
