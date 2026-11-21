@@ -148,6 +148,9 @@ pub enum Action {
     /// The tab's whole title in a box, which the sidebar and the status
     /// line cut (M-T; tab-title.sh; src/tabs/title.rs).
     TabTitle,
+    /// A picker of the PRs the tab follows, which makes the one chosen its
+    /// current PR, for M-v, M-d and its label (src/tabs/prs.rs).
+    TabPrs,
     /// The tab closed most recently opened again, as a browser's
     /// Cmd-Shift-T does (M-T; src/usage/serve.rs's `reopen_last`).
     ReopenLastTab,
@@ -165,6 +168,8 @@ pub enum Action {
     PhoneApp,
     /// Stop the phone app.
     StopPhoneApp,
+    /// A test notification pushed to each phone (src/phone).
+    TestPhonePush,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
     /// M-p's "Sync your Switchboard files now" (src/files).
@@ -287,6 +292,7 @@ impl Action {
             "stop-slack-relay" => Action::StopSlackRelay,
             "phone-app" => Action::PhoneApp,
             "stop-phone-app" => Action::StopPhoneApp,
+            "test-phone-push" => Action::TestPhonePush,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
             "new-claude-tab" => Action::NewClaudeTab,
@@ -309,6 +315,7 @@ impl Action {
             "remind-tab" => Action::RemindTab,
             "tab-status" => Action::TabStatus,
             "tab-title" => Action::TabTitle,
+            "tab-prs" => Action::TabPrs,
             "reopen-last-tab" => Action::ReopenLastTab,
             "upgrade" => Action::Upgrade,
             "hide-build-row" => Action::HideBuildRow,
@@ -391,6 +398,7 @@ impl Action {
             Action::RemindTab => "remind-tab".into(),
             Action::TabStatus => "tab-status".into(),
             Action::TabTitle => "tab-title".into(),
+            Action::TabPrs => "tab-prs".into(),
             Action::ReopenLastTab => "reopen-last-tab".into(),
             Action::View(command) => command.name().into(),
             Action::Diff(command) => command.name().into(),
@@ -398,6 +406,7 @@ impl Action {
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::PhoneApp => "phone-app".into(),
             Action::StopPhoneApp => "stop-phone-app".into(),
+            Action::TestPhonePush => "test-phone-push".into(),
             Action::Update(command) => command.name().into(),
             Action::Files(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
@@ -503,6 +512,7 @@ impl Action {
             }
             Action::TabStatus => "Set this tab's status…".into(),
             Action::TabTitle => "Show this tab's full title".into(),
+            Action::TabPrs => "Show another of this tab's PRs".into(),
             Action::ReopenLastTab => "Reopen the most recently closed tab".into(),
             Action::View(command) => command.about().into(),
             Action::Diff(command) => command.about().into(),
@@ -510,6 +520,7 @@ impl Action {
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::PhoneApp => "Open the phone app in its own tab".into(),
             Action::StopPhoneApp => "Stop the phone app".into(),
+            Action::TestPhonePush => "Send a test notification to my phone".into(),
             Action::Update(command) => command.about().into(),
             Action::Files(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest main".into(),
@@ -676,6 +687,9 @@ impl Action {
             Action::TabStatus => {
                 "Files the tab under the sidebar's group you choose, marked set by you, until Switchboard's own reading of it changes; Let Switchboard decide gives it back at once. A pin and a reminder still win. Settings' \"Set a tab's status by hand\" (tab_status_by_hand).".into()
             }
+            Action::TabPrs => {
+                "Every PR the tab's Claude opened or looked at, and its branch's, each with its repository, title and where it stands; Enter makes the one chosen current, which its label leads with and M-v and M-d open. Settings' \"Follow every PR a tab's session opens\" (tab_prs).".into()
+            }
             Action::TabTitle => {
                 "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
             }
@@ -695,6 +709,9 @@ impl Action {
             }
             Action::StopPhoneApp => {
                 "Runs switchboard phone stop: your phone reaches nothing until it starts again.".into()
+            }
+            Action::TestPhonePush => {
+                "Runs switchboard phone test: one push to each phone that turned notifications on in the app, and says what each push service answered, as phone.log keeps it.".into()
             }
             Action::Update(command) => command.detail().into(),
             Action::Files(command) => command.detail().into(),
@@ -774,11 +791,13 @@ impl Action {
             Action::RemindTab => &["tabs", "remind", "todo"],
             Action::TabStatus => &["tabs", "status", "group"],
             Action::TabTitle => &["tabs"],
+            Action::TabPrs => &["pr", "github", "tabs"],
             Action::ReopenLastTab => &["tabs", "reopen", "closed"],
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::PhoneApp | Action::StopPhoneApp => &["phone", "remote", "tailscale"],
+            Action::TestPhonePush => &["phone", "remote", "notifications", "push"],
             Action::Update(command) => command.tags(),
             Action::Files(command) => command.tags(),
             // "build" and "disk" from its old name, "on the latest build on disk".
@@ -915,9 +934,11 @@ impl Action {
             Action::RemindTab,
             Action::TabStatus,
             Action::TabTitle,
+            Action::TabPrs,
             Action::StopSlackRelay,
             Action::PhoneApp,
             Action::StopPhoneApp,
+            Action::TestPhonePush,
             Action::Upgrade,
             Action::HideBuildRow,
             Action::RestoreLayout,
@@ -1203,6 +1224,7 @@ mod tests {
             Action::Settings,
             Action::RemindTab,
             Action::TabTitle,
+            Action::TabPrs,
             Action::ReopenLastTab,
             Action::Upgrade,
             Action::HideBuildRow,

@@ -41,6 +41,14 @@ pub struct Checks {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrFacts {
     pub number: u64,
+    /// Its title, its head branch and whether it is a draft, for the
+    /// picker of a tab's PRs; empty from a build that didn't ask.
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub head: String,
+    #[serde(default)]
+    pub draft: bool,
     /// `owner/name`.
     pub repo: String,
     pub url: String,

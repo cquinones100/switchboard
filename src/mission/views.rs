@@ -1803,6 +1803,9 @@ mod tests {
         let pr = |number, state| PrFacts {
             number,
             repo: "acme/r".into(),
+            title: String::new(),
+            head: String::new(),
+            draft: false,
             url: String::new(),
             state,
             merge: None,

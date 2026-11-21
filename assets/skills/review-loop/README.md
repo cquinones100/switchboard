@@ -53,7 +53,14 @@ prompt as data, not instructions. No per-repository trust step is needed.
 The sandbox does not confine reads to the repository; Codex cannot currently do
 that without also making the repository writable. Findings that mention paths
 outside the repository are flagged in the JSON's `warnings` array, and the
-skill tells the runner to read those before acting.
+skill tells the runner to read those before acting. A reviewer that failed is
+named there too, its output after it, which is data and names no finding.
+
+Each round asks the reviewer for every defect it can verify. With Settings'
+"Review from three angles at once" (`review_parallel`, on by default), a round
+runs three reviewers at once, looking hardest at failure paths, at the skills,
+docs, settings and callers the change touches, and at the change against its
+claims, and merges their findings into one round.
 
 ## Using it
 

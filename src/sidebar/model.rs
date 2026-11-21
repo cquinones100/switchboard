@@ -133,6 +133,25 @@ impl TabLoop {
     }
 }
 
+/// One of the PRs a tab follows, as the sidebar, its Tabs card and the
+/// picker of its PRs show it (boards 127 to 129).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrLine {
+    pub number: u64,
+    /// `owner/name`, empty when not known (its directory's origin's).
+    pub repo: String,
+    /// Whether it is in another repository than the tab's directory.
+    pub elsewhere: bool,
+    /// Its title, empty until looked up.
+    pub title: String,
+    pub mark: crate::ui::kit::Mark,
+    /// Where it stands in a few words (`tabs::prs::standing`), and in full
+    /// (`standing_long`); empty until looked up.
+    pub standing: String,
+    pub standing_long: String,
+    pub current: bool,
+}
+
 /// One tab, with all the sidebar and mission control show of it.
 #[derive(Clone, Debug)]
 pub struct TabModel {
@@ -159,6 +178,9 @@ pub struct TabModel {
     /// clone, possibly the project upstream names); `None` when only its
     /// number is known, its directory's origin's then.
     pub pr_repo: Option<String>,
+    /// Every PR it follows when there are several (`tabs::prs`), the
+    /// current one first; empty with one or none.
+    pub prs: Vec<PrLine>,
     /// The ticket its branch is for (`Server::tab_ticket`): its GitHub
     /// issue or Linear ticket.
     pub ticket: Option<crate::views::ticket::Ticket>,
@@ -241,6 +263,11 @@ pub struct TabModel {
     /// The round its review loop is on, working or between rounds; 0 with
     /// none.
     pub round: usize,
+    /// The review loop's round cap, as codex-review last set the tab's
+    /// `@tab_review_round`; 0 when it hasn't.
+    pub round_cap: usize,
+    /// Whether the review loop stopped at its cap and waits on you.
+    pub at_cap: bool,
     /// The loop skill its session runs, from when the skill was asked for.
     pub loop_skill: Option<String>,
     /// The loop's step, when it says (queue-and-clean's landing).
@@ -292,6 +319,7 @@ impl TabModel {
             own_name: None,
             pr: None,
             pr_repo: None,
+            prs: Vec::new(),
             ticket: None,
             repo: None,
             repo_dir: None,
@@ -325,6 +353,8 @@ impl TabModel {
             context: None,
             summary: None,
             round: 0,
+            round_cap: 0,
+            at_cap: false,
             loop_skill: None,
             phase: None,
             since: None,
@@ -993,6 +1023,29 @@ fn joined(parts: impl IntoIterator<Item = String>) -> String {
         .join(" · ")
 }
 
+/// The review loop's cap question's option that carries the loop on, by
+/// which the sidebar knows a wait is that question.
+pub const MORE_ROUNDS: &str = "Run 10 more rounds";
+
+/// A tab's `@tab_review_round`, `<round> <cap>` with ` cap` once the loop
+/// waits at it: its round, cap and whether it waits.
+pub fn review_round_of(value: &str) -> Option<(usize, usize, bool)> {
+    let mut words = value.split_whitespace();
+    let round = words.next()?.parse().ok()?;
+    let cap = words.next()?.parse().ok()?;
+    Some((round, cap, words.next() == Some("cap")))
+}
+
+/// The round a tab's loop is on, with its cap when codex-review said it:
+/// `round 21 of 20`.
+pub fn round_words(tab: &TabModel, round: usize) -> String {
+    if tab.round_cap > 0 {
+        format!("round {} of {}", tab.round, tab.round_cap)
+    } else {
+        format!("round {round}")
+    }
+}
+
 /// What a tab is doing, in words: `waiting on you 4m · permission: Bash git
 /// push`, `finished 2m ago`, `review loop · round 2`, with its pin, its
 /// reminder and its PR's place.
@@ -1058,7 +1111,12 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
             } else {
                 format!("waiting on you {since}")
             };
-            and(joined([waiting, opt(&tab.wait)]))
+            let at_cap = if tab.at_cap {
+                round_words(tab, tab.round)
+            } else {
+                String::new()
+            };
+            and(joined([at_cap, waiting, opt(&tab.wait)]))
         }
         TabState::Done => {
             let finished = if since.is_empty() {
@@ -1125,9 +1183,9 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
                     ),
                     "deploy" => "testing deploy".into(),
                     kind => format!(
-                        "{} · round {}",
+                        "{} · {}",
                         Badge::of_loop(kind).map_or(kind, |b| b.look().words),
-                        run.round
+                        round_words(tab, run.round)
                     ),
                 });
             }
@@ -1857,6 +1915,17 @@ pub(crate) mod tests {
         }));
         assert_eq!(state_words(&looped, &r), "review loop · round 2");
         assert_eq!(badge_state(&looped, &r), Badge::Review);
+        // codex-review's round and cap, the hands-free cap the branch's.
+        let (round, cap, waits) = review_round_of("21 20 cap").unwrap();
+        looped.round = round;
+        looped.round_cap = cap;
+        assert_eq!(state_words(&looped, &r), "review loop · round 21 of 20");
+        let mut capped = tab(7, "c", TabState::Waiting);
+        capped.round = round;
+        capped.round_cap = cap;
+        capped.at_cap = waits;
+        assert_eq!(state_words(&capped, &r), "round 21 of 20 · waiting on you");
+        assert_eq!(review_round_of("3 20"), Some((3, 20, false)));
         let mut working = tab(6, "w", TabState::Working);
         working.loop_skill = Some("queue".into());
         working.phase = Some("testing".into());

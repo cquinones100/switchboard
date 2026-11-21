@@ -22,6 +22,8 @@ use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
+use std::path::Path;
+
 use super::config;
 use crate::{net, platform, util};
 
@@ -51,23 +53,36 @@ pub struct Subscription {
     pub auth: String,
 }
 
-fn subscriptions_file() -> std::path::PathBuf {
-    config::state_dir().join("push.json")
+pub fn subscriptions() -> Vec<Subscription> {
+    subscriptions_in(&config::state_dir())
 }
 
-pub fn subscriptions() -> Vec<Subscription> {
-    util::read_text(subscriptions_file())
+fn subscriptions_in(dir: &Path) -> Vec<Subscription> {
+    util::read_text(dir.join("push.json"))
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
 }
 
 fn write_subscriptions(all: &[Subscription]) -> std::io::Result<()> {
-    util::make_dirs(config::state_dir())?;
+    write_subscriptions_in(&config::state_dir(), all)
+}
+
+fn write_subscriptions_in(dir: &Path, all: &[Subscription]) -> std::io::Result<()> {
+    util::make_dirs(dir)?;
     util::write_private(
-        subscriptions_file(),
+        dir.join("push.json"),
         serde_json::to_string_pretty(all).unwrap_or_default(),
         false,
     )
+}
+
+/// The subscriptions of the devices phone.json lists: a device taken out of
+/// it since it subscribed is sent nothing.
+pub fn listed_subscriptions() -> Vec<Subscription> {
+    subscriptions()
+        .into_iter()
+        .filter(|s| super::web::listed(&s.device))
+        .collect()
 }
 
 /// A device's subscription kept, in place of the one it had.
@@ -206,29 +221,95 @@ pub fn encrypt(
     Ok(out)
 }
 
-/// Sends `text` (and the tab it opens, `tab`) to every subscription; one
-/// the service says is gone (404, 410) is forgotten.
-pub async fn send(key: &EcdsaKeyPair, title: &str, tab: &str) {
-    let payload = serde_json::json!({"title": title, "tab": tab}).to_string();
-    let mut gone = Vec::new();
-    // A device taken out of phone.json since it subscribed is sent nothing.
-    for sub in subscriptions()
-        .into_iter()
-        .filter(|s| super::web::listed(&s.device))
-    {
-        match send_one(key, &sub, payload.as_bytes()).await {
-            Ok(status) if status == 404 || status == 410 => gone.push(sub.endpoint.clone()),
-            Ok(status) if !(200..300).contains(&status) => {
-                eprintln!("phone: a push to {} was refused ({status})", sub.device)
+/// What came of a push to one subscription.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The service took it (its status, 2xx).
+    Sent(u16),
+    /// The service refused it, with its status.
+    Refused(u16),
+    /// The service says the subscription is gone (404, 410), so it is
+    /// forgotten.
+    Gone(u16),
+    /// No answer came, or the push couldn't be made, and why.
+    Failed(String),
+}
+
+impl Outcome {
+    pub fn words(&self) -> String {
+        match self {
+            Outcome::Sent(status) => format!("sent ({status})"),
+            Outcome::Refused(status) => format!("refused ({status})"),
+            Outcome::Gone(status) => {
+                format!("gone ({status}), so its subscription is forgotten")
             }
-            Ok(_) => {}
-            Err(e) => eprintln!("phone: a push to {}: {e:#}", sub.device),
+            Outcome::Failed(why) => format!("failed: {why}"),
         }
     }
+}
+
+/// Sends `title` (and the tab it opens, `tab`, empty for none) to every
+/// listed subscription, logs each outcome and forgets the gone; gives each
+/// device with what came of its push.
+pub async fn send(key: &EcdsaKeyPair, title: &str, tab: &str) -> Vec<(String, Outcome)> {
+    let payload = serde_json::json!({"title": title, "tab": tab}).to_string();
+    let sent = deliver(key, listed_subscriptions(), payload.as_bytes()).await;
+    record(&config::state_dir(), &sent);
+    for (sub, outcome) in &sent {
+        eprintln!("phone: a push to {}: {}", sub.device, outcome.words());
+    }
+    sent.into_iter().map(|(s, o)| (s.device, o)).collect()
+}
+
+/// `payload` pushed to each of `subs`. A panic under a push (as macOS's
+/// certificate check once gave) is caught and said as its failure, rather
+/// than ending the task with nothing said.
+async fn deliver(
+    key: &EcdsaKeyPair,
+    subs: Vec<Subscription>,
+    payload: &[u8],
+) -> Vec<(Subscription, Outcome)> {
+    use futures_util::FutureExt;
+    let mut out = Vec::new();
+    for sub in subs {
+        let pushed = std::panic::AssertUnwindSafe(send_one(key, &sub, payload))
+            .catch_unwind()
+            .await;
+        let outcome = match pushed {
+            Ok(Ok(status @ (404 | 410))) => Outcome::Gone(status),
+            Ok(Ok(status)) if (200..300).contains(&status) => Outcome::Sent(status),
+            Ok(Ok(status)) => Outcome::Refused(status),
+            Ok(Err(e)) => Outcome::Failed(format!("{e:#}")),
+            Err(panic) => Outcome::Failed(format!("it panicked: {}", panic_words(&*panic))),
+        };
+        out.push((sub, outcome));
+    }
+    out
+}
+
+fn panic_words(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "no message".into())
+}
+
+/// Each outcome written to the log in `dir`, and the gone subscriptions
+/// taken out of its push.json.
+fn record(dir: &Path, sent: &[(Subscription, Outcome)]) {
+    for (sub, outcome) in sent {
+        super::log::line_in(dir, &format!("push to {}: {}", sub.device, outcome.words()));
+    }
+    let gone: Vec<&str> = sent
+        .iter()
+        .filter(|(_, o)| matches!(o, Outcome::Gone(_)))
+        .map(|(s, _)| s.endpoint.as_str())
+        .collect();
     if !gone.is_empty() {
-        let mut all = subscriptions();
-        all.retain(|s| !gone.contains(&s.endpoint));
-        let _ = write_subscriptions(&all);
+        let mut all = subscriptions_in(dir);
+        all.retain(|s| !gone.contains(&s.endpoint.as_str()));
+        let _ = write_subscriptions_in(dir, &all);
     }
 }
 
@@ -311,5 +392,88 @@ mod tests {
         };
         let refused = subscribe(sub("https://example.com/x")).unwrap_err();
         assert!(refused.to_string().contains("isn't a push service"));
+    }
+
+    /// A browser's subscription to `endpoint`, with real keys.
+    fn browser(device: &str, endpoint: String) -> Subscription {
+        let key = PrivateKey::generate(&ECDH_P256).unwrap();
+        let public = key.compute_public_key().unwrap();
+        Subscription {
+            device: device.into(),
+            endpoint,
+            p256dh: URL_SAFE_NO_PAD.encode(public.as_ref()),
+            auth: URL_SAFE_NO_PAD.encode([7u8; 16]),
+        }
+    }
+
+    #[test]
+    fn a_push_is_sent_logged_and_a_gone_subscription_forgotten() {
+        use crate::demo::services::{Fake, Reply, Service};
+        let service = Fake::start(Service::Web, |req| match req.path() {
+            "/here" => Some(Reply::bytes(201, "text/plain", "")),
+            "/gone" => Some(Reply::bytes(410, "text/plain", "")),
+            "/no" => Some(Reply::bytes(403, "text/plain", "bad key")),
+            _ => None,
+        });
+        let dir = std::env::temp_dir().join(format!("sb-phone-push-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let subs = vec![
+            browser("phone", format!("{}/here", service.url)),
+            browser("old-phone", format!("{}/gone", service.url)),
+            browser("tablet", format!("{}/no", service.url)),
+        ];
+        write_subscriptions_in(&dir, &subs).unwrap();
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let key =
+            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref()).unwrap();
+
+        let sent = util::block_on(deliver(&key, subs.clone(), b"{}"));
+        record(&dir, &sent);
+
+        let outcomes: Vec<(&str, &Outcome)> =
+            sent.iter().map(|(s, o)| (s.device.as_str(), o)).collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                ("phone", &Outcome::Sent(201)),
+                ("old-phone", &Outcome::Gone(410)),
+                ("tablet", &Outcome::Refused(403)),
+            ]
+        );
+        let seen = service.seen();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[0].header("content-encoding"), Some("aes128gcm"));
+        assert!(
+            seen[0]
+                .header("authorization")
+                .is_some_and(|a| a.starts_with("vapid t=")),
+            "signed with the key"
+        );
+        let log = std::fs::read_to_string(dir.join("phone.log")).unwrap();
+        assert!(log.contains("push to phone: sent (201)"), "{log}");
+        assert!(log.contains("push to old-phone: gone (410)"), "{log}");
+        assert!(log.contains("push to tablet: refused (403)"), "{log}");
+        let kept: Vec<String> = subscriptions_in(&dir)
+            .into_iter()
+            .map(|s| s.device)
+            .collect();
+        assert_eq!(kept, ["phone", "tablet"], "the gone one is forgotten");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_push_that_reaches_nothing_says_why() {
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let key =
+            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref()).unwrap();
+        let mut sub = browser("phone", "http://127.0.0.1:9/x".into());
+        sub.p256dh = "not a key".into();
+        let sent = util::block_on(deliver(&key, vec![sub], b"{}"));
+        assert!(
+            matches!(&sent[0].1, Outcome::Failed(why) if why.contains("base64")),
+            "{sent:?}"
+        );
     }
 }

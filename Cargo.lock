@@ -2981,6 +2981,7 @@ dependencies = [
  "notify",
  "nucleo-matcher",
  "portable-pty",
+ "proc-macro2",
  "pulldown-cmark",
  "ratatui",
  "regex",
@@ -2997,6 +2998,7 @@ dependencies = [
  "switchboard-notes",
  "switchboard-plugin-api",
  "switchboard-ui",
+ "syn 2.0.119",
  "syntect",
  "tar",
  "tiny-skia",
@@ -3009,6 +3011,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "url",
+ "webpki-roots 1.0.11",
  "zbus",
 ]
 

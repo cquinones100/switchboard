@@ -265,6 +265,13 @@ pub async fn request_json(
 /// A POST of raw bytes (a Web Push message, already encrypted), its answer
 /// read as `request_json` reads one. Counted in the request audit as it is
 /// sent, and failing only when no answer comes.
+///
+/// Verified against Mozilla's roots, compiled in, rather than the
+/// platform's verifier: under `switchboard phone run` macOS's
+/// (security-framework, through rustls-platform-verifier) was seen to give
+/// no SSL policy and panic on every push, and the push services'
+/// certificates chain to public roots, so nothing of yours is needed to
+/// trust them.
 #[cfg(feature = "net")]
 pub async fn post_bytes(
     url: &str,
@@ -272,7 +279,7 @@ pub async fn post_bytes(
     body: Vec<u8>,
     audit: Audit<'_>,
 ) -> Result<Response> {
-    let mut request = client()?.post(url).body(body);
+    let mut request = fixed_roots_client()?.post(url).body(body);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
@@ -486,7 +493,7 @@ pub fn parse_body(bytes: &[u8]) -> Value {
 #[cfg(feature = "net")]
 mod shared {
     use std::collections::HashMap;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::{Arc, LazyLock, Mutex};
 
     use anyhow::{Result, anyhow};
     use tokio::runtime::{Handle, Id};
@@ -497,34 +504,65 @@ mod shared {
     // short runtimes come and go, so the map is emptied once it holds more
     // than a handful; the long-running server's own runtime just builds its
     // client again then, which costs a new connection, no more.
-    static CLIENTS: LazyLock<Mutex<HashMap<Id, reqwest::Client>>> =
+    static CLIENTS: LazyLock<Mutex<HashMap<(Id, bool), reqwest::Client>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     const KEEP: usize = 8;
 
+    /// The client verifying with the platform's own trust (the Keychain's
+    /// roots and your own on a Mac).
     pub fn client() -> Result<reqwest::Client> {
+        client_of(false)
+    }
+
+    /// The client verifying against Mozilla's roots alone, compiled in:
+    /// a push's, as `post_bytes` says why.
+    pub fn fixed_roots_client() -> Result<reqwest::Client> {
+        client_of(true)
+    }
+
+    fn client_of(fixed_roots: bool) -> Result<reqwest::Client> {
         let runtime = Handle::try_current()
             .map_err(|_| anyhow!("a request needs an async runtime to run on"))?
             .id();
         let mut clients = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(client) = clients.get(&runtime) {
+        if let Some(client) = clients.get(&(runtime, fixed_roots)) {
             return Ok(client.clone());
         }
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT);
+        if fixed_roots {
+            builder = builder.tls_backend_preconfigured(mozilla_roots()?);
+        }
+        let client = builder
             .build()
             .map_err(|e| anyhow!("couldn't set up HTTPS: {e}"))?;
         if clients.len() >= KEEP {
             clients.clear();
         }
-        clients.insert(runtime, client.clone());
+        clients.insert((runtime, fixed_roots), client.clone());
         Ok(client)
+    }
+
+    fn mozilla_roots() -> Result<tokio_rustls::rustls::ClientConfig> {
+        use tokio_rustls::rustls::{ClientConfig, RootCertStore, crypto::aws_lc_rs};
+        let roots = RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let mut config =
+            ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .map_err(|e| anyhow!("couldn't set up HTTPS: {e}"))?
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        Ok(config)
     }
 }
 
 #[cfg(feature = "net")]
-use shared::client;
+use shared::{client, fixed_roots_client};
 
 #[cfg(test)]
 mod tests {

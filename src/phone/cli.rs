@@ -1,4 +1,4 @@
-//! `switchboard phone [start|stop|status|run|pair <code>|devices|revoke <device>]`.
+//! `switchboard phone [start|stop|status|test|run|pair <code>|devices|revoke <device>]`.
 //!
 //! ```text
 //! phone                  open the phone app in a tab of its own, or go to
@@ -6,6 +6,8 @@
 //!                        (the setting off, phone.json, Tailscale) is said
 //!                        first
 //! phone stop             stop it
+//! phone test             send a test notification to each phone that
+//!                        turned notifications on, and say what came back
 //! phone status           whether it runs, and where
 //! phone run              the app itself, in the foreground; `start` runs
 //!                        this in the new tab
@@ -15,7 +17,7 @@
 //! phone revoke <device>  a phone's pairing taken away
 //! ```
 //!
-//! `start` and `stop` take `--say`, for the palette: what goes wrong goes
+//! `start`, `stop` and `test` take `--say`, for the palette: what goes wrong goes
 //! in a box on the screen. Its tab is marked `@phone_app`.
 
 use std::process::ExitCode;
@@ -116,18 +118,18 @@ fn run() -> ExitCode {
     let (config, status) = match ready() {
         Ok(ready) => ready,
         Err(why) => {
-            eprintln!("switchboard phone: {why}");
+            super::log::line(&why);
             return ExitCode::from(1);
         }
     };
     if let Some(pid) = running() {
-        eprintln!("switchboard phone: already running (process {pid})");
+        super::log::line(&format!("already running (process {pid})"));
         return ExitCode::from(1);
     }
     if let Err(e) = util::make_dirs(config::state_dir())
         .and_then(|_| util::write_private(lock_file(), std::process::id().to_string(), false))
     {
-        eprintln!("switchboard phone: {e}");
+        super::log::line(&format!("couldn't start: {e}"));
         return ExitCode::from(1);
     }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -136,7 +138,7 @@ fn run() -> ExitCode {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("switchboard phone: {e}");
+            super::log::line(&format!("couldn't start: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -155,21 +157,52 @@ fn run() -> ExitCode {
             served = super::web::serve(status, config) => match served {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("switchboard phone: {e:#}");
+                    super::log::line(&format!("stopped: {e:#}"));
                     ExitCode::from(1)
                 }
             },
             _ = stopped => {
-                eprintln!("switchboard phone: stopped");
+                super::log::line("stopped");
                 ExitCode::SUCCESS
             }
-            _ = tokio::signal::ctrl_c() => ExitCode::SUCCESS,
+            _ = tokio::signal::ctrl_c() => {
+                super::log::line("stopped");
+                ExitCode::SUCCESS
+            }
         }
     });
     let _ = std::fs::remove_file(lock_file());
     // The listeners' tasks and the server's stream end with the process.
     runtime.shutdown_background();
     code
+}
+
+/// A test notification pushed to each listed subscription, from this
+/// process (the key is the Keychain's, so `phone run` needn't be running):
+/// what came of each, logged in phone.log as every push is.
+#[cfg(feature = "net")]
+fn test_push() -> Result<String, String> {
+    use super::push::{self, Outcome};
+    if push::listed_subscriptions().is_empty() {
+        return Err("no phone has turned on notifications: open the app from its home screen icon and allow them".into());
+    }
+    let key = push::key().map_err(|e| format!("no push key: {e:#}"))?;
+    let sent = util::block_on(push::send(&key, "Test notification from Switchboard", ""));
+    let words: Vec<String> = sent
+        .iter()
+        .map(|(device, outcome)| format!("{device}: {}", outcome.words()))
+        .collect();
+    let words = format!("Test notification: {}.", words.join("; "));
+    if sent.iter().any(|(_, o)| matches!(o, Outcome::Sent(_))) {
+        Ok(words)
+    } else {
+        Err(words)
+    }
+}
+
+#[cfg(not(feature = "net"))]
+fn test_push() -> Result<String, String> {
+    Err("this build has no network support".into())
 }
 
 #[cfg(not(feature = "net"))]
@@ -208,6 +241,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     match args.first().map(String::as_str).unwrap_or("start") {
         "start" => outcome(start()),
         "stop" => outcome(stop()),
+        "test" => outcome(test_push()),
         "status" => {
             match running() {
                 Some(pid) => println!("The phone app is running (process {pid})."),
@@ -246,12 +280,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
         },
         "-h" | "--help" | "help" => {
             println!(
-                "Usage: switchboard phone [start|stop|status|run|pair <code>|devices|revoke <device>]"
+                "Usage: switchboard phone [start|stop|status|test|run|pair <code>|devices|revoke <device>]"
             );
             ExitCode::SUCCESS
         }
         other => outcome(Err(format!(
-            "unknown command \"{other}\"; use start, stop, status, run, pair, devices or revoke"
+            "unknown command \"{other}\"; use start, stop, status, test, run, pair, devices or revoke"
         ))),
     }
 }

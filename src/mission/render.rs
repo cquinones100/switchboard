@@ -858,6 +858,86 @@ fn card_foot(
     line
 }
 
+/// A tab's name on its card: with several PRs, the current one's number
+/// before it (board 128).
+fn card_name(tab: &TabModel) -> String {
+    match tab.prs.first().filter(|p| p.current) {
+        Some(current) => format!("#{} {}", current.number, tab.name),
+        None => tab.name.clone(),
+    }
+}
+
+/// The PRs a card lists (board 128): a blank line, their label with their
+/// count, then a row each, the current one first and marked `›`, its
+/// repository when not the tab's, where it stands at the right in its
+/// mark's tone. None with one PR or none.
+fn pr_lines(tab: &TabModel, inner: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    if tab.prs.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![Vec::new()];
+    let count = tab.prs.len().to_string();
+    let mut label = card_label("PRs", Tone::Dim, theme);
+    let used = spans_width(&label);
+    label.push(Span::raw(
+        " ".repeat(inner.saturating_sub(used + width(&count))),
+    ));
+    label.push(Span::styled(count, Tone::Dim.style(theme)));
+    lines.push(label);
+    for pr in &tab.prs {
+        let (glyph, tone) = pr.mark.look();
+        let right = if pr.standing.is_empty() {
+            String::new()
+        } else {
+            format!("{glyph} {}", pr.standing)
+        };
+        let mut row = vec![
+            Span::styled(if pr.current { "›" } else { " " }, Tone::Needs.bold(theme)),
+            Span::styled(
+                format!(" #{}", pr.number),
+                if pr.current {
+                    Tone::Accent.bold(theme)
+                } else {
+                    Tone::Accent.style(theme)
+                },
+            ),
+        ];
+        if pr.elsewhere {
+            let name = pr.repo.rsplit('/').next().unwrap_or(&pr.repo).to_string();
+            row.push(Span::styled(format!(" {name}"), Tone::Dim.style(theme)));
+        }
+        let room = inner.saturating_sub(width(&right) + 1);
+        let mut row = fit(row, room, Style::new());
+        row.push(Span::raw(" "));
+        row.push(Span::styled(right, tone.style(theme)));
+        lines.push(row);
+    }
+    lines
+}
+
+/// A card's foot for a tab following several PRs: its branch, and how many
+/// PRs in place of its one PR's checks (board 128).
+fn card_foot_prs(
+    tab: &TabModel,
+    branch: Option<&str>,
+    inner: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let count = format!("{} PRs", tab.prs.len());
+    let branch = branch.unwrap_or_default();
+    let mut line = Vec::new();
+    if !branch.is_empty() {
+        let room = inner.saturating_sub(width(&count) + 2).max(1);
+        line.push(Span::styled(
+            text::cut(branch, room),
+            Tone::Dim.style(theme),
+        ));
+        line.push(Span::raw("  "));
+    }
+    line.push(Span::styled(count, Tone::Dim.style(theme)));
+    line
+}
+
 /// A section's name inside a card, in capitals and bold in its tone.
 fn card_label(text: &str, tone: Tone, theme: &Theme) -> Vec<Span<'static>> {
     // The kit's section label, less the space it starts with at a
@@ -1313,7 +1393,7 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
         }
         if tab.round > 0 {
             chips.extend(kit::chip(
-                &format!("round {}", tab.round),
+                &crate::sidebar::model::round_words(tab, tab.round),
                 Tone::Landing,
                 false,
                 theme,
@@ -1444,7 +1524,10 @@ fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission
         Span::raw(" "),
         Span::styled(number, bold(color)),
         Span::raw(" "),
-        Span::styled(text::cut(&tab.name, name_room.max(1)), bold(theme.bright)),
+        Span::styled(
+            text::cut(&card_name(tab), name_room.max(1)),
+            bold(theme.bright),
+        ),
     ];
     if let Some(chip) = by_you {
         title.push(Span::raw(" "));
@@ -1470,12 +1553,29 @@ fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission
     };
     let most = rows + usize::from(inside.tight);
     let branch = look.screen.and_then(|s| s.branch.as_deref());
+    // A tab following several PRs lists them under what it is doing, as
+    // much of that kept as leaves them room (board 128).
+    let prs = if look.shows_screen {
+        Vec::new()
+    } else {
+        pr_lines(tab, inner, theme)
+    };
+    let mut lines: Vec<Vec<Span<'static>>> = inside
+        .lines
+        .into_iter()
+        .take(most.saturating_sub(prs.len()))
+        .collect();
+    lines.extend(prs);
+    let mut foot = card_foot(tab, branch, inner, r.now_secs(), theme);
+    if !tab.prs.is_empty() {
+        foot = card_foot_prs(tab, branch, inner, theme);
+    }
     Card {
         title,
         right,
-        lines: inside.lines.into_iter().take(most).collect(),
+        lines: lines.into_iter().take(most).collect(),
         tight: inside.tight,
-        foot: card_foot(tab, branch, inner, r.now_secs(), theme),
+        foot,
         edge,
         w: look.w,
     }
@@ -3705,14 +3805,22 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
                     .map(|ms| ms / 1000),
                 now_ms / 1000,
             );
+            let at_cap = r["at_cap"].as_bool() == Some(true);
             StageCell {
-                stage: Stage::Running,
-                label: format!("round {}", number(r, "round").unwrap_or(1)),
-                note: [words(r, "reviewer"), ago]
-                    .into_iter()
-                    .filter(|w| !w.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                stage: if at_cap { Stage::Asks } else { Stage::Running },
+                label: round_of_cap(r),
+                note: [
+                    if at_cap {
+                        "waiting on you".to_string()
+                    } else {
+                        words(r, "reviewer")
+                    },
+                    ago,
+                ]
+                .into_iter()
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · "),
             }
         }
         _ => done("clean"),
@@ -4005,10 +4113,23 @@ fn then_words(landing: &serde_json::Value) -> String {
     }
 }
 
+/// A review round with its cap, `round 21 of 20`, as codex-review recorded
+/// it (`round 3` from a build that recorded no cap).
+fn round_of_cap(review: &serde_json::Value) -> String {
+    let round = review["round"].as_u64().unwrap_or(1);
+    match review["cap"].as_u64() {
+        Some(cap) => format!("round {round} of {cap}"),
+        None => format!("round {round}"),
+    }
+}
+
 /// The chosen worktree's last review round, in a line: its round, its
 /// reviewer, how long ago, and codex-review's summary.
 fn review_line(review: &serde_json::Value, now_ms: i64) -> String {
-    let mut parts = vec![format!("round {}", review["round"].as_u64().unwrap_or(1))];
+    let mut parts = vec![round_of_cap(review)];
+    if review["at_cap"].as_bool() == Some(true) {
+        parts.push("waiting on you".to_string());
+    }
     if let Some(r) = review["reviewer"].as_str().filter(|r| !r.is_empty()) {
         parts.push(r.to_string());
     }

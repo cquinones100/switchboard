@@ -156,10 +156,11 @@ pub fn cells(landing: &LandingAt, waiting: bool) -> String {
     } else if clean >= 2 {
         format!("✓ review, {clean} rounds clean")
     } else if record["review"].is_object() {
-        format!(
-            "🔵 review, round {}",
-            number(&record["review"], "round").unwrap_or(1)
-        )
+        let round = number(&record["review"], "round").unwrap_or(1);
+        match number(&record["review"], "cap") {
+            Some(cap) => format!("🔵 review, round {round} of {cap}"),
+            None => format!("🔵 review, round {round}"),
+        }
     } else {
         "✓ review".into()
     };
@@ -321,6 +322,9 @@ mod tests {
         let pr = PrFacts {
             number: 57,
             repo: "o/r".into(),
+            title: String::new(),
+            head: String::new(),
+            draft: false,
             url: String::new(),
             state: PrState::Open,
             merge: None,

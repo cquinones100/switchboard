@@ -107,6 +107,10 @@ impl Server {
             return Reply::ok("");
         };
         let mut hook = super::Hook::read(event, &payload);
+        // The PRs a call opened or looked at, which the tab then follows.
+        if hook.event == "PostToolUse" {
+            self.follow_tab_prs(tab, super::prs::opened(&payload));
+        }
         // Which hooks came, in what order and for which call, can't be read
         // back from anything else once a tab shows the wrong state.
         if settings::cached("hook_log") == Some(Value::Bool(true)) {

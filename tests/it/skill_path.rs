@@ -772,7 +772,7 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
         assert!(report.contains(said), "{said}");
     }
     assert!(
-        regex::Regex::new(r"cap ended the loop with findings still open.*hands-free tab, ask it with `AskUserQuestion` headed `\[always ask\]`")
+        regex::Regex::new(r"cap ended the loop with findings still open.*in every tab, with `AskUserQuestion` headed `\[always ask\]`, so hands-free mode")
             .unwrap()
             .is_match(report),
         "{report}"
@@ -880,7 +880,13 @@ fn review_pr_runs_none_of_the_prs_code_outside_the_sealed_try() {
 #[test]
 fn only_switchboard_s_own_project_skill_runs_leak_check() {
     let shipped = skills();
-    for name in ["queue-and-clean", "review-loop", "shape", "diff-artifact"] {
+    for name in [
+        "queue-and-clean",
+        "review-loop",
+        "shape",
+        "diff-artifact",
+        "ci-loop",
+    ] {
         let (_, text) = shipped.iter().find(|(n, _)| n == name).unwrap();
         assert!(
             !text.contains("switchboard leak-check"),
@@ -1107,7 +1113,8 @@ fn diff_artifact_tells_no_story_of_its_own_and_publishes_only_after_a_yes() {
 
 // main requires a PR's branch to be up to date, and auto-merge waits on one
 // that is behind without updating it, so both of queue-and-clean's waits end
-// on `BEHIND` (after conflicts) and the skill merges the base in.
+// on `BEHIND` (after conflicts) and the skill rebases onto the base, as
+// /resolve-conflicts does.
 #[test]
 fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
     let all = skills();
@@ -1124,7 +1131,7 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
     assert!(watch.contains("mergeStateStatus"), "{watch}");
     let conflicts = watch.find("echo conflicts").unwrap();
     let behind = watch.find("echo behind").expect("behind ends the watch");
-    assert!(conflicts < behind, "conflicts still go to Fixing");
+    assert!(conflicts < behind, "conflicts are read before behind");
     let wait = queue
         .split("### Waiting until the PR is ready")
         .nth(1)
@@ -1142,12 +1149,75 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
         .split("## Bringing it up to date")
         .nth(1)
         .expect("the section behind goes to");
+    let section = section.split("\n## ").next().unwrap();
     assert!(
-        section.contains("git merge --no-edit origin/<baseRefName>")
-            && section.contains("plain `git push`")
-            && !section.contains("rebase "),
+        section.contains("`switchboard skill-path resolve-conflicts`")
+            && section.contains("`[always ask]`")
+            && !section.contains("git merge"),
         "{section}"
     );
+    for exit in ["- `behind`: ", "- `conflicts`: "] {
+        for line in queue.lines().filter(|l| l.starts_with(exit)) {
+            assert!(line.contains("\"Bringing it up to date\""), "{line}");
+        }
+    }
+}
+
+// A branch behind its base or in conflict with it is rebased and pushed with a
+// lease by /resolve-conflicts, read through skill-path, never merged into.
+#[test]
+fn ci_loop_hands_a_branch_behind_or_in_conflict_to_resolve_conflicts() {
+    let all = skills();
+    let ci = &all.iter().find(|(name, _)| name == "ci-loop").unwrap().1;
+    let part = ci
+        .split("**Merge conflicts, or a branch that has to be up to date.**")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("the paragraph on conflicts");
+    assert!(
+        part.contains("`switchboard skill-path resolve-conflicts`")
+            && part.contains("`[always ask]`")
+            && !part.contains("git merge"),
+        "{part}"
+    );
+}
+
+// The review loop's cap question is asked in every tab, with its options
+// and a recommendation, and queue-and-clean waits on it rather than running
+// another loop.
+#[test]
+fn the_review_loop_s_cap_question_has_its_options_and_queue_and_clean_waits_on_it() {
+    let all = skills();
+    let text = |name: &str| {
+        all.iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.clone())
+            .unwrap()
+    };
+    let review = text("review-loop");
+    let report = review
+        .split("## Final report\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the final report");
+    for said in [
+        "ask the cap question before the push question, in every tab, with `AskUserQuestion` headed `[always ask]`",
+        "- **Run 10 more rounds**: run `switchboard codex-review --round more`",
+        "- **Land as it is**: offered only when queue-and-clean runs this loop and its landing is a PR",
+        "- **Stop here**",
+        "with a finding at `high` or above still open, **Run 10 more rounds**",
+        "\"No finding above medium is open; the rest are listed above\"",
+    ] {
+        assert!(report.contains(said), "{said}");
+    }
+    assert!(review.contains("the cap counts the branch's rounds across every loop"));
+    let queue = text("queue-and-clean");
+    for said in [
+        "wait on that answer, never starting another loop to get past the cap",
+        "**Land as it is**, offered only for a PR landing",
+    ] {
+        assert!(queue.contains(said), "{said}");
+    }
 }
 
 #[test]

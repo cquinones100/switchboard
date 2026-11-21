@@ -93,6 +93,9 @@ pub struct TabInfo {
     /// What its PR is asked for by, when it leads to one: the first GitHub
     /// has an answer for is its PR (origin's before upstream's).
     pub keys: Vec<PrKey>,
+    /// Every PR it follows (`tabs::prs`) whose repository is known, its
+    /// current one's among them, each asked about with the rest.
+    pub listed: Vec<PrKey>,
     /// Where it works, for the landing queue: its directory, then its panes'
     /// (Notes, which M-e may have put beside it and focused, left out).
     pub dirs: Vec<PathBuf>,
@@ -122,6 +125,7 @@ impl Default for TabInfo {
             repo: None,
             upstream: None,
             keys: Vec::new(),
+            listed: Vec::new(),
             dirs: Vec::new(),
             panes: Vec::new(),
             sessions: Vec::new(),

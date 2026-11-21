@@ -11,7 +11,7 @@ This is a project skill of Switchboard's repository (`.claude/skills/`), for wor
 
 ## When
 
-- **Commits**: before a branch's first push (queue-and-clean's **Open a PR**, or any push that opens a PR), and before each commit pushed to a branch whose PR is open (a follow-up, a fix for a failing check), since the merge queue lands it as soon as CI passes.
+- **Commits**: before a branch's first push (queue-and-clean's **Open a PR**, or any push that opens a PR), and before each commit pushed to a branch whose PR is open (a follow-up, a fix for a failing check, a rebase that resolved conflicts, on `origin/<base>..HEAD`), since the merge queue lands it as soon as CI passes.
 - **Text**: before a PR is opened (its title and body) and before each edit of them (review-loop's step updating the PR body), before an issue is filed (shape's GitHub issue, its title and body) or edited (review-loop's ticket mode saving an issue), and before a comment, a review or its comments, or a release's notes is posted.
 - **A page**: before diff-artifact publishes, on the branch's commits (`<merge-base>..HEAD` against its base) and on the page's words, which hold the hunks and the story.
 

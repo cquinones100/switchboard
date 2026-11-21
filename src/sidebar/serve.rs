@@ -28,6 +28,7 @@ use super::walk::{Next, Place, Stop, Why};
 use super::{Drawn, PaneRead, SidebarEvent, claude, config, notices, text};
 use crate::agent::State;
 use crate::facts::{Merge, PrState};
+use crate::mission::TabMenuFrom;
 use crate::mux::compose::colors;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::keys::Action;
@@ -59,9 +60,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     ("^d ^u", "half a screen down, up"),
     (
-        "↵ l",
-        "go to the tab; on a heading, ↵ folds or unfolds it, l unfolds it",
+        "↵",
+        "its menu, go to the tab chosen; on a heading, fold or unfold it",
     ),
+    ("l →", "go to the tab; on a heading, unfold it"),
     ("h esc q ^c", "back to your pane"),
     ("1-9", "go to that tab"),
     ("/", "find a tab by title (↵ go, esc clear)"),
@@ -70,7 +72,10 @@ pub const KEYS: &[(&str, &str)] = &[
         "next, last tab (with tab_focus off: mission control)",
     ),
     ("M-space", "mission control"),
-    ("space", "peek at it; on a heading, fold or unfold it"),
+    (
+        "space",
+        "its menu, peek chosen; on a heading, fold or unfold it",
+    ),
     ("m ⇧F10", "its menu, as a right click opens"),
     ("a", "answer it, or send it a message"),
     (
@@ -813,6 +818,7 @@ impl Server {
         // A working tab's loop counts only for its round, which its card
         // shows.
         let round = work.loop_run.as_ref().map_or(0, |r| r.round);
+        let reviewing = work.loop_run.as_ref().is_some_and(|r| r.kind == "review");
         if base == TabState::Working {
             work = claude::Work {
                 api_error: work.api_error,
@@ -904,6 +910,24 @@ impl Server {
         t.background = work.count;
         t.monitors = work.monitors.clone();
         t.round = round;
+        // The review loop's round and cap as codex-review counts them (the
+        // hands-free cap across the branch's loops), over the count of its
+        // runs, while it runs or asks its cap question: once that is
+        // answered, a later wait in the tab is no longer the cap's.
+        let asks_cap = base == TabState::Waiting
+            && agent.and_then(|a| a.ask.as_ref()).is_some_and(|ask| {
+                ask.options
+                    .iter()
+                    .any(|o| o.starts_with(model::MORE_ROUNDS))
+            });
+        if let Some((at, cap, waits)) =
+            opt("@tab_review_round").and_then(|v| model::review_round_of(&v))
+            && (reviewing || (waits && asks_cap))
+        {
+            t.round = at;
+            t.round_cap = cap;
+            t.at_cap = waits && asks_cap;
+        }
         t.tab_loop = work
             .loop_run
             .clone()
@@ -952,7 +976,8 @@ impl Server {
             .map(str::to_string);
         // The PR its label shows, else the one GitHub says its branch has.
         t.pr = pr;
-        t.pr_repo = self.tab_pr_repo(id).map(ToString::to_string);
+        t.pr_repo = self.tab_pr_repo(id).map(|r| r.to_string());
+        t.prs = self.tab_pr_lines(id, t.repo.as_deref());
         t.ticket = self.tab_ticket(id).cloned();
         // What GitHub and the landing queue say of it, as prs.js's mergeOf
         // and landing.js's landingOf gave it; none of GitHub's with the
@@ -1488,6 +1513,39 @@ impl Server {
         self.dirty_session(session);
     }
 
+    /// Moving right out of the sidebar: to the tab's pane along its left
+    /// edge, as moving right from beyond the window's left would, the one
+    /// last used among several there, else the top one.
+    fn sidebar_leave_right(&mut self, session: &str) {
+        let Some(s) = self.session(session) else {
+            return;
+        };
+        let target = self.tabs.get(&s.current).and_then(|tab| {
+            if tab.zoomed {
+                return None;
+            }
+            let edge = tab
+                .layout
+                .at_edge(s.spread_for(tab), crate::mux::Direction::Left);
+            if edge.contains(&tab.active) {
+                return Some(tab.active);
+            }
+            // The one that gave up the keys last; the top one of equals.
+            let left_at = |p: &PaneId| self.panes.get(p).and_then(|s| s.left_at);
+            edge.iter().copied().reduce(|best, p| {
+                if left_at(&p) > left_at(&best) {
+                    p
+                } else {
+                    best
+                }
+            })
+        });
+        self.sidebar_leave(session);
+        if let Some(pane) = target {
+            self.focus_pane(pane);
+        }
+    }
+
     /// A pane of this tab took the focus: its session's sidebar gives it up.
     pub fn sidebar_leave_tab(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
@@ -1564,7 +1622,7 @@ impl Server {
             return (false, false);
         }
         if *action == Action::ContextMenu && !self.mission_open(client) {
-            self.sidebar_menu_key(client, &session);
+            self.sidebar_menu_key(client, &session, TabMenuFrom::SidebarPeek);
             return (true, true);
         }
         // M-f and the reply copy act on the tab in front, which on a folded
@@ -1602,7 +1660,7 @@ impl Server {
         match action {
             Action::SelectPane(dir) => {
                 if *dir == crate::mux::Direction::Right {
-                    self.sidebar_leave(&session);
+                    self.sidebar_leave_right(&session);
                 }
                 (true, true)
             }
@@ -2061,6 +2119,15 @@ impl Server {
             KeyCode::Char('d' | 'u') if ctrl => {
                 self.sidebar_half_page(client, session, k, raw, &order, on_notice.is_some())
             }
+            // Enter and Space open the row's menu, as in mission control,
+            // with what each did alone chosen as it opens: going to the tab
+            // for Enter, peeking at it for Space.
+            KeyCode::Enter if settings::is_on("sidebar_enter_menu") => {
+                self.sidebar_menu_key(client, session, TabMenuFrom::SidebarGo)
+            }
+            KeyCode::Char(' ') if none && settings::is_on("sidebar_enter_menu") => {
+                self.sidebar_menu_key(client, session, TabMenuFrom::SidebarPeek)
+            }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
                 if none || k.code == KeyCode::Enter =>
             {
@@ -2146,7 +2213,9 @@ impl Server {
                 }
             }
             // m: the menu a right click on the cursor's row opens.
-            KeyCode::Char('m') if none => self.sidebar_menu_key(client, session),
+            KeyCode::Char('m') if none => {
+                self.sidebar_menu_key(client, session, TabMenuFrom::SidebarPeek)
+            }
             // Its Claude answered from here, in mission control's box, as
             // the sidebar's `a` answered the chosen tab in a popup.
             KeyCode::Char('a') if none => {

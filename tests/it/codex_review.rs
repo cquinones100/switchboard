@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 use common::stand_in::{self, Claude, sh_quote};
-use common::{BIN, TempDir};
+use common::{BIN, TempDir, TestServer};
 
 fn env(cmd: &mut Command, home: &Path) {
     cmd.env("HOME", home)
@@ -139,7 +139,9 @@ fn on_main_with_no_pr_it_reviews_the_commits_not_yet_on_origin() {
     let run = review(home, &work, &["--dry-run", "--reviewer", "claude"]);
     assert!(run.status.success(), "{}", text(&run.stderr));
     let out = text(&run.stdout);
-    assert!(out.starts_with("# claude -p --output-format json --json-schema {"));
+    assert!(out.starts_with(
+        "# Reviewer 1 of 3: failure paths\n# claude -p --output-format json --json-schema {"
+    ));
     assert!(out.contains("Not pushed yet"));
     assert!(!out.contains("Pushed already"));
     assert!(out.contains("There is no pull request for this branch yet"));
@@ -466,7 +468,9 @@ fn the_reviewer_gets_the_repository_s_rules_as_the_base_has_them_and_your_own() 
 
     let run = review(home, &work, &["--dry-run", "--reviewer", "claude"]);
     assert!(run.status.success(), "{}", text(&run.stderr));
-    let out = text(&run.stdout);
+    // The first of the three reviewers' prompts, which differ only in focus.
+    let all = text(&run.stdout);
+    let out = all.split("\n# Reviewer 2 of 3").next().unwrap().to_string();
     assert!(out.contains("## Rules"));
     assert!(out.contains(
         "Where the repository's rules and the reviewer's own disagree, the repository's win"
@@ -808,6 +812,12 @@ fn rounds_count_to_two_clean_ones_or_the_cap() {
         (Some(1), Some("triage"))
     );
     assert_eq!(first["cap"], 5);
+    let early = review(home, &work, &["--round", "more"]);
+    assert_eq!(
+        early.status.code(),
+        Some(1),
+        "no raising the cap ahead of it"
+    );
     assert!(!sweeps());
     let actions: Vec<&str> = first["findings"]
         .as_array()
@@ -882,8 +892,190 @@ fn rounds_count_to_two_clean_ones_or_the_cap() {
         .expect("the Landing view's record");
     let landing: serde_json::Value = serde_json::from_str(&landing).unwrap();
     assert_eq!(landing["review"]["round"], 5);
+    assert_eq!(landing["review"]["cap"], 5);
     assert_eq!(landing["review"]["findings"], 2);
     assert_eq!(landing["output"]["of"], "review");
+
+    // Past the cap, the next round reviews nothing until it is raised.
+    fs::remove_file(&prompt).unwrap();
+    let past = round(found, "next");
+    assert_eq!(
+        (
+            past["round"].as_u64(),
+            past["next"].as_str(),
+            past["reviewed"].as_bool()
+        ),
+        (Some(6), Some("cap"), Some(false))
+    );
+    assert!(!prompt.exists(), "no reviewer ran");
+    let more = review(home, &work, &["--round", "more"]);
+    assert!(more.status.success(), "{}", text(&more.stderr));
+    let more: serde_json::Value = serde_json::from_slice(&more.stdout).unwrap();
+    assert_eq!(more["cap"], 15);
+    let carried = round(found, "next");
+    assert_eq!(
+        (
+            carried["round"].as_u64(),
+            carried["cap"].as_u64(),
+            carried["next"].as_str()
+        ),
+        (Some(6), Some(15), Some("triage"))
+    );
+}
+
+// In a hands-free tab the cap counts the branch's rounds across loops, so a
+// tab that starts the loop again never starts its count over; "10 more"
+// raises it, and the branch landing takes the count away.
+#[test]
+fn a_hands_free_branch_counts_its_rounds_across_loops() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let tabs = server.list()["sessions"][0]["tabs"].clone();
+    let tab = tabs.as_array().unwrap().last().unwrap().clone();
+    let id = tab["id"].as_str().unwrap().to_string();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    server.ok(&["set", "-t", &id, "@autopilot_handsfree", "1"]);
+
+    let tmp = TempDir::new("cr-rounds");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let prompt = home.join("prompt.txt");
+    let found = r#"{"structured_output":{"summary":"no","findings":[{"title":"t","severity":"high","file":"b.txt","line":1,"body":"b"}]}}"#;
+    let answer = home.join("answer.json");
+    fs::write(&answer, found).unwrap();
+    Claude::new()
+        .answer(&format!(
+            "cat >{}\ncat {}",
+            sh_quote(&prompt.to_string_lossy()),
+            sh_quote(&answer.to_string_lossy())
+        ))
+        .install(&home.join("bin"));
+    let in_pane = |args: &[&str]| -> serde_json::Value {
+        let mut cmd = Command::new(BIN);
+        cmd.arg("codex-review")
+            .args(args)
+            .current_dir(&work)
+            .stdin(Stdio::null());
+        env(&mut cmd, home);
+        cmd.env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &pane);
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let round = |step: &str| in_pane(&["--reviewer", "claude", "--no-rules", "--round", step]);
+    let record = work.join(".git/review-loop-rounds");
+
+    let first = round("start");
+    assert_eq!(
+        (first["round"].as_u64(), first["cap"].as_u64()),
+        (Some(1), Some(20))
+    );
+    let again = round("start");
+    assert_eq!(again["round"], 2, "a second loop goes on from the first");
+    assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 2 0");
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
+        "2 20",
+        "the sidebar's round and cap"
+    );
+
+    // At its cap, a new loop reviews nothing and waits on you.
+    fs::write(&record, "main 20 0\n").unwrap();
+    fs::remove_file(&prompt).unwrap();
+    let capped = round("start");
+    assert_eq!(
+        (
+            capped["round"].as_u64(),
+            capped["next"].as_str(),
+            capped["reviewed"].as_bool()
+        ),
+        (Some(21), Some("cap"), Some(false))
+    );
+    assert_eq!(round("next")["next"], "cap");
+    assert!(!prompt.exists(), "no reviewer ran");
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
+        "21 20 cap"
+    );
+    let landing = || -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(work.join(".git/landing.json")).unwrap()).unwrap()
+    };
+    assert_eq!(
+        landing()["review"]["at_cap"],
+        true,
+        "the Landing view's mark"
+    );
+
+    // "Run 10 more rounds" raises the branch's cap.
+    assert_eq!(in_pane(&["--round", "more"])["cap"], 30);
+    assert!(
+        landing()["review"]["at_cap"].is_null(),
+        "the question answered"
+    );
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
+        "20 30"
+    );
+    let more = round("next");
+    assert_eq!(
+        (
+            more["round"].as_u64(),
+            more["cap"].as_u64(),
+            more["next"].as_str()
+        ),
+        (Some(21), Some(30), Some("triage"))
+    );
+    assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 21 10");
+
+    // "Stop here" ends the loop where it is, the count kept.
+    assert_eq!(in_pane(&["--round", "stop"])["cap"], 30);
+    assert!(!work.join(".git/review-loop-round").exists());
+    assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 21 10");
+
+    // Landing the branch takes its count away.
+    let mut landed = Command::new(BIN);
+    landed
+        .args(["land-lock", "landed", "abc1234", "main"])
+        .current_dir(&work)
+        .stdin(Stdio::null());
+    env(&mut landed, home);
+    assert!(landed.status().unwrap().success());
+    assert!(!record.exists(), "a landing clears the count");
+    assert_eq!(round("start")["round"], 1);
+}
+
+// A review of another checkout (-C) keeps no count of rounds there.
+#[test]
+fn a_review_from_outside_keeps_no_count_of_rounds() {
+    let tmp = TempDir::new("cr-outside");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let out = review(
+        home,
+        home,
+        &[
+            "-C",
+            work.to_str().unwrap(),
+            "--round",
+            "start",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(!work.join(".git/review-loop-rounds").exists());
+    assert!(!work.join(".git/review-loop-round").exists());
 }
 
 // A confirmation round whose findings are all low ends the loop: its lows
@@ -1188,4 +1380,252 @@ fn a_ticket_s_rounds_count_to_two_clean_ones_on_the_same_text() {
     let second = on(&other_arg, clean, "next");
     assert_eq!(second["round"], 2, "the other's place kept");
     assert_eq!(second["next"], "confirm");
+}
+
+/// A clone with a branch's change beyond origin's main.
+fn a_change(home: &Path) -> std::path::PathBuf {
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    work
+}
+
+// Each reviewer is asked for every defect it can verify; with
+// review_parallel on, three reviewers each get a focus, and off, one gets
+// none. A ticket's prompt keeps its own reporting rule.
+#[test]
+fn a_round_asks_three_reviewers_for_every_defect_each_from_its_angle() {
+    let tmp = TempDir::new("cr-angles");
+    let home = tmp.path();
+    let work = a_change(home);
+    let dry = |args: &[&str]| {
+        let run = review(
+            home,
+            &work,
+            &[&["--dry-run", "--reviewer", "claude", "--no-rules"], args].concat(),
+        );
+        assert!(run.status.success(), "{}", text(&run.stderr));
+        text(&run.stdout)
+    };
+
+    let out = dry(&[]);
+    assert!(!out.contains("Prefer fewer"), "{out}");
+    assert_eq!(
+        out.matches("Report every concrete defect you can verify, not only the first")
+            .count(),
+        3,
+        "{out}"
+    );
+    for (n, focus) in [
+        "failure paths",
+        "the change's other surfaces",
+        "the change against its claims",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert!(
+            out.contains(&format!("# Reviewer {} of 3: {focus}\n", n + 1)),
+            "{out}"
+        );
+        assert!(out.contains(&format!("Yours is {focus}: ")), "{out}");
+    }
+
+    fs::write(home.join("settings.json"), r#"{"review_parallel": false}"#).unwrap();
+    let out = dry(&[]);
+    assert!(!out.contains("# Reviewer"), "{out}");
+    assert!(!out.contains("## Your focus"), "{out}");
+    assert_eq!(
+        out.matches("Report every concrete defect you can verify")
+            .count(),
+        1,
+        "{out}"
+    );
+    fs::remove_file(home.join("settings.json")).unwrap();
+
+    let ticket = home.join("ticket.md");
+    fs::write(&ticket, "# FEAT: Count the b's\n").unwrap();
+    let out = dry(&["--ticket", &ticket.to_string_lossy()]);
+    assert!(!out.contains("## Your focus"), "{out}");
+    assert!(!out.contains("Report every concrete defect"), "{out}");
+    assert!(
+        out.contains(
+            "Do not pad the list; more than 12 is a sign you are listing rather than judging."
+        ),
+        "{out}"
+    );
+}
+
+/// A stand-in Claude whose answer depends on its focus: `answers` is the
+/// sh for each of the three focuses, in order, and `count` gets a line a
+/// call.
+fn claude_by_focus(home: &Path, answers: [&str; 3], count: &Path) {
+    let arms: String = [
+        "failure paths",
+        "the change's other surfaces",
+        "the change against its claims",
+    ]
+    .iter()
+    .zip(answers)
+    .map(|(focus, sh)| format!("  *{}*) {sh} ;;\n", sh_quote(&format!("Yours is {focus}:"))))
+    .collect();
+    Claude::new()
+        .answer(&format!(
+            "p=$(cat)\necho x >> {}\ncase \"$p\" in\n{arms}  *) echo '{{\"structured_output\":{{\"summary\":\"one\",\"findings\":[]}}}}' ;;\nesac",
+            sh_quote(&count.to_string_lossy())
+        ))
+        .install(&home.join("bin"));
+}
+
+fn said(findings: &str) -> String {
+    format!(
+        "echo {}",
+        sh_quote(&format!(
+            r#"{{"structured_output":{{"summary":"s","findings":[{findings}]}}}}"#
+        ))
+    )
+}
+
+fn round_by_focus(home: &Path, work: &Path, step: &str) -> Output {
+    let mut cmd = Command::new(BIN);
+    cmd.args([
+        "codex-review",
+        "--reviewer",
+        "claude",
+        "--no-rules",
+        "--round",
+        step,
+    ])
+    .current_dir(work)
+    .stdin(Stdio::null());
+    env(&mut cmd, home);
+    cmd.output().unwrap()
+}
+
+#[test]
+fn three_reviewers_make_one_round_their_findings_merged() {
+    let tmp = TempDir::new("cr-merge");
+    let home = tmp.path();
+    let work = a_change(home);
+    let count = home.join("calls");
+    let clean = said("");
+    let high = said(
+        r#"{"title":"h","severity":"high","category":"correctness","file":"b.txt","line":10,"detail":"d"}"#,
+    );
+    let medium = said(
+        r#"{"title":"m","severity":"medium","category":"correctness","file":"b.txt","line":13,"detail":"d"},{"title":"o","severity":"medium","category":"rules","file":"b.txt","line":13,"detail":"d"}"#,
+    );
+
+    // One reviewer finding something makes the round's findings.
+    claude_by_focus(home, [&clean, &clean, &medium], &count);
+    let out = round_by_focus(home, &work, "start");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "triage", "{json}");
+    assert_eq!(json["findings"].as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(
+        fs::read_to_string(&count).unwrap().lines().count(),
+        3,
+        "three reviewers"
+    );
+
+    // Two reviewers' findings 3 lines apart in one category are one, at the
+    // higher severity; another category stays.
+    claude_by_focus(home, [&high, &clean, &medium], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2, "{json}");
+    assert_eq!(findings[0]["severity"], "high", "{json}");
+    assert_eq!(findings[0]["line"], 10, "{json}");
+    assert_eq!(findings[1]["category"], "rules", "{json}");
+    assert_eq!(json["round"], 2, "the three are one round: {json}");
+
+    // Findings tied to no line are never one defect.
+    let whole = said(
+        r#"{"title":"w","severity":"medium","category":"rules","file":"b.txt","line":0,"detail":"d"}"#,
+    );
+    claude_by_focus(home, [&whole, &whole, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["findings"].as_array().unwrap().len(), 2, "{json}");
+
+    // None finding anything is clean.
+    claude_by_focus(home, [&clean, &clean, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "confirm", "{json}");
+    assert_eq!(json["round"], 4, "{json}");
+
+    // Off, one reviewer.
+    fs::write(home.join("settings.json"), r#"{"review_parallel": false}"#).unwrap();
+    fs::write(&count, "").unwrap();
+    let out = round_by_focus(home, &work, "next");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        fs::read_to_string(&count).unwrap().lines().count(),
+        1,
+        "one reviewer"
+    );
+}
+
+#[test]
+fn a_failed_reviewer_leaves_the_others_findings_and_the_round_unclean() {
+    let tmp = TempDir::new("cr-failed");
+    let home = tmp.path();
+    let work = a_change(home);
+    let count = home.join("calls");
+    let clean = said("");
+    let found = said(
+        r#"{"title":"f","severity":"medium","category":"correctness","file":"b.txt","line":1,"detail":"d"}"#,
+    );
+    let broken = "echo broken >&2; exit 1";
+
+    claude_by_focus(home, [&found, broken, &clean], &count);
+    let out = round_by_focus(home, &work, "start");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["findings"].as_array().unwrap().len(), 1, "{json}");
+    let warnings = json["warnings"].to_string();
+    assert!(warnings.contains("the change's other surfaces"), "{json}");
+    assert!(!warnings.contains("failure paths"), "{json}");
+
+    claude_by_focus(home, [&clean, &clean, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "confirm", "{json}");
+
+    // The others finding nothing fails the round, as one reviewer failing
+    // did, leaving the clean round before it and the loop's place as they
+    // were.
+    claude_by_focus(home, [&clean, broken, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
+    // So do lows alone in a confirmation round, which would have been left.
+    let low = said(
+        r#"{"title":"l","severity":"low","category":"other","file":"b.txt","line":1,"detail":"d"}"#,
+    );
+    claude_by_focus(home, [&low, broken, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
+    assert!(
+        text(&out.stderr).contains("the change's other surfaces"),
+        "{}",
+        text(&out.stderr)
+    );
+    claude_by_focus(home, [&clean, &clean, &clean], &count);
+    let out = round_by_focus(home, &work, "next");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["next"], "done", "{json}");
+    assert_eq!(json["round"], 3, "{json}");
+
+    // All failing fails the round.
+    claude_by_focus(home, [broken, broken, broken], &count);
+    let out = round_by_focus(home, &work, "start");
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stdout));
 }

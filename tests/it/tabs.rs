@@ -944,3 +944,162 @@ fn pane_dir(server: &TestServer, pane: &str) -> PathBuf {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+#[cfg(feature = "net")]
+mod moving_to_another_branch {
+    use super::*;
+    use crate::common::http::{Fake, Reply};
+
+    /// GitHub with a merged PR from `hooks-v2` (12345) and an open draft
+    /// from `revert-hooks` (200), each found by the branch it is asked for,
+    /// and each by its number.
+    fn github() -> Fake {
+        Fake::github("test-token", |request| {
+            if request.path() != "/graphql" {
+                return None;
+            }
+            let body = request.json();
+            let text = body["query"].as_str().unwrap_or("").to_string();
+            let pr = |number: u64| {
+                let (state, draft, head) = if number == 12345 {
+                    ("MERGED", false, "hooks-v2")
+                } else {
+                    ("OPEN", true, "revert-hooks")
+                };
+                json!({
+                    "number": number, "url": format!("https://github.com/acme/widgets/pull/{number}"),
+                    "title": head, "state": state, "isDraft": draft,
+                    "baseRefName": "main", "headRefName": head,
+                    "headRepositoryOwner": {"login": "acme"}, "isCrossRepository": false,
+                    "mergeQueueEntry": null
+                })
+            };
+            if let Some(head) = body["variables"]["head"].as_str() {
+                let nodes: Vec<Value> = match head {
+                    "hooks-v2" => vec![pr(12345)],
+                    "revert-hooks" => vec![pr(200)],
+                    _ => vec![],
+                };
+                return Some(Reply::json(
+                    200,
+                    json!({"data": {"repository": {"pullRequests": {"nodes": nodes}}}}),
+                ));
+            }
+            // The sidebar's query, its PRs by number.
+            let numbers = regex::Regex::new(r"(a\d+): pullRequest\(number: (\d+)\)").unwrap();
+            let mut repo = serde_json::Map::new();
+            for c in numbers.captures_iter(&text) {
+                repo.insert(c[1].to_string(), pr(c[2].parse().unwrap()));
+            }
+            Some(Reply::json(200, json!({"data": {"r0": repo}})))
+        })
+    }
+
+    fn start(github: &Fake) -> TestServer {
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+        ]);
+        settings(&server, json!({"linear": false}));
+        server
+    }
+
+    /// A clone of acme/widgets with a worktree on `hooks-v2` and one on
+    /// `revert-hooks`.
+    fn clone_with_worktrees(server: &TestServer) -> (PathBuf, PathBuf) {
+        let clone = server.dir.path().join("widgets");
+        repo(&clone, "main");
+        git(
+            &clone,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let old = server.dir.path().join("hooks-v2");
+        let new = server.dir.path().join("revert-hooks");
+        for (dir, branch) in [(&old, "hooks-v2"), (&new, "revert-hooks")] {
+            git(
+                &clone,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    branch,
+                    &dir.to_string_lossy(),
+                ],
+            );
+        }
+        (old, new)
+    }
+
+    fn wait_pr(server: &TestServer, what: &str, pr: u64) {
+        wait_tab(server, what, |t| t["pr"] == pr);
+    }
+
+    #[test]
+    fn a_tab_moved_to_a_draft_pr_s_branch_shows_that_pr_not_the_merged_one() {
+        let github = github();
+        let server = start(&github);
+        let (old, new) = clone_with_worktrees(&server);
+        let mut client = server.attach(100, 30);
+        client.wait_text("$");
+        server.ok(&["set", "@tab_name", "REVERT PR"]);
+
+        client.type_text(&format!("cd {}\r", old.display()));
+        wait_pr(&server, "the merged PR", 12345);
+        client.type_text(&format!("cd {}\r", new.display()));
+        wait_pr(&server, "the draft's PR after cd", 200);
+        assert_eq!(first_tab(&server)["label"], "#200 REVERT PR");
+
+        let pane = first_tab(&server)["panes"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        server.ok(&[
+            "respawn-pane",
+            "-k",
+            "-t",
+            &pane,
+            "-c",
+            &old.to_string_lossy(),
+        ]);
+        wait_pr(&server, "the merged PR again", 12345);
+        server.ok(&[
+            "respawn-pane",
+            "-k",
+            "-t",
+            &pane,
+            "-c",
+            &new.to_string_lossy(),
+        ]);
+        wait_pr(&server, "the draft's PR after respawn", 200);
+    }
+
+    #[test]
+    fn a_branch_started_from_another_s_remote_branch_shows_its_own_pr() {
+        let github = github();
+        let server = start(&github);
+        let (_, new) = clone_with_worktrees(&server);
+        // revert-hooks made from origin/hooks-v2, as `git switch -c` does,
+        // tracks hooks-v2.
+        git(&new, &["config", "branch.revert-hooks.remote", "origin"]);
+        git(
+            &new,
+            &["config", "branch.revert-hooks.merge", "refs/heads/hooks-v2"],
+        );
+        let mut client = server.attach(100, 30);
+        client.wait_text("$");
+        client.type_text(&format!("cd {}\r", new.display()));
+        wait_pr(&server, "the draft's PR", 200);
+        // Filed by its own state, an open draft: never Merged.
+        let tab = wait_tab(&server, "the draft's facts", |t| {
+            t["facts"]["pr"]["number"] == 200
+        });
+        assert_ne!(tab["stage"]["key"], "merged", "{tab}");
+    }
+}
