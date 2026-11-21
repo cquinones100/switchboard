@@ -592,4 +592,9 @@ async function start() {
   offerPush().catch(() => {});
 }
 
+// Safari pinches to zoom with these whatever the viewport says.
+for (const name of ["gesturestart", "gesturechange"]) {
+  document.addEventListener(name, (event) => event.preventDefault(), { passive: false });
+}
+
 start();
