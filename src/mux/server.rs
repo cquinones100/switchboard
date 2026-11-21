@@ -194,6 +194,8 @@ pub enum Event {
     Sweep(crate::worktree_sweep::serve::SweepEvent),
     /// The phone app's watchers due what changed (src/phone).
     Phone(crate::phone::serve::PhoneEvent),
+    /// A merge queue's step answered (src/merge_queue).
+    MergeQueue(crate::merge_queue::serve::MergeQueueEvent),
     Tick,
     Quit,
 }
@@ -619,6 +621,8 @@ pub struct Server {
     pub awake: crate::awake::Awake,
     /// The landed worktrees swept (src/worktree_sweep).
     pub sweep: crate::worktree_sweep::serve::Sweep,
+    /// The merge queues' steps (src/merge_queue).
+    pub merge_queue: crate::merge_queue::serve::MergeQueue,
     /// The phone app's watchers (src/phone).
     pub phone: crate::phone::serve::Phone,
     /// The routines and their runs (src/routines).
@@ -1267,6 +1271,7 @@ impl Server {
             autopilot: Default::default(),
             awake: Default::default(),
             sweep: Default::default(),
+            merge_queue: Default::default(),
             phone: Default::default(),
             routines: Default::default(),
             history: Default::default(),
@@ -1388,6 +1393,7 @@ impl Server {
             Event::Awake(event) => self.awake_event(event),
             Event::Sweep(event) => self.sweep_event(event),
             Event::Phone(event) => self.phone_event(event),
+            Event::MergeQueue(event) => self.merge_queue_event(event),
             Event::Routines(event) => self.routines_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
@@ -1411,6 +1417,7 @@ impl Server {
                 self.routines_tick();
                 self.awake_check();
                 self.sweep_tick();
+                self.merge_queue_tick();
                 self.statusline_tick();
                 self.history_tick();
                 self.notice_history_tick();
