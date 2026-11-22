@@ -107,15 +107,20 @@ function ago(ms) {
 // The desktop's spinner (switchboard-ui's `text::SPINNER`), a frame every
 // 120ms, read from the clock so a mark drawn again stays in step; every
 // `.spin` on the page turns with it, and with reduced motion it holds still.
+// Whether the page is drawn by a browser, which animates; the tests run this
+// file in Node over a page of plain objects, where nothing moves or turns.
+const moves = typeof requestAnimationFrame === "function" && typeof getComputedStyle === "function";
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 120;
-const spinFrame = () => SPINNER[Math.floor(Date.now() / SPINNER_MS) % SPINNER.length];
+const spinFrame = () => (moves && !still() ? SPINNER[Math.floor(Date.now() / SPINNER_MS) % SPINNER.length] : "⠹");
 const spinner = () => el("span", { class: "spin" }, spinFrame());
-setInterval(() => {
-  if (document.hidden || still()) return;
-  const frame = spinFrame();
-  for (const node of document.querySelectorAll(".spin")) node.textContent = frame;
-}, SPINNER_MS);
+if (moves) {
+  setInterval(() => {
+    if (document.hidden || still()) return;
+    const frame = spinFrame();
+    for (const node of document.querySelectorAll(".spin")) node.textContent = frame;
+  }, SPINNER_MS);
+}
 
 function markOf(tab) {
   // A pinned tab wears the flag in place of its state's mark (board 75).
@@ -212,12 +217,17 @@ function toast(text, failed) {
 
 const still = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const EASE = "cubic-bezier(.2, .8, .2, 1)";
-const ms = (name) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0;
+const ms = (name) => (moves ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0 : 0);
 
 // A node marked going plays app.css's leaving animation for it, then is
 // taken out of the page and `then` runs; a node already out of the page, or
 // one whose animation never ends, goes after the longest one would take.
 function leave(node, then) {
+  if (!moves) {
+    node.remove();
+    if (then) then();
+    return;
+  }
   let gone = false;
   const done = () => {
     if (gone) return;
@@ -238,7 +248,7 @@ function follow(node, id, needs) {
   const look = node.className;
   const was = looks.get(id);
   looks.set(id, { look, needs });
-  if (!was || was.look === look) return node;
+  if (!moves || !was || was.look === look) return node;
   requestAnimationFrame(() => {
     if (!node.isConnected) return;
     const probe = el(node.tagName, { class: was.look, style: "position:absolute;visibility:hidden" });
@@ -260,6 +270,7 @@ function follow(node, id, needs) {
 // other: a tab comes in from the right over the drawer, and goes back out
 // to the right off it; with reduced motion they cross-fade.
 function slide(back, swap) {
+  if (!moves) return swap();
   const old = app.querySelector(".screen:not(.going)");
   swap();
   const now = app.querySelector(".screen:not(.going)");
@@ -954,16 +965,14 @@ function message(m, i, all) {
   const more = long
     ? el("button", {
         class: "more",
-        onclick: (e) => {
+        onclick: () => {
           const opening = !state.unfolded.has(key);
           if (opening) state.unfolded.add(key);
           else state.unfolded.delete(key);
           body.classList.toggle("folded", !opening);
-          e.currentTarget.textContent = opening ? "Show less" : "Show all";
-          if (!opening) {
-            const node = e.currentTarget.closest(".msg");
-            if (node.getBoundingClientRect().top < 0) node.scrollIntoView({ block: "start" });
-          }
+          more.textContent = opening ? "Show less" : "Show all";
+          const node = !opening && more.closest && more.closest(".msg");
+          if (node && node.getBoundingClientRect().top < 0) node.scrollIntoView({ block: "start" });
         },
       }, folded ? "Show all" : "Show less")
     : null;
@@ -1266,7 +1275,7 @@ function channelHead(tab) {
     follow(el("span", { class: "mark " + kind }, m), "head-mark:" + number(tab), tab.state === "waiting"),
     title(tab),
     follow(el("span", { class: "chip " + chip[1] }, chip[0]), "head-chip:" + number(tab)),
-    menuChoices(tab).length ? el("button", { class: "icon more", "aria-label": "Tab " + tab.index + "'s menu", "aria-haspopup": "menu", onclick: () => openMenu(number(tab)) }, "⋯") : null,
+    menuChoices(tab).length ? el("button", { class: "icon tab-menu", "aria-label": "Tab " + tab.index + "'s menu", "aria-haspopup": "menu", onclick: () => openMenu(number(tab)) }, "⋯") : null,
   );
 }
 
@@ -1312,7 +1321,7 @@ function channel(stick) {
       const node = message(m, i, all);
       const k = arrivalKey(m);
       const left = before && before.get(k);
-      if (before && !left) node.classList.add("coming");
+      if (moves && before && !left) node.classList.add("coming");
       if (left) before.set(k, left - 1);
       return node;
     });
@@ -1334,7 +1343,7 @@ function channel(stick) {
   const oldCard = shown.now.querySelector(".card");
   const wasTall = oldCard ? oldCard.getBoundingClientRect().height : 0;
   shown.now.replaceChildren(...[newCard, working ? el("div", { class: "doing" }, spinner(), " " + doing(tab)) : null].filter(Boolean));
-  if (kept && newCard && cardKey !== shown.cardKey) {
+  if (moves && kept && newCard && cardKey !== shown.cardKey) {
     const folds = cardKey === "answered" && shown.cardKey && shown.cardKey.startsWith("prompt:") && wasTall;
     if (folds) fold(newCard, wasTall);
     else newCard.classList.add("coming");
@@ -1355,7 +1364,7 @@ const arrivalKey = (m) => (m.who === "steps" ? "steps\u0000" + m.key : m.who + "
 // An answered card folds from the prompt's height down to its "You answered"
 // line, its words fading in; with reduced motion it only fades.
 function fold(card, wasTall) {
-  if (!card.animate) return;
+  if (!moves || !card.animate) return;
   const timing = { duration: ms("--move"), easing: EASE };
   const tall = card.getBoundingClientRect().height;
   if (!still() && tall) {
