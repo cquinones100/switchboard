@@ -3436,6 +3436,16 @@ impl Server {
             self.act(id, action.pressed(crate::settings::is_on("reopen_tab_key")));
             return;
         }
+        // While a box holds the keys (a picture chosen beside the pane,
+        // src/ui/pictures.rs), a key it passed on reaches the workspace's
+        // bindings alone, never the pane behind it.
+        if self
+            .clients
+            .get(&id)
+            .is_some_and(|c| !c.overlays.lets_through())
+        {
+            return;
+        }
         // Easy mode's Cmd keys reach only a pane that takes them.
         if super::passthrough::is_cmd_key(&key) {
             self.cmd_key(id, raw);

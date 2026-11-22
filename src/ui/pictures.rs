@@ -206,7 +206,8 @@ impl Pictures {
     }
 
     /// The keys while the pictures have them: moving the choice, its menu,
-    /// Esc giving them back, paging and closing; the rest go nowhere.
+    /// Esc giving them back, paging and closing; the rest go on to the
+    /// workspace's bindings alone.
     fn chosen_key(&mut self, key: Key) -> Step {
         let plain = key.mods == Mods::NONE;
         let shift = key.mods == Mods::SHIFT;
@@ -228,9 +229,10 @@ impl Pictures {
                 self.asked = true;
                 Step::Redraw
             }
-            // The workspace's own keys (M-p, M-1 to M-9, ...) still work.
-            _ if key.mods.alt => Step::Through,
-            _ => Step::Same,
+            // The rest go on to the workspace's bindings (M-p, M-1 to M-9,
+            // the prefix and the key after it), never to the greyed pane
+            // (`Server::key`).
+            _ => Step::Through,
         }
     }
 
@@ -855,7 +857,11 @@ mod tests {
         assert_eq!(step, Step::Redraw, "chosen rather than closed");
         assert_eq!(p.chosen_file(), Some(Path::new("/tmp/b.png")));
         assert!(!p.lets_through(), "the pictures have the keys");
-        assert_eq!(p.key(plain(KeyCode::Char('x')), &look), Step::Same);
+        assert_eq!(
+            p.key(plain(KeyCode::Char('x')), &look),
+            Step::Through,
+            "on to the workspace's bindings, which hold it from the pane"
+        );
         let frame = drawn(&mut p, area);
         let bottom = row(&frame, 29);
         assert!(bottom.contains("Esc keys back to the tab"), "{bottom}");
