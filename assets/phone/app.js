@@ -1,4 +1,4 @@
-// The phone app (src/phone), boards 164 to 169, 173, 174 and 175: the drawer of Claude
+// The phone app (src/phone), boards 164 to 169 and 173 to 176: the drawer of Claude
 // tabs, Needs you first, with its search; a tab's channel of recent turns
 // with the prompt it waits on as a card of buttons; the composer; pairing.
 // Everything shown comes from the computer's own answers and is put on the
@@ -28,7 +28,9 @@ const state = {
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
-  menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question does
+  menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question or the reminder's sheet does
+  reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
+  remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
 };
 
 function el(tag, attrs, ...kids) {
@@ -84,6 +86,23 @@ function markOf(tab) {
   if (tab.state === "done") return ["✓", "passed"];
   if (tab.state === "working" || tab.state === "background") return ["⠹", "working"];
   return ["○", "idle"];
+}
+
+// How long until a reminder, as the sidebar says it: in 45m, in 1h 20m, in 3d.
+function until(at) {
+  const m = Math.max(1, Math.ceil((at * 1000 - Date.now()) / 60000));
+  if (m < 60) return "in " + m + "m";
+  if (m < 1440) return "in " + Math.floor(m / 60) + "h" + (m % 60 ? " " + (m % 60) + "m" : "");
+  return "in " + Math.round(m / 1440) + "d";
+}
+
+// A tab's reminder in words, as the sidebar says it: the time left and the
+// note, or, come due, what it is for; null with none.
+function reminded(tab) {
+  const r = tab.remind;
+  if (!r) return null;
+  if (r.due) return r.note ? "reminder: " + r.note : "reminder";
+  return until(r.at) + (r.note ? " · " + r.note : "");
 }
 
 function doing(tab) {
@@ -158,7 +177,7 @@ const wordsOf = (q) => q.toLowerCase().split(/\s+/).filter(Boolean);
 const holds = (text, words) => words.every((w) => String(text || "").toLowerCase().includes(w));
 // Whether a tab's number, name, repository, branch or what it is doing hold
 // every word typed, as the sidebar's / matches.
-const matches = (tab, words) => holds([tab.index, tab.name, tab.repo, tab.branch, doing(tab)].join(" "), words);
+const matches = (tab, words) => holds([tab.index, tab.name, tab.repo, tab.branch, doing(tab), reminded(tab) || ""].join(" "), words);
 
 function groups(words) {
   const needs = [], working = [], idle = [];
@@ -211,7 +230,7 @@ function lit(text, words) {
 // A tab matched by its repository or branch alone says which, under what
 // it is doing.
 function where(tab, words) {
-  if (!words.length || holds([tab.index, tab.name, doing(tab)].join(" "), words)) return null;
+  if (!words.length || holds([tab.index, tab.name, doing(tab), reminded(tab) || ""].join(" "), words)) return null;
   const by = [["repository ", tab.repo], ["branch ", tab.branch]].filter(([, v]) => v && words.some((w) => v.toLowerCase().includes(w)));
   return el("span", { class: "sub where-line" }, by.flatMap(([what, v], i) => [i ? " · " : "", el("span", { class: "faint" }, what), ...lit(v, words)]));
 }
@@ -268,6 +287,7 @@ function drawerList() {
             el("span", { class: "mark " + kind }, m),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
             el("span", { class: "sub" }, lit(doing(t), words)),
+            reminded(t) ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words)) : null,
             where(t, words),
           ),
           t,
@@ -373,12 +393,15 @@ function boxHead(title) {
   return el("div", { class: "box-head" }, el("span", { class: "box-title" }, title), el("button", { class: "box-close", "aria-label": "Close", onclick: () => closeMenu() }, "×"));
 }
 
-// The kit's box under the row: Mark seen on a finished tab, then Close
-// tab in the failed tone, as it ends the tab.
+// The kit's box under the row: Mark seen on a finished tab, Clear the
+// reminder on a tab with one, Remind me (board 176), then Close tab in the
+// failed tone, as it ends the tab.
 function showMenu(tab) {
   const n = number(tab);
   const options = [];
   if (tab.state === "done") options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => markSeen(n) }, "Mark seen"));
+  if (state.reminders && tab.remind) options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => clearReminder(n) }, "Clear the reminder"));
+  if (state.reminders) options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => remindSheet(n) }, "Remind me"));
   if (state.close) options.push(el("button", { class: "menu-option r", role: "menuitem", onclick: () => ask(n) }, "Close tab"));
   if (!options.length) return closeMenu();
   const box = el("div", { class: "box", role: "menu", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, boxHead("Tab " + tab.index + " · " + (tab.name || "")), options);
@@ -387,7 +410,8 @@ function showMenu(tab) {
   if (row && row.getBoundingClientRect) {
     const r = row.getBoundingClientRect();
     const below = r.bottom + 4;
-    box.style.top = below + 160 > window.innerHeight ? Math.max(8, r.top - 160) + "px" : below + "px";
+    const tall = 48 + options.length * 44;
+    box.style.top = below + tall > window.innerHeight ? Math.max(8, r.top - tall) + "px" : below + "px";
   }
   if (options[0].focus) options[0].focus();
 }
@@ -409,6 +433,85 @@ function ask(n) {
   );
   layer(box);
   if (yes.focus) yes.focus();
+}
+
+// The sheet Remind me opens at the screen's foot (board 176): When, the
+// workspace's five times each with the clock time it means, or one typed,
+// which the computer reads; What for, optional. Set, at the right as the
+// affirmative choice is, sets it, a typed time over a chosen one; a time the
+// computer can't read is answered under the field and the sheet stays open.
+// On a tab with a reminder it is Change the reminder, its note filled in.
+function remindSheet(n) {
+  const tab = state.tabs.find((t) => number(t) === n);
+  if (!tab) return closeMenu();
+  state.menu = { pane: n, asking: true };
+  const change = !!tab.remind;
+  let chosen = "";
+  const typed = el("input", { type: "text", class: "field", placeholder: "45m, 3pm, tue 9am, nov 20", autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": "Or type a time" });
+  const note = el("input", { type: "text", class: "field", placeholder: "a note for when it comes due", autocomplete: "off", "aria-label": "What for" });
+  note.value = change ? tab.remind.note || "" : "";
+  const refused = el("div", { class: "refused", role: "alert" });
+  // The chosen time lit, a yellow › before it, as a menu's chosen option.
+  const offered = state.remindTimes;
+  const times = offered.map((t) =>
+    el("button", { class: "menu-option time", role: "radio", "aria-checked": "false", onclick: () => choose(t.label) }, el("span", {}, t.label), el("span", { class: "clock-time" }, t.clock)),
+  );
+  function choose(label) {
+    light(label);
+    typed.value = "";
+  }
+  function light(label) {
+    chosen = label;
+    times.forEach((o, i) => {
+      const on = offered[i].label === label;
+      o.className = "menu-option time" + (on ? " chosen" : "");
+      o.setAttribute("aria-checked", String(on));
+    });
+  }
+  const setIt = () => setReminder(n, (typed.value || "").trim() || chosen, note.value || "", refused);
+  const set = el("button", { class: "option lit", onclick: setIt }, "Set");
+  typed.addEventListener("keydown", (e) => { if (e.key === "Enter") setIt(); });
+  // A time typed takes the place of the one chosen, which goes dark.
+  typed.addEventListener("input", () => { if (chosen) light(""); });
+  const box = el(
+    "div",
+    { class: "box sheet", role: "dialog", "aria-label": (change ? "Change the reminder for tab " : "Remind me about tab ") + tab.index + " " + (tab.name || "") },
+    boxHead(change ? "Change the reminder" : "Remind me"),
+    el("div", { class: "question" }, el("b", {}, (change ? "for tab " : "about tab ") + tab.index + " " + (tab.name || ""))),
+    change ? el("div", { class: "dim" }, "⏰ " + reminded(tab)) : null,
+    el("div", { class: "label d" }, "When"),
+    el("div", { class: "times", role: "radiogroup", "aria-label": "When" }, times),
+    el("div", { class: "input" }, el("span", { class: "prompt" }, "›"), typed),
+    refused,
+    el("div", { class: "label d" }, el("span", {}, "What for"), el("span", { class: "faint" }, "optional")),
+    el("div", { class: "input" }, el("span", { class: "prompt" }, "›"), note),
+    el("div", { class: "answers" }, el("button", { class: "option", onclick: () => closeMenu() }, "Cancel"), set),
+  );
+  layer(box);
+}
+
+async function setReminder(n, when, note, refused) {
+  if (!when) {
+    refused.replaceChildren(el("span", {}, "Choose a time, or type one."));
+    return;
+  }
+  try {
+    const r = await api("/api/tabs/" + n + "/remind", { when, note });
+    closeMenu();
+    toast(r.said);
+  } catch (e) {
+    refused.replaceChildren(el("span", {}, String(e.message || e)));
+  }
+}
+
+async function clearReminder(n) {
+  closeMenu();
+  try {
+    const r = await api("/api/tabs/" + n + "/remind", { clear: true });
+    toast(r.said);
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
 }
 
 async function markSeen(n) {
@@ -938,6 +1041,8 @@ function listen() {
     const turned = before && after && JSON.stringify(before.turn) !== JSON.stringify(after.turn);
     if (after && after.prompt) state.answered = null;
     state.close = data.close !== false;
+    state.reminders = data.reminders !== false;
+    state.remindTimes = data.remind_times || state.remindTimes;
     if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
     render();
     if (turned) loadTurns();

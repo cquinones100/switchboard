@@ -1,4 +1,4 @@
-/* The phone app (src/phone), drawn as boards 164 to 169 and 174 draw it: the
+/* The phone app (src/phone), drawn as boards 164 to 169 and 173 to 176 draw it: the
    kit's tones, marks and chips, in a phone's portrait. */
 :root {
   --bg: #11121a;
@@ -431,3 +431,53 @@ body.refused p { color: var(--dim); }
 .box.ask .answers { display: flex; gap: 10px; margin-top: 10px; }
 .box.ask .answers .option { text-align: center; }
 .toast .bad { color: var(--red); font-weight: 700; margin-right: 6px; }
+
+/* ── A tab's reminder (board 176): the row's ⏰ line, and the sheet Remind me opens at the screen's foot ── */
+.row .sub.remind { color: var(--yellow); }
+.row .sub.remind .clock { font-size: 11px; }
+.box.sheet {
+  left: 8px;
+  right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  padding: 4px 14px 14px;
+}
+.box.sheet .box-head { padding-left: 0; padding-right: 0; }
+.box.sheet .question { margin: 2px 0 2px; overflow-wrap: anywhere; }
+.box.sheet .dim { color: var(--dim); }
+.box.sheet .label { padding: 12px 0 4px; }
+.box.sheet .label .faint { color: var(--faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.box.sheet .menu-option.time { display: flex; justify-content: space-between; gap: 8px; margin: 0 -14px; width: calc(100% + 28px); padding-right: 14px; }
+.box.sheet .menu-option.time .clock-time { color: var(--dim); }
+.box.sheet .menu-option.time.chosen { background: var(--chosen); font-weight: 700; }
+.box.sheet .menu-option.time.chosen::before { content: "›"; color: var(--yellow); font-weight: 700; margin-left: -16px; margin-right: 8px; }
+.box.sheet .menu-option.time.chosen > span:first-child { flex: 1; }
+.box.sheet .menu-option.time.chosen .clock-time { color: var(--accent); font-weight: 400; }
+.box.sheet .input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  min-height: 40px;
+}
+.box.sheet .input .prompt { color: var(--accent); font-weight: 700; }
+.box.sheet .input input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px; /* under 16px, iOS zooms the page in on focus */
+  color: var(--text);
+  background: none;
+  border: 0;
+  outline: none;
+  padding: 8px 0;
+}
+.box.sheet .input input::placeholder { color: var(--faint); }
+.box.sheet .refused { color: var(--red); margin-top: 6px; overflow-wrap: anywhere; }
+.box.sheet .refused:empty { display: none; }
+.box.sheet .answers { display: flex; gap: 10px; margin-top: 14px; }
+.box.sheet .answers .option { text-align: center; }

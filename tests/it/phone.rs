@@ -232,14 +232,8 @@ fn next_line(stream: &mut UnixStream, pred: impl Fn(&Value) -> bool) -> Value {
     }
 }
 
-#[test]
-fn watch_streams_the_claude_tabs_as_they_change() {
-    let server = TestServer::start();
-    let mut client = server.attach(100, 30);
-    client.wait_text("$");
-    server.ok(&["new-tab", "-d", "-n", "plain"]);
-    let pane = claude_pane(&server);
-
+/// The server's `watch`, as the phone app follows it.
+fn watch(server: &TestServer) -> UnixStream {
     let mut stream = UnixStream::connect(server.socket()).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
@@ -252,6 +246,18 @@ fn watch_streams_the_claude_tabs_as_they_change() {
         by_hand: false,
     };
     stream.write_all(&proto::encode_client(&msg)).unwrap();
+    stream
+}
+
+#[test]
+fn watch_streams_the_claude_tabs_as_they_change() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let pane = claude_pane(&server);
+
+    let mut stream = watch(&server);
     let first = next_line(&mut stream, |v| v["tabs"].as_array().is_some());
     let tabs = first["tabs"].as_array().unwrap();
     assert_eq!(tabs.len(), 1, "the Claude tab alone: {first}");
@@ -962,14 +968,106 @@ fn the_phone_closes_a_claude_tab_and_refuses_any_other() {
     );
 }
 
-/// The drawer's menu (assets/phone/app.js), run in Node over a page made
-/// of plain objects: a long press on a row opens its tab's menu rather
-/// than the tab, Close tab asks first, only Close closes it, and a tap
-/// still opens the tab; skipped without Node.
+/// `remind`, which the phone's route asks: a typed or offered time sets
+/// the tab's reminder, which the sidebar and the phone's tabs show with
+/// the time left and its note, and `-c` clears it; a time it can't read
+/// is refused in the reminder box's words, as are a pane not running
+/// Claude and Settings' "Reminders" off; each set and clear is logged.
 #[test]
-fn a_long_press_opens_a_tabs_menu_and_close_tab_asks_first() {
-    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
-    let script = r#"
+fn the_phone_sets_and_clears_a_claude_tabs_reminder() {
+    let server = TestServer::start();
+    let mut client = server.attach(120, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let plain = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, _, err) = server.run(&["remind", "-t", &plain, "-s", "phone", "45m"]);
+    assert_eq!(code, 1, "a pane not running Claude");
+    assert!(err.contains("isn't running Claude"), "{err}");
+
+    let pane = claude_pane(&server);
+    let mut stream = watch(&server);
+    next_line(&mut stream, |v| {
+        v["tabs"].as_array().is_some_and(|t| !t.is_empty())
+    });
+
+    let (code, _, err) = server.run(&["remind", "-t", &pane, "-s", "phone", "soonish"]);
+    assert_eq!(code, 1, "an unreadable time");
+    assert!(
+        err.contains("\"soonish\" isn't a time I know. Try 45m"),
+        "the box's words: {err}"
+    );
+
+    let said = server.ok(&[
+        "remind",
+        "-t",
+        &pane,
+        "-s",
+        "phone",
+        "-n",
+        "check the deploy",
+        "--",
+        "45m",
+    ]);
+    assert!(said.starts_with("Reminder for tab 1 "), "{said}");
+    let set = next_line(&mut stream, |v| v["tabs"][0]["remind"].is_object());
+    let remind = &set["tabs"][0]["remind"];
+    assert_eq!(remind["note"], "check the deploy", "{set}");
+    assert_eq!(remind["due"], false, "{set}");
+    let left = remind["at"].as_i64().unwrap() - switchboard::util::now_secs();
+    assert!(
+        (44 * 60..=45 * 60).contains(&left),
+        "45 minutes out: {left}"
+    );
+    assert_eq!(set["reminders"], true);
+    let times: Vec<&str> = set["remind_times"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(times, switchboard::mission::remind::CHOICES, "{set}");
+    assert!(
+        set["remind_times"][0]["clock"]
+            .as_str()
+            .unwrap()
+            .contains(':'),
+        "{set}"
+    );
+    client.wait_text("remind in 45m");
+
+    // One of the box's times, as the sheet sends a chosen one.
+    server.ok(&["remind", "-t", &pane, "-s", "phone", "--", "In 3 hours"]);
+    let later = next_line(&mut stream, |v| {
+        v["tabs"][0]["remind"]["at"].as_i64().unwrap_or(0) > remind["at"].as_i64().unwrap()
+    });
+    assert_eq!(later["tabs"][0]["remind"]["note"], "", "no note: {later}");
+
+    let said = server.ok(&["remind", "-t", &pane, "-s", "phone", "-c"]);
+    assert!(
+        said.starts_with("Cleared the reminder for tab 1 "),
+        "{said}"
+    );
+    next_line(&mut stream, |v| v["tabs"][0]["remind"].is_null());
+    let log = server.log();
+    assert!(log.contains("): Reminder at "), "logged: {log}");
+    assert!(log.contains("): Cleared its reminder"), "logged: {log}");
+
+    // Settings' "Reminders" off refuses it, and the phone is told so.
+    common::write_settings(&server.home, json!({ "reminders": false }));
+    wait_until(&server, "the reminder refused while off", || {
+        let (_, _, err) = server.run(&["remind", "-t", &pane, "-s", "phone", "45m"]);
+        err.contains("reminders are off in Settings")
+    });
+    next_line(&mut stream, |v| v["reminders"] == false);
+}
+
+/// A page made of plain objects for assets/phone/app.js to run on in Node:
+/// its `app` and `body`, the events fired on them, its timers and what it
+/// posted, before the app is loaded.
+const PRELUDE: &str = r#"
 const vm = require("vm");
 const fs = require("fs");
 class Node {
@@ -1017,7 +1115,17 @@ const ctx = vm.createContext({
   },
   console,
 });
-vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+"#;
+
+/// The drawer's menu (assets/phone/app.js), run in Node over a page made
+/// of plain objects: a long press on a row opens its tab's menu rather
+/// than the tab, Close tab asks first, only Close closes it, and a tap
+/// still opens the tab; skipped without Node.
+#[test]
+fn a_long_press_opens_a_tabs_menu_and_close_tab_asks_first() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let script = PRELUDE.to_string()
+        + r#"vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 vm.runInContext(`
   state.me = { paired: true, computer: "studio" };
   state.tabs = [
@@ -1071,8 +1179,8 @@ const out = [];
   row("5").fire("pointerup");
   row("5").fire("click");
   out.push("lit row=" + vm.runInContext("state.menu", ctx) + " open=" + vm.runInContext("state.open", ctx));
-  // Close tabs from the phone off: a tab still working has nothing to offer.
-  vm.runInContext("state.close = false", ctx);
+  // Close tabs from the phone and Reminders off: a tab still working has nothing to offer.
+  vm.runInContext("state.close = false; state.reminders = false", ctx);
   row("3").fire("contextmenu");
   out.push("off=" + vm.runInContext("state.menu", ctx) + " " + options().join(","));
   console.log(out.join("\n"));
@@ -1099,16 +1207,123 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "menu=Mark seen,Close tab open=null",
+            "menu=Mark seen,Remind me,Close tab open=null",
             "asks=true posted=0",
             "answers=Close*,No",
             "no=0 menu=null",
             "closed=/api/tabs/4/close tabs=3",
-            "working=Close tab",
+            "working=Remind me,Close tab",
             "tap=3",
             "redrawn=null",
             "lit row=null open=null",
             "off=null ",
+        ],
+        "{stdout}"
+    );
+}
+
+/// Remind me in the drawer's menu (assets/phone/app.js, board 176), run in
+/// Node over a page made of plain objects: offered on every tab, with Clear
+/// the reminder before it on a tab with one, whose row shows ⏰ and the time
+/// left; its sheet lists the box's times with their clock times, sends a
+/// chosen or typed time with the note, keeps open with the computer's words
+/// for a time it can't read, and puts Set at the right; skipped without
+/// Node.
+#[test]
+fn remind_me_in_a_tabs_menu_sets_and_clears_its_reminder() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let script = r#"
+${PRELUDE}
+ctx.fetch = (path, opts) => {
+  if (opts && opts.method === "POST") {
+    const body = JSON.parse(opts.body);
+    posted.push(path + " " + opts.body);
+    if (body.when === "soonish") return Promise.resolve({ ok: false, status: 409, json: async () => ({ error: "\"soonish\" isn't a time I know. Try 45m, 2h, 3pm, 15:30, nov 20 or 2027-01-04 3pm." }) });
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ said: "Reminder for tab 4 full titles at Sun 10:41 AM" }) });
+  }
+  return new Promise(() => {});
+};
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.remindTimes = [
+    { label: "In 20 minutes", clock: "10:01" }, { label: "In 1 hour", clock: "10:41" }, { label: "In 3 hours", clock: "12:41" },
+    { label: "Tomorrow at 9:00", clock: "Sun 9:00" }, { label: "Next Monday at 9:00", clock: "Mon 9:00" },
+  ];
+  state.tabs = [
+    { index: 4, pane: "%4", name: "full titles", state: "done", needs: true },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working", wait: "Edit diffview.lua", remind: { at: Math.floor(Date.now() / 1000) + 80 * 60, note: "check the deploy", due: false } },
+  ];
+  render();
+`, ctx);
+const row = (n) => app.all((x) => x.attrs["data-pane"] === n)[0];
+const options = () => body.all((x) => x.attrs.role === "menuitem").map((x) => x.text);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const field = (label) => body.all((x) => x.tag === "input" && x.attrs["aria-label"] === label)[0];
+const sheet = () => body.all((x) => x.className === "box sheet")[0];
+const tick = () => new Promise((r) => setImmediate(r));
+const out = [];
+(async () => {
+  out.push("row=" + row("3").text);
+  row("4").fire("contextmenu");
+  out.push("none=" + options().join(","));
+  button("Remind me").fire("click");
+  out.push("sheet=" + sheet().attrs["aria-label"]);
+  out.push("times=" + body.all((x) => x.attrs.role === "radio").map((x) => x.text).join(","));
+  out.push("answers=" + body.all((x) => x.className === "answers")[0].kids.map((k) => k.text + (k.className.includes("lit") ? "*" : "")).join(","));
+  field("Or type a time").value = "soonish";
+  button("Set").fire("click");
+  await tick();
+  out.push("refused=" + body.all((x) => x.className === "refused")[0].text + " open=" + !!sheet());
+  body.all((x) => x.attrs.role === "radio" && x.text.startsWith("In 1 hour"))[0].fire("click");
+  field("What for").value = "check the deploy";
+  button("Set").fire("click");
+  await tick();
+  out.push("set=" + posted[posted.length - 1] + " open=" + !!sheet());
+  row("3").fire("contextmenu");
+  out.push("one=" + options().join(","));
+  button("Remind me").fire("click");
+  out.push("change=" + sheet().attrs["aria-label"] + " note=" + field("What for").value);
+  button("Cancel").fire("click");
+  row("3").fire("contextmenu");
+  button("Clear the reminder").fire("click");
+  await tick();
+  out.push("cleared=" + posted[posted.length - 1]);
+  console.log(out.join("\n"));
+})();
+"#
+    .replace("${PRELUDE}", PRELUDE);
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "row=⠹3M-d uncommittedEdit diffview.lua⏰ in 1h 20m · check the deploy",
+            "none=Mark seen,Remind me,Close tab",
+            "sheet=Remind me about tab 4 full titles",
+            "times=In 20 minutes10:01,In 1 hour10:41,In 3 hours12:41,Tomorrow at 9:00Sun 9:00,Next Monday at 9:00Mon 9:00",
+            "answers=Cancel,Set*",
+            "refused=\"soonish\" isn't a time I know. Try 45m, 2h, 3pm, 15:30, nov 20 or 2027-01-04 3pm. open=true",
+            r#"set=/api/tabs/4/remind {"when":"In 1 hour","note":"check the deploy"} open=false"#,
+            "one=Clear the reminder,Remind me,Close tab",
+            "change=Change the reminder for tab 3 M-d uncommitted note=check the deploy",
+            r#"cleared=/api/tabs/3/remind {"clear":true}"#,
         ],
         "{stdout}"
     );
@@ -1531,6 +1746,44 @@ mod preview_server {
         assert_eq!(status, 503);
         assert_eq!(http(at, "POST", "/preview/online", None).0, 200);
         assert_eq!(json_of(at, "/api/tabs")["live"], true);
+    }
+
+    #[test]
+    fn a_reminder_is_set_refused_and_cleared_on_the_made_up_tabs() {
+        let at = preview(&assets());
+        let tabs = json_of(at, "/api/tabs");
+        assert_eq!(tabs["reminders"], true);
+        assert_eq!(tabs["remind_times"].as_array().unwrap().len(), 5);
+        let pane = tabs["tabs"][0]["pane"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches('%')
+            .to_string();
+        let path = format!("/api/tabs/{pane}/remind");
+        let (status, body) = http(
+            at,
+            "POST",
+            &path,
+            Some(json!({"when": "soonish", "note": ""})),
+        );
+        assert_eq!(status, 409);
+        assert!(body.contains("isn't a time I know"), "{body}");
+        let (status, body) = http(
+            at,
+            "POST",
+            &path,
+            Some(json!({"when": "45m", "note": "check the deploy"})),
+        );
+        assert_eq!(status, 200, "{body}");
+        let set = json_of(at, "/api/tabs")["tabs"][0]["remind"].clone();
+        assert_eq!(
+            (set["note"].as_str(), set["due"].as_bool()),
+            (Some("check the deploy"), Some(false)),
+            "{set}"
+        );
+        let (status, _) = http(at, "POST", &path, Some(json!({"clear": true})));
+        assert_eq!(status, 200);
+        assert!(json_of(at, "/api/tabs")["tabs"][0]["remind"].is_null());
     }
 
     #[test]
