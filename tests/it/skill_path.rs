@@ -1260,3 +1260,19 @@ fn queue_and_clean_uses_switchboard_s_merge_queue_only_with_its_setting_on() {
     assert!(watch.contains("switchboard land-lock pr-status <number>"));
     assert!(watch.contains("Go to \"Fixing\""), "a dropped PR is fixed");
 }
+
+// A tab that lands without asking skips the deploy and the test without asking
+// wherever the repository has neither, not only in autopilot's tabs, so a
+// merge in a repository with no deploy asks nothing.
+#[test]
+fn queue_and_clean_skips_a_missing_deploy_without_asking_in_a_tab_that_lands_without_asking() {
+    let text = fs::read_to_string(skills_dir().join("queue-and-clean/SKILL.md")).unwrap();
+    let before = section(&text, "Before watching");
+    assert!(before.contains(
+        "In any other tab that lands without asking (`switchboard show @land` prints `1`)"
+    ));
+    assert!(before.contains("\"Deploy and test\" then gives `not tested: no deploy`"));
+    let deploy = section(&text, "Deploy and test");
+    assert!(deploy.contains("`deploy-test: approved (not tested: no deploy)`"));
+    assert!(deploy.contains("`deploy-test: approved (not tested: autopilot landed it)`"));
+}

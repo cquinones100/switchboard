@@ -1539,7 +1539,7 @@
     "key": "land_without_asking",
     "category": "Safety",
     "label": "Land without asking",
-    "description": "Each tab /wt, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking; off, it asks before its first push",
+    "description": "Each tab /wt, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking, and once its PR merges it skips the deploy-test approval where the repository has no deploy or test to wait for; off, it asks before its first push and for that approval",
     "default": false
   },
   {
