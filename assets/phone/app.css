@@ -2,7 +2,9 @@
    from board 184's kit: every size, radius, step of space and timing is a
    variable here, in points (a CSS pixel is a point on a phone), so each atom
    reads the kit rather than numbers of its own. Anything pressed is 44 every
-   way; only transform and opacity move, so nothing reflows mid-animation. */
+   way; what moves is transform and opacity, and what changes tone (a state's
+   mark and chip, send lighting up, a press darkening) is color, so nothing
+   reflows mid-animation. */
 :root {
   --bg: #11121a;
   --sunk: #0b0c12;

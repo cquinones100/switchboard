@@ -685,7 +685,7 @@ async function closeTab(n) {
 function drawer() {
   state.whole = false;
   const { box, head, offline, list } = drawerParts();
-  const screen = app.querySelector(".screen.drawer-screen");
+  const screen = app.querySelector(".screen.drawer-screen:not(.going)");
   // The drawer already showing: everything but the search box drawn again,
   // since taking a focused field out of the page closes the keyboard.
   if (screen && screen.contains(box)) {
@@ -1298,7 +1298,7 @@ function channel(stick) {
     state.open = null;
     return drawer();
   }
-  const kept = shown && shown.open === state.open && shown.screen.parentNode === app ? shown : null;
+  const kept = shown && shown.open === state.open && shown.screen.parentNode === app && !shown.screen.classList.contains("going") ? shown : null;
   const atEnd = !kept || kept.list.scrollTop + kept.list.clientHeight >= kept.list.scrollHeight - 40;
   const top = kept ? kept.list.scrollTop : 0;
   if (!kept) {

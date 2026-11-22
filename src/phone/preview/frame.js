@@ -79,7 +79,12 @@ function followFocus() {
   const doc = frame.contentDocument;
   if (!doc) return;
   doc.addEventListener("focusin", (e) => { if (typesIn(e.target)) setKeyboard(true); });
-  doc.addEventListener("focusout", (e) => { if (typesIn(e.target) && !typesIn(e.relatedTarget)) setKeyboard(false); });
+  // Only the focus moving elsewhere in the app closes it: a click on the
+  // frame's own switch takes the focus out of the app, and the switch decides.
+  doc.addEventListener("focusout", (e) => {
+    if (!typesIn(e.target) || typesIn(e.relatedTarget)) return;
+    setTimeout(() => { if (doc.hasFocus() && !typesIn(doc.activeElement)) setKeyboard(false); });
+  });
 }
 
 function say(text, failed) {
