@@ -248,9 +248,15 @@ function follow(node, id, needs) {
   const look = node.className;
   const was = looks.get(id);
   looks.set(id, { look, needs });
-  if (!moves || !was || was.look === look) return node;
+  if (!moves || !was) return node;
+  // Moving to Needs you pulses the mark whether or not the mark changes (a
+  // reminder coming due on an idle tab keeps its ○).
+  const pulses = needs && !was.needs && node.classList.contains("mark") && !still();
+  if (was.look === look && !pulses) return node;
   requestAnimationFrame(() => {
     if (!node.isConnected) return;
+    if (pulses) node.animate([{ transform: "none" }, { transform: "scale(1.6)" }, { transform: "none" }], { duration: 2 * ms("--move"), easing: EASE });
+    if (was.look === look) return;
     const probe = el(node.tagName, { class: was.look, style: "position:absolute;visibility:hidden" });
     document.body.append(probe);
     const from = getComputedStyle(probe);
@@ -260,8 +266,6 @@ function follow(node, id, needs) {
       { duration: ms("--move"), easing: EASE },
     );
     probe.remove();
-    const pulses = needs && !was.needs && node.classList.contains("mark") && !still();
-    if (pulses) node.animate([{ transform: "none" }, { transform: "scale(1.6)" }, { transform: "none" }], { duration: 2 * ms("--move"), easing: EASE });
   });
   return node;
 }
@@ -972,7 +976,10 @@ function message(m, i, all) {
           body.classList.toggle("folded", !opening);
           more.textContent = opening ? "Show less" : "Show all";
           const node = !opening && more.closest && more.closest(".msg");
-          if (node && node.getBoundingClientRect().top < 0) node.scrollIntoView({ block: "start" });
+          // Its top hidden above the channel (under the header, not only off the screen).
+          const list = node && node.closest(".channel");
+          const listTop = list ? list.getBoundingClientRect().top : 0;
+          if (node && node.getBoundingClientRect().top < listTop) node.scrollIntoView({ block: "start" });
         },
       }, folded ? "Show all" : "Show less")
     : null;
@@ -1272,7 +1279,7 @@ function channelHead(tab) {
     "div",
     { class: "head" + (state.whole ? " whole" : "") },
     el("button", { class: "icon menu", "aria-label": "Tabs", onclick: () => slide(true, toDrawer) }, "☰"),
-    follow(el("span", { class: "mark " + kind }, m), "head-mark:" + number(tab), tab.state === "waiting"),
+    follow(el("span", { class: "mark " + kind }, m), "head-mark:" + number(tab), tab.needs),
     title(tab),
     follow(el("span", { class: "chip " + chip[1] }, chip[0]), "head-chip:" + number(tab)),
     menuChoices(tab).length ? el("button", { class: "icon tab-menu", "aria-label": "Tab " + tab.index + "'s menu", "aria-haspopup": "menu", onclick: () => openMenu(number(tab)) }, "⋯") : null,
@@ -1431,8 +1438,17 @@ function swipeable(screen) {
     swipe = null;
     if (!done.under) return;
     const opens = e.type === "touchend" && (done.dx > window.innerWidth / 3 || (done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
-    screen.style.transition = "transform " + ms("--slide") + "ms " + EASE;
-    screen.style.transform = opens ? "translateX(100%)" : "";
+    // With reduced motion, the channel fades out as the drawer opens, or is
+    // put back at once, rather than sliding.
+    const lasts = still() ? (opens ? ms("--quick") : 0) : ms("--slide");
+    if (still()) {
+      screen.style.transition = "opacity " + lasts + "ms " + EASE;
+      screen.style.transform = "";
+      if (opens) screen.style.opacity = "0";
+    } else {
+      screen.style.transition = "transform " + lasts + "ms " + EASE;
+      screen.style.transform = opens ? "translateX(100%)" : "";
+    }
     // Held off until the slide ends, so no redraw lands mid-slide.
     swipe = { screen, under: done.under, wanted: done.wanted, sliding: true };
     setTimeout(() => {
@@ -1441,6 +1457,7 @@ function swipeable(screen) {
       app.classList.remove("swiping");
       screen.style.transition = "";
       screen.style.transform = "";
+      screen.style.opacity = "";
       if (opens) {
         screen.remove();
         toDrawer();
@@ -1448,7 +1465,7 @@ function swipeable(screen) {
       }
       done.under.remove();
       if (wanted) render(wanted.stick);
-    }, ms("--slide"));
+    }, lasts);
   };
   screen.addEventListener("touchend", end);
   screen.addEventListener("touchcancel", end);
