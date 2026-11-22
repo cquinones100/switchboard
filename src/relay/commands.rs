@@ -814,9 +814,10 @@ async fn send_to_tab(
     let mut before = tabs::screen(cx, &tab.id);
     let current = tabs::tab(cx, &tab.id);
     let aimed = target(tab, thread);
-    // A tab showing numbered choices gets just the keys for your answer: an
-    // option's number picks it at once, and an Enter after it would land on
-    // whatever comes next.
+    // A tab showing numbered choices gets just the keys for your answer
+    // (`presses`): an option's number picks it at once, and an Enter after
+    // it would land on whatever comes next, but beside a preview, where the
+    // number only moves the ❯ there and Enter chooses.
     let prompt = current
         .as_ref()
         .filter(|t| t.state == "waiting")

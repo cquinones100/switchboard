@@ -48,6 +48,8 @@ static SUBMIT_ROW: LazyLock<Regex> =
 static RULE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\s\x{2500}-\x{257F}—-]+$").expect("a regex"));
 static QUESTION_TABS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[☐☒]").expect("a regex"));
+/// What a box's left edge is drawn with, on its rows top to bottom.
+const BOX_EDGE: [char; 7] = ['│', '┃', '├', '┌', '└', '╭', '╰'];
 static LABEL_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}.*$").expect("a regex"));
 static SCROLL_PILL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\S\s+·\s+\S+ to scroll$").expect("a regex"));
@@ -90,6 +92,9 @@ pub struct Prompt {
     pub question: String,
     pub options: Vec<PromptOption>,
     pub multi: bool,
+    /// Whether its options have a preview drawn in a box beside them, where
+    /// a number only moves the ❯ and Enter chooses.
+    pub preview: bool,
     pub free: Option<u32>,
     pub cursor: Option<Cursor>,
     /// The options whose screen shows more than their label: words cut
@@ -108,7 +113,8 @@ pub struct Prompt {
 /// `free`, found by its place. With several questions they come one at a
 /// time, under a line of their names marked ☐ or ☒. A question that takes
 /// several answers (`multi`) shows each option as [ ] or [✔], and a Submit
-/// row after the options moves on.
+/// row after the options moves on. One whose options carry a preview draws
+/// it in a box to their right (`preview`), its edge on the options' rows.
 ///
 /// A screen scrolled back (`scrolled_back`) shows none: the numbered lines
 /// on it are the transcript's, a question answered long ago, while the
@@ -117,16 +123,31 @@ pub fn options_in(text: &str) -> Option<Prompt> {
     if scrolled_back(text) {
         return None;
     }
-    let mapped: Vec<String> = text
-        .split('\n')
+    let raw: Vec<&str> = text.split('\n').collect();
+    // A preview beside the options is a box whose top corner, the first of
+    // a box on its row, has words to its left (a prompt drawn in a box of
+    // its own has none); every row with the box's edge at that column is
+    // read without the box, so nothing drawn in it (a numbered list, a
+    // divider) passes for an option, a description or the rule.
+    let beside: Option<usize> = raw.iter().rev().find_map(|l| {
+        let chars: Vec<char> = l.chars().collect();
+        let at = chars.iter().position(|c| BOX_EDGE.contains(c))?;
+        let words_left = chars[..at].iter().any(|c| !c.is_whitespace());
+        (['┌', '╭'].contains(&chars[at]) && words_left).then_some(at)
+    });
+    let edge_at = |l: &str, at: usize| l.chars().nth(at).is_some_and(|c| BOX_EDGE.contains(&c));
+    let mapped: Vec<String> = raw
+        .iter()
+        .map(|l| match beside {
+            Some(at) if edge_at(l, at) => l.chars().take(at).collect(),
+            _ => l.to_string(),
+        })
         .map(|l| l.replace(['│', '┃'], " ").trim_end().to_string())
         .collect();
-    let lines: Vec<&str> = mapped
-        .iter()
-        .enumerate()
-        .filter(|(i, l)| !l.trim().is_empty() && (*i == 0 || **l != mapped[i - 1]))
-        .map(|(_, l)| l.as_str())
+    let kept: Vec<usize> = (0..mapped.len())
+        .filter(|&i| !mapped[i].trim().is_empty() && (i == 0 || mapped[i] != mapped[i - 1]))
         .collect();
+    let lines: Vec<&str> = kept.iter().map(|&i| mapped[i].as_str()).collect();
     struct Found {
         n: u32,
         label: String,
@@ -199,9 +220,9 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         .filter(|(o, under)| o.cut || !under.is_empty())
         .map(|(o, _)| o.n)
         .collect();
-    let between = |re: &Regex| (first + 1..last).find(|&i| re.is_match(lines[i]));
-    let rule = between(&RULE);
-    let submit = between(&SUBMIT_ROW);
+    let preview = beside.is_some_and(|at| options.iter().any(|o| edge_at(raw[kept[o.line]], at)));
+    let rule = (first + 1..last).find(|&i| RULE.is_match(lines[i]));
+    let submit = (first + 1..last).find(|&i| SUBMIT_ROW.is_match(lines[i]));
     let free = rule.and_then(|r| options.iter().rfind(|o| o.line < r).map(|o| o.n));
     let multi = options.iter().any(|o| o.checked.is_some());
     let cursor = match submit {
@@ -243,6 +264,7 @@ pub fn options_in(text: &str) -> Option<Prompt> {
             })
             .collect(),
         multi,
+        preview,
         free,
         cursor: free.and(cursor),
         more,
@@ -362,7 +384,8 @@ pub enum Press {
 /// or ticks its option; Submit and a free answer in a question that takes
 /// several are reached with the arrow keys from wherever the ❯ is, since a
 /// number only ticks; in one that takes one answer, the free option's
-/// number opens it for typing, and Enter sends what was typed.
+/// number opens it for typing, and Enter sends what was typed. Beside a
+/// preview a number only moves the ❯ to its option, so Enter follows it.
 pub fn presses(found: &Prompt, answer: &Answer) -> Vec<Press> {
     let rows = found.free.unwrap_or(found.options.len() as u32);
     let at = match found.cursor {
@@ -395,6 +418,9 @@ pub fn presses(found: &Prompt, answer: &Answer) -> Vec<Press> {
             Press::Settle,
             enter,
         ],
+        Answer::Choose(o) if found.preview => {
+            vec![Press::Text(o.n.to_string()), Press::Settle, enter]
+        }
         Answer::Choose(o) => vec![Press::Text(o.n.to_string())],
         Answer::Toggle(options) => options
             .iter()
@@ -1071,6 +1097,75 @@ Which colors?
             presses(&found, &Answer::Submit).len(),
             4,
             "three rows down to Submit, then Enter"
+        );
+    }
+
+    #[test]
+    fn a_choice_beside_a_preview_is_its_number_then_enter() {
+        let screen = "\
+ ☐ Layout
+
+Which layout?
+
+❯ 1. Sidebar          ┌──────────────────────┐
+  2. Top bar          │ ┌──────┐             │
+  3. Tabs             │ │ nav  │  content    │
+                      │ ──────────────────── │
+                      │ 1. Install           │
+                      │ 2. Run               │
+                      │ └──────┘             │
+                      └──────────────────────┘
+  4. Type something
+──────────────────
+  5. Chat about this";
+        let found = options_in(screen).expect("a prompt");
+        assert!(found.preview);
+        assert_eq!(found.free, Some(4), "a divider in the box is no rule");
+        let labels: Vec<&str> = found.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Sidebar",
+                "Top bar",
+                "Tabs",
+                "Type something",
+                "Chat about this"
+            ],
+            "nothing in the box passes for an option"
+        );
+        assert!(found.more.is_empty(), "nor for a description: {found:?}");
+        let chose = answer_for(&found, "2").unwrap();
+        assert_eq!(answer_said(&chose), "Chose 2. Top bar");
+        assert_eq!(
+            presses(&found, &chose),
+            vec![
+                Press::Text("2".into()),
+                Press::Settle,
+                Press::Key(Key::new(KeyCode::Enter, Mods::NONE)),
+            ],
+            "the number only moves the ❯ there, and Enter chooses"
+        );
+        let plain = "\
+ ☐ Layout
+
+Which layout?
+
+❯ 1. Sidebar
+  2. Top bar
+  3. Type something
+──────────────────
+  4. Chat about this";
+        let found = options_in(plain).expect("a prompt");
+        assert!(!found.preview);
+        let chose = answer_for(&found, "2").unwrap();
+        assert_eq!(presses(&found, &chose), vec![Press::Text("2".into())]);
+        let boxed = "\
+│ Do you want to proceed?        │
+│ ❯ 1. Yes                       │
+│   2. No                        │";
+        assert!(
+            !options_in(boxed).expect("a prompt").preview,
+            "a prompt in a box of its own has no preview"
         );
     }
 
