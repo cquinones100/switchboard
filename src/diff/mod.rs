@@ -29,7 +29,7 @@ pub mod host;
 pub mod in_place;
 mod serve;
 
-pub use switchboard_diff::{app, ask, clear, git, highlight, order, sides, story, tell};
+pub use switchboard_diff::{app, clear, git, highlight, order, sides, story, tell};
 use switchboard_plugin_api::Plugin;
 
 /// What the diff's keys do in the server, an action of the multiplexer's
@@ -44,8 +44,6 @@ pub enum Command {
     Full,
     /// yS pressed in the diff: its story copied as Markdown.
     CopyStory,
-    /// ga pressed in the diff: a question about it.
-    Ask,
     /// lazygit in place of this pane, or quit.
     Lazygit,
     /// The working tree's changes in place of this pane, or closed.
@@ -55,12 +53,11 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 8] = [
+    pub const ALL: [Command; 7] = [
         Command::Diff,
         Command::Side,
         Command::Full,
         Command::CopyStory,
-        Command::Ask,
         Command::Lazygit,
         Command::WorkingTree,
         Command::ClearCache,
@@ -73,7 +70,6 @@ impl Command {
             Command::Side => "tool-beside",
             Command::Full => "tool-alone",
             Command::CopyStory => "copy-diff-story",
-            Command::Ask => "ask-about-diff",
             Command::Lazygit => "lazygit",
             Command::WorkingTree => "diff-working-tree",
             Command::ClearCache => "clear-diff-cache",
@@ -95,9 +91,6 @@ impl Command {
             }
             Command::Full => "Show a tool in place of a pane alone again, full width",
             Command::CopyStory => "Copy the diff's story (M-d) as Markdown, to share it",
-            Command::Ask => {
-                "Ask Claude about the diff (M-d), with its story, reading the repository as needed"
-            }
             Command::Lazygit => {
                 "Open lazygit in place of this pane, or quit it; quitting brings the pane back"
             }
@@ -125,9 +118,6 @@ impl Command {
             Command::CopyStory => {
                 "It presses yS in the diff: each page's number, title and why, its files, and each change's note as path:line. Listed only while the diff is open; with no story told yet, it says so."
             }
-            Command::Ask => {
-                "It presses ga in the diff. Haiku runs in the repository with tools to read and search only, keeps no session, and streams its answer beside the diff. Sends the diff and your question to Claude; diff_ask turns it off."
-            }
             Command::Lazygit => {
                 "It runs in the pane's directory, the pane parked behind it, and quits with its own Ctrl-c rather than q, which would land in a commit message. lazygit isn't shipped with Switchboard; without it, a box says so."
             }
@@ -147,7 +137,6 @@ impl Command {
             Command::Diff => &["git", "diff", "review"],
             Command::Side | Command::Full => &["panes", "split"],
             Command::CopyStory => &["git", "diff", "review", "story", "diffview"],
-            Command::Ask => &["git", "diff", "review", "story", "ai", "diffview"],
             Command::Lazygit => &["git", "commit", "stage"],
             Command::WorkingTree => &["git", "diff", "review", "stage"],
             Command::ClearCache => &["git", "diff", "story", "cache"],
@@ -168,8 +157,8 @@ pub fn plugin() -> &'static dyn Plugin {
     &switchboard_diff::Diff
 }
 
-/// `switchboard diff [--base <ref> | --working] [--session <id>
-/// --session-dir <dir>] [--resize-key <key> <columns>]... [dir]`: the diff run on this terminal, loaded as a
+/// `switchboard diff [--base <ref> | --working] [--resize-key <key>
+/// <columns>]... [dir]`: the diff run on this terminal, loaded as a
 /// plugin (a build can't load one built for a newer protocol) with this
 /// program answering for the workspace (`host`). `switchboard diff --ahead
 /// [--plan <note>] [dir]` hands it a tab's new commit instead (`ahead`):
@@ -209,7 +198,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: switchboard diff [--base <ref> | --working] [--ahead [--plan <note>]] [--session <id> --session-dir <dir>] [--resize-key <key> <columns>]... [dir]"
+        "Usage: switchboard diff [--base <ref> | --working] [--ahead [--plan <note>]] [--resize-key <key> <columns>]... [dir]"
     );
     ExitCode::from(2)
 }

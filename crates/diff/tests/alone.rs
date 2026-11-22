@@ -47,11 +47,7 @@ fn env(home: &Path) -> Vec<(&'static str, String)> {
     let settings = home.join("diff-settings.json");
     // Written once: a test that changes them keeps what it wrote.
     if !settings.exists() {
-        std::fs::write(
-            &settings,
-            r#"{"diff_order": false, "diff_story": false, "diff_ask": false}"#,
-        )
-        .unwrap();
+        std::fs::write(&settings, r#"{"diff_order": false, "diff_story": false}"#).unwrap();
     }
     vec![
         ("HOME", home.to_string_lossy().into_owned()),
@@ -526,7 +522,7 @@ fn a_newer_release_is_said_in_the_header_and_asked_for_once_a_day() {
     std::fs::remove_file(&kept).unwrap();
     std::fs::write(
         home.join("diff-settings.json"),
-        r#"{"diff_order": false, "diff_story": false, "diff_ask": false, "diff_update_check": false}"#,
+        r#"{"diff_order": false, "diff_story": false, "diff_update_check": false}"#,
     )
     .unwrap();
     let mut diff = Running::start(&repo, &home, &looks);

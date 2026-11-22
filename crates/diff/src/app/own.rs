@@ -176,12 +176,11 @@ impl App {
         (self.opts.easy || self.opts.alone) && !self.in_history
     }
 
-    /// The row's buttons in its order: each of `BUTTONS` (Ask only with
-    /// diff_ask), and alone a Settings button before Close.
+    /// The row's buttons in its order: each of `BUTTONS`, and alone a
+    /// Settings button before Close.
     pub(super) fn bar_buttons(&self) -> Vec<(Button, &'static str)> {
         let mut bar: Vec<(Button, &'static str)> = BUTTONS
             .iter()
-            .filter(|(_, k)| self.opts.ask || *k != "ga")
             .enumerate()
             .map(|(i, (label, _))| (Button::Bar(i), *label))
             .collect();
@@ -190,24 +189,13 @@ impl App {
         // what works there: Close, and Settings.
         let covered = self.cover.is_some() && self.telling == Telling::Waiting;
         let no_change = self.nothing.is_some() || self.failed.is_some() || self.loading.is_some();
-        // A question being typed takes the keys: only Close (which closes
-        // it) and Settings.
-        let typing = self.ask_box.is_some() && self.settings.is_none();
-        if no_change || covered || typing {
+        if no_change || covered {
             bar.drain(..bar.len().saturating_sub(1));
         }
-        // A commit of the history doesn't change and asks nothing: no
-        // Refresh, no Ask.
+        // A commit of the history doesn't change: no Refresh.
         if self.history.is_some() || self.in_history {
             bar.retain(|(b, _)| match b {
-                Button::Bar(i) => {
-                    let keys = BUTTONS
-                        .iter()
-                        .filter(|(_, k)| self.opts.ask || *k != "ga")
-                        .nth(*i)
-                        .map(|(_, k)| *k);
-                    !matches!(keys, Some("R" | "ga"))
-                }
+                Button::Bar(i) => BUTTONS.get(*i).map(|(_, k)| *k) != Some("R"),
                 _ => true,
             });
         }
@@ -533,14 +521,6 @@ impl App {
             self.list_widened = now.list_wide && self.kept_width().is_none();
             self.relay_out(to);
         }
-        // Ask turned off, whatever else changed with it: a question being
-        // typed and an answer go first, so nothing of them asks again.
-        if !now.ask {
-            self.ask_box = None;
-            if self.answer.is_some() {
-                self.close_answer();
-            }
-        }
         if now.uncommitted != before.uncommitted && !self.in_history {
             // The working tree's changes (--working) are read the same
             // whatever the setting says: nothing to read anew.
@@ -554,11 +534,6 @@ impl App {
                 // failed) gives way to this one until it answers.
                 self.nothing = None;
                 self.failed = None;
-                // A question being typed keeps its draft; an answer of the
-                // change before goes.
-                if self.answer.is_some() {
-                    self.close_answer();
-                }
                 // Under its number, so a reading a later change of the
                 // setting outran is dropped when it comes.
                 self.reloads += 1;
@@ -582,14 +557,6 @@ impl App {
         // and order once it is read.
         if self.nothing.is_some() || self.failed.is_some() || self.loading.is_some() {
             return;
-        }
-        // Ask turned off: a question being typed and an answer go, so
-        // nothing of them asks again.
-        if !now.ask {
-            self.ask_box = None;
-            if self.answer.is_some() {
-                self.close_answer();
-            }
         }
         // A page open as a page of its own, with pages turned off, would
         // have no key to leave it: back to the whole diff.
@@ -864,9 +831,8 @@ impl App {
             "Settings are in Switchboard's Settings (Diff)"
         }));
         for (i, (label, keys)) in BUTTONS.iter().enumerate() {
-            // Ask only with diff_ask; in a commit of the history, which
-            // doesn't change, no Refresh.
-            if (*keys == "ga" && !self.opts.ask) || (*keys == "R" && self.in_history) {
+            // In a commit of the history, which doesn't change, no Refresh.
+            if *keys == "R" && self.in_history {
                 continue;
             }
             choices.push(Choice::Keys(i));

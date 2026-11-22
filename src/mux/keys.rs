@@ -1238,7 +1238,6 @@ mod tests {
             Action::View(crate::views::Command::PrView),
             Action::View(crate::views::Command::OpenLinkRead),
             Action::Diff(crate::diff::Command::Diff),
-            Action::Diff(crate::diff::Command::Ask),
             Action::Notes(crate::notes::serve::Command::Beside),
             Action::Notes(crate::notes::serve::Command::NoteTab),
             Action::Extra(crate::extras::Command::GoToTab),

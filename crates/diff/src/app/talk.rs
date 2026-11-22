@@ -656,7 +656,7 @@ impl App {
     /// Shift with the wheel, or a trackpad sideways: the talk's flow, the
     /// map or What runs moved, where one is shown.
     pub(super) fn scroll_sideways(&mut self, right: bool, (x, y): (u16, u16)) -> bool {
-        if self.answer.is_some() || self.ask_box.is_some() || self.menu.is_some() {
+        if self.menu.is_some() {
             return false;
         }
         if self.on_talk() {

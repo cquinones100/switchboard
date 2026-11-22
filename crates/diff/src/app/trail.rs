@@ -114,8 +114,6 @@ impl App {
         let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         let free = self.menu.is_none()
             && self.settings.is_none()
-            && self.ask_box.is_none()
-            && self.answer.is_none()
             && self.history.is_none()
             && !self.filtering
             && self.pending.is_none();

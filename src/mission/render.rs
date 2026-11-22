@@ -10730,7 +10730,6 @@ mod tests {
         let shown = Shown {
             github: true,
             linear: true,
-            ask: true,
             easy: false,
         };
         let items = keymap::items(&bindings, shown, &counts);
@@ -10804,7 +10803,6 @@ mod tests {
         let shown = Shown {
             github: true,
             linear: true,
-            ask: true,
             easy: false,
         };
         let items = keymap::items(&bindings, shown, &counts);

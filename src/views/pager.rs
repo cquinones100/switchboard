@@ -94,7 +94,7 @@ pub enum Content {
     /// CI job's log.
     Log(String),
     /// Plain text, a line each, opened at a line (from 1), as `less +N`
-    /// opens a file: a file the diff's answer names, read beside it.
+    /// opens a file (`switchboard view +<line> <file>`).
     Text { text: String, line: usize },
 }
 

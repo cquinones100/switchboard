@@ -109,8 +109,7 @@ fn claude_takes_every_call_switchboard_makes_of_it() {
     let mut order = quiet.to_vec();
     order.extend(["--system-prompt", "Order them.", "--output-format", "text"]);
     assert_eq!(run(&order, Some("a.rs\n")), "call=print\na.rs\n");
-    // The story and the questions about it, streamed (crates/diff/src/tell.rs,
-    // crates/diff/src/ask.rs).
+    // The story, streamed (crates/diff/src/tell.rs).
     let mut story = quiet.to_vec();
     story.extend([
         "--system-prompt",
@@ -121,26 +120,6 @@ fn claude_takes_every_call_switchboard_makes_of_it() {
         "--verbose",
     ]);
     assert_eq!(run(&story, Some("the diff")), "call=print\nthe diff");
-    let ask = [
-        "-p",
-        "--model",
-        "haiku",
-        "--no-session-persistence",
-        "--restricted",
-        "--tools",
-        "Read,Grep,Glob",
-        "--allowedTools",
-        "Read,Grep,Glob",
-        "--strict-mcp-config",
-        "--disable-slash-commands",
-        "--system-prompt",
-        "Answer.",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-    ];
-    assert_eq!(run(&ask, Some("why?")), "call=print\nwhy?");
     // The Slack relay's summaries (src/relay/summaries.rs).
     let mut summary = quiet.to_vec();
     summary.extend(["--system-prompt", "Sum up.", "--output-format", "json"]);

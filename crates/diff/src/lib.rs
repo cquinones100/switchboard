@@ -1,7 +1,7 @@
 //! The diff: a branch's changes as GitHub's "Files changed" shows them,
 //! side by side in a terminal, told as a story. Ported from diffview.nvim
 //! as M-d set it up (nvim/lua/plugins/diffview.lua, nvim/lua/diffstory.lua,
-//! nvim/lua/diffask.lua, nvim/diff.lua) and the scripts around it
+//! nvim/diff.lua) and the scripts around it
 //! (tmux/diff-base.sh, tmux/diff-story-ahead.sh), and taken out of the
 //! `switchboard` crate (src/diff) to be an app of its own and the first
 //! plugin on Switchboard's plugin API.
@@ -30,7 +30,6 @@
 //! - `highlight`: syntax colours.
 //! - `story`: the diff told as a story: what Haiku reads, its answer read.
 //! - `tell`: telling it, cached, and followed while another program tells it.
-//! - `ask`: a question about the diff, answered by Haiku.
 //! - `app`: the program on the screen.
 //! - `ahead`: a commit's story told ahead of time, the event the workspace
 //!   hands it.
@@ -48,7 +47,6 @@ use switchboard_plugin_api::{Event, Host, Manifest, PROTOCOL_VERSION, Plugin, Sc
 
 pub mod ahead;
 pub mod app;
-pub mod ask;
 pub mod clear;
 pub mod git;
 pub mod highlight;
@@ -78,9 +76,9 @@ pub const UPDATE_CHECK: &str = "diff_update_check";
 /// its default, its name and what it does (the same as `switchboard`'s
 /// `assets/settings.json` lists it with, which a test there keeps so), so
 /// the workspace's Settings, drawn from that file, and the diff's own
-/// settings view, alone, drawn from this, say the same. One only the workspace has a use for (a tab's session,
-/// a pane beside) is left out of that view, and the one that is the diff
-/// alone's is in no list of the workspace's.
+/// settings view, alone, drawn from this, say the same. One only the
+/// workspace has a use for (a pane beside) is left out of that view, and
+/// the one that is the diff alone's is in no list of the workspace's.
 pub fn manifest() -> Manifest {
     Manifest {
         protocol: PROTOCOL_VERSION,
@@ -158,17 +156,6 @@ pub fn manifest() -> Manifest {
                     "Resize the diff's file list",
                     "A drag of M-d's file list's right edge, lit under the mouse, or the pane resize keys (C-M-S-h and C-M-S-l) while the list has the keys, gives the list a width of its own, from 24 columns to half the diff's width, which every diff opens at after, E going between it and the longest path; the diff's menu (m, or a right click) has \"Use the file list's default width\". Off, the list takes the width it had before (30 columns, or its longest path with diff_list_wide and E), its edge takes no drag and the pane resize keys move the pane's divider",
                 ),
-            Setting::new("diff_ask", true)
-                .said(
-                    "Ask Claude about the diff",
-                    "ga in M-d's diff, and M-p's command while the diff is open, ask Haiku a question about the change: it reads the story, the diff and where the cursor is, and may read the repository's files to answer, its answer streamed into a window beside the diff. Sends the diff and the question to Claude",
-                ),
-            Setting::new("diff_ask_session", true)
-                .said(
-                    "Ask in the tab's session",
-                    "With Ask Claude about the diff on, ga asks a copy of the tab's own Claude session, which knows the conversation that made the change, on that session's model; the tab's conversation is left as it was, and Haiku answers in its place when the session can't be resumed. Off, it asks a fresh Haiku with the story and the diff alone, which costs less",
-                )
-                .only(Scope::Workspace),
             Setting::new("diff_beside_share", json!("75"))
                 .said(
                     "Diff's share in the side panel",
@@ -190,14 +177,11 @@ impl Plugin for Diff {
         manifest()
     }
 
-    /// `<program> [--base <ref> | --working] [--session <id> --session-dir
-    /// <dir>] [--resize-key <key> <columns>]... [dir]`: the change in `dir` (where it runs, else) against
+    /// `<program> [--base <ref> | --working] [--resize-key <key> <columns>]... [dir]`: the change in `dir` (where it runs, else) against
     /// `<ref>`, or, without one, its PR's base as the workspace says it
     /// (alone, the default branch, or the branch it was cut from when it tracks one), to the working tree with the
     /// diff_uncommitted setting on; with `--working`, the working tree's
-    /// changes, staged and not; with `--session`, `ga` asks a copy of that
-    /// Claude session (the tab's, which M-d passes), resumed from the
-    /// directory `--session-dir` names; each `--resize-key` names a key
+    /// changes, staged and not; each `--resize-key` names a key
     /// bound to moving a pane's divider and the columns it moves it by (to
     /// the left when negative), which set the file list's width while the
     /// list has the keys (the workspace's default keys with none named);
@@ -208,14 +192,13 @@ impl Plugin for Diff {
         host::share_with_ui();
         let usage = || {
             eprintln!(
-                "Usage: {program} [--base <ref> | --working] [--session <id> --session-dir <dir>] [--resize-key <key> <columns>]... [--several] [dir]"
+                "Usage: {program} [--base <ref> | --working] [--resize-key <key> <columns>]... [--several] [dir]"
             );
             ExitCode::from(2)
         };
         let mut base = None;
         let mut working = false;
         let mut dir = None;
-        let (mut session, mut session_dir) = (None, None);
         let mut resize_keys = Vec::new();
         let mut several = false;
         let mut rest = args.into_iter();
@@ -225,14 +208,14 @@ impl Plugin for Diff {
                     Some(b) if git::safe_ref(&b) => base = Some(b),
                     _ => return usage(),
                 },
-                "--session" => match rest.next() {
-                    Some(id) => session = Some(id),
-                    None => return usage(),
-                },
-                "--session-dir" => match rest.next() {
-                    Some(d) => session_dir = Some(d),
-                    None => return usage(),
-                },
+                // Passed by a server still running a build from before Ask
+                // was removed, until it restarts on this one: taken and
+                // passed over, so its M-d still opens the diff.
+                "--session" | "--session-dir" => {
+                    if rest.next().is_none() {
+                        return usage();
+                    }
+                }
                 // A key the diff can't take as a resize (Escape bound to
                 // one) is passed over, the workspace keeping its binding.
                 "--resize-key" => match (rest.next(), rest.next()) {
@@ -257,15 +240,7 @@ impl Plugin for Diff {
         if working && base.is_some() {
             return usage();
         }
-        let session = match (session, session_dir) {
-            (None, None) => None,
-            (Some(id), Some(at)) => match ask::Session::new(&id, &at) {
-                Some(s) => Some(s),
-                None => return usage(),
-            },
-            _ => return usage(),
-        };
-        app::run(dir, base, working, session, resize_keys, several)
+        app::run(dir, base, working, resize_keys, several)
     }
 
     /// A tab's new commit: its story told and kept, with nothing drawn, so

@@ -31,7 +31,7 @@ install -m 755 target/release/switchboard-diff ~/.local/bin/
 
 - git.
 - A terminal that draws 256 colors. One that reports the mouse lets you click, scroll and select text.
-- Claude Code (`claude` on your PATH, or in `~/.local/bin`), only for the story, the reading order of the files and questions about the change. Without it the files are listed by kind and nothing of the change is sent to Claude; the once-a-day look for a newer release asks GitHub for its list of releases whatever is installed ([Updates](#updates)).
+- Claude Code (`claude` on your PATH, or in `~/.local/bin`), only for the story and the reading order of the files. Without it the files are listed by kind and nothing of the change is sent to Claude; the once-a-day look for a newer release asks GitHub for its list of releases whatever is installed ([Updates](#updates)).
 
 ## Using it
 
@@ -64,7 +64,6 @@ The first line of the screen is its header: its name, the repository and what th
 | Open the diff as a talk | `diff_story_talk` | on |
 | Uncommitted changes in M-d | `diff_uncommitted` | on |
 | Diff file list wide | `diff_list_wide` | on |
-| Ask Claude about the diff | `diff_ask` | on |
 | Check for a newer switchboard-diff | `diff_update_check` | on |
 
 A change is kept in `~/.config/switchboard-diff/settings.json`, the diff's own file, apart from Switchboard's (`SWITCHBOARD_DIFF_SETTINGS` names another): only what differs from its default is written, the version before is kept as `settings.json.bak`, and a file that doesn't read as JSON is never written over. The diff follows a change at once. You can edit the file by hand too. In Switchboard the same options are rows of its own Settings, kept in its own file.
@@ -83,10 +82,10 @@ switchboard-diff update --force    # install it in place of a build from a clone
 
 ## What it sends
 
-With Claude Code installed, the diff and the commits' messages go to Claude (Haiku, or Sonnet for a large change, through `claude -p`) to order the files and tell the story, and a question you ask with `ga` goes with the diff. To keep the diff on your computer, turn off "Files in reading order", "Diff told as a story" and "Ask Claude about the diff" in its [settings](#settings). The story is asked for as a change opens, so to send Claude nothing from the first run, write them to `~/.config/switchboard-diff/settings.json` before opening a repository, with `diff_update_check` to ask GitHub for no releases either (comparing with a base it hasn't kept yet still fetches it from `origin`; `--base <ref>` or `--working` fetch nothing):
+With Claude Code installed, the diff and the commits' messages go to Claude (Haiku, or Sonnet for a large change, through `claude -p`) to order the files and tell the story. To keep the diff on your computer, turn off "Files in reading order" and "Diff told as a story" in its [settings](#settings). The story is asked for as a change opens, so to send Claude nothing from the first run, write them to `~/.config/switchboard-diff/settings.json` before opening a repository, with `diff_update_check` to ask GitHub for no releases either (comparing with a base it hasn't kept yet still fetches it from `origin`; `--base <ref>` or `--working` fetch nothing):
 
 ```json
-{ "diff_order": false, "diff_story": false, "diff_ask": false, "diff_update_check": false }
+{ "diff_order": false, "diff_story": false, "diff_update_check": false }
 ```
 
 A `switchboard-diff` built from a clone before it had settings of its own read them from Switchboard's `~/.config/switchboard/settings.json`; it reads only its own file now, so write any of these you had set there into `~/.config/switchboard-diff/settings.json` before running it again.

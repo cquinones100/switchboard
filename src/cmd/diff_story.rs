@@ -40,7 +40,6 @@ fn page_options() -> app::Options {
         notes: on("diff_story_notes"),
         list_wide: on("diff_list_wide"),
         uncommitted: on("diff_uncommitted"),
-        ask: false,
         easy: false,
         key_help: false,
         hover: false,
