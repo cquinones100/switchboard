@@ -4190,6 +4190,11 @@ pub enum Shape {
     Picture {
         key: String,
     },
+    /// A Slack workspace's own emoji (`images::emoji`), from the
+    /// snapshot's `slack_emoji` by its name.
+    Emoji {
+        name: String,
+    },
     /// A closed tab's last screen (`images::screen`), the Reopen view's.
     Screen {
         shot: std::sync::Arc<crate::usage::shots::Shot>,
@@ -4246,6 +4251,7 @@ impl Image {
             | Shape::Keyboard { .. }
             | Shape::Avatar { .. }
             | Shape::Picture { .. }
+            | Shape::Emoji { .. }
             | Shape::Screen { .. } => None,
         }
     }
@@ -6095,6 +6101,8 @@ pub(super) fn body(
                         _ => None,
                     },
                     sections_focused: m.pane_now() == super::Pane::Panel,
+                    emoji_on: crate::day::slack_emoji::on(),
+                    emoji: &snap.slack_emoji,
                 };
                 let (board, at, images) = super::slack_board::board(v, &look);
                 lines.extend(board);
@@ -6357,6 +6365,7 @@ mod tests {
             inbox_links: Default::default(),
             slack_thread: None,
             slack_pictures: Default::default(),
+            slack_emoji: Default::default(),
             slack_work: Vec::new(),
             slack_thread_failed: None,
             slack_files_failed: Default::default(),

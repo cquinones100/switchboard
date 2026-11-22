@@ -704,7 +704,7 @@ mod tests {
             .find(|&i| text[i].trim_start().starts_with("Slack "))
             .unwrap_or_else(|| panic!("{}", text.join("\n")));
         // Slack is in front, named whole over its options, its switch first.
-        assert!(text[slack].contains("9"), "{}", text[slack]);
+        assert!(text[slack].contains("10"), "{}", text[slack]);
         assert!(text[0].contains("Mission control: Slack"), "{}", text[0]);
         let shown = text.join("\n");
         let place = |words: &str| {

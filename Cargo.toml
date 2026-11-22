@@ -130,6 +130,9 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
 # sent Linear's key (src/photos).
 url = "2"
 ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc"] }
+# Slack's standard emoji by their shortcodes, drawn as characters in its
+# messages (src/day/slack_emoji.rs).
+emojis = "0.9.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the

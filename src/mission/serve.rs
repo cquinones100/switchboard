@@ -814,8 +814,19 @@ impl Server {
             .filter_map(|(_, at)| at.checked_sub(1).and_then(|i| m.snap.views.get(i)))
             .find(|v| super::render::slack_board_shown(v))
             .cloned();
+        // The workspace's own emoji in what the boards show: a cell's first
+        // section, then the board in front's rows and thread.
+        let mut emoji_names: Vec<String> = Vec::new();
         if let Some(v) = cell {
             let first = super::slack_board::shown(&v.data.items, -1);
+            emoji_names.extend(
+                first
+                    .iter()
+                    .flat_map(|i| super::slack_board::words_of(&v.data.items[*i]))
+                    .flat_map(|text| {
+                        crate::day::slack_emoji::custom_names(&text).collect::<Vec<_>>()
+                    }),
+            );
             m.slack_viewed.get_or_insert_default().extend(
                 first
                     .into_iter()
@@ -833,6 +844,7 @@ impl Server {
             // message chosen.
             self.slack_pane_shows(None);
             m.slack_thread_open = false;
+            m.snap.slack_emoji = self.slack_emoji(emoji_names);
             return;
         };
         // What the board shows has been shown, every message of a thread's
@@ -859,6 +871,18 @@ impl Server {
                 m.snap.photos.insert(who, photo);
             }
         }
+        emoji_names.extend(
+            slack_shown(m, &view)
+                .into_iter()
+                .flat_map(|i| super::slack_board::words_of(&view.data.items[i]))
+                .chain(
+                    thread
+                        .iter()
+                        .flat_map(|t| t.messages.iter().map(|s| s.text.clone())),
+                )
+                .flat_map(|text| crate::day::slack_emoji::custom_names(&text).collect::<Vec<_>>()),
+        );
+        m.snap.slack_emoji = self.slack_emoji(emoji_names);
         m.snap.slack_thread = thread;
         m.snap.slack_pictures = pictures;
     }
@@ -1359,6 +1383,7 @@ impl Server {
             inbox_links: Default::default(),
             slack_thread: None,
             slack_pictures: Default::default(),
+            slack_emoji: Default::default(),
             reopen_shot: None,
             slack_work,
             slack_thread_failed: None,

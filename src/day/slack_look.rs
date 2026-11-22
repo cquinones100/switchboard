@@ -297,14 +297,20 @@ pub fn page_of(answer: &str) -> (String, Option<String>) {
 }
 
 /// A message's text as the view shows it: `<@U1|ada>` as `@ada`, a link
-/// `<https://…|words>` as its words.
+/// `<https://…|words>` as its words, and each standard emoji's code as its
+/// character while Settings' `slack_emoji` is on (`slack_emoji`).
 pub fn plain(text: &str) -> String {
     static MENTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<@\w+\|([^>]+)>").unwrap());
     static LINKED: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"<(https?:[^|>]+)\|([^>]+)>").unwrap());
     let named = MENTION.replace_all(text, "@$1");
     let shown = LINKED.replace_all(&named, "$2");
-    unescape(&shown)
+    let text = unescape(&shown);
+    if super::slack_emoji::on() {
+        super::slack_emoji::with_standard(&text)
+    } else {
+        text
+    }
 }
 
 /// Slack's three escapes in a message's text (`&lt;`, `&gt;`, `&amp;`) as

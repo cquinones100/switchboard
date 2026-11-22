@@ -4733,3 +4733,127 @@ fn the_tabs_view_follows_the_sidebar_s_repository_filter() {
             && s.iter().any(|l| l.contains("bee-work"))
     });
 }
+
+/// A server signed in to a stand-in Slack whose workspace has one emoji of
+/// its own, `:shipit:`, its picture on a web server of its own, and a
+/// Slack view holding a message that uses it; with `extra` settings.
+fn slack_with_an_emoji(extra: Value) -> (common::http::Fake, common::http::Fake, TestServer) {
+    let png = {
+        let mut bytes = Vec::new();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 40, 40, 255]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    };
+    let pictures = common::http::Fake::start(common::http::Service::Web, move |request| {
+        (request.path() == "/shipit.png")
+            .then(|| common::http::Reply::bytes(200, "image/png", png.clone()))
+    });
+    let picture = format!("{}/shipit.png", pictures.url);
+    let mut settings = json!({ "view_slack": true, "slack_threads": false,
+        "slack_background": false, "photos": false });
+    for (k, v) in extra.as_object().unwrap() {
+        settings[k] = v.clone();
+    }
+    let (slack, server) = slack_signed_in(
+        move |request| {
+            (request.path() == "/api/emoji.list").then(|| {
+                common::http::Reply::json(
+                    200,
+                    json!({ "ok": true, "emoji": { "shipit": picture, "ship": "alias:shipit" } }),
+                )
+            })
+        },
+        true,
+        settings,
+    );
+    let secs = switchboard::util::now_ms() / 1000;
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "channel", "channel": "C1", "where": "#dev", "from": "Bo", "user": "UBo",
+              "text": "ready :shipit: go", "ts": format!("{}.000100", secs - 300),
+              "link": "https://slack.example/m" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    (slack, pictures, server)
+}
+
+/// The requests the Usage view counts for the workspace's emoji.
+fn emoji_requests(server: &TestServer) -> usize {
+    let dir = server.state.join("requests");
+    std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+        .map(|text| text.lines().filter(|l| l.contains("slack emoji")).count())
+        .sum()
+}
+
+// A workspace's own emoji is read through your own Slack sign-in, its list
+// with `emoji.list` and its picture from where the list says, each once and
+// counted, and kept on this computer; where the terminal draws no images,
+// the message shows its code.
+#[test]
+fn a_slack_workspaces_emoji_is_read_once_through_your_sign_in_and_kept() {
+    let (slack, pictures, server) = slack_with_an_emoji(json!({}));
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("ready :shipit: go");
+    let kept = server
+        .home
+        .join(".cache/switchboard/slack-emoji/T1/shipit.img");
+    let deadline = common::deadline(Duration::from_secs(15));
+    while !kept.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the picture kept: {:?}",
+            slack_calls(&slack)
+        );
+        std::thread::sleep(Duration::from_millis(50) * common::patience());
+    }
+    assert!(
+        server
+            .home
+            .join(".cache/switchboard/slack-emoji/T1/list.json")
+            .exists()
+    );
+    // Drawn again, nothing more is asked.
+    client.type_text("\x1b");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("ready :shipit: go");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(slack_calls(&slack), ["GET emoji.list"]);
+    assert_eq!(pictures.seen().len(), 1, "the picture fetched once");
+    assert_eq!(
+        emoji_requests(&server),
+        2,
+        "the list and the picture counted"
+    );
+}
+
+// With Settings' "Draw emoji in Slack messages" off, a workspace's emoji
+// stays its code and nothing is looked up.
+#[test]
+fn with_slack_emoji_off_no_emoji_is_looked_up() {
+    let (slack, pictures, server) = slack_with_an_emoji(json!({ "slack_emoji": false }));
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("ready :shipit: go");
+    std::thread::sleep(Duration::from_millis(800) * common::patience());
+    client.wait_text("ready :shipit: go");
+    assert_eq!(slack_calls(&slack), Vec::<String>::new());
+    assert!(pictures.seen().is_empty());
+    assert_eq!(emoji_requests(&server), 0);
+}

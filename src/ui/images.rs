@@ -183,6 +183,23 @@ pub fn raster_avatar(photo: &RgbaImage, cols: u16, rows: u16, cell: Cell) -> Pix
     pm
 }
 
+/// A Slack workspace's emoji scaled to fit its cells, in their middle,
+/// with nothing behind it.
+pub fn raster_emoji(img: &RgbaImage, cols: u16, rows: u16, cell: Cell) -> Pixmap {
+    let (w, h) = (cols as u32 * cell.0 as u32, rows as u32 * cell.1 as u32);
+    let mut pm = canvas(w, h);
+    let (img, x, y) = scaled(img, w, h, false);
+    pm.draw_pixmap(
+        x,
+        y,
+        img.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    pm
+}
+
 /// A picture scaled to fit, on the sunken surface inside a 1 px border in
 /// the rule's color with a 6 px corner.
 pub fn raster_picture(img: &RgbaImage, cols: u16, rows: u16, cell: Cell, tones: &Tones) -> Pixmap {
@@ -712,6 +729,37 @@ pub fn avatar(
         area.width.min(2),
         area.height.min(1),
     ));
+}
+
+/// A Slack workspace's own emoji in `area` (`kit::emoji`, two columns
+/// and a row): its picture where the terminal draws images, else nothing,
+/// leaving the text the cells hold, `kit::emoji`'s, as its text form.
+pub fn emoji(frame: &mut Frame, name: &str, area: Rect, img: &RgbaImage) {
+    let area = area.intersection(frame.buf.area);
+    let Some(cell) = frame.graphics.map(|g| g.cell) else {
+        return;
+    };
+    if !placeable(frame, area) {
+        return;
+    }
+    let key = key_of((
+        "emoji",
+        area.width,
+        area.height,
+        cell,
+        img.dimensions(),
+        img.as_raw(),
+    ));
+    let img = img.clone();
+    let (cols, rows) = (area.width, area.height);
+    place(
+        frame,
+        name,
+        area,
+        key,
+        true,
+        Arc::new(move || raster_emoji(&img, cols, rows, cell)),
+    );
 }
 
 /// A picture in `area`, scaled to fit inside its border; as text, its name

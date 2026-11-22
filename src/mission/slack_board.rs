@@ -44,6 +44,7 @@ use super::diagrams::Ready;
 use super::render::{Image, Shape};
 use super::views::{View, ViewId};
 use super::{HitBox, Spot};
+use crate::day::slack_emoji::{self, Custom, Piece};
 use crate::day::slack_thread::{Said, SlackFile, Thread};
 use crate::items::Item;
 use crate::photos::{Service, Who};
@@ -120,6 +121,11 @@ pub struct Look<'a> {
     pub hover_section: Option<usize>,
     /// The sections' column has the focus (`h`, `C-w h`).
     pub sections_focused: bool,
+    /// Settings' `slack_emoji`: a workspace's own emoji are drawn.
+    pub emoji_on: bool,
+    /// What the workspace's own emoji the board shows are, those loaded,
+    /// by name.
+    pub emoji: &'a HashMap<String, Custom>,
 }
 
 /// A piece of a line: text, someone's avatar (`kit::avatar`, `rows` of
@@ -136,6 +142,11 @@ enum Run {
         id: String,
         cols: usize,
         rows: usize,
+    },
+    /// A workspace's own emoji (`kit::emoji`), its picture placed over it
+    /// once loaded.
+    Emoji {
+        name: String,
     },
 }
 
@@ -775,6 +786,7 @@ fn run_width(run: &Run) -> usize {
         Run::Text(s) => width(&s.content),
         Run::Avatar { size, .. } => size.cols(),
         Run::Picture { cols, .. } => *cols,
+        Run::Emoji { .. } => kit::EMOJI_COLS,
     }
 }
 
@@ -867,6 +879,25 @@ fn put(
                 }
                 spans.push(Span::raw(" ".repeat(cols)));
                 x += cols;
+            }
+            Run::Emoji { name: emoji } => {
+                if x + kit::EMOJI_COLS > w {
+                    continue;
+                }
+                if look.graphics && matches!(look.emoji.get(&emoji), Some(Custom::Picture(_))) {
+                    images.push(Image {
+                        name: format!("{name}-emoji-{y}-{}", x0 + x),
+                        x: (x0 + x) as u16,
+                        y: y as u16,
+                        width: kit::EMOJI_COLS as u16,
+                        height: 1,
+                        shape: Shape::Emoji {
+                            name: emoji.clone(),
+                        },
+                    });
+                }
+                spans.push(kit::emoji(&emoji, look.theme));
+                x += kit::EMOJI_COLS;
             }
         }
     }
@@ -1211,6 +1242,10 @@ fn on_surface(runs: Vec<Run>, w: usize, bg: ratatui::style::Color) -> Vec<Run> {
                 used += cols;
                 r
             }
+            Run::Emoji { .. } => {
+                used += kit::EMOJI_COLS;
+                r
+            }
         })
         .collect();
     if used < w {
@@ -1228,23 +1263,71 @@ fn ago(ts: &str, now_ms: i64) -> String {
     crate::sidebar::text::ago(Some(secs), now_ms.div_euclid(1000))
 }
 
+/// The first of the characters a workspace's emoji drawn as a picture
+/// stands as while its message is wrapped, each two columns wide as the
+/// picture is (`kit::EMOJI_COLS`), so the lines break where it is drawn:
+/// the end of plane 3, where no character is assigned.
+const EMOJI_MARK: u32 = 0x3f000;
+/// How many emoji a message draws as pictures, the rest left as codes.
+const EMOJI_MARKS: usize = 0xff0;
+
 /// A message's text wrapped to `w`, `@someone` in the accent, at most
-/// `most` lines, each with `indent` before it.
+/// `most` lines, each with `indent` before it. While Settings'
+/// `slack_emoji` is on, a workspace's own emoji (`slack_emoji::pieces`)
+/// is drawn by `kit::emoji` where the terminal draws images, until it is
+/// known the workspace has none by its name; else, and for none, it is its
+/// code, dimmed; and one that is an alias of a standard emoji is that emoji.
 fn body(
     text: &str,
     w: usize,
     most: usize,
     indent: usize,
     tone: Tone,
-    theme: &Theme,
+    look: &Look,
 ) -> Vec<Vec<Run>> {
+    let theme = look.theme;
     let room = w.saturating_sub(indent + 1).min(kit::WRAP_MAX);
-    let mut lines = wrap(text, room);
+    let mut drawn: Vec<&str> = Vec::new();
+    let marked = if look.emoji_on {
+        let mut marked = String::with_capacity(text.len());
+        for piece in slack_emoji::pieces(text) {
+            match piece {
+                Piece::Text(t) => marked.push_str(t),
+                Piece::Custom(name) => match look.emoji.get(name) {
+                    Some(Custom::Standard(c)) => marked.push_str(c),
+                    Some(Custom::Picture(_)) | None
+                        if look.graphics && drawn.len() < EMOJI_MARKS =>
+                    {
+                        marked.extend(char::from_u32(EMOJI_MARK + drawn.len() as u32));
+                        drawn.push(name);
+                    }
+                    _ => marked.push_str(&format!(":{name}:")),
+                },
+            }
+        }
+        marked
+    } else {
+        text.to_string()
+    };
+    let mut lines = wrap(&marked, room);
     let cut_short = lines.len() > most;
     lines.truncate(most);
     if cut_short && let Some(last) = lines.last_mut() {
         *last = format!("{}…", cut(last, room.saturating_sub(1)));
     }
+    // Words as they are, a code left in them dimmed.
+    let words = |runs: &mut Vec<Run>, text: &str, style: Style| {
+        if !look.emoji_on {
+            runs.push(Run::Text(Span::styled(text.to_string(), style)));
+            return;
+        }
+        for piece in slack_emoji::pieces(text) {
+            runs.push(Run::Text(match piece {
+                Piece::Text(t) => Span::styled(t.to_string(), style),
+                Piece::Custom(name) => Span::styled(format!(":{name}:"), Tone::Dim.style(theme)),
+            }));
+        }
+    };
     lines
         .into_iter()
         .map(|l| {
@@ -1258,7 +1341,22 @@ fn body(
                 } else {
                     tone.style(theme)
                 };
-                runs.push(Run::Text(Span::styled(word.to_string(), style)));
+                let mut said = String::new();
+                for c in word.chars() {
+                    let mark = (c as u32).checked_sub(EMOJI_MARK).map(|i| i as usize);
+                    match mark.and_then(|i| drawn.get(i)) {
+                        Some(name) => {
+                            words(&mut runs, &std::mem::take(&mut said), style);
+                            runs.push(Run::Emoji {
+                                name: name.to_string(),
+                            });
+                        }
+                        None => said.push(c),
+                    }
+                }
+                if !said.is_empty() || word.is_empty() {
+                    words(&mut runs, &said, style);
+                }
             }
             runs
         })
@@ -1298,6 +1396,14 @@ fn root_of(item: &Item) -> (Said, bool) {
         }
         None => (listed, false),
     }
+}
+
+/// The words a row draws: its messages', and its thread's first
+/// message's.
+pub fn words_of(item: &Item) -> Vec<String> {
+    let mut out: Vec<String> = members(item).iter().map(|m| m.lines.join("\n")).collect();
+    out.push(root_of(item).0.text);
+    out
 }
 
 /// A message of the view as a thread's message.
@@ -1479,7 +1585,7 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     // Its first message on one line, beside the avatar's second row, which
     // stays blank when there are no words.
     let indent = at[1].map_or(kit::SAID_INDENT, |(fx, _)| fx);
-    let mut words = body(&root.text, inner, 1, indent, tone, theme);
+    let mut words = body(&root.text, inner, 1, indent, tone, look);
     if words.is_empty() {
         words.push(Vec::new());
     }
@@ -1733,7 +1839,7 @@ fn thread_lines(
             head.extend(texts(kit::chip("new", Tone::Accent, look.caps, theme)));
         }
         out.push(head);
-        let mut words = body(&m.text, w, usize::MAX, kit::SAID_INDENT, Tone::Text, theme);
+        let mut words = body(&m.text, w, usize::MAX, kit::SAID_INDENT, Tone::Text, look);
         if words.is_empty() {
             words.push(Vec::new());
         }
@@ -2127,6 +2233,8 @@ mod tests {
             hover: None,
             hover_section: None,
             sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
         };
         let (lines, _, images) = board(view, &look);
         for l in &lines {
@@ -2137,6 +2245,171 @@ mod tests {
             );
         }
         (texts(&lines), images)
+    }
+
+    /// A message's words as `body` lays them out on a board drawing images
+    /// (`graphics`) or not, with what is known of its emoji: each line's
+    /// text, an emoji as `{name}`, and the dimmed words.
+    fn emoji_body(
+        text: &str,
+        emoji: &HashMap<String, Custom>,
+        graphics: bool,
+        on: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        let tz = TimeZone::UTC;
+        let pictures = HashMap::new();
+        let look = Look {
+            cols: 100,
+            rows: 40,
+            top_row: 1,
+            cursor: Some(0),
+            theme: &Theme::DARK,
+            caps: false,
+            now_ms: NOW,
+            tz: &tz,
+            thread: None,
+            threads_on: true,
+            pictures: &pictures,
+            graphics,
+            work: &[],
+            tabs: &[],
+            side_top: 0,
+            thread_open: false,
+            failed: None,
+            files_failed: &Default::default(),
+            files_kept: &Default::default(),
+            hover: None,
+            hover_section: None,
+            sections_focused: false,
+            emoji_on: on,
+            emoji,
+        };
+        let dim = Tone::Dim.style(&Theme::DARK);
+        let mut dimmed = Vec::new();
+        let lines = body(text, 40, usize::MAX, 0, Tone::Text, &look)
+            .into_iter()
+            .map(|runs| {
+                let mut line = String::new();
+                for run in runs {
+                    match run {
+                        Run::Emoji { name } => line.push_str(&format!("{{{name}}}")),
+                        Run::Text(s) => {
+                            if s.style == dim {
+                                dimmed.push(s.content.to_string());
+                            }
+                            line.push_str(&s.content);
+                        }
+                        _ => {}
+                    }
+                }
+                line
+            })
+            .collect();
+        (lines, dimmed)
+    }
+
+    #[test]
+    fn a_workspaces_emoji_is_two_columns_while_its_picture_is_had_or_awaited() {
+        let none = HashMap::new();
+        let (lines, dimmed) = emoji_body("ship :shipit: now", &none, true, true);
+        assert_eq!(lines, vec!["ship {shipit} now"]);
+        assert!(dimmed.is_empty(), "{dimmed:?}");
+        let had = HashMap::from([(
+            "shipit".to_string(),
+            Custom::Picture(std::sync::Arc::new(image::RgbaImage::new(4, 4))),
+        )]);
+        assert_eq!(
+            emoji_body("ship :shipit: now", &had, true, true).0,
+            vec!["ship {shipit} now"]
+        );
+        // Wrapped as two columns each: thirteen and their spaces fill 39.
+        let many = vec![":shipit:"; 14].join(" ");
+        let (lines, _) = emoji_body(&many, &none, true, true);
+        assert_eq!(lines[0].matches("{shipit}").count(), 13, "{lines:?}");
+    }
+
+    #[test]
+    fn a_workspaces_emoji_had_is_placed_as_a_picture_over_its_two_columns() {
+        let had = HashMap::from([(
+            "shipit".to_string(),
+            Custom::Picture(std::sync::Arc::new(image::RgbaImage::new(4, 4))),
+        )]);
+        let (tz, pictures) = (TimeZone::UTC, HashMap::new());
+        let mut look = Look {
+            cols: 100,
+            rows: 40,
+            top_row: 1,
+            cursor: Some(0),
+            theme: &Theme::DARK,
+            caps: false,
+            now_ms: NOW,
+            tz: &tz,
+            thread: None,
+            threads_on: true,
+            pictures: &pictures,
+            graphics: true,
+            work: &[],
+            tabs: &[],
+            side_top: 0,
+            thread_open: false,
+            failed: None,
+            files_failed: &Default::default(),
+            files_kept: &Default::default(),
+            hover: None,
+            hover_section: None,
+            sections_focused: false,
+            emoji_on: true,
+            emoji: &had,
+        };
+        for graphics in [true, false] {
+            look.graphics = graphics;
+            let runs = vec![
+                Run::Text(Span::raw("ok ")),
+                Run::Emoji {
+                    name: "shipit".into(),
+                },
+                Run::Text(Span::raw(" go")),
+            ];
+            let (mut line, mut images) = (Vec::new(), Vec::new());
+            put(&mut line, runs, (10, 40), 3, &look, &mut images, "t");
+            let text: String = line.iter().map(|s| s.content.to_string()).collect();
+            assert_eq!(text.trim(), "ok :… go", "the same width either way");
+            let placed: Vec<_> = images
+                .iter()
+                .map(|i| (i.x, i.y, i.width, i.height, i.shape.clone()))
+                .collect();
+            let want = if graphics {
+                vec![(
+                    13,
+                    3,
+                    2,
+                    1,
+                    Shape::Emoji {
+                        name: "shipit".into(),
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(placed, want);
+        }
+    }
+
+    #[test]
+    fn a_workspaces_emoji_is_its_dimmed_code_without_images_or_by_a_name_it_lacks() {
+        let none = HashMap::new();
+        let (lines, dimmed) = emoji_body("ship :shipit: now", &none, false, true);
+        assert_eq!(lines, vec!["ship :shipit: now"]);
+        assert_eq!(dimmed, vec![":shipit:"]);
+        let unknown = HashMap::from([("shipit".to_string(), Custom::Unknown)]);
+        let (lines, dimmed) = emoji_body("ship :shipit: now", &unknown, true, true);
+        assert_eq!(lines, vec!["ship :shipit: now"]);
+        assert_eq!(dimmed, vec![":shipit:"]);
+        let alias = HashMap::from([("yes".to_string(), Custom::Standard("👍".into()))]);
+        assert_eq!(emoji_body("ok :yes:", &alias, true, true).0, vec!["ok 👍"]);
+        let (lines, dimmed) = emoji_body("ship :shipit: now", &none, true, false);
+        assert_eq!(lines, vec!["ship :shipit: now"], "the setting off");
+        assert!(dimmed.is_empty());
     }
 
     /// A reply in the thread `C1:<root>` of #dev.
@@ -2570,6 +2843,8 @@ mod tests {
             hover: None,
             hover_section: None,
             sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
         };
         let said = texts(&board(&view(), &look).0).join("\n");
         assert!(
@@ -2799,6 +3074,8 @@ mod tests {
             hover: None,
             hover_section: None,
             sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
         };
         let (_, hits, _) = board(&view(), &look);
         assert!(
@@ -2886,6 +3163,8 @@ mod tests {
             hover: None,
             hover_section: None,
             sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
         };
         let lines = texts(&board(&view, &look).0);
         let ed = lines.iter().find(|l| l.contains("Ed ")).unwrap();
@@ -2926,6 +3205,8 @@ mod tests {
             hover: None,
             hover_section: None,
             sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
         };
         let (spans, at) = section_line(&secs, Some(1), &look, 80);
         assert!(
@@ -2980,6 +3261,8 @@ mod tests {
                 hover: None,
                 hover_section: None,
                 sections_focused: false,
+                emoji_on: true,
+                emoji: &Default::default(),
             };
             texts(&board(&view, &look).0)
         };

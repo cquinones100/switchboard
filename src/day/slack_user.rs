@@ -45,8 +45,8 @@ pub const SETUP: &str = "switchboard setup slack-user";
 /// The user scopes the token needs: reading and completing reminders,
 /// reading how far a conversation is read and marking it, and the Slack
 /// view's reads (`slack_api`): its messages, threads, people, search and
-/// pictures.
-pub const SCOPES: [&str; 17] = [
+/// pictures, and the workspace's own emoji (`slack_emoji`).
+pub const SCOPES: [&str; 18] = [
     "reminders:read",
     "reminders:write",
     "channels:read",
@@ -64,6 +64,7 @@ pub const SCOPES: [&str; 17] = [
     "search:read",
     "users:read",
     "files:read",
+    "emoji:read",
 ];
 /// How often the reminders are read while you're at the computer.
 /// How a read Slack refused for its rate limit starts, Slack's

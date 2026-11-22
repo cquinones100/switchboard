@@ -1730,6 +1730,19 @@ pub fn avatar(name: &str, size: AvatarSize) -> Vec<Vec<Span<'static>>> {
     rows
 }
 
+/// How many columns a workspace's emoji takes (`emoji`).
+pub const EMOJI_COLS: usize = 2;
+
+/// A Slack workspace's own emoji as text, `EMOJI_COLS` wide: its code,
+/// `:name:`, cut to fit and dimmed. It is what shows under its picture
+/// (the server's `ui::images::emoji`) and in its place until the picture
+/// is had, so the line never moves when it arrives.
+pub fn emoji(name: &str, theme: &Theme) -> Span<'static> {
+    let code = cut(&format!(":{name}:"), EMOJI_COLS);
+    let pad = EMOJI_COLS.saturating_sub(width(&code));
+    Span::styled(format!("{code}{}", " ".repeat(pad)), Tone::Dim.style(theme))
+}
+
 /// A person's initial on `color`, two columns wide: dark on a light
 /// color and white on a dark one.
 pub fn initial(name: &str, color: Color) -> Vec<Span<'static>> {
@@ -2502,6 +2515,16 @@ mod tests {
         assert_eq!(text(&p[0]), "api       ");
         assert_eq!(text(&p[1]), "main · 2m ");
         assert_eq!(text(&p[2]), "─".repeat(10));
+    }
+
+    #[test]
+    fn an_emoji_is_two_columns_whatever_its_name() {
+        for name in ["shipit", "a", "party-parrot_with_a_very_long_name"] {
+            let span = emoji(name, &Theme::DARK);
+            assert_eq!(width(&span.content), EMOJI_COLS, "{name}");
+            assert!(span.content.starts_with(':'), "{name}");
+            assert_eq!(span.style, Tone::Dim.style(&Theme::DARK));
+        }
     }
 
     #[test]
