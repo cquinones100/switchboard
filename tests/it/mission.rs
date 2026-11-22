@@ -4776,7 +4776,7 @@ fn a_slack_workspaces_emoji_is_read_once_through_your_sign_in_and_kept() {
     client.wait_text("ready :shipit: go");
     let kept = server
         .home
-        .join(".cache/switchboard/slack-emoji/shipit.img");
+        .join(".cache/switchboard/slack-emoji/T1/shipit.img");
     let deadline = common::deadline(Duration::from_secs(15));
     while !kept.exists() {
         assert!(
@@ -4789,7 +4789,7 @@ fn a_slack_workspaces_emoji_is_read_once_through_your_sign_in_and_kept() {
     assert!(
         server
             .home
-            .join(".cache/switchboard/slack-emoji/list.json")
+            .join(".cache/switchboard/slack-emoji/T1/list.json")
             .exists()
     );
     // Drawn again, nothing more is asked.

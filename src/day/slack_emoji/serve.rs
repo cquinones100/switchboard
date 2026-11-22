@@ -22,12 +22,16 @@ pub struct SlackEmojis {
     failed: HashMap<String, i64>,
     /// The names being loaded now.
     loading: HashSet<String>,
+    /// The workspace what is held came from: one signed in to since lets
+    /// all of it go.
+    team: String,
 }
 
 #[derive(Debug)]
 pub enum SlackEmojisEvent {
-    /// What was found of the names asked, and the names asked.
-    Loaded(Vec<(String, Custom)>, Vec<String>),
+    /// The workspace looked in, what was found of the names asked, and the
+    /// names asked.
+    Loaded(String, Vec<(String, Custom)>, Vec<String>),
     Failed(Vec<String>),
 }
 
@@ -75,8 +79,13 @@ impl Server {
         self.slack_emojis.loading.extend(wanted.iter().cloned());
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let event = match super::load(&Store::here(), &wanted).await {
-                Ok(found) => SlackEmojisEvent::Loaded(found, wanted),
+            let team = super::signed_in_team();
+            let found = match &team {
+                Some(team) => super::load(&Store::of(team), &wanted).await,
+                None => Err("no Slack sign-in".to_string()),
+            };
+            let event = match found {
+                Ok(found) => SlackEmojisEvent::Loaded(team.unwrap_or_default(), found, wanted),
                 Err(_) => SlackEmojisEvent::Failed(wanted),
             };
             let _ = tx.send(Event::SlackEmojis(event));
@@ -87,7 +96,14 @@ impl Server {
     pub(crate) fn slack_emojis_event(&mut self, event: SlackEmojisEvent) {
         let now = util::now_ms();
         let (found, asked) = match event {
-            SlackEmojisEvent::Loaded(found, asked) => (found, asked),
+            SlackEmojisEvent::Loaded(team, found, asked) => {
+                if team != self.slack_emojis.team {
+                    self.slack_emojis.held.clear();
+                    self.slack_emojis.failed.clear();
+                    self.slack_emojis.team = team;
+                }
+                (found, asked)
+            }
             SlackEmojisEvent::Failed(asked) => (Vec::new(), asked),
         };
         for name in &asked {

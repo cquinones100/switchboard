@@ -14,8 +14,8 @@
 //! sign-in (`slack_user`) while one is stored and Settings'
 //! `slack_token_reads` is on, which needs the `emoji:read` scope; with
 //! none, a workspace's emoji stay their codes. The list is kept in
-//! `~/.cache/switchboard/slack-emoji/list.json` and each picture by its
-//! name beside it, both read again after `KEEP`, the old ones used while
+//! `~/.cache/switchboard/slack-emoji/<workspace>/list.json` and each picture
+//! by its name beside it, a folder for each workspace signed in to, both read again after `KEEP`, the old ones used while
 //! that fails. An alias resolves to what it names. Everything here runs
 //! off the server's task (`serve.rs`), and each request is counted in the
 //! request audit (src/net.rs). Settings' `slack_emoji` off leaves every
@@ -273,9 +273,13 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn here() -> Store {
+    /// The emoji of the workspace `team` names (its ID, `T0123`), each
+    /// workspace's apart, so signing in to another never draws the last
+    /// one's.
+    pub fn of(team: &str) -> Store {
+        let team: String = team.chars().filter(char::is_ascii_alphanumeric).collect();
         Store {
-            dir: paths::cache_dir().join("slack-emoji"),
+            dir: paths::cache_dir().join("slack-emoji").join(team),
         }
     }
 
@@ -405,10 +409,25 @@ async fn download(url: &str) -> Result<Vec<u8>, String> {
 /// had is left out, to be asked again.
 pub async fn load(store: &Store, names: &[String]) -> Result<Vec<(String, Custom)>, String> {
     let list = workspace_list(store).await?;
+    load_from(store, &list, names).await
+}
+
+/// The workspace you are signed in to (its ID), `None` with no sign-in.
+pub fn signed_in_team() -> Option<String> {
+    super::slack_user::signed_in(&paths::state_dir())
+        .map(|s| s.team)
+        .filter(|t| !t.is_empty())
+}
+
+async fn load_from(
+    store: &Store,
+    list: &HashMap<String, String>,
+    names: &[String],
+) -> Result<Vec<(String, Custom)>, String> {
     let now = SystemTime::now();
     let mut out = Vec::new();
     for name in names {
-        let custom = match resolve(&list, name) {
+        let custom = match resolve(list, name) {
             Found::Unknown => Custom::Unknown,
             Found::Standard(c) => Custom::Standard(c),
             Found::Picture(url) => {
