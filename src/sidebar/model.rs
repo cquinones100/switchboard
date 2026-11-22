@@ -459,7 +459,7 @@ fn by_number(a: &TabModel, b: &TabModel) -> Ordering {
 
 /// In Needs you, the tabs you pinned come first (you marked them yourself),
 /// with the reminders come due.
-fn pinned_first(a: &TabModel, b: &TabModel, r: &Rules) -> Ordering {
+pub fn pinned_first(a: &TabModel, b: &TabModel, r: &Rules) -> Ordering {
     let first = |t: &TabModel| t.pinned || reminder_due(t, r);
     first(b).cmp(&first(a)).then_with(|| by_need(a, b))
 }

@@ -14,9 +14,8 @@
 //! A prompt is read and answered with mission control's own reader and
 //! keys (`mission::answer`), the ones the Slack relay uses, so the phone
 //! presses exactly what the answer box would. Nothing here reaches a pane
-//! that isn't running Claude: `prompt`, `answer`, `kill-tab -s` and
-//! `remind` refuse one, and
-//! `watch` lists Claude tabs alone.
+//! that isn't running Claude: `prompt`, `answer`, `kill-tab -s`, `remind`
+//! and `pin` refuse one, and `watch` lists Claude tabs alone.
 //!
 //! `watch` keeps its connection: the server takes the stream back from
 //! the command's task (`Answer::Keep`) and writes `Output` frames to it,
@@ -37,7 +36,7 @@ use crate::mission::remind;
 use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
-use crate::sidebar::model::{Rules, by_need, needs_tab, reminder_due};
+use crate::sidebar::model::{Rules, needs_tab, pinned_first, reminder_due};
 use crate::{settings, util};
 
 use super::{cli, images, looks};
@@ -329,6 +328,35 @@ impl Server {
         Ok(Reply::ok(format!("{said}\n")))
     }
 
+    /// `pin`: the tab of a pane running Claude pinned, or with `pin` false
+    /// unpinned, as M-f does; refused for a pane not running Claude.
+    /// `from` names who asked, for the log.
+    pub(crate) fn phone_pin(
+        &mut self,
+        pane: PaneId,
+        pin: bool,
+        from: Option<&str>,
+    ) -> Result<Reply, String> {
+        self.phone_claude_pane(pane)?;
+        let tab = self.panes[&pane].tab;
+        self.set_pin(tab, pin);
+        let (did, what) = if pin {
+            ("Pinned", "Pinned it")
+        } else {
+            ("Unpinned", "Unpinned it")
+        };
+        if let Some(from) = from {
+            self.phone_did(from, tab, what);
+        }
+        let n = self.tab_number(tab);
+        let name = self
+            .tabs
+            .get(&tab)
+            .map(|t| t.display_name().to_string())
+            .unwrap_or_default();
+        Ok(Reply::ok(format!("{did} tab {n} {name}\n")))
+    }
+
     /// Something done from elsewhere (`from`, the phone), written in the
     /// server's log alone: no notification, since the tab shows what was
     /// done there.
@@ -597,7 +625,8 @@ impl Server {
         }
     }
 
-    /// Every Claude tab, those that need you first: its repository and
+    /// Every Claude tab, those that need you first, the pinned leading
+    /// them as in the sidebar: its repository and
     /// branch (for the drawer's search), its state, what it waits on, its
     /// last turn, and the prompt it shows while waiting.
     pub(crate) fn phone_snapshot(&self) -> Value {
@@ -611,7 +640,7 @@ impl Server {
         tabs.sort_by(|a, b| {
             needs_tab(b, &r)
                 .cmp(&needs_tab(a, &r))
-                .then_with(|| by_need(a, b))
+                .then_with(|| pinned_first(a, b, &r))
         });
         let tabs: Vec<Value> = tabs
             .iter()
@@ -662,6 +691,7 @@ impl Server {
                     "branch": branch,
                     "state": t.state.name(),
                     "needs": needs_tab(t, &r),
+                    "pinned": t.pinned,
                     "since": t.since,
                     "pane": pane.to_string(),
                     "wait": t.wait,

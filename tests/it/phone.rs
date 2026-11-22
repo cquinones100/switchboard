@@ -1385,6 +1385,57 @@ fn the_phone_sets_and_clears_a_claude_tabs_reminder() {
     next_line(&mut stream, |v| v["reminders"] == false);
 }
 
+/// `pin`, which the phone's route asks: it pins a Claude tab as M-f does,
+/// which the sidebar shows at the top of Needs you and the phone's tabs
+/// say, `-u` unpins it, and a tab pinned with M-f reads as pinned too; a
+/// pane not running Claude is refused; each pin and unpin is logged.
+#[test]
+fn the_phone_pins_and_unpins_a_claude_tab() {
+    let server = TestServer::start();
+    let mut client = server.attach(120, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let plain = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, _, err) = server.run(&["pin", "-t", &plain, "-s", "phone"]);
+    assert_eq!(code, 1, "a pane not running Claude");
+    assert!(err.contains("isn't running Claude"), "{err}");
+
+    let pane = claude_pane(&server);
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut stream = watch(&server);
+    next_line(&mut stream, |v| v["tabs"][0]["pinned"] == false);
+
+    let said = server.ok(&["pin", "-t", &pane, "-s", "phone"]);
+    assert!(said.starts_with("Pinned tab 1 "), "{said}");
+    let pinned = next_line(&mut stream, |v| v["tabs"][0]["pinned"] == true);
+    assert_eq!(pinned["tabs"][0]["needs"], true, "{pinned}");
+    assert_eq!(
+        server.ok(&["show", "-t", &tab, "@pinned"]).trim(),
+        "1",
+        "pinned as M-f pins it"
+    );
+    client.wait_text("⚑");
+
+    let said = server.ok(&["pin", "-t", &pane, "-s", "phone", "-u"]);
+    assert!(said.starts_with("Unpinned tab 1 "), "{said}");
+    next_line(&mut stream, |v| v["tabs"][0]["pinned"] == false);
+    assert_eq!(server.ok(&["show", "-t", &tab, "@pinned"]).trim(), "");
+
+    let log = server.log();
+    assert!(log.contains("): Pinned it"), "logged: {log}");
+    assert!(log.contains("): Unpinned it"), "logged: {log}");
+
+    // Pinned in the workspace, the phone reads it as pinned.
+    server.ok(&["set", "-t", &tab, "@pinned", "1"]);
+    next_line(&mut stream, |v| v["tabs"][0]["pinned"] == true);
+}
+
 /// A page made of plain objects for assets/phone/app.js to run on in Node:
 /// its `app` and `body`, the events fired on them, its timers and what it
 /// posted, before the app is loaded.
@@ -1508,10 +1559,10 @@ const out = [];
   row("5").fire("pointerup");
   row("5").fire("click");
   out.push("lit row=" + vm.runInContext("state.menu", ctx) + " open=" + vm.runInContext("state.open", ctx));
-  // Close tabs from the phone and Reminders off: a tab still working has nothing to offer.
+  // Close tabs from the phone and Reminders off: a tab still working offers Pin it alone.
   vm.runInContext("state.close = false; state.reminders = false", ctx);
   row("3").fire("contextmenu");
-  out.push("off=" + vm.runInContext("state.menu", ctx) + " " + options().join(","));
+  out.push("off=" + options().join(","));
   console.log(out.join("\n"));
 })();
 "#;
@@ -1536,17 +1587,17 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "menu=Mark seen,Remind me,Close tab open=null buzzes=1",
+            "menu=Mark seen,Pin it,Remind me,Close tab open=null buzzes=1",
             "asks=true posted=0",
             "answers=Close*,No",
             "no=0 menu=null",
             "closed=/api/tabs/4/close tabs=3",
-            "working=Remind me,Close tab buzzes=1",
+            "working=Pin it,Remind me,Close tab buzzes=1",
             "tap=3",
             "redrawn=null",
             "android=5 buzzes=2",
             "lit row=null open=null",
-            "off=null ",
+            "off=Pin it",
         ],
         "{stdout}"
     );
@@ -1645,15 +1696,96 @@ const out = [];
         lines,
         [
             "row=⠹3M-d uncommittedEdit diffview.lua⏰ in 1h 20m · check the deploy",
-            "none=Mark seen,Remind me,Close tab",
+            "none=Mark seen,Pin it,Remind me,Close tab",
             "sheet=Remind me about tab 4 full titles",
             "times=In 20 minutes10:01,In 1 hour10:41,In 3 hours12:41,Tomorrow at 9:00Sun 9:00,Next Monday at 9:00Mon 9:00",
             "answers=Cancel,Set*",
             "refused=\"soonish\" isn't a time I know. Try 45m, 2h, 3pm, 15:30, nov 20 or 2027-01-04 3pm. open=true",
             r#"set=/api/tabs/4/remind {"when":"In 1 hour","note":"check the deploy"} open=false"#,
-            "one=Clear the reminder,Remind me,Close tab",
+            "one=Pin it,Clear the reminder,Remind me,Close tab",
             "change=Change the reminder for tab 3 M-d uncommitted note=check the deploy",
             r#"cleared=/api/tabs/3/remind {"clear":true}"#,
+        ],
+        "{stdout}"
+    );
+}
+
+/// Pin it in the drawer's menu (assets/phone/app.js), run in Node over a
+/// page made of plain objects: Pin it on a tab not pinned, Unpin it on one
+/// that is, each posting whether to pin without asking first; a pinned tab
+/// leads Needs you with the flag in place of its mark; skipped without
+/// Node.
+#[test]
+fn pin_it_in_a_tabs_menu_pins_and_unpins_it() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let script = r#"
+${PRELUDE}
+ctx.fetch = (path, opts) => {
+  if (opts && opts.method === "POST") {
+    posted.push(path + " " + opts.body);
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ said: "Pinned tab 3" }) });
+  }
+  return new Promise(() => {});
+};
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = [
+    { index: 4, pane: "%4", name: "full titles", state: "waiting", needs: true, pinned: false },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "idle", needs: true, pinned: true },
+    { index: 5, pane: "%5", name: "five", state: "working", needs: false, pinned: false },
+  ];
+  render();
+`, ctx);
+const row = (n) => app.all((x) => x.attrs["data-pane"] === n)[0];
+const options = () => body.all((x) => x.attrs.role === "menuitem").map((x) => x.text);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const tick = () => new Promise((r) => setImmediate(r));
+const out = [];
+(async () => {
+  out.push("groups=" + JSON.stringify(vm.runInContext("groups([]).map(([name, , tabs]) => [name, tabs.map((t) => t.index)])", ctx)));
+  out.push("rows=" + row("3").text + " | " + row("4").text);
+  row("3").fire("contextmenu");
+  out.push("pinned=" + options().join(","));
+  button("Unpin it").fire("click");
+  await tick();
+  out.push("unpin=" + posted[posted.length - 1] + " menu=" + vm.runInContext("state.menu", ctx));
+  row("5").fire("contextmenu");
+  out.push("not=" + options().join(","));
+  button("Pin it").fire("click");
+  await tick();
+  out.push("pin=" + posted[posted.length - 1] + " menu=" + vm.runInContext("state.menu", ctx));
+  console.log(out.join("\n"));
+})();
+"#
+    .replace("${PRELUDE}", PRELUDE);
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            r#"groups=[["Needs you",[3,4]],["Working",[5]]]"#,
+            "rows=⚑3M-d uncommittedidle  | ●4full titleswaiting on you",
+            "pinned=Unpin it,Remind me,Close tab",
+            r#"unpin=/api/tabs/3/pin {"pin":false} menu=null"#,
+            "not=Pin it,Remind me,Close tab",
+            r#"pin=/api/tabs/5/pin {"pin":true} menu=null"#,
         ],
         "{stdout}"
     );

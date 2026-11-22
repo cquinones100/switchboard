@@ -111,6 +111,7 @@ button {
 
 .mark { display: inline-block; width: 1ch; text-align: center; }
 .mark.needs { color: var(--yellow); }
+.mark.pinned { color: var(--yellow); }
 .mark.passed { color: var(--green); }
 .mark.working { color: var(--blue); }
 .mark.idle { color: var(--dim); }
