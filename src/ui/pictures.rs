@@ -223,6 +223,13 @@ impl Pictures {
                 self.asked = true;
                 Step::Redraw
             }
+            // S-F10 opens what a right click on the chosen one would.
+            KeyCode::F(10) if shift => {
+                self.asked = true;
+                Step::Redraw
+            }
+            // The workspace's own keys (M-p, M-1 to M-9, ...) still work.
+            _ if key.mods.alt => Step::Through,
             _ => Step::Same,
         }
     }
@@ -899,6 +906,16 @@ mod tests {
             Some((PathBuf::from("/tmp/a.png"), "a.png".to_string()))
         );
         assert_eq!(p.take_asked(), None, "asked once");
+        assert_eq!(
+            p.key(Key::new(KeyCode::F(10), Mods::SHIFT), &look),
+            Step::Redraw
+        );
+        assert!(p.take_asked().is_some(), "S-F10 asks as a right click does");
+        assert_eq!(
+            p.key(Key::new(KeyCode::Char('p'), Mods::ALT), &look),
+            Step::Through,
+            "the workspace's keys still reach it"
+        );
         let second = card_of(&p, 1);
         p.mouse(press(MouseButton::Right, second.x + 5, second.y + 3), &look);
         assert_eq!(
