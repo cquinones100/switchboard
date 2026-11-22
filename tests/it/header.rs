@@ -2,7 +2,7 @@
 //! header over the tab's panes naming it with the keys of what it can show
 //! in Claude's place, the kit's keycaps ending in half circles on a
 //! terminal that draws them, and its ⌘ Commands button opening and closing
-//! the palette. With pictures drawn as sixel (src/mux/sixel), never over the
+//! the palette, and again under the panes with `tab_header_bottom` on. With pictures drawn as sixel (src/mux/sixel), never over the
 //! header or on the last row a pane now reaches, never from mission
 //! control's copy of a tab's screen, and drawn by the image view in
 //! Claude's place. M-h's history of a tab, mission control's Settings as a
@@ -70,6 +70,38 @@ fn a_header_names_the_tab_over_its_panes() {
     // The pane takes the rest: all but the header's four rows.
     client.wait_for("the pane under the header", |_| {
         server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 20
+    });
+}
+
+#[test]
+fn tab_header_bottom_repeats_the_header_under_the_panes_and_its_keys_click() {
+    let server = start(json!({"tab_header_bottom": true}));
+    let mut client = server.attach(90, 24);
+    client.wait_text("$");
+    let screen = client.wait_for("the header at the top and the bottom", |s| {
+        s[0].contains("○ 1 ") && s[20].contains("○ 1 ") && s[22].contains("M-d  Diff")
+    });
+    assert_eq!(screen[0], screen[20], "the same first row");
+    assert!(screen[23].starts_with("───"), "its rule: {:?}", screen[23]);
+    // The pane takes what the two headers leave.
+    client.wait_for("the pane between the headers", |_| {
+        server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 16
+    });
+    // M-d in the bottom header does what the top one's does: here, with
+    // no repository, says there is no diff to show.
+    let line = screen[22].clone();
+    click(&mut client, column(&line, "M-d"), 22);
+    client.wait_text("Not in a git repository");
+    client.send(b"\x1b");
+    client.wait_for("the message closed", |s| {
+        !s.iter().any(|l| l.contains("Not in a git repository"))
+    });
+    // Off, the panes reach the bottom as before.
+    settings(&server, json!({"tab_header_bottom": false}));
+    client.wait_for("the pane to the bottom", |s| {
+        server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 20
+            && !s[20].contains("○ 1 ")
+            && !s[22].contains("M-d  Diff")
     });
 }
 

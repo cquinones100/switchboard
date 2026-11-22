@@ -53,6 +53,15 @@ use crate::ui::kit::{self, Mark};
 /// The rows the header takes: the name, a blank row, the keys, the rule.
 pub const ROWS: u16 = 4;
 
+/// Whether every tab with a header has it again under its panes, the same
+/// rows in the same order (Settings' `tab_header_bottom`, off by default
+/// since it takes `ROWS` more from every tab's panes), so a program whose
+/// actions sit at the bottom, as Claude Code's prompt does, has the tab's
+/// state and keys beside it.
+pub fn at_bottom() -> bool {
+    crate::settings::is_on("tab_header_bottom")
+}
+
 /// What a tab shows in Claude's place, each with the key that shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shown {

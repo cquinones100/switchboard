@@ -260,22 +260,28 @@ pub struct Session {
 
 impl Session {
     /// The area panes are laid out in: all but the sidebar and the tab's
-    /// header at the top (src/mux/header.rs).
+    /// header at the top, and under the panes too with Settings'
+    /// `tab_header_bottom` on (src/mux/header.rs).
     pub fn main_area(&self) -> Rect {
         self.main_area_with(true)
     }
 
     /// The area panes are laid out in, with or without the tab's header's
-    /// rows at the top.
+    /// rows at the top, and at the bottom when it is repeated there.
     fn main_area_with(&self, header: bool) -> Rect {
         let side = self.sidebar.min(self.cols.saturating_sub(1));
         let top = if header { super::header::ROWS } else { 0 };
         let top = top.min(self.rows.saturating_sub(1));
+        let bottom = if header && super::header::at_bottom() {
+            super::header::ROWS.min(self.rows.saturating_sub(top + 1))
+        } else {
+            0
+        };
         Rect::new(
             side,
             top,
             self.cols.saturating_sub(side).max(1),
-            self.rows.saturating_sub(top).max(1),
+            self.rows.saturating_sub(top + bottom).max(1),
         )
     }
 
@@ -463,9 +469,10 @@ pub struct Client {
     drag: Option<Drag>,
     last_click: Option<(Instant, u16, u16, u8)>,
     /// Where UX 2.0's header drew its keys, for clicks, and the one under
-    /// the mouse (src/mux/header.rs).
+    /// the mouse, with where it is, since the header repeated under the
+    /// panes has the same buttons (src/mux/header.rs).
     pub header_keys: super::header::Keys,
-    pub header_hover: Option<super::header::Button>,
+    pub header_hover: Option<(Rect, super::header::Button)>,
     /// The mouse pointer's shape last sent to its terminal (crates/ui/src/pointer.rs),
     /// none until one is.
     pub pointer: Option<crate::ui::pointer::Pointer>,
@@ -3774,7 +3781,7 @@ impl Server {
             .header_keys
             .iter()
             .find(|(r, _)| m.row == r.y && m.col >= r.x && m.col < r.right())
-            .map(|(_, button)| *button);
+            .copied();
         if m.kind == MouseKind::Move {
             let lit = header_hit.filter(|_| crate::settings::is_on("hover_highlight"));
             if c.header_hover != lit
@@ -3785,7 +3792,7 @@ impl Server {
             }
         }
         // A drag held from a pane goes on over the header, to its release.
-        if let Some(button) = header_hit.filter(|_| !dragging) {
+        if let Some((_, button)) = header_hit.filter(|_| !dragging) {
             if m.kind == MouseKind::Press && m.button == MouseButton::Left {
                 self.act(id, button.action());
             }
@@ -4560,7 +4567,7 @@ impl Server {
                     let rows = super::beside::rows(pr, ticket);
                     let (keyed, last) = super::beside::lines(&self.bindings, &rows);
                     let hover = match c.header_hover {
-                        Some(super::header::Button::Beside(b)) => Some(b),
+                        Some((_, super::header::Button::Beside(b))) => Some(b),
                         _ => None,
                     };
                     spare_keys = super::beside::draw(
@@ -4587,6 +4594,12 @@ impl Server {
                 let main = s.main_area();
                 Rect::new(main.x, 0, main.width, top).intersection(frame.area())
             });
+        // With Settings' `tab_header_bottom` on, the same header again under
+        // the panes, in the rows `main_area` leaves there.
+        let bottom_at = header_at.filter(|_| super::header::at_bottom()).map(|_| {
+            let main = s.main_area();
+            Rect::new(main.x, main.bottom(), main.width, top).intersection(frame.area())
+        });
         let mut header_keys = super::header::Keys::new();
         if let Some(area) = header_at {
             let mut header = self.tab_header(s.current);
@@ -4595,18 +4608,27 @@ impl Server {
             if !self.sidebar_shown(&s.name) {
                 header.nav = Some(self.header_nav(s));
             }
-            header_keys = super::header::draw(
-                &mut frame.buf,
-                area,
-                &header,
-                c.header_hover,
-                palette,
-                super::graphics::round_ends(&c.term),
-                c.overlays
-                    .layers
-                    .iter()
-                    .any(|l| l.overlay.kind() == "palette"),
-            );
+            let palette_open = c
+                .overlays
+                .layers
+                .iter()
+                .any(|l| l.overlay.kind() == "palette");
+            for area in std::iter::once(area).chain(bottom_at.filter(|a| a.height > 0)) {
+                // Only the copy under the mouse lights its button.
+                let hover = c
+                    .header_hover
+                    .filter(|(r, _)| area.intersects(*r))
+                    .map(|(_, b)| b);
+                header_keys.extend(super::header::draw(
+                    &mut frame.buf,
+                    area,
+                    &header,
+                    hover,
+                    palette,
+                    super::graphics::round_ends(&c.term),
+                    palette_open,
+                ));
+            }
         }
         header_keys.extend(
             spare_keys
