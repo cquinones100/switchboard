@@ -25,7 +25,12 @@ pub struct SlackEmojis {
     /// The workspace what is held came from: one signed in to since lets
     /// all of it go.
     team: String,
+    /// When the sign-in was last read for its workspace.
+    team_read_at: i64,
 }
+
+/// How often the sign-in's workspace is read again, a small file.
+const TEAM_EVERY_MS: i64 = 5_000;
 
 #[derive(Debug)]
 pub enum SlackEmojisEvent {
@@ -48,6 +53,10 @@ impl Server {
             return out;
         }
         let now = util::now_ms();
+        if now - self.slack_emojis.team_read_at >= TEAM_EVERY_MS {
+            self.slack_emojis.team_read_at = now;
+            self.slack_emojis_from(super::signed_in_team().unwrap_or_default());
+        }
         let mut wanted = Vec::new();
         for name in names {
             if out.contains_key(&name) || wanted.contains(&name) {
@@ -93,15 +102,21 @@ impl Server {
         out
     }
 
+    /// Lets go of what is held when it came from another workspace than
+    /// `team`, the one signed in to now (empty with none).
+    fn slack_emojis_from(&mut self, team: String) {
+        if team != self.slack_emojis.team {
+            self.slack_emojis.held.clear();
+            self.slack_emojis.failed.clear();
+            self.slack_emojis.team = team;
+        }
+    }
+
     pub(crate) fn slack_emojis_event(&mut self, event: SlackEmojisEvent) {
         let now = util::now_ms();
         let (found, asked) = match event {
             SlackEmojisEvent::Loaded(team, found, asked) => {
-                if team != self.slack_emojis.team {
-                    self.slack_emojis.held.clear();
-                    self.slack_emojis.failed.clear();
-                    self.slack_emojis.team = team;
-                }
+                self.slack_emojis_from(team);
                 (found, asked)
             }
             SlackEmojisEvent::Failed(asked) => (Vec::new(), asked),
