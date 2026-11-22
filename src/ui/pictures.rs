@@ -230,6 +230,9 @@ impl Pictures {
                 self.asked = true;
                 Step::Redraw
             }
+            // C-w would hand the pane a key of its own (`pane_nav`), so the
+            // pictures keep it.
+            KeyCode::Char('w') if key.mods == Mods::CTRL => Step::Same,
             // S-F10 opens what a right click on the chosen one would.
             KeyCode::F(10) if shift => {
                 self.asked = true;

@@ -328,6 +328,10 @@ impl Server {
                 && matches!(parsed.input, Input::Key(_))
                 && top.overlay.as_any().is::<Pictures>()
             {
+                // Still held from the pane while a picture is chosen.
+                if !top.overlay.lets_through() {
+                    return Handed::Held(parsed);
+                }
                 return Handed::Left(parsed);
             }
             let let_through = top.overlay.lets_through();
