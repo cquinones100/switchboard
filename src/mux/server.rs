@@ -1453,6 +1453,7 @@ impl Server {
                 self.sweep_tick();
                 self.merge_queue_tick();
                 self.statusline_tick();
+                self.unprompted_tick();
                 self.history_tick();
                 self.notice_history_tick();
             }

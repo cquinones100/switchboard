@@ -29,6 +29,14 @@
 //! fires before auto mode decides, and a call it allows runs with nothing
 //! more said until it ends, so the request's words are kept aside and the
 //! pane waits only once the Notification of a prompt shown to you comes.
+//!
+//! That Notification comes only once a prompt has waited about six seconds,
+//! so it can arrive after the prompt was answered and even after the turn
+//! ended. One arriving once the conversation's turn is over (its Stop the
+//! last hook that marks anything) starts no wait, and a wait no prompt on
+//! the screen keeps up, once the turn is over, ends in "done"
+//! (`Agents::unprompted`), since nothing else would end it before your next
+//! prompt.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -526,7 +534,18 @@ pub struct Agents {
     /// a plugin outside Switchboard's tier (an administrator's) answered
     /// Claude Code's settings.read without passing it on to Switchboard's.
     statusline_missing: HashSet<PaneId>,
+    /// The panes whose conversation's turn is over: its Stop was the last
+    /// hook that marks a state, so no prompt of that turn is still shown.
+    turn_over: HashSet<PaneId>,
+    /// Each waiting pane whose screen has shown no prompt since (ms), with
+    /// its turn over (`unprompted`).
+    unprompted: HashMap<PaneId, i64>,
 }
+
+/// How long a waiting pane with its turn over shows no prompt before its
+/// wait counts as over (ms): Claude Code may draw a prompt a moment after
+/// its hook comes.
+pub const UNPROMPTED_GRACE_MS: i64 = 5_000;
 
 /// How long after a turn ends a statusline that hasn't spoken counts as
 /// skipped (ms): Claude Code draws it within a moment of the answer.
@@ -601,6 +620,8 @@ impl Agents {
     /// whose stage times the board still shows.
     pub fn restarted(&mut self, pane: PaneId) {
         self.dirs.remove(&pane);
+        self.turn_over.remove(&pane);
+        self.unprompted.remove(&pane);
         self.statusline_ended(pane);
         let phases = self
             .panes
@@ -624,6 +645,64 @@ impl Agents {
         self.dirs.retain(|p, _| alive(*p));
         self.statusline_due.retain(|p, _| alive(*p));
         self.statusline_missing.retain(|p| alive(*p));
+        self.turn_over.retain(|p| alive(*p));
+        self.unprompted.retain(|p, _| alive(*p));
+    }
+
+    /// Whether the pane's conversation's turn is over: its Stop was the
+    /// last hook that marks a state.
+    pub fn turn_over(&self, pane: PaneId) -> bool {
+        self.turn_over.contains(&pane)
+    }
+
+    /// The panes waiting on you.
+    pub fn waiting(&self) -> Vec<PaneId> {
+        let mut panes: Vec<PaneId> = self
+            .panes
+            .iter()
+            .filter(|(_, a)| a.state == Some(State::Waiting))
+            .map(|(p, _)| *p)
+            .collect();
+        panes.sort();
+        panes
+    }
+
+    /// A waiting pane, read on the tick at `now_ms`: `prompted` says
+    /// whether it could still be waiting (a prompt on its screen, or its
+    /// turn not over). One that couldn't for `UNPROMPTED_GRACE_MS` is done,
+    /// as its turn's Stop would have left it, at `now` (seconds), `front`
+    /// saying whether its tab is in front. Gives whether its state changed.
+    pub fn unprompted(
+        &mut self,
+        pane: PaneId,
+        prompted: bool,
+        now_ms: i64,
+        now: i64,
+        front: bool,
+    ) -> bool {
+        let waits = self.state(pane) == Some(State::Waiting);
+        if prompted || !waits {
+            self.unprompted.remove(&pane);
+            return false;
+        }
+        let since = *self.unprompted.entry(pane).or_insert(now_ms);
+        if now_ms - since < UNPROMPTED_GRACE_MS {
+            return false;
+        }
+        self.unprompted.remove(&pane);
+        let Some(agent) = self.panes.get_mut(&pane) else {
+            return false;
+        };
+        let changed = set_state(agent, Some(State::Done), now, front);
+        agent.wait = None;
+        agent.wait_by = None;
+        agent.wait_call = None;
+        agent.asked = None;
+        agent.ask = None;
+        if agent.is_empty() {
+            self.panes.remove(&pane);
+        }
+        changed
     }
 
     /// A session started in the pane with Switchboard's statusline wanted:
@@ -710,6 +789,16 @@ impl Agents {
         let Some(mut state) = hook.marks() else {
             return false;
         };
+        // The conversation's turn ends with its Stop, and anything but a
+        // compaction, which Claude Code also runs in the background after a
+        // turn, says work goes on.
+        if hook.event == "Stop" && hook.agent.is_empty() {
+            self.turn_over.insert(pane);
+        } else if !matches!(hook.event.as_str(), "PreCompact" | "PostCompact")
+            && !(hook.event == "SessionStart" && hook.source == "compact")
+        {
+            self.turn_over.remove(&pane);
+        }
         // Compaction. A session it restarts (SessionStart from compact) is the
         // same one going on, so it keeps its state and loop. A /compact you
         // typed has Claude at work on it, whatever the tab showed, and nothing
@@ -802,9 +891,13 @@ impl Agents {
         changed
     }
 
-    /// Marks a pane waiting on you (a Notification's question). Gives whether
-    /// its state changed.
+    /// Marks a pane waiting on you (a Notification's question), unless its
+    /// turn is over: a late notice of a prompt already answered. Gives
+    /// whether its state changed.
     pub fn wait(&mut self, pane: PaneId, now: i64, front: bool) -> bool {
+        if self.turn_over(pane) {
+            return false;
+        }
         let agent = self.panes.entry(pane).or_default();
         let already = agent.state == Some(State::Waiting);
         let changed = set_state(agent, Some(State::Waiting), now, front);
@@ -1021,6 +1114,8 @@ impl Agents {
     /// context. What it was doing is kept, as agent-state.sh kept it. Gives
     /// whether its state or context went.
     pub fn drop_state(&mut self, pane: PaneId) -> bool {
+        self.turn_over.remove(&pane);
+        self.unprompted.remove(&pane);
         let Some(agent) = self.panes.get_mut(&pane) else {
             return false;
         };
@@ -1730,6 +1825,54 @@ mod tests {
             },
         );
         assert!(!c.asked(P, 150_000, "q", "Old?", 201, false));
+    }
+
+    #[test]
+    fn a_question_notification_after_the_turn_ended_leaves_the_pane_done() {
+        let mut a = Agents::default();
+        let test = json!({"tool_name": "Bash", "tool_use_id": "b1", "permission_mode": "auto",
+            "tool_input": {"command": "gh pr merge", "description": "Merge the PR"}});
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        on(&mut a, "PreToolUse", test.clone(), 101);
+        on(&mut a, "PermissionRequest", test.clone(), 102);
+        on(&mut a, "PostToolUse", test.clone(), 103);
+        on(&mut a, "Stop", json!({}), 104);
+        // Auto mode allowed the call; its notice comes six seconds on.
+        assert!(!a.wait(P, 108, false));
+        assert_eq!(a.state(P), Some(State::Done));
+        // A compaction Claude Code runs after the turn doesn't start one.
+        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 109);
+        assert!(!a.wait(P, 110, false));
+        assert_eq!(a.state(P), Some(State::Done));
+        // The next turn's prompts wait as before.
+        on(&mut a, "UserPromptSubmit", json!({}), 120);
+        assert!(a.wait(P, 127, false));
+        assert_eq!(a.state(P), Some(State::Waiting));
+    }
+
+    #[test]
+    fn a_wait_with_no_prompt_shown_ends_in_done_after_a_grace() {
+        let mut a = Agents::default();
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        a.wait(P, 101, false);
+        // A prompt on the screen keeps it, however long.
+        assert!(!a.unprompted(P, true, 0, 101, false));
+        assert!(!a.unprompted(P, true, 60_000, 161, false));
+        // None, for less than the grace, keeps it too.
+        assert!(!a.unprompted(P, false, 61_000, 162, false));
+        assert!(!a.unprompted(P, false, 65_000, 166, false));
+        assert_eq!(a.state(P), Some(State::Waiting));
+        // A prompt seen again starts the grace over.
+        assert!(!a.unprompted(P, true, 66_000, 167, false));
+        assert!(!a.unprompted(P, false, 67_000, 168, false));
+        assert!(!a.unprompted(P, false, 71_000, 172, false));
+        assert!(a.unprompted(P, false, 72_000, 173, false));
+        let agent = a.get(P).unwrap();
+        assert_eq!(agent.state, Some(State::Done));
+        assert_eq!(agent.wait, None);
+        // Seen, it clears as any finished pane does.
+        assert!(a.seen(&[P]));
+        assert_eq!(a.state(P), None);
     }
 
     #[test]

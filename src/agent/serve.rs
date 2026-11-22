@@ -522,6 +522,39 @@ impl Server {
         self.agents.any_statusline_missing()
     }
 
+    /// Each tick: a waiting pane whose turn is over (its Stop came, or
+    /// Claude Code says its session is idle) and whose screen shows no
+    /// prompt Claude draws (a permission, a question, a dialog) for a few
+    /// seconds is done (`Agents::unprompted`), so a wait nothing keeps up
+    /// leaves Needs you once seen. A pane whose program in front isn't
+    /// Claude is left as it is, since its screen isn't Claude's.
+    pub fn unprompted_tick(&mut self) {
+        let now_ms = util::now_ms();
+        let now = util::now_secs();
+        for pane in self.agents.waiting() {
+            let read = self.sidebar.panes.get(&pane);
+            let claude_in_front = read.is_some_and(|r| r.claude);
+            let session_idle = read
+                .and_then(|r| r.session.as_ref())
+                .is_some_and(|s| s.idle_since.is_some());
+            let turn_over = self.agents.turn_over(pane) || session_idle;
+            let prompt_shown = self.panes.get(&pane).is_some_and(|slot| {
+                let screen = slot.pane.text(0);
+                (crate::mission::answer::options_in(&screen).is_some()
+                    && cursor_on_a_choice(&screen))
+                    || crate::relay::tabs::dialog_in(&screen).is_some()
+            });
+            let prompted = !claude_in_front || !turn_over || prompt_shown;
+            let Some(tab) = self.panes.get(&pane).map(|slot| slot.tab) else {
+                continue;
+            };
+            let front = self.tab_in_front(tab);
+            if self.agents.unprompted(pane, prompted, now_ms, now, front) {
+                self.redraw_tab(tab);
+            }
+        }
+    }
+
     /// A pane's record for `switchboard list`, or null.
     pub fn agent_json(&self, pane: PaneId) -> Value {
         self.agents
@@ -1048,6 +1081,20 @@ impl Server {
 /// A process's group, one call to the kernel, so finding a parked Claude's
 /// pane reads no pane's whole process list; `None` when it can't be read,
 /// and the processes are read instead.
+/// Whether a screen shows Claude Code's cursor, `❯`, on a numbered choice or
+/// a question's Submit row: what a prompt waiting on you has and a
+/// numbered list in Claude's reply doesn't.
+fn cursor_on_a_choice(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        line.trim_start_matches([' ', '│', '┃'])
+            .strip_prefix('❯')
+            .map(str::trim_start)
+            .is_some_and(|rest| {
+                rest.starts_with(|c: char| c.is_ascii_digit()) || rest.starts_with("Submit")
+            })
+    })
+}
+
 fn process_group(pid: u32) -> Option<u32> {
     let pid = libc::pid_t::try_from(pid).ok().filter(|p| *p > 0)?;
     // SAFETY: getpgid only reads the kernel's process table; a pid that
@@ -1098,6 +1145,18 @@ pub fn land_question(leak_checked: bool) -> (String, Vec<String>) {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn a_prompt_has_the_cursor_on_a_choice_and_a_reply_s_list_has_none() {
+        assert!(cursor_on_a_choice(
+            "Do you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel"
+        ));
+        assert!(cursor_on_a_choice("│ ❯ 1. Yes │\n│   2. No  │"));
+        assert!(cursor_on_a_choice("  1. [✔] A\n  2. [ ] B\n❯ Submit"));
+        assert!(!cursor_on_a_choice(
+            "⏺ Next:\n  1. Land it\n  2. Close the issue\n\n❯ \n  ? for shortcuts"
+        ));
+    }
 
     #[test]
     fn a_worktree_is_under_a_repositorys_claude_worktrees() {
