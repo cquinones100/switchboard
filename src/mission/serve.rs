@@ -3753,8 +3753,8 @@ impl Server {
             Some(n) if view.id == ViewId::Ci => with_check(item, n),
             _ => item,
         };
-        // The Slack board shows one section at a time, which is what its
-        // menu's "every message shown" puts away.
+        // The Slack board shows one section at a time, what its item's
+        // menu is opened among.
         let shown: Vec<Item> = if super::render::slack_board_shown(&view) {
             slack_shown(m, &view)
                 .into_iter()

@@ -380,9 +380,6 @@ impl Server {
         });
     }
 
-    /// Asks which repository the tickets are for, the pane's own first, and
-    /// opens a tab for each item there, at the end and in the background,
-    /// as shape-batch did.
     /// The Tickets view's "Shape a new ticket…": an idea typed in, shaped by
     /// `/shape` in a tab of its own in the repository at `dir` (the front
     /// pane's main clone), filed in that repository's ticket source; while
@@ -426,6 +423,9 @@ impl Server {
         );
     }
 
+    /// Asks which repository the tickets are for, the pane's own first, and
+    /// opens a tab for each item there, at the end and in the background,
+    /// as shape-batch did.
     fn shape_in_repo(&mut self, client: ClientId, items: Vec<String>) {
         let items = shape_batch::items_of(&items);
         self.pick_dir_for(
