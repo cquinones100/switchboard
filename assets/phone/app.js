@@ -28,7 +28,6 @@ const state = {
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
   turnKeys: [], // the keys of the open tab's turns last drawn, oldest first (`turns`)
-  explaining: "", // the same, for the one redraw after its i opened it, which slides it open
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
   menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question or the reminder's sheet does
@@ -240,6 +239,28 @@ function leave(node, then) {
   node.classList.add("going");
   node.addEventListener("animationend", done);
   setTimeout(done, ms("--quick") + 100);
+}
+
+// Animations a redraw would cut short, by what they animate: the stream
+// redraws the card, its explainers and the tray of images from scratch, so a
+// node drawn again mid-animation takes it up where it was, its CSS animation
+// started that long ago, rather than jumping to its end.
+const playing = new Map(); // key → { cls, at, lasts }
+function play(key, cls, lasts) {
+  if (moves) playing.set(key, { cls, at: Date.now(), lasts });
+}
+function underWay(key) {
+  const p = playing.get(key);
+  if (p && Date.now() - p.at < p.lasts) return p;
+  playing.delete(key);
+  return null;
+}
+function resume(node, key) {
+  const p = underWay(key);
+  if (!p) return node;
+  node.classList.add(p.cls);
+  node.style.animationDelay = -(Date.now() - p.at) + "ms";
+  return node;
 }
 
 // The colors a tab's mark or chip had last time it was drawn, by what it is
@@ -1070,28 +1091,20 @@ function choice(p, o, i, waiting) {
   if (!o.detail) return button;
   const key = p.id + ":" + o.n;
   const open = state.explained === key;
-  const explainer = open ? el("div", { class: "explainer" + (state.explaining === key ? " coming" : "") }, o.detail) : null;
+  const going = !open && underWay("explain:" + key);
+  const explainer = open || going ? resume(el("div", { class: "explainer" }, o.detail), "explain:" + key) : null;
   const info = el(
     "button",
     {
       class: "icon info" + (open ? " lit" : ""),
       "aria-label": open ? "Hide what this choice means" : "Show what this choice means",
       "aria-expanded": String(open),
-      onclick: (e) => {
-        if (!open) {
-          state.explained = state.explaining = key;
-          return render();
-        }
-        e.currentTarget.classList.remove("lit");
-        const shut = () => {
-          if (state.explained !== key) return;
-          state.explained = "";
-          render();
-        };
-        // The one in the page now, which a redraw since may have put in its place.
-        const shown = e.currentTarget.closest(".choice").querySelector(".explainer");
-        if (shown) leave(shown, shut);
-        else shut();
+      onclick: () => {
+        state.explained = open ? "" : key;
+        play("explain:" + key, open ? "going" : "coming", ms("--quick"));
+        render();
+        // Closing, it is drawn going until its slide ends, then left out.
+        if (open && moves) setTimeout(render, ms("--quick"));
       },
     },
     "i",
@@ -1239,20 +1252,28 @@ function composer() {
           "div",
           { class: "tray" },
           state.chosen.map((c) => {
+            if (!trayShown.has(c.url)) play("shot:" + c.url, "coming", ms("--quick"));
+            const gone = () => {
+              const i = state.chosen.indexOf(c);
+              if (i >= 0) drop(i);
+              render();
+            };
             const shot = el(
               "div",
-              { class: "shot" + (trayShown.has(c.url) ? "" : " coming") },
+              { class: "shot" },
               el("img", { src: c.url, alt: "An image to send" }),
               el("button", {
                 class: "drop",
                 "aria-label": "Drop this image",
-                onclick: () => leave(shot, () => {
-                  const i = state.chosen.indexOf(c);
-                  if (i >= 0) drop(i);
+                onclick: () => {
+                  if (!moves) return gone();
+                  play("shot:" + c.url, "going", ms("--quick"));
                   render();
-                }),
+                  setTimeout(gone, ms("--quick"));
+                },
               }),
             );
+            resume(shot, "shot:" + c.url);
             return shot;
           }),
         )
@@ -1354,16 +1375,19 @@ function channel(stick) {
   shown.now.replaceChildren(...[newCard, working ? el("div", { class: "doing" }, spinner(), " " + doing(tab)) : null].filter(Boolean));
   if (moves && kept && newCard && cardKey !== shown.cardKey) {
     const folds = cardKey === "answered" && shown.cardKey && shown.cardKey.startsWith("prompt:") && wasTall;
-    if (folds) fold(newCard, wasTall);
-    else newCard.classList.add("coming");
+    if (folds) shown.folding = { at: Date.now(), wasTall };
+    else play("card:" + cardKey, "coming", ms("--move"));
   }
+  // Drawn again mid-way, the card carries on rising or folding.
+  if (newCard) resume(newCard, "card:" + cardKey);
+  const foldGone = shown.folding ? Date.now() - shown.folding.at : Infinity;
+  if (newCard && cardKey === "answered" && foldGone < ms("--move")) fold(newCard, shown.folding.wasTall, foldGone);
   shown.cardKey = cardKey;
   shown.composer.sync(tab);
   const whole = full() || el("div");
   shown.full.replaceWith(whole);
   shown.full = whole;
   shown.list.scrollTop = stick || atEnd ? shown.list.scrollHeight : top;
-  state.explaining = "";
 }
 
 // What tells a message from the others for its arrival: who sent it and its
@@ -1372,15 +1396,16 @@ const arrivalKey = (m) => (m.who === "steps" ? "steps\u0000" + m.key : m.who + "
 
 // An answered card folds from the prompt's height down to its "You answered"
 // line, its words fading in; with reduced motion it only fades.
-function fold(card, wasTall) {
+function fold(card, wasTall, gone) {
   if (!moves || !card.animate) return;
   const timing = { duration: ms("--move"), easing: EASE };
   const tall = card.getBoundingClientRect().height;
+  const at = (a) => { a.currentTime = gone; };
   if (!still() && tall) {
     card.style.transformOrigin = "top";
-    card.animate([{ transform: "scaleY(" + wasTall / tall + ")" }, { transform: "none" }], timing);
+    at(card.animate([{ transform: "scaleY(" + wasTall / tall + ")" }, { transform: "none" }], timing));
   }
-  for (const kid of card.children) kid.animate([{ opacity: 0 }, { opacity: 1 }], timing);
+  for (const kid of card.children) at(kid.animate([{ opacity: 0 }, { opacity: 1 }], timing));
 }
 
 // Swiping right in a channel (board 164's second phone): the drawer drawn
