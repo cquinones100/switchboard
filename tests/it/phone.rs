@@ -415,7 +415,7 @@ const fs = require("fs");
 class Node {
   constructor(tag) {
     this.tagName = tag; this.children = []; this.parentNode = null; this.className = "";
-    this.listeners = {}; this.style = {}; this.value = ""; this.text = "";
+    this.listeners = {}; this.options = {}; this.style = {}; this.value = ""; this.text = "";
     this.scrollTop = 0; this.scrollHeight = 1000; this.clientHeight = 100;
     const node = this;
     this.classList = {
@@ -429,14 +429,19 @@ class Node {
   get textContent() { return this.text + this.children.map((c) => c.textContent).join(""); }
   set textContent(text) { this.replaceChildren(); this.text = text; }
   setAttribute(k, v) { this[k] = v; }
-  addEventListener(k, f) { (this.listeners[k] = this.listeners[k] || []).push(f); }
-  dispatchEvent(e) { for (const f of this.listeners[e.type] || []) f({ ...e, target: this }); }
+  addEventListener(k, f, options) { (this.listeners[k] = this.listeners[k] || []).push(f); this.options[k] = options; }
+  // Sent to this node, keeping it as the target, and up through its parents.
+  dispatchEvent(e) { e.target = e.target || this; for (let n = this; n; n = n.parentNode) for (const f of n.listeners[e.type] || []) f(e); }
   click() { this.dispatchEvent(new Event("click")); }
   focus() { document.activeElement = this; }
   append(...kids) { for (const k of kids) { if (k.parentNode) k.remove(); k.parentNode = this; this.children.push(k); } }
   remove() { const p = this.parentNode; if (p) { p.children = p.children.filter((c) => c !== this); this.parentNode = null; } }
   replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
   replaceWith(n) { const p = this.parentNode; const i = p.children.indexOf(this); if (n.parentNode) n.remove(); p.children[i] = n; n.parentNode = p; this.parentNode = null; }
+  insertBefore(n, ref) { if (n.parentNode) n.remove(); n.parentNode = this; this.children.splice(this.children.indexOf(ref), 0, n); }
+  // Selectors of "tag.class" parts, separated by commas.
+  matches(sel) { return sel.split(",").some((part) => { const [tag, ...classes] = part.trim().split("."); return (!tag || this.tagName === tag) && classes.every((c) => this.classList.has(c)); }); }
+  closest(sel) { for (let n = this; n; n = n.parentNode) if (n.matches && n.matches(sel)) return n; return null; }
   contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
   all() { return this.children.flatMap((c) => [c, ...c.all()]); }
   // Selectors of "tag.class" parts, each part a descendant of the one before;
@@ -453,7 +458,10 @@ class Node {
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
-class Event { constructor(type) { this.type = type; } }
+class Event {
+  constructor(type, init) { Object.assign(this, init); this.type = type; this.defaultPrevented = false; }
+  preventDefault() { this.defaultPrevented = true; }
+}
 const app = new Node("div");
 const document = {
   activeElement: null,
@@ -463,11 +471,13 @@ const document = {
   createTextNode: (text) => Object.assign(new Node("#text"), { text }),
 };
 let source = null;
+const addresses = [];
 const ctx = vm.createContext({
   document, Node, Event, console,
   EventSource: class { constructor() { source = this; } },
-  history: { replaceState: () => {} },
-  window: { addEventListener: () => {} },
+  history: { replaceState: (_, __, url) => addresses.push(url) },
+  window: { addEventListener: () => {}, innerWidth: 390 },
+  setTimeout,
   location: { hash: "" },
   fetch: () => new Promise(() => {}),
 });
@@ -635,6 +645,96 @@ console.log("no tools=" + said());
             "newer=[▸ 2 steps · Bash: after false]",
             "background=Go | [▸ 1 step false] | Watching CI.",
             "no tools=Hi | Hello.",
+        ],
+        "{stdout}"
+    );
+}
+
+/// Swiping right in a tab's channel (assets/phone/app.js's `swipeable`), run
+/// in Node over the page: a touch moving right past a third of the screen's
+/// width, or flicked, opens the drawer and clears the address's tab; a short
+/// one slides back, leaving the tab open; one moving mostly down, or starting
+/// in the composer's field or its tray of images, changes nothing; and a
+/// redraw asked for mid-swipe is drawn once as it ends, leaving only the
+/// screen it ended on; skipped without Node.
+#[test]
+fn swiping_right_in_a_channel_opens_the_drawer() {
+    let script = [CHANNEL_PAGE, r##"
+const tab = (wait) => ({ pane: "%5", index: 2, name: "phone", state: "working", wait, turn: { prompt: "go" } });
+const update = (t) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [t] }) });
+let drawn = 0;
+const channel = ctx.channel;
+ctx.channel = (stick) => { drawn++; channel(stick); };
+const open = () => vm.runInContext(`state.open = "5"; render();`, ctx);
+vm.runInContext(`state.me = { paired: true, computer: "mac" }; listen();`, ctx);
+update(tab("Edit app.js"));
+open();
+const screens = () => app.children.map((c) => (c.className.includes("drawer-screen") ? "drawer" : "channel")).join(",");
+const touch = (type, x, y, at, on) => {
+  const e = new Event(type, { touches: type === "touchend" ? [] : [{ clientX: x, clientY: y }], timeStamp: at });
+  (on || app.children[app.children.length - 1]).dispatchEvent(e);
+  return e.defaultPrevented;
+};
+// A path of touches from (x, y), each move `step` milliseconds apart, then let go.
+const swipe = (points, step, on) => {
+  touch("touchstart", points[0][0], points[0][1], 0, on);
+  const prevented = points.slice(1).map(([x, y], i) => touch("touchmove", x, y, (i + 1) * step, on));
+  return prevented;
+};
+const slid = () => new Promise((done) => setTimeout(done, 300));
+(async () => {
+  const screen = app.children[0];
+  console.log("move not passive=" + (screen.options.touchmove.passive === false));
+  console.log("down=" + swipe([[100, 300], [104, 320], [110, 380]], 100) + " " + screens());
+  touch("touchend", 0, 0, 400);
+  const field = app.querySelector(".composer textarea");
+  console.log("field=" + swipe([[20, 600], [80, 600], [300, 600]], 100, field) + " " + screens());
+  touch("touchend", 0, 0, 400, field);
+  vm.runInContext(`state.chosen = [{ file: "a.png", url: "blob:a" }]; render();`, ctx);
+  const shot = app.querySelector(".tray img");
+  console.log("tray=" + swipe([[20, 500], [80, 500], [300, 500]], 100, shot) + " " + screens());
+  touch("touchend", 0, 0, 400, shot);
+  vm.runInContext(`state.chosen = []; render();`, ctx);
+  // A short swipe, with the stream and another caller asking for redraws.
+  drawn = 0;
+  console.log("short=" + swipe([[20, 300], [40, 304], [100, 306]], 200) + " " + screens() + " " + app.children[1].style.transform);
+  update(tab("Bash: cargo test"));
+  vm.runInContext("render(true)", ctx);
+  console.log("held=" + drawn + " " + app.querySelector(".doing").textContent);
+  touch("touchend", 0, 0, 400);
+  await slid();
+  console.log("back=" + vm.runInContext("state.open", ctx) + " " + screens() + " drawn " + drawn + " " + app.querySelector(".doing").textContent + " " + JSON.stringify(app.children[0].style.transform));
+  // Past a third of the width.
+  addresses.length = 0;
+  swipe([[20, 300], [60, 300], [200, 310]], 100);
+  touch("touchend", 0, 0, 400);
+  await slid();
+  console.log("far=" + vm.runInContext("state.open", ctx) + " " + screens() + " " + addresses.join(""));
+  // A flick: short, but quick.
+  open();
+  swipe([[20, 300], [40, 300], [90, 300]], 10);
+  touch("touchend", 0, 0, 30);
+  await slid();
+  console.log("flick=" + vm.runInContext("state.open", ctx) + " " + screens());
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "move not passive=true",
+            "down=false,false channel",
+            "field=false,false channel",
+            "tray=false,false channel",
+            "short=true,true drawer,channel translateX(80px)",
+            "held=0 ⠹ Edit app.js",
+            r#"back=5 channel drawn 1 ⠹ Bash: cargo test """#,
+            "far=null drawer #",
+            "flick=null drawer",
         ],
         "{stdout}"
     );

@@ -538,11 +538,7 @@ async function closeTab(n) {
 
 function drawer() {
   state.whole = false;
-  const box = search();
-  box.show();
-  const head = header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)));
-  const offline = el("div", { class: "offline-slot" }, state.live ? null : el("div", { class: "offline-line" }, reconnecting() ? "Reconnecting…" : "Last heard " + ago(state.lastHeard) + " · trying again"));
-  const list = drawerList();
+  const { box, head, offline, list } = drawerParts();
   const screen = app.querySelector(".screen.drawer-screen");
   // The drawer already showing: everything but the search box drawn again,
   // since taking a focused field out of the page closes the keyboard.
@@ -556,7 +552,19 @@ function drawer() {
     list.scrollTop = kept;
     return;
   }
-  app.replaceChildren(el("div", { class: "screen drawer-screen" }, head, box, offline, list));
+  app.replaceChildren(drawerScreen({ box, head, offline, list }));
+}
+
+function drawerScreen({ box, head, offline, list } = drawerParts()) {
+  return el("div", { class: "screen drawer-screen" }, head, box, offline, list);
+}
+
+function drawerParts() {
+  const box = search();
+  box.show();
+  const head = header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)));
+  const offline = el("div", { class: "offline-slot" }, state.live ? null : el("div", { class: "offline-line" }, reconnecting() ? "Reconnecting…" : "Last heard " + ago(state.lastHeard) + " · trying again"));
+  return { box, head, offline, list: drawerList() };
 }
 
 // ── A tab's channel (board 165), its prompt card (166) and composer (167) ──
@@ -1024,13 +1032,19 @@ function composer() {
   return box;
 }
 
+function toDrawer() {
+  state.open = null;
+  history.replaceState(null, "", "#");
+  render();
+}
+
 function channelHead(tab) {
   const [m, kind] = markOf(tab);
   const chip = tab.state === "waiting" ? ["waiting", "y"] : tab.state === "done" ? ["done", "g"] : tab.state === "idle" ? ["idle", ""] : ["working", "b"];
   return el(
     "div",
     { class: "head" + (state.whole ? " whole" : "") },
-    el("button", { class: "menu", "aria-label": "Tabs", onclick: () => { state.open = null; history.replaceState(null, "", "#"); render(); } }, "☰"),
+    el("button", { class: "menu", "aria-label": "Tabs", onclick: toDrawer }, "☰"),
     el("span", { class: "mark " + kind }, m),
     title(tab),
     el("span", { class: "chip " + chip[1] }, chip[0]),
@@ -1060,6 +1074,7 @@ function channel(stick) {
     const box = composer();
     const whole = el("div");
     shown = { open: state.open, screen: el("div", { class: "screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, now, composer: box, full: whole };
+    swipeable(shown.screen);
     app.replaceChildren(shown.screen);
   }
   const head = channelHead(tab);
@@ -1085,8 +1100,82 @@ function channel(stick) {
   shown.list.scrollTop = stick || atEnd ? shown.list.scrollHeight : top;
 }
 
+// Swiping right in a channel (board 164's second phone): the drawer drawn
+// under the channel once the touch moves right more than up or down, the
+// channel following the finger. Let go past a third of the screen's width,
+// or flicked right, it opens the drawer as ☰ does; otherwise it slides back.
+// A touch in the composer's field or its tray of images is theirs.
+const SWIPE_DECIDES = 10; // px moved before a touch counts as sideways or not
+const SWIPE_FLICK = 0.5; // px a millisecond rightward that open the drawer however far it went
+const SWIPE_MS = 200;
+let swipe = null; // { screen, x, y, dx, at, speed, under, wanted, sliding }: the touch under way, or the slide after it
+
+function swipeable(screen) {
+  screen.addEventListener("touchstart", (e) => {
+    if (swipe && swipe.sliding) return;
+    swipe = null;
+    if (e.touches.length !== 1 || e.target.closest("textarea, .tray")) return;
+    const t = e.touches[0];
+    swipe = { screen, x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, under: null, wanted: null };
+  }, { passive: true });
+  screen.addEventListener("touchmove", (e) => {
+    if (!swipe || swipe.sliding || swipe.screen !== screen || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - swipe.x;
+    const dy = t.clientY - swipe.y;
+    if (!swipe.under) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_DECIDES) return;
+      const stillOpen = state.open && screen.parentNode === app;
+      if (dx <= Math.abs(dy) || !stillOpen) {
+        swipe = null;
+        return;
+      }
+      swipe.under = drawerScreen();
+      app.insertBefore(swipe.under, screen);
+      app.classList.add("swiping");
+    }
+    e.preventDefault();
+    const elapsed = e.timeStamp - swipe.at;
+    if (elapsed > 0) swipe.speed = (dx - swipe.dx) / elapsed;
+    swipe.at = e.timeStamp;
+    swipe.dx = Math.max(0, dx);
+    screen.style.transform = "translateX(" + swipe.dx + "px)";
+  }, { passive: false });
+  const end = (e) => {
+    if (!swipe || swipe.sliding || swipe.screen !== screen) return;
+    const done = swipe;
+    swipe = null;
+    if (!done.under) return;
+    const opens = e.type === "touchend" && (done.dx > window.innerWidth / 3 || done.speed > SWIPE_FLICK);
+    screen.style.transition = "transform " + SWIPE_MS + "ms ease-out";
+    screen.style.transform = opens ? "translateX(100%)" : "";
+    // Held off until the slide ends, so no redraw lands mid-slide.
+    swipe = { screen, under: done.under, wanted: done.wanted, sliding: true };
+    setTimeout(() => {
+      const wanted = swipe.wanted;
+      swipe = null;
+      app.classList.remove("swiping");
+      screen.style.transition = "";
+      screen.style.transform = "";
+      if (opens) {
+        screen.remove();
+        toDrawer();
+        return;
+      }
+      done.under.remove();
+      if (wanted) render(wanted.stick);
+    }, SWIPE_MS);
+  };
+  screen.addEventListener("touchend", end);
+  screen.addEventListener("touchcancel", end);
+}
+
 function render(stick) {
   if (!state.me || !state.me.paired) return;
+  if (swipe && swipe.under) {
+    swipe.wanted = { stick: !!stick || !!(swipe.wanted && swipe.wanted.stick) };
+    return;
+  }
   if (state.open) channel(stick);
   else drawer();
 }
