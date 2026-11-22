@@ -165,6 +165,8 @@ button {
 }
 .avatar.claude { background: var(--claude); }
 .avatar.you { background: var(--you); }
+/* Another tab's Claude (board 182): neither Claude's color nor yours. */
+.avatar.tab { background: var(--magenta); }
 .msg .who { font-weight: 700; }
 .msg .when { color: var(--dim); font-weight: 400; margin-left: 8px; font-size: 12px; }
 .msg .tag { margin-left: 6px; }
