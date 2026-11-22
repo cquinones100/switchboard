@@ -284,8 +284,8 @@ const tx = (x, y, w, h, text, color, size, bold, align) => K(x, y, w, h, 'displa
 
 // ── THE ATOMS ──
 // 1. TOUCH TARGET: 44 pt every way, for anything a finger presses; what is drawn may be smaller, the target never is.
-// 2. ICON BUTTON: 44 × 44, its glyph 18 pt; ghost (the glyph in the accent, no fill: ☰ ⋯ + in a header or the composer),
-//    filled (raised: × on a box, i beside a choice), lit (accent fill, ink glyph: send with something to send, i open).
+// 2. ICON BUTTON: 44 × 44, its glyph 18 pt; ghost (the glyph in the accent, no fill: + in the composer,
+//    × inside a field), filled (raised, so it stands off the screen behind it: ☰ and ⋯ in a header, × on a box, i beside a choice), lit (accent fill, ink glyph: send with something to send, i open).
 const icon = (x, y, glyph, kind) => {
   const bg = kind === 'lit' ? C.accent : kind === 'fill' ? C.raised : 'transparent';
   K(x, y, Wd(44), PT(44), 'border-radius:50%;background:' + bg);
@@ -316,12 +316,12 @@ const rowK = (sx, y, st, num, name, sub, held) => {
   put(sx + 6, ty + 1, sub, 'd', '', bg);
 };
 // 7. GROUP LABEL: 12 pt capitals, bold, in its state's tone, its count at the right; 24 pt above its first row.
-// 8. HEADER: 48 pt: an icon button at each end (☰, ⋯), between them the title 16 pt bold and a chip; a rule under it.
+// 8. HEADER: 48 pt: a filled icon button at each end (☰, ⋯), between them the title 16 pt bold and a chip; a rule under it.
 const header = (sx, y, title, chip) => {
-  icon(sx, y, '☰', 'ghost');
-  tx(sx + 4.5, y, 20, PT(44), title, C.text, 12, true);
+  icon(sx + 0.4, y, '☰', 'fill');
+  tx(sx + 5.4, y, 19, PT(44), title, C.text, 12, true);
   if (chip) chipK(sx + 20, y + 0.45, chip[0], chip[1], chip[2]);
-  icon(sx + 36 - Wd(44), y, '⋯', 'ghost');
+  icon(sx + 35.6 - Wd(44), y, '⋯', 'fill');
   K(sx, y + PT(48), 36, 0.06, 'background:' + C.line);
 };
 // 9. MESSAGE: a 28 pt avatar, the name 16 pt bold and when 12 pt dim, the words 16 pt; a step Claude took, one 12 pt dim line.
@@ -338,7 +338,7 @@ let y = 2;
 const atom = (x, yy, name, spec) => { T(x, yy, [name.toUpperCase(), 't', 'b']); spec.forEach((s, i) => put(x, yy + 1 + i, s, 'd')); };
 // Column A
 atom(1, y, 'Icon button', ['44 × 44 · glyph 18 · ghost, filled, lit']);
-icon(1, y + 2.2, '☰', 'ghost'); icon(6, y + 2.2, '⋯', 'ghost'); icon(11, y + 2.2, '×', 'fill'); icon(16, y + 2.2, 'i', 'fill'); icon(21, y + 2.2, 'i', 'lit'); icon(26, y + 2.2, '➤', 'lit');
+icon(1, y + 2.2, '☰', 'fill'); icon(6, y + 2.2, '⋯', 'fill'); icon(11, y + 2.2, '×', 'fill'); icon(16, y + 2.2, 'i', 'fill'); icon(21, y + 2.2, 'i', 'lit'); icon(26, y + 2.2, '➤', 'lit');
 y += 6;
 atom(1, y, 'Button', ['pill · 44 high · padding 16 · words 16']);
 btn(1, y + 2.2, 18, 'notes-400', 'plain'); btn(20, y + 2.2, 18, 'Send', 'lit', true);
