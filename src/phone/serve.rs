@@ -135,6 +135,14 @@ impl Server {
             .is_some_and(|slot| crate::relay::tabs::dialog_in(&slot.pane.text(0)).is_some())
     }
 
+    /// Whether Claude's fullscreen view is scrolled back, so what it waits
+    /// on is out of sight and a message's keys would reach it unseen.
+    fn phone_scrolled_back(&self, pane: PaneId) -> bool {
+        self.panes
+            .get(&pane)
+            .is_some_and(|slot| answer::scrolled_back(&slot.pane.text(0)))
+    }
+
     fn phone_draft(&self, pane: PaneId) -> bool {
         self.panes.get(&pane).is_some_and(|slot| {
             crate::relay::tabs::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0)).is_some()
@@ -176,6 +184,12 @@ impl Server {
         let said = match (message, found) {
             (true, Some(_)) if waiting => {
                 return Err("its Claude is showing a prompt: answer that first".into());
+            }
+            (true, None) if waiting && self.phone_scrolled_back(pane) => {
+                return Err(
+                    "its Claude's view is scrolled up past what it waits on: scroll it down at the computer"
+                        .into(),
+                );
             }
             (true, _) if reply.trim().is_empty() => return Err("nothing to send".into()),
             // A dialog before its session starts (trust this folder, a new

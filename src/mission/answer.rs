@@ -49,6 +49,19 @@ static RULE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\s\x{2500}-\x{257F}—-]+$").expect("a regex"));
 static QUESTION_TABS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[☐☒]").expect("a regex"));
 static LABEL_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}.*$").expect("a regex"));
+static SCROLL_PILL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\S\s+·\s+\S+ to scroll$").expect("a regex"));
+
+/// Whether Claude Code's fullscreen view (its `tui` setting) is scrolled
+/// back: its screen then ends in a pill such as "Waiting for your answer ·
+/// fn+↓ to scroll" over the transcript, and what Claude waits on, a
+/// permission prompt or a question, is below what the screen holds.
+pub fn scrolled_back(text: &str) -> bool {
+    text.lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| SCROLL_PILL.is_match(l.trim_end()))
+}
 
 /// One numbered option of a prompt; `checked` for one that takes several
 /// answers, ticked or not; `detail` the lines under its label (a question's
@@ -96,7 +109,14 @@ pub struct Prompt {
 /// time, under a line of their names marked ☐ or ☒. A question that takes
 /// several answers (`multi`) shows each option as [ ] or [✔], and a Submit
 /// row after the options moves on.
+///
+/// A screen scrolled back (`scrolled_back`) shows none: the numbered lines
+/// on it are the transcript's, a question answered long ago, while the
+/// prompt Claude waits on is out of sight below.
 pub fn options_in(text: &str) -> Option<Prompt> {
+    if scrolled_back(text) {
+        return None;
+    }
     let mapped: Vec<String> = text
         .split('\n')
         .map(|l| l.replace(['│', '┃'], " ").trim_end().to_string())
@@ -902,6 +922,55 @@ mod tests {
         assert_eq!(options_in("$ ls\nfoo bar\n$ "), None);
         assert_eq!(options_in("1. only one"), None);
         assert!(found.more.is_empty(), "every label shown whole");
+    }
+
+    #[test]
+    fn a_fullscreen_view_scrolled_back_over_a_permission_prompt_shows_none() {
+        // Claude Code's fullscreen view, scrolled up while a Bash
+        // permission prompt waits below: the screen holds a question
+        // answered earlier, and the pill saying what is out of sight.
+        let screen = "\
+⏺ Which color?
+  1. Red
+  2. Blue
+  3. Green
+
+⏺ Ran 2 stop hooks
+
+✻ Cogitated for 1s · done 11:23 AM
+
+❯ Run this exact bash command with the Bash tool: node scripts/build.js
+  ⎿  $ node scripts/build.js
+
+⏺ line 1
+  line 2
+  line 3                                                      Waiting for your answer · fn+↓ to scroll
+";
+        assert!(scrolled_back(screen));
+        assert_eq!(options_in(screen), None, "not the earlier question");
+        let live = "\
+⏺ Which color?
+  1. Red
+  2. Blue
+  3. Green
+
+ Bash command
+ node scripts/build.js
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to scripts/ from this project
+   3. No
+
+ Esc to cancel · Tab to amend
+";
+        assert!(!scrolled_back(live));
+        let found = options_in(live).expect("the permission prompt");
+        assert_eq!(
+            found.question,
+            "Bash command node scripts/build.js Do you want to proceed?"
+        );
+        assert_eq!(found.options.len(), 3);
+        assert_eq!(found.options[0].label, "Yes");
     }
 
     #[test]
