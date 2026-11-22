@@ -971,6 +971,13 @@
     "default": true
   },
   {
+    "key": "pictures_menu",
+    "category": "Tabs and header",
+    "label": "Choose a picture beside a pane and act on it",
+    "description": "With pictures shown in the side panel (switchboard look), each is drawn in a card, the one under the mouse lit, and a click on one chooses it and gives the pictures the keys, the tab's pane greyed: j and k, the arrows and Tab move the choice, paging to keep it in view, Enter, Space or a right click open its menu (Open in Finder, Open in Preview, Copy its path, Close the pictures), Esc gives the keys back to the tab with the pictures still up, and M-Esc or the × closes them. Off, the pictures take no keys and a click on them closes them",
+    "default": true
+  },
+  {
     "key": "tab_back_forward",
     "category": "Tabs and header",
     "label": "M-{ and M-} go back and forward",

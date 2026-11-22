@@ -1482,7 +1482,7 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     let (kx, ky) = cell_of(&screen, "M-Esc close").unwrap();
     assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
     assert!(
-        !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
+        !screen[y].contains('╭') && !screen.iter().any(|l| l.contains('▀')),
         "no box edge or shadow:\n{}",
         screen.join("\n")
     );
@@ -1519,10 +1519,17 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
     let (ax, ay) = cell_of(&screen, "after.png").unwrap();
     assert!(bx > rule && ax == bx, "names at {bx} and {ax}");
     assert!(by > 0 && ay > by + 8, "names on rows {by} and {ay}");
-    // A click on them closes them.
+    // A click on one chooses it and gives the pictures the keys; Esc
+    // gives them back with the pictures still up, and M-Esc closes them.
     let (col, row) = (bx + 6, by + 5);
     let click = format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m");
     client.send(click.as_bytes());
+    client.wait_text("Esc keys back to the tab");
+    client.send(b"\x1b");
+    client.wait_for("the keys back, the pictures up", |s| {
+        cell_of(s, "Esc keys back").is_none() && cell_of(s, "Before and after").is_some()
+    });
+    client.send(b"\x1b\x1b");
     client.wait_for("the pictures gone", |s| {
         cell_of(s, "Before and after").is_none() && cell_of(s, "SIDE PANEL").is_some()
     });
@@ -1604,6 +1611,69 @@ fn panes_stacked_by_m_j_keep_the_lone_panes_width_and_side_panel() {
         w.len() == 2 && w.iter().sum::<u64>() + 1 == 240 - side
     });
     assert!(opened(&server).is_empty(), "{:?}", opened(&server));
+}
+
+#[test]
+fn a_chosen_pictures_menu_copies_its_path() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    stand_in_clipboard(&server);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("SIDE PANEL");
+    let shot = picture_at(&server, "shot.png");
+    server.ok(&["look", &shot]);
+    let screen = client.wait_text("1 of 1");
+    let (x, y) = cell_of(&screen, "1 of 1").unwrap();
+    let (col, row) = (x - 4, y + 6);
+    let click = format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m");
+    client.send(click.as_bytes());
+    client.wait_text("Esc keys back to the tab");
+    client.send(b"\r");
+    let screen = client.wait_for("the chosen picture's menu", |s| {
+        cell_of(s, "Close the pictures").is_some() && s.iter().any(|l| l.contains("› "))
+    });
+    for option in [
+        switchboard::platform::REVEAL_LABEL,
+        switchboard::platform::VIEWER_LABEL,
+        "Copy its path",
+    ] {
+        assert!(
+            cell_of(&screen, option).is_some(),
+            "{option}:\n{}",
+            screen.join("\n")
+        );
+    }
+    client.send(b"\x1b[B\x1b[B\r");
+    wait_copied(&mut client, &shot);
+    let copied = server.home.join("copied");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while std::fs::read_to_string(&copied).unwrap_or_default() != shot {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stand-in clipboard holds {:?}",
+            std::fs::read_to_string(&copied)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    client.wait_text(&format!("Copied {shot}"));
+}
+
+#[test]
+fn with_the_pictures_menu_off_a_click_closes_the_pictures() {
+    let server =
+        TestServer::start_with_settings(r#"{"lone_pane_width": "80", "pictures_menu": false}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("SIDE PANEL");
+    let shot = picture_at(&server, "shot.png");
+    server.ok(&["look", &shot]);
+    let screen = client.wait_text("shot.png   tab 1 · ");
+    let (x, y) = cell_of(&screen, "shot.png   tab 1 · ").unwrap();
+    assert!(cell_of(&screen, "1 of 1").is_none(), "no cards");
+    let (col, row) = (x + 6, y + 8);
+    let click = format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m");
+    client.send(click.as_bytes());
+    client.wait_for("the pictures gone", |s| {
+        cell_of(s, "M-Esc close").is_none() && cell_of(s, "SIDE PANEL").is_some()
+    });
 }
 
 #[test]

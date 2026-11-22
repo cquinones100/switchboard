@@ -37,7 +37,8 @@ enum Spare {
     /// The columns are behind another tab or mission control for now: the
     /// tab would have them were it in front with nothing over it.
     Hidden,
-    At(Rect),
+    /// The columns, and the tab's pane beside them.
+    At { room: Rect, pane: Rect },
 }
 
 /// Why pictures can't go beside a tab no client shows.
@@ -353,6 +354,9 @@ impl Server {
                 Step::Same => return Handed::Took { only_itself },
                 Step::Redraw => {
                     c.dirty = true;
+                    if self.picture_menu_asked(id) {
+                        return Handed::Took { only_itself: false };
+                    }
                     return Handed::Took { only_itself };
                 }
                 Step::Close(outcome) => {
@@ -486,7 +490,13 @@ impl Server {
                 // never take those beside the tab in front.
                 self.close_pictures(client, |p| p.tab == tab);
                 let about = format!("tab {} · {}", self.tab_number(tab), self.tab_label(tab));
-                let pictures = Pictures::new(tab, &about, shown, before_after);
+                let pictures = Pictures::new(
+                    tab,
+                    &about,
+                    shown,
+                    before_after,
+                    settings::is_on("pictures_menu"),
+                );
                 // Under every box already up: they pass keys on to the tab,
                 // which would take them from a menu or a question open
                 // when Claude shows them, were they on top of it.
@@ -678,7 +688,8 @@ impl Server {
         if self.graphics_of(c).is_none() {
             return Spare::Gone("this terminal doesn't draw the workspace's images");
         }
-        let Some(room) = crate::mux::beside::spare_of(s.spread_for(t), s.area_for(t))
+        let pane = s.area_for(t);
+        let Some(room) = crate::mux::beside::spare_of(s.spread_for(t), pane)
             .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
         else {
             return Spare::Gone(
@@ -689,7 +700,7 @@ impl Server {
         if s.current != tab || covered {
             return Spare::Hidden;
         }
-        Spare::At(room)
+        Spare::At { room, pane }
     }
 
     /// Keeps the pictures shown beside each tab's pane on its spare columns
@@ -728,9 +739,9 @@ impl Server {
                 continue;
             };
             if let Some((_, spare)) = spares.iter().find(|(t, _)| *t == p.tab) {
-                p.area = match spare {
-                    Spare::At(area) => Some(*area),
-                    _ => None,
+                (p.area, p.pane) = match spare {
+                    Spare::At { room, pane } => (Some(*room), Some(*pane)),
+                    _ => (None, None),
                 };
             }
         }
@@ -741,6 +752,59 @@ impl Server {
             .partition(|l| pictures_of(l).is_some_and(|p| p.area.is_none()));
         c.overlays.layers = hidden;
         c.overlays.layers.extend(rest);
+    }
+
+    /// Opens the menu of the picture chosen beside a pane (UX 2.0 board
+    /// 171), when the pictures on top asked for it (Enter, Space or a right
+    /// click, which it opens beside): showing its file in the desktop's
+    /// file manager, opening it in its viewer, copying its path and
+    /// closing the pictures. Whether it opened.
+    fn picture_menu_asked(&mut self, client: ClientId) -> bool {
+        let Some((tab, (file, title))) = self
+            .clients
+            .get_mut(&client)
+            .and_then(|c| c.overlays.layers.last_mut())
+            .and_then(|l| l.overlay.as_any_mut().downcast_mut::<Pictures>())
+            .and_then(|p| Some((p.tab, p.take_asked()?)))
+        else {
+            return false;
+        };
+        let options = [
+            crate::platform::REVEAL_LABEL,
+            crate::platform::VIEWER_LABEL,
+            "Copy its path",
+            "Close the pictures",
+        ];
+        self.choose(
+            client,
+            Menu::of(title, &options),
+            move |server, client, chose| {
+                let tx = server.tx.clone();
+                match chose {
+                    Some(0) => {
+                        tokio::task::spawn_blocking(move || {
+                            if let Err(e) = crate::platform::reveal(&file) {
+                                let _ = tx.send(Event::Ui(UiEvent::Said {
+                                    client: Some(client),
+                                    text: format!("Couldn't show it: {e:#}"),
+                                }));
+                            }
+                        });
+                    }
+                    Some(1) => {
+                        tokio::task::spawn_blocking(move || open_file(&file, &tx, Some(client)));
+                    }
+                    Some(2) => {
+                        let path = file.to_string_lossy();
+                        server.to_clipboard(Some(client), &path);
+                        server.say(Some(client), &format!("Copied {path}"));
+                    }
+                    Some(3) => server.close_pictures(client, |p| p.tab == tab),
+                    _ => {}
+                }
+            },
+        );
+        true
     }
 
     /// Closes a client's pictures beside a pane that `which` picks.

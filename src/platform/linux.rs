@@ -15,6 +15,8 @@ use super::Presence;
 use crate::{paths, util};
 
 pub const NAME: &str = "Linux";
+pub const REVEAL_LABEL: &str = "Show in the file manager";
+pub const VIEWER_LABEL: &str = "Open in the viewer";
 
 /// Where Homebrew on Linux puts rustup's `cargo`, which it leaves off the
 /// PATH.
