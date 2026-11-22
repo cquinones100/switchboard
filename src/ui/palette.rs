@@ -7,15 +7,18 @@
 //! and so is a default key's action that keys.json unbinds or binds its key
 //! over, so changing a default never takes a command out of the palette.
 //!
-//! The commands picked last come first, newest first (`recent`, the last
-//! six); the rest follow by description. As you type, a command picked
-//! before after the same words comes first, then one picked after longer
-//! words starting with them ("sha" for "shape"), each by how often, then by
+//! With nothing typed, the six commands picked last come first, newest
+//! first; the rest follow by description. As you type, the rows that match
+//! are ordered by when each was last picked (`recent`, the last 200 picks,
+//! each command once, newest first), the ones never picked after them by
 //! how well each word typed fits a word of the row: 3 for the whole word, 2
-//! for its start, 1 inside it (`rank`, palette.sh's `--rank`). What was typed
+//! for its start, 1 inside it (`rank`, palette.sh's `--rank`). Ahead of them
+//! all comes a command picked after exactly what is typed now, by how often,
+//! so a word always used for one command finds it first: what was typed
 //! before each pick is kept (`queries`, the last 300) with the palette_learn
-//! setting on. Both files are under `~/.local/state/switchboard/palette/`, in
-//! a directory only you can read, since what you type names your work.
+//! setting on, and with it off recency alone orders the matches (`order`).
+//! Both files are under `~/.local/state/switchboard/palette/`, in a
+//! directory only you can read, since what you type names your work.
 
 use std::path::PathBuf;
 
@@ -26,8 +29,10 @@ use crate::{paths, util};
 
 use super::picker::PickItem;
 
-/// How many recent picks lead the list.
-pub const RECENT_MAX: usize = 6;
+/// How many picks are kept, each command once, to order the matches by.
+pub const RECENT_MAX: usize = 200;
+/// How many of the recent picks lead the list with nothing typed.
+pub const RECENT_SHOWN: usize = 6;
 /// How many of what was typed before a pick are kept.
 pub const QUERIES_MAX: usize = 300;
 
@@ -302,12 +307,19 @@ No key: Notes in front lists it"
     list
 }
 
-/// The entries with the ones picked last first, newest first.
+/// The entries with the six picked last first, newest first; a pick of a
+/// command listed only while Notes is in front, kept among the recent ones
+/// to order the matches, takes none of the six.
 pub fn recent_first(mut entries: Vec<Entry>, recent: &[String]) -> Vec<Entry> {
+    let shown: Vec<&String> = recent
+        .iter()
+        .filter(|r| entries.iter().any(|e| e.action.name() == **r))
+        .take(RECENT_SHOWN)
+        .collect();
     let rank = |e: &Entry| {
-        recent
+        shown
             .iter()
-            .position(|r| *r == e.action.name())
+            .position(|r| **r == e.action.name())
             .unwrap_or(usize::MAX)
     };
     // A stable sort keeps the rest by description.
@@ -316,6 +328,39 @@ pub fn recent_first(mut entries: Vec<Entry>, recent: &[String]) -> Vec<Entry> {
 }
 
 pub use switchboard_ui::rank::{normalize, rank};
+
+/// Orders the rows that matched `query` (each its value and the text it is
+/// matched on): a row picked after exactly this query first, by how often
+/// (`picks`, what was typed before each pick and what was picked), then the
+/// rest picked before by their place in `recent`, newest first, then the
+/// ones never picked by how well they fit. Nothing typed keeps the list's
+/// order.
+pub fn order(
+    query: &str,
+    rows: &[(String, String)],
+    recent: &[String],
+    picks: &[(String, String)],
+) -> Vec<usize> {
+    let typed = normalize(query);
+    if typed.is_empty() {
+        return (0..rows.len()).collect();
+    }
+    let exact: Vec<(String, String)> = picks.iter().filter(|(q, _)| *q == typed).cloned().collect();
+    let mut ordered = rank(query, rows, &exact);
+    // A stable sort keeps rank's order among the exact picks and the rest.
+    ordered.sort_by_key(|&i| {
+        let value = rows[i].0.as_str();
+        if exact.iter().any(|(_, v)| v == value) {
+            0
+        } else {
+            recent
+                .iter()
+                .position(|r| r == value)
+                .map_or(usize::MAX, |at| at + 1)
+        }
+    });
+    ordered
+}
 
 fn dir() -> PathBuf {
     paths::state_dir().join("palette")
@@ -360,26 +405,8 @@ pub fn remember(value: &str, query: &str, learn: bool) {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
-    let mut recent = vec![value.to_string()];
-    recent.extend(read_recent().into_iter().filter(|r| r != value));
-    recent.truncate(RECENT_MAX);
+    let recent = picked_first(value, read_recent());
     let _ = util::write_atomic(recent_file(), format!("{}\n", recent.join("\n")));
-    learn_query(value, query, learn);
-}
-
-/// Keeps what was typed before a pick, when `learn` and something was
-/// typed, so the same words rank it first again; a command listed only
-/// while Notes is in front is kept so alone, its place among the recent
-/// picks left to the workspace's commands, which lead the list.
-pub fn learn_query(value: &str, query: &str, learn: bool) {
-    let dir = dir();
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
     let typed = normalize(query);
     if learn && !typed.is_empty() {
         let mut queries = read_queries();
@@ -391,6 +418,15 @@ pub fn learn_query(value: &str, query: &str, learn: bool) {
             .collect();
         let _ = util::write_atomic(queries_file(), text);
     }
+}
+
+/// The recent picks with `value` first and once, the oldest dropped past
+/// `RECENT_MAX`.
+fn picked_first(value: &str, recent: Vec<String>) -> Vec<String> {
+    let mut kept = vec![value.to_string()];
+    kept.extend(recent.into_iter().filter(|r| r != value));
+    kept.truncate(RECENT_MAX);
+    kept
 }
 
 #[cfg(test)]
@@ -548,6 +584,103 @@ mod tests {
         let ordered = recent_first(all, &["zoom".into(), "detach".into()]);
         assert_eq!(ordered[0].action, Action::Zoom);
         assert_eq!(ordered[1].action, Action::Detach);
+    }
+
+    fn rows(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(v, t)| (v.to_string(), t.to_string()))
+            .collect()
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn matches_go_by_last_use_then_never_used_ones_by_fit() {
+        let list = rows(&[
+            ("detach", "Detach the pane"),
+            ("split", "Split pane to the right"),
+            ("panes", "List panes"),
+            ("zoom", "Zoom pane"),
+        ]);
+        let recent = strings(&["zoom", "detach"]);
+        let values = |order: Vec<usize>| -> Vec<&str> {
+            order.into_iter().map(|i| list[i].0.as_str()).collect()
+        };
+        assert_eq!(
+            values(order("pane", &list, &recent, &[])),
+            ["zoom", "detach", "split", "panes"],
+            "zoom used after detach, then the whole word over its start"
+        );
+        assert_eq!(
+            values(order("", &list, &recent, &[])),
+            ["detach", "split", "panes", "zoom"],
+            "nothing typed keeps the list's order"
+        );
+    }
+
+    #[test]
+    fn a_command_picked_after_exactly_what_is_typed_leads() {
+        let list = rows(&[("detach", "Detach the pane"), ("zoom", "Zoom pane")]);
+        let recent = strings(&["zoom", "detach"]);
+        let picks = vec![
+            ("pane".to_string(), "detach".to_string()),
+            ("pan".to_string(), "zoom".to_string()),
+        ];
+        assert_eq!(order("Pane", &list, &recent, &picks), vec![0, 1]);
+        assert_eq!(
+            order("pa", &list, &recent, &picks),
+            vec![1, 0],
+            "a pick after longer words is only recency"
+        );
+    }
+
+    #[test]
+    fn two_hundred_picks_are_kept_and_six_lead_with_nothing_typed() {
+        let mut recent = Vec::new();
+        for n in 0..=RECENT_MAX {
+            recent = picked_first(&n.to_string(), recent);
+        }
+        assert_eq!(recent.len(), 200);
+        assert_eq!(recent[0], "200");
+        assert!(!recent.contains(&"0".to_string()), "the oldest dropped");
+        let again = picked_first("100", recent.clone());
+        assert_eq!(
+            (again.len(), again[0].as_str(), again[1].as_str()),
+            (200, "100", "200"),
+            "each command once"
+        );
+
+        let all = entries(&Bindings::default(), true, true, &[]);
+        let names: Vec<String> = all.iter().map(|e| e.action.name()).collect();
+        let picked: Vec<String> = names.iter().rev().take(10).cloned().collect();
+        let ordered = recent_first(all, &picked);
+        assert_eq!(
+            ordered
+                .iter()
+                .take(6)
+                .map(|e| e.action.name())
+                .collect::<Vec<_>>(),
+            picked[..6]
+        );
+        let rest: Vec<_> = ordered[6..].iter().map(|e| e.words.clone()).collect();
+        let mut sorted = rest.clone();
+        sorted.sort();
+        assert_eq!(rest, sorted, "the seventh on in its place by description");
+
+        let mut with_notes = picked.clone();
+        with_notes.insert(1, "notes:Add an item".into());
+        let ordered = recent_first(entries(&Bindings::default(), true, true, &[]), &with_notes);
+        assert_eq!(
+            ordered
+                .iter()
+                .take(6)
+                .map(|e| e.action.name())
+                .collect::<Vec<_>>(),
+            picked[..6],
+            "a Notes command's pick takes none of the six"
+        );
     }
 
     #[test]
