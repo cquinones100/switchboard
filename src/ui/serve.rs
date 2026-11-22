@@ -318,6 +318,14 @@ impl Server {
             let Some(top) = c.overlays.layers.last_mut() else {
                 return Handed::Left(parsed);
             };
+            // The key after the prefix is the bindings', never the
+            // pictures', which pass the prefix itself on.
+            if c.prefix
+                && matches!(parsed.input, Input::Key(_))
+                && top.overlay.as_any().is::<Pictures>()
+            {
+                return Handed::Left(parsed);
+            }
             let let_through = top.overlay.lets_through();
             let step = match &parsed.input {
                 Input::Key(k) => top.overlay.key(*k, &look),
@@ -355,6 +363,14 @@ impl Server {
                 Step::Same => return Handed::Took { only_itself },
                 Step::Redraw => {
                     c.dirty = true;
+                    let took_keys = let_through
+                        && c.overlays
+                            .layers
+                            .last()
+                            .is_some_and(|l| !l.overlay.lets_through());
+                    if took_keys {
+                        self.pictures_took_keys(id);
+                    }
                     if self.picture_menu_asked(id) {
                         return Handed::Took { only_itself: false };
                     }
@@ -839,7 +855,9 @@ impl Server {
                 .filter_map(|l| l.overlay.as_any_mut().downcast_mut::<Pictures>())
                 .any(Pictures::choose_first)
         });
-        if !chosen {
+        if chosen {
+            self.pictures_took_keys(client);
+        } else {
             let why = if settings::is_on("pictures_menu") {
                 "No pictures are shown beside the pane to choose"
             } else {
@@ -848,6 +866,18 @@ impl Server {
             return self.say(Some(client), why);
         }
         self.overlays_changed(client);
+    }
+
+    /// A picture chosen beside the pane takes the keys from the sidebar
+    /// and the coordinator, which would otherwise give it up on the next
+    /// draw (`looks_before_draw`).
+    fn pictures_took_keys(&mut self, client: ClientId) {
+        if let Some(session) = self.clients.get(&client).map(|c| c.session.clone())
+            && self.sidebar.focused(&session)
+        {
+            self.sidebar_leave(&session);
+        }
+        self.coordinator_unfocus(client);
     }
 
     /// Closes a client's pictures beside a pane that `which` picks.

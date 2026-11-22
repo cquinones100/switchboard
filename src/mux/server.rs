@@ -472,7 +472,7 @@ pub struct Client {
     /// decides how anything terminal-dependent is drawn for it.
     pub term: String,
     parser: Parser,
-    prefix: bool,
+    pub(crate) prefix: bool,
     /// The digits of a tab's number typed after M-1 to M-9, and when the
     /// wait for the next one ends (src/mux/tab_digits.rs).
     tab_digits: Option<(String, Instant)>,

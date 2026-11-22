@@ -575,6 +575,16 @@ impl Server {
         }
     }
 
+    /// Takes the keys from it, as a picture chosen beside the pane does.
+    pub(crate) fn coordinator_unfocus(&mut self, client: ClientId) {
+        if let Some(shown) = self.coordinator.shown.get_mut(&client)
+            && shown.focused
+        {
+            shown.focused = false;
+            self.coordinator_redraw();
+        }
+    }
+
     /// A key while it has the keys: Escape gives them back to the tab,
     /// anything else is its. False when it hasn't the keys.
     pub fn coordinator_key(&mut self, client: ClientId, key: Key, raw: &[u8]) -> bool {
