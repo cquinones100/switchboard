@@ -718,10 +718,12 @@ pub async fn send_waiting(
 }
 
 /// Whether a tab shows a choice: numbered options while it waits on you,
-/// or a dialog before its session starts.
+/// or Claude's fullscreen view scrolled back over what it waits on, or a
+/// dialog before its session starts.
 fn showing_choice(cx: &Cx, tab: &Tab, screen: &str) -> bool {
     let waiting_on_you = tabs::tab(cx, &tab.id).is_some_and(|t| t.state == "waiting");
-    (waiting_on_you && tabs::options_in(screen).is_some()) || tabs::dialog_in(screen).is_some()
+    (waiting_on_you && (tabs::options_in(screen).is_some() || tabs::scrolled_back(screen)))
+        || tabs::dialog_in(screen).is_some()
 }
 
 fn choice_now(tab: &Tab) -> String {
@@ -954,6 +956,15 @@ async fn send_to_tab(
             offer_choice(cx, &tab.id, kind, ts, &format!("🤖 {body}"));
         }
         return Ok(ts);
+    }
+    // Claude's fullscreen view scrolled back hides what it waits on, which
+    // the message's keys and Enter would answer unseen.
+    let waiting = current.as_ref().is_some_and(|t| t.state == "waiting");
+    if waiting && tabs::scrolled_back(&before) {
+        let body = format!(
+            "{name} is waiting on a choice its view is scrolled up past, so I didn't type anything. Scroll it down at the computer."
+        );
+        return say(cx, reply, &body, vec![]).await;
     }
     // Text typed in the prompt box and left unsent would go with the
     // message as one prompt, so you're asked first.
