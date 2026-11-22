@@ -5829,7 +5829,8 @@ impl Server {
             }
             // Claude's fullscreen view scrolled back hides what it waits
             // on, which the message's keys and Enter would answer unseen.
-            None if self.agents.state(pane) == Some(crate::agent::State::Waiting)
+            None if (self.agents.state(pane) == Some(crate::agent::State::Waiting)
+                || self.agents.get(pane).is_some_and(|a| a.asked.is_some()))
                 && self
                     .panes
                     .get(&pane)
