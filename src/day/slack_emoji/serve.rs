@@ -108,6 +108,7 @@ impl Server {
         if team != self.slack_emojis.team {
             self.slack_emojis.held.clear();
             self.slack_emojis.failed.clear();
+            self.slack_emojis.loading.clear();
             self.slack_emojis.team = team;
         }
     }
@@ -115,10 +116,14 @@ impl Server {
     pub(crate) fn slack_emojis_event(&mut self, event: SlackEmojisEvent) {
         let now = util::now_ms();
         let (found, asked) = match event {
-            SlackEmojisEvent::Loaded(team, found, asked) => {
-                self.slack_emojis_from(team);
-                (found, asked)
+            // A load from a workspace no longer signed in to is dropped.
+            SlackEmojisEvent::Loaded(team, _, asked) if team != self.slack_emojis.team => {
+                for name in &asked {
+                    self.slack_emojis.loading.remove(name);
+                }
+                return;
             }
+            SlackEmojisEvent::Loaded(_, found, asked) => (found, asked),
             SlackEmojisEvent::Failed(asked) => (Vec::new(), asked),
         };
         for name in &asked {
@@ -128,7 +133,13 @@ impl Server {
         let found_names: HashSet<String> = found.iter().map(|(n, _)| n.clone()).collect();
         for (name, custom) in found {
             self.slack_emojis.failed.remove(&name);
-            let due = now + super::KEEP.as_millis() as i64;
+            // A name the workspace lacks is asked about again sooner, as
+            // it may be a new emoji.
+            let keep = match custom {
+                Custom::Unknown => super::UNKNOWN_AGAIN,
+                _ => super::KEEP,
+            };
+            let due = now + keep.as_millis() as i64;
             self.slack_emojis.held.insert(name, (custom, due));
             changed = true;
         }

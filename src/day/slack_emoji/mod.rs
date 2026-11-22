@@ -42,6 +42,11 @@ pub use serve::{SlackEmojis, SlackEmojisEvent};
 /// read again.
 pub const KEEP: Duration = Duration::from_secs(7 * 24 * 3600);
 
+/// How old the workspace's list may be before a name it lacks has it read
+/// again, since a new emoji is usually used as soon as it is added; and how
+/// long a name the workspace lacks is held before it is asked about again.
+pub const UNKNOWN_AGAIN: Duration = Duration::from_secs(3600);
+
 /// The longest side of a picture as it is drawn, two cells being small.
 const SIDE: u32 = 64;
 
@@ -297,6 +302,12 @@ impl Store {
         Some((list, Store::fresh(&path, now)))
     }
 
+    /// How long ago the list kept was read.
+    pub fn list_age(&self, now: SystemTime) -> Option<Duration> {
+        let read = fs::metadata(self.dir.join("list.json")).and_then(|m| m.modified());
+        Some(now.duration_since(read.ok()?).unwrap_or_default())
+    }
+
     pub fn write_list(&self, list: &HashMap<String, String>) -> anyhow::Result<()> {
         fs::create_dir_all(&self.dir)?;
         util::write_atomic(
@@ -347,10 +358,13 @@ pub fn list_of(answer: &Value) -> HashMap<String, String> {
 
 /// The workspace's list: the one kept while it is fresh, else read through
 /// your own sign-in and kept, else the one kept however old.
-async fn workspace_list(store: &Store) -> Result<HashMap<String, String>, String> {
+/// With `again`, it is read from Slack whatever its age.
+async fn workspace_list(store: &Store, again: bool) -> Result<HashMap<String, String>, String> {
     let now = SystemTime::now();
     let kept = store.list(now);
-    if let Some((list, true)) = &kept {
+    if let Some((list, true)) = &kept
+        && !again
+    {
         return Ok(list.clone());
     }
     let read = async {
@@ -408,7 +422,17 @@ async fn download(url: &str) -> Result<Vec<u8>, String> {
 /// kept, else the one kept however old. A name whose picture couldn't be
 /// had is left out, to be asked again.
 pub async fn load(store: &Store, names: &[String]) -> Result<Vec<(String, Custom)>, String> {
-    let list = workspace_list(store).await?;
+    let mut list = workspace_list(store, false).await?;
+    let lacks_one = names.iter().any(|n| resolve(&list, n) == Found::Unknown);
+    let read_a_while_ago = store
+        .list_age(SystemTime::now())
+        .is_some_and(|age| age >= UNKNOWN_AGAIN);
+    if lacks_one
+        && read_a_while_ago
+        && let Ok(newer) = workspace_list(store, true).await
+    {
+        list = newer;
+    }
     load_from(store, &list, names).await
 }
 
