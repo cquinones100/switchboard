@@ -682,7 +682,7 @@ impl Server {
             .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
         else {
             return Spare::Gone(
-                "the tab has no side panel (a split, or a pane too wide to leave room beside it)",
+                "the tab has no side panel (a split side by side, or a pane too wide to leave room beside it)",
             );
         };
         let covered = c.overlays.layers.iter().any(|l| l.overlay.covers_screen());

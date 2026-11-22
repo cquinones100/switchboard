@@ -1555,6 +1555,58 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
 }
 
 #[test]
+fn panes_stacked_by_m_j_keep_the_lone_panes_width_and_side_panel() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "100"}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("SIDE PANEL");
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0);
+    client.wait_for("the lone pane at 100 columns", |_| {
+        widths(&server.list()) == [100]
+    });
+    let shot = picture_at(&server, "shot.png");
+    server.ok(&["look", &shot]);
+    client.wait_text("shot.png   tab 1 · ");
+    // M-J: two panes, one above the other, each the lone pane's width,
+    // the picture still beside them.
+    client.type_text(&format!("{ALT}J"));
+    client.wait_for("two stacked panes at 100 columns", |_| {
+        widths(&server.list()) == [100, 100]
+    });
+    client.wait_text("shot.png   tab 1 · ");
+    // Closing either leaves the other at the same width, the picture
+    // still beside it.
+    let second = server.list()["sessions"][0]["tabs"][0]["panes"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["kill-pane", "-t", &second]);
+    client.wait_for("one pane at 100 columns", |_| {
+        widths(&server.list()) == [100]
+    });
+    client.wait_text("shot.png   tab 1 · ");
+    let first = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["split", "-t", &first, "-D"]);
+    client.wait_for("stacked again", |_| widths(&server.list()) == [100, 100]);
+    server.ok(&["kill-pane", "-t", &first]);
+    client.wait_for("the lower one alone at 100 columns", |_| {
+        widths(&server.list()) == [100]
+    });
+    client.wait_text("shot.png   tab 1 · ");
+    // M-L instead: a split side by side fills the width.
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("two panes sharing the whole width", |_| {
+        let w = widths(&server.list());
+        w.len() == 2 && w.iter().sum::<u64>() + 1 == 240 - side
+    });
+    assert!(opened(&server).is_empty(), "{:?}", opened(&server));
+}
+
+#[test]
 fn pictures_beside_a_pane_stay_up_through_the_keys_typed_into_it() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
