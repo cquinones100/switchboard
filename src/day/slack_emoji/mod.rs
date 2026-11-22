@@ -459,10 +459,13 @@ async fn load_from(
                 let bytes = match kept {
                     Some((bytes, true)) => Some(bytes),
                     kept => match download(&url).await {
-                        Ok(bytes) => {
+                        // Kept only once it reads as a picture, so a bad one
+                        // is downloaded again at the retry.
+                        Ok(bytes) if decode(&bytes).is_some() => {
                             let _ = store.write_picture(name, &bytes);
                             Some(bytes)
                         }
+                        Ok(_) => None,
                         Err(_) => kept.map(|(bytes, _)| bytes),
                     },
                 };
