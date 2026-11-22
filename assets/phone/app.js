@@ -20,6 +20,7 @@ const state = {
   messages: [],
   answered: null, // what was answered last, for the folded card
   search: "", // what is typed in the drawer's search, kept while a tab is open
+  turnsLoaded: false, // the open tab's turns were read, so a message drawn since arrived while it was open
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   chosen: [], // { file, url }: the images chosen from the photo library, waiting over the composer
   full: null, // the name of the image shown whole, or null
@@ -27,6 +28,7 @@ const state = {
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
   turnKeys: [], // the keys of the open tab's turns last drawn, oldest first (`turns`)
+  explaining: "", // the same, for the one redraw after its i opened it, which slides it open
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
   menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question or the reminder's sheet does
@@ -190,7 +192,73 @@ async function pair() {
 function toast(text, failed) {
   const t = el("div", { class: "toast" }, failed ? el("span", { class: "bad" }, "✕") : el("span", { class: "ok" }, "✓"), text);
   document.body.append(t);
-  setTimeout(() => t.remove(), 3000);
+  setTimeout(() => leave(t), 3000);
+}
+
+// ── Motion (board 184): the timings are app.css's variables ──
+
+const still = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const EASE = "cubic-bezier(.2, .8, .2, 1)";
+const ms = (name) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0;
+
+// A node marked going plays app.css's leaving animation for it, then is
+// taken out of the page and `then` runs; a node already out of the page, or
+// one whose animation never ends, goes after the longest one would take.
+function leave(node, then) {
+  let gone = false;
+  const done = () => {
+    if (gone) return;
+    gone = true;
+    node.remove();
+    if (then) then();
+  };
+  node.classList.add("going");
+  node.addEventListener("animationend", done);
+  setTimeout(done, ms("--quick") + 100);
+}
+
+// The colors a tab's mark or chip had last time it was drawn, by what it is
+// (`row-mark:<pane>`, `head-chip:<pane>`), so one drawn again in a new
+// state cross-fades from them; a tab that moved to Needs you pulses its mark once.
+const looks = new Map();
+function follow(node, id, needs) {
+  const look = node.className;
+  const was = looks.get(id);
+  looks.set(id, { look, needs });
+  if (!was || was.look === look) return node;
+  requestAnimationFrame(() => {
+    if (!node.isConnected) return;
+    const probe = el(node.tagName, { class: was.look, style: "position:absolute;visibility:hidden" });
+    document.body.append(probe);
+    const from = getComputedStyle(probe);
+    const to = getComputedStyle(node);
+    node.animate(
+      [{ color: from.color, backgroundColor: from.backgroundColor }, { color: to.color, backgroundColor: to.backgroundColor }],
+      { duration: ms("--move"), easing: EASE },
+    );
+    probe.remove();
+    const pulses = needs && !was.needs && node.classList.contains("mark") && !still();
+    if (pulses) node.animate([{ transform: "none" }, { transform: "scale(1.6)" }, { transform: "none" }], { duration: 2 * ms("--move"), easing: EASE });
+  });
+  return node;
+}
+
+// The drawer and a tab's channel slide over each other as one opens the
+// other: a tab comes in from the right over the drawer, and goes back out
+// to the right off it; with reduced motion they cross-fade.
+function slide(back, swap) {
+  const old = app.querySelector(".screen:not(.going)");
+  swap();
+  const now = app.querySelector(".screen:not(.going)");
+  if (!old || !now || old === now || !now.animate) return;
+  old.classList.add("going");
+  if (back) now.after(old);
+  else now.before(old);
+  const timing = { duration: ms("--slide"), easing: EASE };
+  const away = still() ? { opacity: 0 } : { transform: back ? "translateX(100%)" : "translateX(-30%)", opacity: back ? 1 : 0.6 };
+  const from = still() ? { opacity: 0 } : { transform: back ? "translateX(-30%)" : "translateX(100%)", opacity: back ? 0.6 : 1 };
+  old.animate([{ transform: "none", opacity: 1 }, away], timing).onfinish = () => old.remove();
+  now.animate([from, { transform: "none", opacity: 1 }], timing);
 }
 
 // ── The drawer (board 164) and its search (board 173) ──
@@ -227,11 +295,14 @@ function header(...rest) {
     "div",
     { class: "head" },
     ...rest,
-    state.live
-      ? el("span", { class: "chip g" }, "live")
-      : reconnecting()
-        ? el("span", { class: "chip y" }, "reconnecting")
-        : el("span", { class: "chip r" }, "offline"),
+    follow(
+      state.live
+        ? el("span", { class: "chip g" }, "live")
+        : reconnecting()
+          ? el("span", { class: "chip y" }, "reconnecting")
+          : el("span", { class: "chip r" }, "offline"),
+      "live",
+    ),
   );
 }
 
@@ -267,7 +338,7 @@ let searchBox = null;
 function search() {
   if (searchBox) return searchBox;
   const field = el("input", { type: "search", placeholder: "Search tabs", autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": "Search tabs" });
-  const clear = el("button", { class: "clear", "aria-label": "Clear the search" }, "×");
+  const clear = el("button", { class: "icon ghost clear", "aria-label": "Clear the search" }, "×");
   const sync = () => clear.classList.toggle("shown", state.search !== "");
   field.addEventListener("input", () => {
     state.search = field.value;
@@ -310,7 +381,7 @@ function drawerList() {
           el(
             "button",
             { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "menu", "data-pane": number(t) },
-            el("span", { class: "mark " + kind }, m),
+            follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
             el("span", { class: "sub" }, lit(doing(t), words)),
             reminded(t) ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words)) : null,
@@ -393,7 +464,7 @@ let menuLayer = null;
 
 function closeMenu() {
   state.menu = null;
-  if (menuLayer) menuLayer.remove();
+  if (menuLayer) leave(menuLayer);
   menuLayer = null;
   document.removeEventListener("keydown", menuKeys);
   if (!state.open) drawer();
@@ -407,40 +478,49 @@ function openMenu(pane) {
   const tab = state.tabs.find((t) => number(t) === pane);
   if (!tab) return;
   state.menu = { pane, asking: false };
-  drawer();
+  if (!state.open) drawer();
   document.addEventListener("keydown", menuKeys);
   showMenu(tab);
 }
 
+// The veil fades in with the box rising into it; a box that takes the place
+// of another (the menu's question, its sheet) rises in the veil already there.
 function layer(box) {
-  if (menuLayer) menuLayer.remove();
+  if (menuLayer) return menuLayer.replaceChildren(box);
   menuLayer = el("div", { class: "veil", onclick: (e) => { if (e.target === menuLayer) closeMenu(); } }, box);
   document.body.append(menuLayer);
 }
 
 function boxHead(title) {
-  return el("div", { class: "box-head" }, el("span", { class: "box-title" }, title), el("button", { class: "box-close", "aria-label": "Close", onclick: () => closeMenu() }, "×"));
+  return el("div", { class: "box-head" }, el("span", { class: "box-title" }, title), el("button", { class: "icon", "aria-label": "Close", onclick: () => closeMenu() }, "×"));
 }
 
-// The kit's box under the row: Mark seen on a finished tab, Pin it (Unpin
-// it on a pinned tab), Clear the reminder on a tab with one, Remind me
-// (board 176), then Close tab in the failed tone, as it ends the tab.
+// What a tab's menu offers: Mark seen on a finished tab, Pin it (Unpin it
+// on a pinned tab), Clear the reminder on a tab with one, Remind me (board
+// 176), then Close tab in the failed tone, as it ends the tab.
+function menuChoices(tab) {
+  const n = number(tab);
+  const choices = [];
+  if (tab.state === "done") choices.push(["Mark seen", "", () => markSeen(n)]);
+  choices.push([tab.pinned ? "Unpin it" : "Pin it", "", () => pin(n, !tab.pinned)]);
+  if (state.reminders && tab.remind) choices.push(["Clear the reminder", "", () => clearReminder(n)]);
+  if (state.reminders) choices.push(["Remind me", "", () => remindSheet(n)]);
+  if (state.close) choices.push(["Close tab", " r", () => ask(n)]);
+  return choices;
+}
+
+// The kit's box under the row, or, from a channel's ⋯, under its header.
 function showMenu(tab) {
   const n = number(tab);
-  const options = [];
-  if (tab.state === "done") options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => markSeen(n) }, "Mark seen"));
-  options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => pin(n, !tab.pinned) }, tab.pinned ? "Unpin it" : "Pin it"));
-  if (state.reminders && tab.remind) options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => clearReminder(n) }, "Clear the reminder"));
-  if (state.reminders) options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => remindSheet(n) }, "Remind me"));
-  if (state.close) options.push(el("button", { class: "menu-option r", role: "menuitem", onclick: () => ask(n) }, "Close tab"));
+  const options = menuChoices(tab).map(([words, tone, act]) => el("button", { class: "menu-option" + tone, role: "menuitem", onclick: act }, words));
   if (!options.length) return closeMenu();
   const box = el("div", { class: "box", role: "menu", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, boxHead("Tab " + tab.index + " · " + (tab.name || "")), options);
   layer(box);
-  const row = app.querySelector && app.querySelector('.row[data-pane="' + n + '"]');
+  const row = app.querySelector && app.querySelector(state.open ? ".screen:not(.going) .head" : '.row[data-pane="' + n + '"]');
   if (row && row.getBoundingClientRect) {
     const r = row.getBoundingClientRect();
     const below = r.bottom + 4;
-    const tall = 48 + options.length * 44;
+    const tall = 44 + options.length * 44 + 10;
     box.style.top = below + tall > window.innerHeight ? Math.max(8, r.top - tall) + "px" : below + "px";
   }
   if (options[0].focus) options[0].focus();
@@ -637,6 +717,7 @@ async function openTab(n) {
   if (state.menu) closeMenu();
   state.open = n;
   state.messages = [];
+  state.turnsLoaded = false;
   state.answered = null;
   state.error = "";
   state.unfolded = new Set();
@@ -645,7 +726,7 @@ async function openTab(n) {
   state.full = null;
   state.whole = false;
   history.replaceState(null, "", "#" + n);
-  render();
+  slide(false, () => render());
   await loadTurns();
   const tab = current();
   if (tab && tab.state === "done") api("/api/tabs/" + n + "/seen", {}).catch(() => {});
@@ -658,6 +739,7 @@ async function loadTurns() {
     const r = await api("/api/tabs/" + n + "/turns");
     if (state.open !== n) return;
     state.messages = r.messages || [];
+    state.turnsLoaded = true;
   } catch (_) {
     return;
   }
@@ -883,7 +965,7 @@ function full() {
   return el(
     "div",
     { class: "full", onclick: close },
-    el("button", { class: "close", "aria-label": "Close" }, "×"),
+    el("button", { class: "icon close", "aria-label": "Close" }, "×"),
     el("img", { src: imageUrl(state.full), alt: "The image, whole" }),
   );
 }
@@ -948,25 +1030,33 @@ function choice(p, o, i, waiting) {
   if (!o.detail) return button;
   const key = p.id + ":" + o.n;
   const open = state.explained === key;
+  const explainer = open ? el("div", { class: "explainer" + (state.explaining === key ? " coming" : "") }, o.detail) : null;
   const info = el(
     "button",
     {
-      class: "info" + (open ? " lit" : ""),
+      class: "icon info" + (open ? " lit" : ""),
       "aria-label": open ? "Hide what this choice means" : "Show what this choice means",
       "aria-expanded": String(open),
-      onclick: () => {
-        state.explained = open ? "" : key;
-        render();
+      onclick: (e) => {
+        if (!open) {
+          state.explained = state.explaining = key;
+          return render();
+        }
+        e.currentTarget.classList.remove("lit");
+        const shut = () => {
+          if (state.explained !== key) return;
+          state.explained = "";
+          render();
+        };
+        // The one in the page now, which a redraw since may have put in its place.
+        const shown = e.currentTarget.closest(".choice").querySelector(".explainer");
+        if (shown) leave(shown, shut);
+        else shut();
       },
     },
     "i",
   );
-  return el(
-    "div",
-    { class: "choice" },
-    el("div", { class: "row" }, button, info),
-    open ? el("div", { class: "explainer" }, o.detail) : null,
-  );
+  return el("div", { class: "choice" }, el("div", { class: "row" }, button, info), explainer);
 }
 
 // A prompt as it stands: its id and which options are ticked, so a tick
@@ -1008,7 +1098,7 @@ function composer() {
     autocapitalize: "sentences",
     spellcheck: "true",
   });
-  const send = el("button", { class: "send", "aria-label": "Send" }, "➤");
+  const send = el("button", { class: "icon send", "aria-label": "Send" }, "➤");
   // The photo library alone: images, several at once, no camera.
   const kinds = ["image/png", "image/jpeg", "image/gif", "image/webp"];
   const picker = el("input", { type: "file", accept: kinds.join(","), multiple: true, hidden: true });
@@ -1017,7 +1107,7 @@ function composer() {
     picker.value = "";
     render();
   });
-  const plus = el("button", { class: "plus", "aria-label": "Add images from your photos", onclick: () => picker.click() }, "+");
+  const plus = el("button", { class: "icon plus", "aria-label": "Add images from your photos", onclick: () => picker.click() }, "+");
   const free = () => {
     const tab = current();
     return !!(tab && tab.prompt && tab.prompt.free);
@@ -1094,6 +1184,7 @@ function composer() {
     }
   });
   let tray = el("div");
+  let trayShown = new Set();
   let error = el("div");
   const box = el("div", { class: "composing" }, tray, error, el("div", { class: "composer" }, plus, picker, field, send));
   box.sync = (tab) => {
@@ -1102,20 +1193,31 @@ function composer() {
     field.placeholder = p && !free ? "Answer the question above" : free ? "Your own answer" : "Message " + tab.index + " " + tab.name;
     field.disabled = !!(p && !free);
     plus.disabled = !!p;
+    // A thumbnail added grows in, and one dropped shrinks away before it goes.
     const newTray = state.chosen.length
       ? el(
           "div",
           { class: "tray" },
-          state.chosen.map((c, i) =>
-            el(
+          state.chosen.map((c) => {
+            const shot = el(
               "div",
-              { class: "shot" },
+              { class: "shot" + (trayShown.has(c.url) ? "" : " coming") },
               el("img", { src: c.url, alt: "An image to send" }),
-              el("button", { class: "drop", "aria-label": "Drop this image", onclick: () => { drop(i); render(); } }, "×"),
-            ),
-          ),
+              el("button", {
+                class: "drop",
+                "aria-label": "Drop this image",
+                onclick: () => leave(shot, () => {
+                  const i = state.chosen.indexOf(c);
+                  if (i >= 0) drop(i);
+                  render();
+                }),
+              }),
+            );
+            return shot;
+          }),
         )
       : el("div");
+    trayShown = new Set(state.chosen.map((c) => c.url));
     tray.replaceWith(newTray);
     tray = newTray;
     const newError = state.error && !p ? el("div", { class: "error" }, state.error) : el("div");
@@ -1138,10 +1240,11 @@ function channelHead(tab) {
   return el(
     "div",
     { class: "head" + (state.whole ? " whole" : "") },
-    el("button", { class: "menu", "aria-label": "Tabs", onclick: toDrawer }, "☰"),
-    el("span", { class: "mark " + kind }, m),
+    el("button", { class: "icon menu", "aria-label": "Tabs", onclick: () => slide(true, toDrawer) }, "☰"),
+    follow(el("span", { class: "mark " + kind }, m), "head-mark:" + number(tab), tab.state === "waiting"),
     title(tab),
-    el("span", { class: "chip " + chip[1] }, chip[0]),
+    follow(el("span", { class: "chip " + chip[1] }, chip[0]), "head-chip:" + number(tab)),
+    menuChoices(tab).length ? el("button", { class: "icon more", "aria-label": "Tab " + tab.index + "'s menu", "aria-haspopup": "menu", onclick: () => openMenu(number(tab)) }, "⋯") : null,
   );
 }
 
@@ -1149,7 +1252,7 @@ function channelHead(tab) {
 // prompt card, "doing" line and image shown whole, the messages only when
 // the turns changed, and leaves the composer where it is, since taking a
 // focused field out of the page closes the keyboard.
-let shown = null; // { open, screen, head, list, messages, drawn, count, working, now, composer, full }
+let shown = null; // { open, screen, head, list, messages, drawn, count, working, arrived, now, cardKey, composer, full }
 
 function channel(stick) {
   const tab = current();
@@ -1167,7 +1270,7 @@ function channel(stick) {
     const head = el("div", { class: "head" });
     const box = composer();
     const whole = el("div");
-    shown = { open: state.open, screen: el("div", { class: "screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, now, composer: box, full: whole };
+    shown = { open: state.open, screen: el("div", { class: "screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole };
     swipeable(shown.screen);
     app.replaceChildren(shown.screen);
   }
@@ -1178,20 +1281,66 @@ function channel(stick) {
   // A tab in the background (a Monitor, a /loop between runs) has ended its turn.
   const answering = tab.state === "working";
   if (shown.drawn !== state.messages || shown.count !== state.messages.length || shown.working !== answering) {
-    shown.messages.replaceChildren(...turns(state.messages, answering).map(message));
+    // A message or row not drawn before arrived while the channel was open,
+    // and rises in; the first load, a redraw of the same turns and steps
+    // opened or folded move nothing.
+    const before = shown.arrived ? new Map(shown.arrived) : null;
+    const drawn = turns(state.messages, answering);
+    const nodes = drawn.map((m, i, all) => {
+      const node = message(m, i, all);
+      const k = arrivalKey(m);
+      const left = before && before.get(k);
+      if (before && !left) node.classList.add("coming");
+      if (left) before.set(k, left - 1);
+      return node;
+    });
+    shown.messages.replaceChildren(...nodes);
     shown.drawn = state.messages;
     shown.count = state.messages.length;
     shown.working = answering;
+    shown.arrived = null;
+    if (state.turnsLoaded) {
+      shown.arrived = new Map();
+      for (const m of [...state.messages, ...drawn.filter((d) => d.who === "steps")]) shown.arrived.set(arrivalKey(m), (shown.arrived.get(arrivalKey(m)) || 0) + 1);
+    }
   } else {
     // Kept, so their times ("now", "3m ago") are worked out again in place.
     for (const when of shown.messages.querySelectorAll(".when")) when.textContent = ago(when.at);
   }
-  shown.now.replaceChildren(...[card(tab), working ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null].filter(Boolean));
+  const newCard = card(tab);
+  const cardKey = tab.prompt ? "prompt:" + tab.prompt.id : newCard ? "answered" : "";
+  const oldCard = shown.now.querySelector(".card");
+  const wasTall = oldCard ? oldCard.getBoundingClientRect().height : 0;
+  shown.now.replaceChildren(...[newCard, working ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null].filter(Boolean));
+  if (kept && newCard && cardKey !== shown.cardKey) {
+    const folds = cardKey === "answered" && shown.cardKey && shown.cardKey.startsWith("prompt:") && wasTall;
+    if (folds) fold(newCard, wasTall);
+    else newCard.classList.add("coming");
+  }
+  shown.cardKey = cardKey;
   shown.composer.sync(tab);
   const whole = full() || el("div");
   shown.full.replaceWith(whole);
   shown.full = whole;
   shown.list.scrollTop = stick || atEnd ? shown.list.scrollHeight : top;
+  state.explaining = "";
+}
+
+// What tells a message from the others for its arrival: who sent it and its
+// words, not its time, which the copy shown as it was sent has its own of.
+const arrivalKey = (m) => (m.who === "steps" ? "steps\u0000" + m.key : m.who + "\u0000" + (m.text || "") + "\u0000" + (m.images || m.looks || []).join(" "));
+
+// An answered card folds from the prompt's height down to its "You answered"
+// line, its words fading in; with reduced motion it only fades.
+function fold(card, wasTall) {
+  if (!card.animate) return;
+  const timing = { duration: ms("--move"), easing: EASE };
+  const tall = card.getBoundingClientRect().height;
+  if (!still() && tall) {
+    card.style.transformOrigin = "top";
+    card.animate([{ transform: "scaleY(" + wasTall / tall + ")" }, { transform: "none" }], timing);
+  }
+  for (const kid of card.children) kid.animate([{ opacity: 0 }, { opacity: 1 }], timing);
 }
 
 // Swiping right in a channel (board 164's second phone): the drawer drawn
@@ -1202,7 +1351,6 @@ function channel(stick) {
 // code block or an image shown whole is theirs.
 const SWIPE_DECIDES = 10; // px moved before a touch counts as sideways or not
 const SWIPE_FLICK = 0.5; // px a millisecond rightward that open the drawer however far it went
-const SWIPE_MS = 200;
 const SWIPE_FLICK_MS = 100; // a flick lets go within this of its last move
 let swipe = null; // { screen, x, y, dx, at, speed, under, wanted, buzzed, sliding }: the touch under way, or the slide after it
 
@@ -1252,7 +1400,7 @@ function swipeable(screen) {
     swipe = null;
     if (!done.under) return;
     const opens = e.type === "touchend" && (done.dx > window.innerWidth / 3 || (done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
-    screen.style.transition = "transform " + SWIPE_MS + "ms ease-out";
+    screen.style.transition = "transform " + ms("--slide") + "ms " + EASE;
     screen.style.transform = opens ? "translateX(100%)" : "";
     // Held off until the slide ends, so no redraw lands mid-slide.
     swipe = { screen, under: done.under, wanted: done.wanted, sliding: true };
@@ -1269,7 +1417,7 @@ function swipeable(screen) {
       }
       done.under.remove();
       if (wanted) render(wanted.stick);
-    }, SWIPE_MS);
+    }, ms("--slide"));
   };
   screen.addEventListener("touchend", end);
   screen.addEventListener("touchcancel", end);
