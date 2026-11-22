@@ -194,9 +194,10 @@ fn notes_offered(notes: &Path) -> Vec<String> {
 }
 
 /// The tab command that runs `shape` with one item, as shape-batch makes it,
-/// as a Linear ticket whatever the repository keeps its work in.
-fn shape_tab(item: &str) -> Vec<String> {
-    let script = format!("{} --linear \"$@\"", worktree::self_command("shape"));
+/// filed in `source` (`linear`, `github` or `notes`) whatever the
+/// repository keeps its work in.
+fn shape_tab(item: &str, source: &str) -> Vec<String> {
+    let script = format!("{} --{source} \"$@\"", worktree::self_command("shape"));
     worktree::tab_command(&script, "shape", &[item.to_string()])
 }
 
@@ -382,6 +383,49 @@ impl Server {
     /// Asks which repository the tickets are for, the pane's own first, and
     /// opens a tab for each item there, at the end and in the background,
     /// as shape-batch did.
+    /// The Tickets view's "Shape a new ticket…": an idea typed in, shaped by
+    /// `/shape` in a tab of its own in the repository at `dir` (the front
+    /// pane's main clone), filed in that repository's ticket source; while
+    /// none is set, what sets it is said instead, as `/shape` would stop.
+    pub fn shape_from_tickets(&mut self, client: ClientId, dir: PathBuf, source: Option<String>) {
+        let Some(source) = source else {
+            let name = crate::repos::name_known(&dir);
+            self.say(Some(client), &crate::repos::unset_words(&name));
+            return;
+        };
+        let ask = crate::mission::ask::Ask::new(
+            "Shape a new ticket",
+            "What should it be about? S-Enter starts a new line.",
+        )
+        .multi_line();
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let crate::ui::Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                let Some(session) = server.clients.get(&client).map(|c| c.session.clone()) else {
+                    return;
+                };
+                let command = shape_tab(&p.value, &source);
+                match server.new_tab(
+                    &session,
+                    Some(dir.clone()),
+                    Some(command),
+                    None,
+                    crate::mux::server::Opened::Background,
+                ) {
+                    Ok((tab, _)) => {
+                        server.tab_to_end(tab);
+                        server.front(client, &[tab]);
+                    }
+                    Err(e) => server.say(Some(client), &format!("Couldn't open a tab: {e}")),
+                }
+            })),
+        );
+    }
+
     fn shape_in_repo(&mut self, client: ClientId, items: Vec<String>) {
         let items = shape_batch::items_of(&items);
         self.pick_dir_for(
@@ -404,7 +448,7 @@ impl Server {
                 };
                 let mut opened: Vec<TabId> = Vec::new();
                 for item in &items {
-                    match server.new_tab(&session, Some(repo.clone()), Some(shape_tab(item)), None, crate::mux::server::Opened::Background)
+                    match server.new_tab(&session, Some(repo.clone()), Some(shape_tab(item, "linear")), None, crate::mux::server::Opened::Background)
                     {
                         Ok((tab, _)) => {
                             server.tab_to_end(tab);

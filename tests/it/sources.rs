@@ -635,6 +635,50 @@ fn a_failing_default_branch_landing_in_ci_is_in_the_ci_view_and_said_once_until_
     );
     client.wait_text("main failing at abc1234");
 
+    // The CI view's `m` runs its failed jobs again only once asked: a no
+    // asks GitHub nothing, a yes asks it for the failing run.
+    let reruns = || {
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.contains("rerun-failed-jobs"))
+            .count()
+    };
+    crate::mission::open(&mut client);
+    client.type_text("vci\r");
+    client.wait_text("main failing at abc1234");
+    client.type_text("m");
+    crate::mission::pick(&mut client, "Re-run main's failed jobs…");
+    client.wait_text("acme/widgets run 77");
+    client.type_text("n");
+    client.wait_for("the question closed", |s| {
+        !s.iter().any(|l| l.contains("[Y/n]"))
+    });
+    assert_eq!(reruns(), 0, "a no asks GitHub nothing");
+    client.type_text("m");
+    crate::mission::pick(&mut client, "Re-run main's failed jobs…");
+    client.wait_text("[Y/n]");
+    client.type_text("\r");
+    wait(
+        "the failing run asked again",
+        || json!(reruns()),
+        |n| *n == 1,
+    );
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p == "/repos/acme/widgets/actions/runs/77/rerun-failed-jobs"),
+        "the run's failed jobs"
+    );
+    client.wait_text("Couldn't start them all again");
+    client.type_text("\x1bw");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+
     // It passes: the CI view and the notification clear.
     failing.store(false, Ordering::SeqCst);
     wait(

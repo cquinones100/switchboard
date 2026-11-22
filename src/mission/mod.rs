@@ -13,7 +13,8 @@
 //! `z` fold, `i` a narrow screen's pane, the Slack view's `p` play).
 //! No view acts on an item by a key of its own: everything that acts on
 //! what is chosen is in the menu Enter opens on it, in every view, what
-//! Enter did before it first, and what acts on the view (a kind of
+//! Enter did before it first, and what acts on the view (what it does over
+//! all it shows, a kind of
 //! notification, a sort, a scope, a day, several views at once with
 //! `grid`, this view's settings) in the menu `m` opens. Each is a box over
 //! the view; an option that takes a moment shows a box with a
@@ -33,6 +34,9 @@
 //! - `keys_board`: the Keys view as a board: the groups, the
 //!   keyboard as a heatmap of the week's presses, the chosen key, the
 //!   group's table.
+//! - `view_acts`: what a view's `m` menu does over all it shows (every
+//!   merged tab closed, every Slack message shown dismissed, every PR read
+//!   again, main's failed jobs run again, a ticket shaped).
 //! - `find_key`: the Find a key box the Keys view's `m` menu opens: a
 //!   key pressed comes up with what it does.
 //! - `render`: the screen, as lines, and where a click lands.
@@ -98,6 +102,7 @@ pub mod settings_board;
 pub mod slack_board;
 pub mod summary;
 pub mod usage_board;
+pub mod view_acts;
 pub mod views;
 pub mod views_box;
 

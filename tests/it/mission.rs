@@ -97,14 +97,14 @@ fn two_tabs(extra: Value) -> (TestServer, TestClient) {
     (server, client)
 }
 
-fn open(client: &mut TestClient) -> Vec<String> {
+pub(crate) fn open(client: &mut TestClient) -> Vec<String> {
     client.type_text(&format!("{ALT} "));
     client.wait_text("MISSION CONTROL")
 }
 
 /// Takes a menu's option by its label, as the daemon's menus were used:
 /// j down to it, Enter. Its options have no letters of their own.
-fn pick(client: &mut TestClient, label: &str) {
+pub(crate) fn pick(client: &mut TestClient, label: &str) {
     // Waits for the menu's cursor itself, since the label may already be
     // on the screen in the view behind it, and a `j` sent before the menu
     // opens moves the view instead.
@@ -3032,13 +3032,47 @@ fn the_slack_views_menu_checks_a_connector_down_again() {
     let status = std::fs::read_to_string(server.state.join("connectors-down")).unwrap();
     assert_eq!(status, "", "Slack is no longer down");
     assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 1);
+    // Connected, it looks at Slack again rather than asking Claude Code.
     client.type_text("m");
-    let menu = client.wait_text("view actions");
-    assert!(
-        !menu.join("\n").contains("Check Slack again"),
-        "{}",
-        menu.join("\n")
-    );
+    pick(&mut client, "Check Slack again");
+    client.wait_text("Looking at Slack again.");
+    assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 1);
+}
+
+// The Slack view's `m` puts away every message its board shows, which no
+// message's own menu offers.
+#[test]
+fn the_slack_views_menu_dismisses_every_message_shown() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let now = switchboard::util::now_ms();
+    let ts = |ago: i64| format!("{}.000100", now / 1000 - ago);
+    let (first, second) = (ts(120), ts(60));
+    let message = |text: &str, ts: &str| {
+        json!({ "kind": "dm", "channel": "D1", "from": "Lin", "user": "ULIN",
+            "where": "DM", "text": text, "ts": ts })
+    };
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": now, "items": [
+            message("the first message", &first),
+            message("the second message", &second),
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "view_slack": true, "photos": false }));
+    let mut client = server.attach(160, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("the second message");
+    client.type_text("m");
+    pick(&mut client, "Dismiss every message shown");
+    client.wait_text("Dismissed.");
+    let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
+    assert!(gone.contains(&format!("D1:{first}")), "{gone}");
+    assert!(gone.contains(&format!("D1:{second}")), "{gone}");
 }
 
 // A reconnect in /mcp writes Claude Code's config, which has the server ask
@@ -4071,14 +4105,14 @@ fn slack_reply_box_open(client: &mut TestClient) {
     let deadline = common::deadline(Duration::from_secs(10));
     loop {
         client.type_text("\r");
-        let menu = client.wait_text("Dismiss every message shown");
+        let menu = client.wait_text("Dismiss it, until");
         if menu.iter().any(|l| l.contains("Reply in Ben's thread")) {
             break;
         }
         assert!(Instant::now() < deadline, "the menu offers no replies");
         client.type_text("\x1b");
         client.wait_for("the menu closed", |s| {
-            !s.iter().any(|l| l.contains("Dismiss every message shown"))
+            !s.iter().any(|l| l.contains("Dismiss it, until"))
         });
         std::thread::sleep(Duration::from_millis(100));
     }

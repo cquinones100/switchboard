@@ -184,6 +184,8 @@ fn autopilot_label() -> &'static str {
 
 /// What an option of a view's menu (`m`) does.
 enum ViewAct {
+    /// What it does over all the view shows (`view_acts`).
+    Whole(super::view_acts::Whole),
     /// The Notifications view narrowed to a kind, by its key (1 all).
     Kind(usize),
     /// The Usage view between today and this week.
@@ -222,8 +224,6 @@ enum ViewAct {
     DismissShown,
     /// A plugin's view asked again.
     AskAgain(String),
-    /// Claude Code asked now whether a connector down is connected.
-    CheckConnector(String),
     ViewsAtOnce,
     /// The Settings view, filtered by the view's name.
     Settings(String),
@@ -3886,6 +3886,22 @@ impl Server {
         let mut list: Vec<(String, ViewAct)> = Vec::new();
         let mut add = |label: &str, act: ViewAct| list.push((label.to_string(), act));
         let view = m.current().cloned();
+        // What it does over all it shows first, then what it shows.
+        let shown: Vec<Item> = match &view {
+            Some(v) if super::render::slack_board_shown(v) => slack_shown(m, v)
+                .into_iter()
+                .map(|i| v.data.items[i].clone())
+                .collect(),
+            Some(v) => v.data.items.clone(),
+            None => Vec::new(),
+        };
+        let items = view.as_ref().map_or(&[][..], |v| &v.data.items[..]);
+        let facts = self.view_facts(client);
+        for (label, act) in
+            super::view_acts::of(view.as_ref().map(|v| &v.id), items, &shown, &facts)
+        {
+            add(&label, ViewAct::Whole(act));
+        }
         match view.as_ref().map(|v| &v.id) {
             None => {
                 if m.snap.pilot.is_some() {
@@ -4059,12 +4075,6 @@ impl Server {
                     );
                 }
             }
-            Some(ViewId::Slack)
-                if settings::is_on("slack_background")
-                    && crate::connector::connector_down("Slack").is_some() =>
-            {
-                add("Check Slack again", ViewAct::CheckConnector("Slack".into()));
-            }
             Some(ViewId::Plugin(name)) => add("Ask it again", ViewAct::AskAgain(name.clone())),
             _ => {}
         }
@@ -4076,11 +4086,120 @@ impl Server {
         let options: Vec<MenuOption> = list.iter().map(|(l, _)| MenuOption::new(l)).collect();
         let menu = Menu::new(format!("{title}: view actions"), options);
         self.choose(client, menu, move |server, client, chose| {
-            let Some((_, act)) = chose.and_then(|i| list.into_iter().nth(i)) else {
+            let Some((label, act)) = chose.and_then(|i| list.into_iter().nth(i)) else {
                 return;
             };
-            server.view_act(client, act);
+            match act {
+                ViewAct::Whole(whole) => server.whole_view_act(client, whole, &label),
+                act => server.view_act(client, act),
+            }
         });
+    }
+
+    /// What the view's `m` menu needs to know beyond the view
+    /// (`view_acts::Facts`), from what the server holds and small files:
+    /// the front pane's repository read from git's files, never by git.
+    fn view_facts(&self, client: ClientId) -> super::view_acts::Facts {
+        let rules = Rules::now();
+        let merged = self
+            .sidebar_all_tabs()
+            .iter()
+            .filter(|t| model::own_stage(t, &rules) == model::Stage::Merged)
+            .map(|t| t.id)
+            .collect();
+        let dir = self
+            .current_pane(client)
+            .and_then(|p| self.pane_dir(p))
+            .and_then(|d| crate::cmd::work::main_clone(&d));
+        super::view_acts::Facts {
+            github: settings::is_on("github"),
+            linear: settings::is_on("linear"),
+            slack_background: settings::is_on("slack_background"),
+            slack_down: crate::connector::connector_down("Slack").is_some(),
+            slack_mark_read: settings::is_on("slack_mark_read")
+                && crate::day::slack_user::signed_in(&crate::day::Dirs::here().state).is_some(),
+            merged,
+            repo: dir
+                .as_deref()
+                .and_then(crate::sources::repo::origin_of)
+                .map(|r| r.to_string()),
+            tickets: dir.as_deref().and_then(crate::repos::tickets_known),
+            dir,
+        }
+    }
+
+    /// What was picked of a view's actions over all it shows.
+    fn whole_view_act(&mut self, client: ClientId, act: super::view_acts::Whole, label: &str) {
+        use super::view_acts::Whole;
+        match act {
+            Whole::Do(act) => self.mission_do(client, act, label),
+            Whole::Refresh(view) => {
+                self.refresh_sources(Some(view));
+                self.mission_note(client, "Asked again.");
+            }
+            Whole::CheckSlack { down: true } => {
+                self.mission_note(client, "Asking Claude Code about Slack…");
+                self.connector_check_now(client, "Slack");
+            }
+            Whole::CheckSlack { down: false } => {
+                self.slack_look_now();
+                self.mission_note(client, "Looking at Slack again.");
+            }
+            Whole::SlackMarkRead(newest) => {
+                for (channel, ts) in &newest {
+                    self.slack_mark_read(channel, ts);
+                }
+                let n = newest.len();
+                self.mission_note(
+                    client,
+                    format!(
+                        "Marking {n} conversation{} read in Slack.",
+                        if n == 1 { "" } else { "s" }
+                    ),
+                );
+            }
+            Whole::RerunMain(runs) => self.rerun_main(client, runs),
+            Whole::Shape { dir, source } => self.shape_from_tickets(client, dir, source),
+        }
+    }
+
+    /// The failed jobs of each failing default branch's run started again
+    /// on GitHub, asked first, since it starts CI there.
+    fn rerun_main(&mut self, client: ClientId, runs: Vec<(String, String)>) {
+        let n = runs.len();
+        let question = format!(
+            "Run the failed jobs of {n} default branch run{} again on GitHub?",
+            if n == 1 { "" } else { "s" }
+        );
+        let shown = runs
+            .iter()
+            .map(|(repo, run)| format!("{repo} run {run}"))
+            .collect();
+        self.ask(
+            client,
+            Confirm::new(question).list(shown),
+            move |server, client, yes| {
+                if !yes {
+                    return;
+                }
+                server.mission_busy(client, "Starting the failed jobs again", None, async move {
+                    use crate::integrations::github;
+                    let mut failed = Vec::new();
+                    for (repo, run) in &runs {
+                        let path = format!("repos/{repo}/actions/runs/{run}/rerun-failed-jobs");
+                        if let Err(e) = github::rest("POST", &path, None, "mission: CI view").await
+                        {
+                            failed.push(format!("{repo} run {run}: {e}"));
+                        }
+                    }
+                    Some(if failed.is_empty() {
+                        "Started the failed jobs again.".to_string()
+                    } else {
+                        format!("Couldn't start them all again: {}", failed.join("; "))
+                    })
+                });
+            },
+        );
     }
 
     /// The notifications the sidebar shows, each under the id the
@@ -4125,11 +4244,6 @@ impl Server {
                     Some(all) => self.mission_do(client, all, ""),
                     None => self.mission_note(client, "Nothing in the sidebar to dismiss."),
                 }
-                return;
-            }
-            ViewAct::CheckConnector(service) => {
-                self.mission_note(client, format!("Asking Claude Code about {service}…"));
-                self.connector_check_now(client, &service);
                 return;
             }
             ViewAct::AskAgain(name) => {

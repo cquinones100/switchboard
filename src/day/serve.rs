@@ -1242,6 +1242,12 @@ impl Server {
     // Every look starts here, so none goes out inside the wait Slack asked
     // for, nor sooner than its slowed looks' time apart (`slack_look::Pace`),
     // whatever asked for it.
+    /// The Slack view's "Check Slack again" while its connector is up:
+    /// the server's own look now, within its pace.
+    pub fn slack_look_now(&mut self) {
+        self.look_at_slack();
+    }
+
     fn look_at_slack(&mut self) {
         let now = util::now_ms();
         let every = slack_look_every(&Dirs::here());
