@@ -318,6 +318,7 @@ impl Server {
             let Some(top) = c.overlays.layers.last_mut() else {
                 return Handed::Left(parsed);
             };
+            let let_through = top.overlay.lets_through();
             let step = match &parsed.input {
                 Input::Key(k) => top.overlay.key(*k, &look),
                 // A right press on a box does nothing inside it and outside
@@ -367,7 +368,16 @@ impl Server {
                     closed = true;
                     self.finish_top(id, Outcome::Dismissed);
                 }
-                Step::Through => return Handed::Left(parsed),
+                Step::Through => {
+                    // A click past the pictures gives the tab its keys back,
+                    // which shows.
+                    if c.overlays.layers.last().map(|l| l.overlay.lets_through())
+                        != Some(let_through)
+                    {
+                        c.dirty = true;
+                    }
+                    return Handed::Left(parsed);
+                }
             }
         }
     }
@@ -805,6 +815,29 @@ impl Server {
             },
         );
         true
+    }
+
+    /// The palette's "Choose a picture shown beside the pane": the first
+    /// picture shown is chosen and the pictures take the keys, as a click on
+    /// one does; said when none are shown or `pictures_menu` is off.
+    pub fn choose_picture(&mut self, client: ClientId) {
+        let chosen = self.clients.get_mut(&client).is_some_and(|c| {
+            c.overlays
+                .layers
+                .iter_mut()
+                .rev()
+                .filter_map(|l| l.overlay.as_any_mut().downcast_mut::<Pictures>())
+                .any(Pictures::choose_first)
+        });
+        if !chosen {
+            let why = if settings::is_on("pictures_menu") {
+                "No pictures are shown beside the pane to choose"
+            } else {
+                "Choosing a picture beside a pane is off in Settings (pictures_menu)"
+            };
+            return self.say(Some(client), why);
+        }
+        self.overlays_changed(client);
     }
 
     /// Closes a client's pictures beside a pane that `which` picks.

@@ -89,6 +89,9 @@ pub enum Action {
     Palette,
     /// Show every tip again, each once more.
     ResetTips,
+    /// Choose the first picture shown beside the pane (`switchboard look`),
+    /// giving the pictures the keys, as a click on one does.
+    ChoosePicture,
     /// Switch between the light and dark theme (the theme setting;
     /// crates/ui/src/theme.rs).
     ToggleTheme,
@@ -290,6 +293,7 @@ impl Action {
             "toggle-pin" => Action::TogglePin,
             "palette" => Action::Palette,
             "reset-tips" => Action::ResetTips,
+            "choose-picture" => Action::ChoosePicture,
             "toggle-theme" => Action::ToggleTheme,
             "slack-relay" => Action::SlackRelay,
             "stop-slack-relay" => Action::StopSlackRelay,
@@ -379,6 +383,7 @@ impl Action {
             Action::TogglePin => "toggle-pin".into(),
             Action::Palette => "palette".into(),
             Action::ResetTips => "reset-tips".into(),
+            Action::ChoosePicture => "choose-picture".into(),
             Action::ToggleTheme => "toggle-theme".into(),
             Action::FocusSidebar => "focus-sidebar".into(),
             Action::ToggleSidebar => "toggle-sidebar".into(),
@@ -479,6 +484,7 @@ impl Action {
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
             Action::Palette => "Find a command and run it (the palette)".into(),
             Action::ResetTips => "Show the tips again, each once more".into(),
+            Action::ChoosePicture => "Choose a picture shown beside the pane".into(),
             Action::ToggleTheme => "Toggle light and dark theme".into(),
             Action::FocusSidebar => "Jump into the sidebar, or back out of it".into(),
             Action::ToggleSidebar => "Turn the sidebar on or off".into(),
@@ -626,6 +632,9 @@ impl Action {
             }
             Action::ResetTips => {
                 "Each tip comes back once more, in the top-right corner, the next time what it teaches would help.".into()
+            }
+            Action::ChoosePicture => {
+                "The first picture switchboard look shows beside the pane is chosen and the pictures take the keys, as a click on one does: j and k move the choice, Enter opens its menu, Esc gives the keys back. Off in Settings (pictures_menu), or with no pictures shown, it says so.".into()
             }
             Action::ToggleTheme => {
                 "Sets the theme setting to the other one. The programs in your panes keep your terminal's own colors.".into()
@@ -777,6 +786,7 @@ impl Action {
             Action::TogglePin => &["tabs", "pin"],
             Action::Palette => &["palette"],
             Action::ResetTips => &["help", "tips"],
+            Action::ChoosePicture => &["pictures", "look", "tabs"],
             Action::ToggleTheme => &["theme", "colors"],
             Action::FocusSidebar => &["sidebar", "tabs", "navigate"],
             Action::ToggleSidebar => &["sidebar"],
@@ -931,6 +941,7 @@ impl Action {
             .map(Action::Extra);
         [
             Action::ResetTips,
+            Action::ChoosePicture,
             Action::ToggleTheme,
             Action::ToggleSidebar,
             Action::WorkOnTask,
@@ -1228,6 +1239,7 @@ mod tests {
             Action::TogglePin,
             Action::Palette,
             Action::ResetTips,
+            Action::ChoosePicture,
             Action::ToggleTheme,
             Action::FocusSidebar,
             Action::ToggleSidebar,

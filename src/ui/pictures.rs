@@ -158,6 +158,17 @@ impl Pictures {
         self.chosen.map(|i| self.items[i].file.as_path())
     }
 
+    /// Chooses the first picture shown, giving the pictures the keys, as a
+    /// click on it does (the palette's "Choose a picture shown beside the
+    /// pane"); false while they are hidden or the menu is off.
+    pub fn choose_first(&mut self) -> bool {
+        if !self.menu || self.area.is_none() {
+            return false;
+        }
+        self.choose(self.first);
+        true
+    }
+
     /// Chooses picture `i`, paging so it shows.
     fn choose(&mut self, i: usize) {
         self.chosen = Some(i);
@@ -930,5 +941,16 @@ mod tests {
             frame.buf[(second.x + 1, second.y + 1)].bg,
             Surface::Chosen.color(&look.theme)
         );
+    }
+
+    #[test]
+    fn choosing_the_first_from_the_palette_gives_the_pictures_the_keys() {
+        let (mut p, _) = chooseable();
+        assert!(p.choose_first());
+        assert_eq!(p.chosen_file(), Some(Path::new("/tmp/a.png")));
+        assert!(!p.lets_through());
+        let mut off = Pictures::new(TabId(1), "tab 1", shown(&["a.png"]), false, false);
+        drawn(&mut off, Rect::new(100, 0, 60, 30));
+        assert!(!off.choose_first(), "not with the menu off");
     }
 }

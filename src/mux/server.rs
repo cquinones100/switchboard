@@ -3692,6 +3692,7 @@ impl Server {
             Action::Palette => self.open_palette(id),
             Action::ToggleTheme => self.toggle_theme(id),
             Action::ResetTips => self.reset_tips(),
+            Action::ChoosePicture => self.choose_picture(id),
             Action::NewClaudeTab
             | Action::WorkOnTickets
             | Action::WorkOnBranch
