@@ -228,6 +228,10 @@ pub const LAST: &[Step] = &[
             "@wait:MISSION CONTROL",
             "m",
             "@wait:view actions",
+            // Found by name: the Tabs view's own actions come first.
+            "/",
+            "Several",
+            "@wait:Several views at once",
             "Enter",
         ],
         wait: "LAYOUT",

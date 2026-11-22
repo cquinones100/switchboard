@@ -1446,17 +1446,6 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     "Dismiss it, until its thread gets a reply",
                     Do::SlackDismiss(super::slack_board::members(item)),
                 ));
-                out.push(choice(
-                    'X',
-                    "Dismiss every message shown",
-                    Do::SlackDismiss(
-                        shown
-                            .iter()
-                            .filter(|i| i.data.get("message").is_some())
-                            .flat_map(super::slack_board::members)
-                            .collect(),
-                    ),
-                ));
             }
         }
         // Board 54's order: joining first, so Enter twice
@@ -1839,9 +1828,6 @@ pub fn notice_choices(item: &Item, shown: &[Item], ctx: &Ctx<'_>) -> Vec<Choice>
     let mut out = match notices::view_of(&source) {
         Some(view) => {
             let listed = notices::as_its_view_has_it(&source, &own);
-            // With nothing shown beside it, what acts on all shown acts on none.
-            let acts_on_all_shown =
-                |c: &Choice| matches!(&c.act, Do::SlackDismiss(all) if all.is_empty());
             let show_it = (ctx.shows)(&view).then(|| {
                 choice(
                     'i',
@@ -1854,11 +1840,7 @@ pub fn notice_choices(item: &Item, shown: &[Item], ctx: &Ctx<'_>) -> Vec<Choice>
             });
             show_it
                 .into_iter()
-                .chain(
-                    item_choices(&view, &listed, &[], ctx)
-                        .into_iter()
-                        .filter(|c| !acts_on_all_shown(c)),
-                )
+                .chain(item_choices(&view, &listed, &[], ctx))
                 .collect()
         }
         None => notice_leads(&source, &own, ctx),
@@ -2797,7 +2779,7 @@ mod tests {
         assert_eq!(keys(&choices), "iwsDvoyrx");
         assert!(matches!(&choices[8].act, Do::Dismiss { source, .. } if source == "inbox"));
         // A Slack message offers the Slack view's menu, its dismissing
-        // worded as there, less dismissing every message shown.
+        // worded as there.
         let message = Item::new("slack\tD1:1.5", "DM Ada · Slack")
             .target(Target::Url("https://slack.example/m".into()))
             .data(json!({ "kind": "dm", "old": false,
