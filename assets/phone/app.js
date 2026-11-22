@@ -213,8 +213,9 @@ function groups(words) {
     else if (t.state === "working" || t.state === "background") working.push(t);
     else idle.push(t);
   }
-  // The pinned lead Needs you, as in the sidebar.
-  needs.sort((a, b) => (b.pinned === true) - (a.pinned === true));
+  // The pinned and the reminders come due lead Needs you, as in the sidebar.
+  const first = (t) => t.pinned === true || !!(t.remind && t.remind.due);
+  needs.sort((a, b) => first(b) - first(a));
   return [
     ["Needs you", "y", needs],
     ["Working", "b", working],

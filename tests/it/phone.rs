@@ -1713,8 +1713,9 @@ const out = [];
 /// Pin it in the drawer's menu (assets/phone/app.js), run in Node over a
 /// page made of plain objects: Pin it on a tab not pinned, Unpin it on one
 /// that is, each posting whether to pin without asking first; a pinned tab
-/// leads Needs you with the flag in place of its mark; skipped without
-/// Node.
+/// leads Needs you with the flag in place of its mark, beside a reminder
+/// come due in the server's order, as the sidebar ranks them; skipped
+/// without Node.
 #[test]
 fn pin_it_in_a_tabs_menu_pins_and_unpins_it() {
     let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
@@ -1733,6 +1734,7 @@ vm.runInContext(`
   state.tabs = [
     { index: 4, pane: "%4", name: "full titles", state: "waiting", needs: true, pinned: false },
     { index: 3, pane: "%3", name: "M-d uncommitted", state: "idle", needs: true, pinned: true },
+    { index: 6, pane: "%6", name: "deploy", state: "waiting", needs: true, pinned: false, remind: { at: 1, note: "", due: true } },
     { index: 5, pane: "%5", name: "five", state: "working", needs: false, pinned: false },
   ];
   render();
@@ -1780,7 +1782,7 @@ const out = [];
     assert_eq!(
         lines,
         [
-            r#"groups=[["Needs you",[3,4]],["Working",[5]]]"#,
+            r#"groups=[["Needs you",[3,6,4]],["Working",[5]]]"#,
             "rows=⚑3M-d uncommittedidle  | ●4full titleswaiting on you",
             "pinned=Unpin it,Remind me,Close tab",
             r#"unpin=/api/tabs/3/pin {"pin":false} menu=null"#,

@@ -159,14 +159,15 @@ impl Data {
         self.sort();
     }
 
-    /// Needs you first, the pinned leading it, as the server sorts them.
+    /// Needs you first, the pinned and the reminders come due leading it,
+    /// as the server sorts them.
     fn sort(&mut self) {
+        let first = |t: &Value| t["pinned"] == true || t["remind"]["due"] == true;
         for tab in &mut self.tabs {
             let state = tab["state"].as_str().unwrap_or("");
-            tab["needs"] = json!(tab["pinned"] == true || state == "waiting" || state == "done");
+            tab["needs"] = json!(first(tab) || state == "waiting" || state == "done");
         }
-        self.tabs
-            .sort_by_key(|t| (t["needs"] != true, t["pinned"] != true));
+        self.tabs.sort_by_key(|t| (t["needs"] != true, !first(t)));
     }
 
     /// What the stream sends.
