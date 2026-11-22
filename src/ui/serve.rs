@@ -123,6 +123,9 @@ fn pictures_of(layer: &Layer) -> Option<&Pictures> {
 pub enum Handed {
     /// None of them took it: it is the tab's.
     Left(Parsed),
+    /// A key the chosen pictures beside the pane passed on: the workspace's
+    /// bindings' alone, never the greyed pane's.
+    Held(Parsed),
     /// One took it; `only_itself` while all it changed was that box (a key
     /// typed in it), not anything a box closing hands its opener.
     Took { only_itself: bool },
@@ -386,12 +389,14 @@ impl Server {
                     self.finish_top(id, Outcome::Dismissed);
                 }
                 Step::Through => {
+                    let now = c.overlays.layers.last().map(|l| l.overlay.lets_through());
                     // A click past the pictures gives the tab its keys back,
                     // which shows.
-                    if c.overlays.layers.last().map(|l| l.overlay.lets_through())
-                        != Some(let_through)
-                    {
+                    if now != Some(let_through) {
                         c.dirty = true;
+                    }
+                    if now == Some(false) && matches!(parsed.input, Input::Key(_)) {
+                        return Handed::Held(parsed);
                     }
                     return Handed::Left(parsed);
                 }
@@ -768,11 +773,19 @@ impl Server {
         let Some(c) = self.clients.get_mut(&id) else {
             return;
         };
+        // A box over them that passes keys on (the restart's steps) is
+        // another place the keys go, so they give them up too; the
+        // picture's own menu takes the keys and leaves the choice.
+        let covered_by_through = c
+            .overlays
+            .layers
+            .last()
+            .is_some_and(|l| l.overlay.lets_through() && !l.overlay.as_any().is::<Pictures>());
         for layer in &mut c.overlays.layers {
             let Some(p) = layer.overlay.as_any_mut().downcast_mut::<Pictures>() else {
                 continue;
             };
-            if keys_elsewhere {
+            if keys_elsewhere || covered_by_through {
                 p.release();
             }
             if let Some((_, spare)) = spares.iter().find(|(t, _)| *t == p.tab) {

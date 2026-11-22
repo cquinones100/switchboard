@@ -3322,8 +3322,9 @@ impl Server {
         // A key typed in a box over mission control (the Slack reply box's)
         // changes the box alone, so mission control stands rather than
         // building every view again on each key.
-        let parsed = match self.overlay_input(id, parsed) {
-            crate::ui::Handed::Left(parsed) => parsed,
+        let (parsed, held) = match self.overlay_input(id, parsed) {
+            crate::ui::Handed::Left(parsed) => (parsed, false),
+            crate::ui::Handed::Held(parsed) => (parsed, true),
             crate::ui::Handed::Took { only_itself } => {
                 if !only_itself {
                     self.mission_changed();
@@ -3333,7 +3334,7 @@ impl Server {
         };
         self.mission_changed();
         match parsed.input {
-            Input::Key(key) => self.key(id, key, &parsed.raw),
+            Input::Key(key) => self.key(id, key, &parsed.raw, held),
             Input::Mouse(m) => {
                 if !self.coordinator_mouse(id, m) {
                     self.mouse(id, m);
@@ -3377,7 +3378,9 @@ impl Server {
         }
     }
 
-    fn key(&mut self, id: ClientId, key: Key, raw: &[u8]) {
+    /// `held` for a key the chosen pictures beside the pane passed on,
+    /// which reaches the workspace's bindings alone, never the pane.
+    fn key(&mut self, id: ClientId, key: Key, raw: &[u8], held: bool) {
         let prefix_pending = self.clients.get(&id).is_some_and(|c| c.prefix);
         if prefix_pending {
             if let Some(c) = self.clients.get_mut(&id) {
@@ -3439,11 +3442,7 @@ impl Server {
         // While a box holds the keys (a picture chosen beside the pane,
         // src/ui/pictures.rs), a key it passed on reaches the workspace's
         // bindings alone, never the pane behind it.
-        if self
-            .clients
-            .get(&id)
-            .is_some_and(|c| !c.overlays.lets_through())
-        {
+        if held {
             return;
         }
         // Easy mode's Cmd keys reach only a pane that takes them.
