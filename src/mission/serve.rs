@@ -5827,6 +5827,20 @@ impl Server {
             None if reply.trim().is_empty() => {
                 self.open_answer(client, tab, Some("Nothing to send.".into()))
             }
+            // Claude's fullscreen view scrolled back hides what it waits
+            // on, which the message's keys and Enter would answer unseen.
+            None if (self.agents.state(pane) == Some(crate::agent::State::Waiting)
+                || self.agents.get(pane).is_some_and(|a| a.asked.is_some()))
+                && self
+                    .panes
+                    .get(&pane)
+                    .is_some_and(|slot| answer::scrolled_back(&slot.pane.text(0))) =>
+            {
+                self.mission_note(
+                    client,
+                    "Its Claude's view is scrolled up past what it waits on: scroll it down first.",
+                );
+            }
             None => {
                 self.type_into_claude(pane, answer::message_presses(reply));
                 self.mission_note(client, "Sent.");

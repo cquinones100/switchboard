@@ -38,7 +38,7 @@ use super::{Cx, Relay};
 use crate::mission::answer::{self, Answer, Press, Prompt, PromptOption};
 use crate::util;
 
-pub use answer::{answer_for, answer_said, options_in};
+pub use answer::{answer_for, answer_said, options_in, scrolled_back};
 
 /// The option the relay records a tab's Claude pane in.
 pub const CLAUDE_PANE: &str = "@claude_pane";

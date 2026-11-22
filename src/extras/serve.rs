@@ -633,7 +633,8 @@ impl Server {
         // Enter on a question or a permission prompt would pick its
         // option rather than send the words, so a Claude asking something
         // gets nothing: the tab comes to the front for it to be answered.
-        // Asking is waiting on you with options on screen, as mission
+        // Asking is waiting on you with options on screen (or Claude's
+        // fullscreen view scrolled back over them), as mission
         // control's answers read it, since a numbered list Claude wrote
         // looks like options too; or a permission request auto mode still
         // counts as work until it reaches you (`asked`), whose prompt is
@@ -649,7 +650,10 @@ impl Server {
             && model.claude_pane.is_some()
             && (dialog
                 || (model.state == crate::sidebar::model::TabState::Waiting || auto_mode_asked)
-                    && self.prompt_of(tab).is_some());
+                    && (self.prompt_of(tab).is_some()
+                        || self.panes.get(&pane).is_some_and(|slot| {
+                            crate::mission::answer::scrolled_back(&slot.pane.text(0))
+                        })));
         // A draft already in its prompt box would go with the words, so
         // they are pasted in unsent, at its cursor as a paste always was, to
         // send together by hand.
