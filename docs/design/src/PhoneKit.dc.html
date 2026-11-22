@@ -375,21 +375,21 @@ K(51, y + 3.0, 26, PT(44), 'border-radius:12px;background:' + C.raised); tx(52.2
 y += 7;
 // TODAY'S SIZES THE KIT REPLACES, from app.css: each control as drawn now, in points.
 atom(42, y, 'Today, in app.css', []);
-[['☰ in the header', '~26 tall'], ['+ beside the field', '28 × 38'], ['send', '38 × 38'], ['search field', '40'], ['search ×', '~30'], ['× on a box', '36'], ['× on a picture shown whole', '32 × 32'], ['× on a thumbnail', '22 × 22']].forEach(([n, v], i) => { put(43, y + 1 + i, n, 'd'); R(76, y + 1 + i, v, 'y'); });
+[['☰ in the header', '~26 tall'], ['+ beside the field', '28 × 38'], ['send', '38 × 38'], ['search field', '40'], ['search ×', '~30'], ['× on a box', '36'], ['× on a picture shown whole', '32 × 32'], ['× on a thumbnail', '22 × 22'], ['drawer row', '48'], ['box radius', '8']].forEach(([n, v], i) => { put(43, y + 1 + i, n, 'd'); R(76, y + 1 + i, v, 'y'); });
 
 // ── A DRAWER FROM THE KIT ──
 { const sx = phone(84, 'The drawer, from the kit', '1');
   tx(sx + 1, 3, 20, PT(44), 'Switchboard  studio', C.text, 12, true); chipK(sx + 29, 3.45, 'live', C.green, C.gbg);
   field(sx + 1.5, 5.4, 33, '', 'Search tabs');
   let yy = 8;
-  label(sx + 1, Math.round(yy), 'Needs you', 'y', 2, sx + 34); yy += 1;
+  label(sx + 1, Math.round(yy), 'Needs you', 'y', 3, sx + 34); yy += 1;
   rowK(sx, yy, 'needs', 2, 'stable note IDs', 'Bash: git push origin main', false); yy += 2;
-  rowK(sx, yy, 'needs', 6, 'review PR 41', 'asks: which fixture?', false); yy += 3;
+  rowK(sx, yy, 'needs', 6, 'review PR 41', 'asks: which fixture?', false); yy += 2;
+  rowK(sx, yy, 'passed', 4, 'full titles', 'finished 1m ago', true); yy += 3;
   label(sx + 1, Math.round(yy), 'Working', 'b', 2, sx + 34); yy += 1;
   rowK(sx, yy, 'working', 1, 'planning', 'Monitor: fork parity', false); yy += 2;
   rowK(sx, yy, 'working', 3, 'M-d uncommitted', 'Edit diffview.lua', false); yy += 3;
-  label(sx + 1, Math.round(yy), 'Idle', 'd', 2, sx + 34); yy += 1;
-  rowK(sx, yy, 'passed', 4, 'full titles', 'finished 1m ago', true); yy += 2;
+  label(sx + 1, Math.round(yy), 'Idle', 'd', 1, sx + 34); yy += 1;
   rowK(sx, yy, 'idle', 8, 'handoff', 'idle 58m', false); yy += 2;
   K(sx + 1.5, 40.2, 33, PT(44), 'border-radius:12px;background:' + C.raised); tx(sx + 2.7, 40.2, 30, PT(44), '✓ Marked tab 4 seen', C.text, 11); }
 
