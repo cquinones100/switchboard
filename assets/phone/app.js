@@ -228,6 +228,8 @@ function leave(node, then) {
     if (then) then();
     return;
   }
+  // Going, it takes no tap or key, so a closing box's button can't be pressed twice.
+  node.inert = true;
   let gone = false;
   const done = () => {
     if (gone) return;

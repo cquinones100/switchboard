@@ -124,6 +124,8 @@ button {
 .keyboard .screen { padding-bottom: 0; }
 /* The screen going while the next slides over it (app.js's `slide`). */
 .screen.going { position: absolute; inset: 0; pointer-events: none; }
+/* Anything leaving (a box, a toast, a thumbnail, an explainer) takes no tap. */
+.going { pointer-events: none; }
 
 /* ── The kit's controls (board 184) ── */
 
