@@ -315,11 +315,13 @@ impl Session {
         self.sidebar > 0 && tab.opts.get("@notes").is_some_and(|v| v == "1")
     }
 
-    /// Where a tab's panes go: its spread, but for a lone pane (one pane,
-    /// or zoomed into one of several) at most the tab's own width
+    /// Where a tab's panes go: its spread, but for one column of panes (a
+    /// lone pane, panes stacked by M-J alone, or zoomed into one of several)
+    /// at most the tab's own width
     /// (`@lone_width`, from a drag of its edge) or else Settings'
     /// `lone_pane_width` wide when one is chosen (it is off by default),
-    /// against the sidebar, while a split shares out the whole width.
+    /// against the sidebar, the side panel beside it, while a split side by
+    /// side shares out the whole width.
     pub fn area_for(&self, tab: &Tab) -> Rect {
         Self::area_in(
             self.spread_for(tab),
@@ -329,7 +331,7 @@ impl Session {
     }
 
     fn area_in(spread: Rect, tab: &Tab, cap: Option<u16>) -> Rect {
-        if tab.lone() {
+        if tab.one_column() {
             super::layout::capped(spread, cap)
         } else {
             spread
@@ -338,9 +340,11 @@ impl Session {
 }
 
 impl Tab {
-    /// Whether it shows one pane: it has one, or is zoomed into one.
-    pub fn lone(&self) -> bool {
-        self.zoomed || matches!(self.layout, super::layout::Layout::Pane(_))
+    /// Whether it shows one column of panes, placed as a lone pane is: it
+    /// has one, its panes are all stacked one above another, or it is
+    /// zoomed into one.
+    pub fn one_column(&self) -> bool {
+        self.zoomed || self.layout.one_column()
     }
 }
 
@@ -3629,9 +3633,9 @@ impl Server {
                 self.dirty_tab(current_tab);
             }
             Action::Resize(dir @ (Direction::Left | Direction::Right), cells)
-                if self.tabs.get(&current_tab).is_some_and(Tab::lone) =>
+                if self.tabs.get(&current_tab).is_some_and(Tab::one_column) =>
             {
-                // A lone pane has no divider: the keys move its right edge.
+                // A column has no divider across: the keys move its right edge.
                 let Some((spread, area)) = self.tabs.get(&current_tab).and_then(|t| {
                     let s = self.session(&session)?;
                     Some((s.spread_for(t), s.area_for(t)))
@@ -3647,7 +3651,7 @@ impl Server {
                 let area = self
                     .session(&session)
                     .zip(self.tabs.get(&current_tab))
-                    .map(|(s, t)| s.spread_for(t));
+                    .map(|(s, t)| s.area_for(t));
                 if let (Some(p), Some(area), Some(tab)) =
                     (pane, area, self.tabs.get_mut(&current_tab))
                 {

@@ -173,6 +173,17 @@ impl Layout {
         out
     }
 
+    /// Whether its panes stand in one column: a lone pane, or splits that
+    /// are all one above another (M-J's), none side by side.
+    pub fn one_column(&self) -> bool {
+        match self {
+            Layout::Pane(_) => true,
+            Layout::Split {
+                across, children, ..
+            } => !across && children.iter().all(Layout::one_column),
+        }
+    }
+
     pub fn contains(&self, pane: PaneId) -> bool {
         match self {
             Layout::Pane(id) => *id == pane,
@@ -961,6 +972,17 @@ mod tests {
 
     fn pane(n: u32) -> Layout {
         Layout::Pane(p(n))
+    }
+
+    #[test]
+    fn one_column_is_a_lone_pane_or_panes_stacked_alone() {
+        let mut layout = Layout::new(p(1));
+        assert!(layout.one_column());
+        layout.split(p(1), p(2), Direction::Down, None);
+        layout.split(p(2), p(3), Direction::Down, None);
+        assert!(layout.one_column());
+        layout.split(p(3), p(4), Direction::Right, None);
+        assert!(!layout.one_column());
     }
 
     fn split(across: bool, children: Vec<Layout>, shares: Vec<f32>) -> Layout {
