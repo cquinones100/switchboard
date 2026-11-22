@@ -51,25 +51,22 @@ function el(tag, attrs, ...kids) {
 }
 
 // A short tap of feedback (Settings' phone_haptics): `navigator.vibrate`
-// where the browser has it, as Android's does; else, where inputs take
-// `switch` (Safari, whose iOS 18 and later answer a switch toggled during a
-// tap with a haptic tick), a click on a hidden switch's label; else nothing.
-let haptic = null; // the hidden switch's label, made on the first buzz that needs it
-
+// where the browser has it, as Android's does; else a click on the label of a
+// switch made for it and removed at once, which iOS 18 and later answer with a
+// haptic tick, as the ios-haptics library does. Safari exposes no `switch`
+// property to test for, and the click is harmless where nothing answers it.
 function buzz() {
   if (!state.haptics) return;
   if (typeof navigator.vibrate === "function") {
     navigator.vibrate(10);
     return;
   }
-  const hasSwitch = typeof HTMLInputElement !== "undefined" && "switch" in HTMLInputElement.prototype;
-  if (!hasSwitch) return;
-  if (!haptic) {
-    const input = el("input", { type: "checkbox", switch: true, tabindex: "-1", "aria-hidden": "true" });
-    haptic = el("label", { class: "haptic", "aria-hidden": "true" }, input);
-    document.body.append(haptic);
-  }
-  haptic.click();
+  const input = el("input", { type: "checkbox", switch: true, tabindex: "-1", "aria-hidden": "true" });
+  const label = el("label", { "aria-hidden": "true" }, input);
+  label.style.display = "none"; // through the CSSOM: the CSP refuses an inline style attribute
+  document.body.append(label);
+  label.click();
+  label.remove();
 }
 
 async function api(path, body) {
