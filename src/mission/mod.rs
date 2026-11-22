@@ -293,6 +293,9 @@ pub struct Snapshot {
     pub slack_thread: Option<crate::day::slack_thread::Thread>,
     /// The Slack files' pictures read and decoded, by file ID.
     pub slack_pictures: HashMap<String, diagrams::Ready>,
+    /// What the Slack workspace's own emoji the Slack board shows are,
+    /// those loaded, by name (`Server::slack_emoji`).
+    pub slack_emoji: HashMap<String, crate::day::slack_emoji::Custom>,
     /// Today's Calendar and the Tickets, unfiltered, for the Slack board's
     /// From your work.
     pub slack_work: Vec<views::View>,
@@ -341,6 +344,7 @@ impl Default for Snapshot {
             inbox_links: HashMap::new(),
             slack_thread: None,
             slack_pictures: HashMap::new(),
+            slack_emoji: HashMap::new(),
             slack_work: Vec::new(),
             slack_thread_failed: None,
             slack_files_failed: Default::default(),
@@ -1583,6 +1587,13 @@ impl Overlay for Mission {
                     )
                 }
                 render::Shape::Screen { shot } => crate::ui::images::screen(frame, area, shot),
+                render::Shape::Emoji { name } => {
+                    if let Some(crate::day::slack_emoji::Custom::Picture(img)) =
+                        self.snap.slack_emoji.get(name)
+                    {
+                        crate::ui::images::emoji(frame, &image.name, area, img)
+                    }
+                }
                 render::Shape::Picture { key } => {
                     if let Some(p) = self.snap.slack_pictures.get(key) {
                         crate::ui::images::picture_shared(

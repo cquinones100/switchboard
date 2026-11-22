@@ -473,6 +473,13 @@
     "default": true
   },
   {
+    "key": "slack_emoji",
+    "category": "Mission control: Slack",
+    "label": "Draw emoji in Slack messages",
+    "description": "Slack's emoji show as emoji in the Slack view, its notifications and the reply box, and a workspace's own emoji as small pictures in the view's list and thread where the terminal draws images, which your own Slack sign-in (with the emoji:read scope) reads from Slack's emoji list and keeps on this computer for a week; off, emoji show as their codes, :thumbsup:, and no emoji is looked up",
+    "default": true
+  },
+  {
     "key": "slack_background",
     "category": "Mission control: Slack",
     "label": "Slack without a tab",

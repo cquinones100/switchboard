@@ -859,6 +859,19 @@ impl Server {
                 m.snap.photos.insert(who, photo);
             }
         }
+        // The workspace's own emoji in what the board shows: its rows'
+        // messages and the thread's.
+        let names: Vec<String> = slack_shown(m, &view)
+            .into_iter()
+            .flat_map(|i| super::slack_board::words_of(&view.data.items[i]))
+            .chain(
+                thread
+                    .iter()
+                    .flat_map(|t| t.messages.iter().map(|s| s.text.clone())),
+            )
+            .flat_map(|text| crate::day::slack_emoji::custom_names(&text).collect::<Vec<_>>())
+            .collect();
+        m.snap.slack_emoji = self.slack_emoji(names);
         m.snap.slack_thread = thread;
         m.snap.slack_pictures = pictures;
     }
@@ -1359,6 +1372,7 @@ impl Server {
             inbox_links: Default::default(),
             slack_thread: None,
             slack_pictures: Default::default(),
+            slack_emoji: Default::default(),
             reopen_shot: None,
             slack_work,
             slack_thread_failed: None,

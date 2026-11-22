@@ -27,6 +27,8 @@
 //!   marking what you open read in Slack.
 //! - `slack_api`: the Slack view's reads (the look, threads, files, the
 //!   search) through that token, the connector when it fails.
+//! - `slack_emoji`: emoji in messages drawn, a workspace's own as small
+//!   pictures read through that token.
 //! - `standup`: the note written for you. Today's todo note and the
 //!   meeting notes are starter routines now (src/routines/starters.rs).
 //! - `new_notes`: the notifications for them until you read them.
@@ -41,6 +43,7 @@ pub mod rrule;
 mod serve;
 pub mod slack;
 pub mod slack_api;
+pub mod slack_emoji;
 pub mod slack_look;
 pub mod slack_reply;
 pub mod slack_thread;

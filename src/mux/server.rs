@@ -178,6 +178,8 @@ pub enum Event {
     Upgrade(super::upgrade::UpgradeEvent),
     /// A person's photo loaded, or failed to (src/photos).
     Photos(crate::photos::PhotosEvent),
+    /// A Slack workspace's emoji loaded, or failed to (src/day/slack_emoji).
+    SlackEmojis(crate::day::slack_emoji::SlackEmojisEvent),
     /// A transcript read for a tab's history (src/history).
     History(crate::history::serve::HistoryEvent),
     /// A picture's file looked at, or a piece of it drawn as sixel, off
@@ -596,6 +598,8 @@ pub struct Server {
     pub day: crate::day::Day,
     /// People's photos for their avatars, as they load (src/photos).
     pub photos: crate::photos::Photos,
+    /// A Slack workspace's own emoji, as they load (src/day/slack_emoji).
+    pub slack_emojis: crate::day::slack_emoji::SlackEmojis,
     /// The sidebar's state: what was read of each pane's Claude, each
     /// session's focus and cursor, where each client's was drawn
     /// (src/sidebar).
@@ -1258,6 +1262,7 @@ impl Server {
             usage: Default::default(),
             day: Default::default(),
             photos: Default::default(),
+            slack_emojis: Default::default(),
             sidebar: Default::default(),
             mission: Default::default(),
             views: Default::default(),
@@ -1388,6 +1393,7 @@ impl Server {
             Event::Autopilot(event) => self.autopilot_event(event),
             Event::Upgrade(event) => self.upgrade_event(event),
             Event::Photos(event) => self.photos_event(event),
+            Event::SlackEmojis(event) => self.slack_emojis_event(event),
             Event::History(event) => self.history_event(event),
             Event::Sixel(event) => self.sixel_event(event),
             Event::Awake(event) => self.awake_event(event),
