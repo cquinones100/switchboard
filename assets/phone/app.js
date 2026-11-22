@@ -1104,17 +1104,21 @@ function channel(stick) {
 // under the channel once the touch moves right more than up or down, the
 // channel following the finger. Let go past a third of the screen's width,
 // or flicked right, it opens the drawer as ☰ does; otherwise it slides back.
-// A touch in the composer's field or its tray of images is theirs.
+// A touch in the composer's field, its tray of images or a reply's table or
+// code block is theirs, since those scroll sideways or move a cursor.
 const SWIPE_DECIDES = 10; // px moved before a touch counts as sideways or not
 const SWIPE_FLICK = 0.5; // px a millisecond rightward that open the drawer however far it went
 const SWIPE_MS = 200;
+const SWIPE_FLICK_MS = 100; // a flick lets go within this of its last move
 let swipe = null; // { screen, x, y, dx, at, speed, under, wanted, sliding }: the touch under way, or the slide after it
 
 function swipeable(screen) {
   screen.addEventListener("touchstart", (e) => {
     if (swipe && swipe.sliding) return;
+    // A second finger mid-swipe sends the channel back, as a cancel does.
+    if (swipe && swipe.under) return end({ type: "touchcancel" });
     swipe = null;
-    if (e.touches.length !== 1 || e.target.closest("textarea, .tray")) return;
+    if (e.touches.length !== 1 || e.target.closest("textarea, .tray, pre, .table")) return;
     const t = e.touches[0];
     swipe = { screen, x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, under: null, wanted: null };
   }, { passive: true });
@@ -1146,7 +1150,7 @@ function swipeable(screen) {
     const done = swipe;
     swipe = null;
     if (!done.under) return;
-    const opens = e.type === "touchend" && (done.dx > window.innerWidth / 3 || done.speed > SWIPE_FLICK);
+    const opens = e.type === "touchend" && (done.dx > window.innerWidth / 3 || (done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
     screen.style.transition = "transform " + SWIPE_MS + "ms ease-out";
     screen.style.transform = opens ? "translateX(100%)" : "";
     // Held off until the slide ends, so no redraw lands mid-slide.

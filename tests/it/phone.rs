@@ -653,8 +653,10 @@ console.log("no tools=" + said());
 /// Swiping right in a tab's channel (assets/phone/app.js's `swipeable`), run
 /// in Node over the page: a touch moving right past a third of the screen's
 /// width, or flicked, opens the drawer and clears the address's tab; a short
-/// one slides back, leaving the tab open; one moving mostly down, or starting
-/// in the composer's field or its tray of images, changes nothing; and a
+/// one, or a quick one held still before letting go, or one a second finger
+/// joins, slides back, leaving the tab open; one moving mostly down, or
+/// starting in the composer's field, its tray of images or a reply's code
+/// block, changes nothing; and a
 /// redraw asked for mid-swipe is drawn once as it ends, leaving only the
 /// screen it ended on; skipped without Node.
 #[test]
@@ -695,6 +697,12 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
   console.log("tray=" + swipe([[20, 500], [80, 500], [300, 500]], 100, shot) + " " + screens());
   touch("touchend", 0, 0, 400, shot);
   vm.runInContext(`state.chosen = []; render();`, ctx);
+  // A reply's code block, which scrolls sideways.
+  const pre = new Node("pre");
+  app.querySelector(".messages").append(pre);
+  console.log("code=" + swipe([[20, 200], [80, 200], [300, 200]], 100, pre) + " " + screens());
+  touch("touchend", 0, 0, 400, pre);
+  pre.remove();
   // A short swipe, with the stream and another caller asking for redraws.
   drawn = 0;
   console.log("short=" + swipe([[20, 300], [40, 304], [100, 306]], 200) + " " + screens() + " " + app.children[1].style.transform);
@@ -704,6 +712,16 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
   touch("touchend", 0, 0, 400);
   await slid();
   console.log("back=" + vm.runInContext("state.open", ctx) + " " + screens() + " drawn " + drawn + " " + app.querySelector(".doing").textContent + " " + JSON.stringify(app.children[0].style.transform));
+  // Quick, then held still before letting go.
+  swipe([[20, 300], [40, 300], [90, 300]], 10);
+  touch("touchend", 0, 0, 600);
+  await slid();
+  console.log("paused=" + vm.runInContext("state.open", ctx) + " " + screens());
+  // A second finger mid-swipe.
+  swipe([[20, 300], [40, 300], [90, 300]], 100);
+  touch("touchstart", 90, 300, 300);
+  await slid();
+  console.log("second finger=" + vm.runInContext("state.open", ctx) + " " + screens() + " " + JSON.stringify(app.children[0].style.transform));
   // Past a third of the width.
   addresses.length = 0;
   swipe([[20, 300], [60, 300], [200, 310]], 100);
@@ -730,9 +748,12 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
             "down=false,false channel",
             "field=false,false channel",
             "tray=false,false channel",
+            "code=false,false channel",
             "short=true,true drawer,channel translateX(80px)",
             "held=0 ⠹ Edit app.js",
             r#"back=5 channel drawn 1 ⠹ Bash: cargo test """#,
+            "paused=5 channel",
+            r#"second finger=5 channel """#,
             "far=null drawer #",
             "flick=null drawer",
         ],
