@@ -1475,7 +1475,7 @@ impl Server {
                     .get(ITEM)
                     .cloned()
                     .unwrap_or_else(|| model.name.clone()),
-                state: model.state,
+                state: holding_slot(model.state, model.background, model.monitors.len()),
                 was_in: marked(&tab.opts, IN),
                 loop_skill: model.loop_skill.clone(),
                 phase: model.phase.clone(),
