@@ -1536,7 +1536,8 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let clip = server.dir.path().join("clip.mp4");
     std::fs::write(&clip, b"a video").unwrap();
     let clip = real(&clip);
-    server.ok(&["look", &clip]);
+    // A video always goes to the desktop's viewer, which is no news.
+    assert_eq!(server.ok(&["look", &clip]), "");
     assert_eq!(wait_opened(&server, 1), std::slice::from_ref(&clip));
     // Anything but a picture, a video or a PDF is refused, and a file
     // that isn't there.
@@ -1563,10 +1564,15 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
         assert!(err.contains("usage: switchboard look"), "{err}");
     }
     assert_eq!(opened(&server).len(), 1, "none of them opened anything");
-    // With a split there are no columns beside the pane: each is opened.
+    // With a split there are no columns beside the pane: each is opened,
+    // and `look` says why, so the asker can tell you where they went.
     server.ok(&["split", "-R"]);
     client.wait_for("the hints gone", |s| cell_of(s, "SIDE PANEL").is_none());
-    server.ok(&["look", &shot, &other]);
+    let said = server.ok(&["look", &shot, &other]);
+    assert!(
+        said.starts_with("Opening in the desktop's viewer: the tab has no side panel"),
+        "{said}"
+    );
     assert_eq!(
         wait_opened(&server, 3),
         [clip.clone(), shot.clone(), other.clone()]
@@ -1581,7 +1587,11 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
     client.wait_text("SIDE PANEL");
     let shot = picture_at(&server, "shot.png");
-    server.ok(&["look", &shot]);
+    let said = server.ok(&["look", &shot]);
+    assert!(
+        said.contains("\"Show images in the side panel\" is off"),
+        "{said}"
+    );
     assert_eq!(wait_opened(&server, 1), [shot]);
     assert!(cell_of(&client.screen(), "M-Esc close").is_none());
     drop(client);
@@ -1591,7 +1601,11 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let mut client = server.attach(240, 40);
     client.wait_text("SIDE PANEL");
     let shot = picture_at(&server, "shot.png");
-    server.ok(&["look", &shot]);
+    let said = server.ok(&["look", &shot]);
+    assert!(
+        said.contains("doesn't draw the workspace's images"),
+        "{said}"
+    );
     assert_eq!(wait_opened(&server, 1), [shot]);
     assert!(cell_of(&client.screen(), "M-Esc close").is_none());
 }

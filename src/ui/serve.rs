@@ -31,13 +31,17 @@ use crate::{paths, settings, util};
 /// Where pictures shown beside a tab's pane go on a client
 /// (`Server::look_spare`).
 enum Spare {
-    /// Nowhere any more: no such columns, tab or client.
-    Gone,
+    /// Nowhere any more: no such columns, tab or client, and why, as
+    /// `look` says it.
+    Gone(&'static str),
     /// The columns are behind another tab or mission control for now: the
     /// tab would have them were it in front with nothing over it.
     Hidden,
     At(Rect),
 }
+
+/// Why pictures can't go beside a tab no client shows.
+const NO_TAB: &str = "no workspace on screen shows the tab";
 
 /// What `switchboard look` does with a file, by its name's ending.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -473,7 +477,7 @@ impl Server {
                 // The columns may have gone while the pictures were read.
                 // Ones behind another tab or mission control keep them,
                 // hidden until the tab is in front again.
-                if matches!(self.look_spare(client, tab), Spare::Gone) {
+                if matches!(self.look_spare(client, tab), Spare::Gone(_)) {
                     let files = shown.into_iter().map(|s| s.file).collect();
                     open_outside(files, self.tx.clone(), Some(client), true);
                     return;
@@ -508,8 +512,8 @@ impl Server {
     /// off the server's task (Settings' `images_beside_pane`). Where there
     /// are no such columns on a terminal that draws the server's images (a
     /// split, a wide pane), with more than `pictures::MOST` of them, or with the setting
-    /// off, each opens with what the desktop opens it with, as a video or
-    /// a PDF always does, and a picture this can't decode. Anything else is
+    /// off, each opens with what the desktop opens it with, printing why,
+    /// as a video or a PDF always does, and a picture this can't decode. Anything else is
     /// refused, by the ending of the file a name leads to with links
     /// followed, and so is a file in a PR's untrusted worktree, since Claude
     /// may run this without asking and the desktop runs some kinds of file
@@ -586,20 +590,32 @@ impl Server {
                 Some(self.session(&c.session)?.current)
             });
         let pictures = files.iter().filter(|(_, k)| *k == Kind::Picture).count();
-        let beside = match (client, tab) {
-            (Some(client), Some(tab))
-                if (1..=pictures::MOST).contains(&pictures)
-                    && settings::is_on("images_beside_pane")
-                    && !matches!(self.look_spare(client, tab), Spare::Gone) =>
-            {
-                Some((client, tab))
+        // Why the pictures can't go beside the pane, said back so whoever
+        // asked (Claude, mostly) can tell you where they went.
+        let outside = match (client, tab) {
+            _ if pictures == 0 => Err(None),
+            _ if pictures > pictures::MOST => {
+                Err(Some(format!("more than {} pictures", pictures::MOST)))
             }
-            _ => None,
+            _ if !settings::is_on("images_beside_pane") => Err(Some(
+                "Settings' \"Show images in the side panel\" is off".to_string(),
+            )),
+            (Some(client), Some(tab)) => match self.look_spare(client, tab) {
+                Spare::Gone(why) => Err(Some(why.to_string())),
+                _ => Ok((client, tab)),
+            },
+            _ => Err(Some(NO_TAB.to_string())),
         };
-        let Some((client, tab)) = beside else {
-            let files = files.into_iter().map(|(f, _)| f).collect();
-            open_outside(files, self.tx.clone(), client, false);
-            return Reply::ok("");
+        let (client, tab) = match outside {
+            Ok(beside) => beside,
+            Err(why) => {
+                let files = files.into_iter().map(|(f, _)| f).collect();
+                open_outside(files, self.tx.clone(), client, false);
+                return Reply::ok(
+                    why.map(|why| format!("Opening in the desktop's viewer: {why}\n"))
+                        .unwrap_or_default(),
+                );
+            }
         };
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
@@ -642,22 +658,24 @@ impl Server {
     /// over the screen is in front of columns the tab has.
     fn look_spare(&self, client: ClientId, tab: TabId) -> Spare {
         let Some(c) = self.clients.get(&client) else {
-            return Spare::Gone;
+            return Spare::Gone(NO_TAB);
         };
         let (Some(s), Some(t)) = (self.session(&c.session), self.tabs.get(&tab)) else {
-            return Spare::Gone;
+            return Spare::Gone(NO_TAB);
         };
         // A client of another session never brings the tab to the front.
         if !s.tabs.contains(&tab) {
-            return Spare::Gone;
+            return Spare::Gone(NO_TAB);
         }
         if self.graphics_of(c).is_none() {
-            return Spare::Gone;
+            return Spare::Gone("this terminal doesn't draw the workspace's images");
         }
         let Some(room) = crate::mux::beside::spare_of(s.spread_for(t), s.area_for(t))
             .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
         else {
-            return Spare::Gone;
+            return Spare::Gone(
+                "the tab has no side panel (a split, or a pane too wide to leave room beside it)",
+            );
         };
         let covered = c.overlays.layers.iter().any(|l| l.overlay.covers_screen());
         if s.current != tab || covered {
@@ -688,7 +706,7 @@ impl Server {
             .collect();
         let gone: Vec<TabId> = spares
             .iter()
-            .filter(|(_, s)| matches!(s, Spare::Gone))
+            .filter(|(_, s)| matches!(s, Spare::Gone(_)))
             .map(|(t, _)| *t)
             .collect();
         if !gone.is_empty() {
