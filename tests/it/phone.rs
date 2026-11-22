@@ -654,7 +654,7 @@ console.log("no tools=" + said());
 /// in Node over the page: a touch moving right past a third of the screen's
 /// width, or flicked, opens the drawer and clears the address's tab; a short
 /// one, or a quick one held still before letting go, or one a second finger
-/// joins, slides back, leaving the tab open; one moving mostly down, or
+/// joins, on the channel or the drawer, slides back, leaving the tab open; one moving mostly down, or
 /// starting in the composer's field, its tray of images or a reply's code
 /// block, changes nothing; and a
 /// redraw asked for mid-swipe is drawn once as it ends, leaving only the
@@ -722,6 +722,13 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
   touch("touchstart", 90, 300, 300);
   await slid();
   console.log("second finger=" + vm.runInContext("state.open", ctx) + " " + screens() + " " + JSON.stringify(app.children[0].style.transform));
+  // A second finger on the drawer it uncovered, then the first let go far.
+  swipe([[20, 300], [40, 300], [90, 300]], 100);
+  touch("touchstart", 30, 300, 300, app.children[0].children[0]);
+  touch("touchmove", 300, 300, 400);
+  touch("touchend", 0, 0, 500);
+  await slid();
+  console.log("on the drawer=" + vm.runInContext("state.open", ctx) + " " + screens());
   // Past a third of the width.
   addresses.length = 0;
   swipe([[20, 300], [60, 300], [200, 310]], 100);
@@ -754,6 +761,7 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
             r#"back=5 channel drawn 1 ⠹ Bash: cargo test """#,
             "paused=5 channel",
             r#"second finger=5 channel """#,
+            "on the drawer=5 channel",
             "far=null drawer #",
             "flick=null drawer",
         ],

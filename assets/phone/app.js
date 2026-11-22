@@ -1104,8 +1104,8 @@ function channel(stick) {
 // under the channel once the touch moves right more than up or down, the
 // channel following the finger. Let go past a third of the screen's width,
 // or flicked right, it opens the drawer as ☰ does; otherwise it slides back.
-// A touch in the composer's field, its tray of images or a reply's table or
-// code block is theirs, since those scroll sideways or move a cursor.
+// A touch in the composer's field, its tray of images, a reply's table or
+// code block or an image shown whole is theirs.
 const SWIPE_DECIDES = 10; // px moved before a touch counts as sideways or not
 const SWIPE_FLICK = 0.5; // px a millisecond rightward that open the drawer however far it went
 const SWIPE_MS = 200;
@@ -1118,7 +1118,7 @@ function swipeable(screen) {
     // A second finger mid-swipe sends the channel back, as a cancel does.
     if (swipe && swipe.under) return end({ type: "touchcancel" });
     swipe = null;
-    if (e.touches.length !== 1 || e.target.closest("textarea, .tray, pre, .table")) return;
+    if (e.touches.length !== 1 || e.target.closest("textarea, .tray, pre, .table, .full")) return;
     const t = e.touches[0];
     swipe = { screen, x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, under: null, wanted: null };
   }, { passive: true });
@@ -1135,6 +1135,8 @@ function swipeable(screen) {
         return;
       }
       swipe.under = drawerScreen();
+      // A second finger on the drawer uncovered ends it too.
+      swipe.under.addEventListener("touchstart", () => end({ type: "touchcancel" }), { passive: true });
       app.insertBefore(swipe.under, screen);
       app.classList.add("swiping");
     }
