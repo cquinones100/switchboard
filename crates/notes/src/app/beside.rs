@@ -321,11 +321,13 @@ pub fn lines(
         Span::styled(name, Tone::Accent.bold(theme)),
     ];
     let mut right = Vec::new();
-    // The folder only where the name, it and easy mode's × all fit in the
-    // plan's own width, so the × is never cut off.
+    // At board 8's share the folder shows, the name cut to make room;
+    // narrowed, only where the name, it and easy mode's × all fit, so the
+    // × is never cut off.
     let head_w = kit::spans_width(&head);
     let close_w = if easy { 2 } else { 0 };
-    let folder_fits = head_w + 1 + switchboard_ui::draw::width(folder) + close_w < cols;
+    let folder_fits =
+        !narrowed || head_w + 1 + switchboard_ui::draw::width(folder) + close_w < cols;
     if room == Room::All && !folder.is_empty() && folder_fits {
         right.push(Span::styled(folder.to_string(), Tone::Dim.style(theme)));
     }
