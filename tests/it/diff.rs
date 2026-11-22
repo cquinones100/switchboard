@@ -840,12 +840,14 @@ fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
         "the index beside the file: {row:?}"
     );
     client.type_text("j");
-    let screen = client.wait_text("export const a = 2;");
-    let row = screen.iter().find(|l| l.contains("a = 3;")).unwrap();
-    assert!(
-        row.contains("export const a = 2;"),
-        "HEAD beside the index: {row:?}"
-    );
+    // The staged file's preview, HEAD beside the index, already sits under
+    // the file before it, so wait for the first row holding the index's line
+    // to be the one beside HEAD's, not for HEAD's line alone.
+    client.wait_for("HEAD beside the index", |s| {
+        s.iter()
+            .find(|l| l.contains("a = 3;"))
+            .is_some_and(|l| l.contains("export const a = 2;"))
+    });
     assert_eq!(panes(&server)[0]["options"]["@in_place"], "diff");
     client.send(b"\x1bd");
     wait_until("the pane back", || {
