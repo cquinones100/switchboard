@@ -700,7 +700,16 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
             r#where: text(i.get("where"), 80),
             user: text(i.get("user"), 40),
             from: text(i.get("from"), 80),
-            text: body(i.get("text"), 2000),
+            text: {
+                // As the skill saved it, its standard emoji drawn as the
+                // look's own messages are (`slack_look::plain`).
+                let text = body(i.get("text"), 2000);
+                if super::slack_emoji::on() {
+                    super::slack_emoji::with_standard(&text)
+                } else {
+                    text
+                }
+            },
             ts: util::js_string(&i["ts"]),
             thread: i.get("thread").map(util::js_string).filter(|t| is_ts(t)),
             link: https(i.get("link")),

@@ -97,10 +97,7 @@ const SLACK_NAMES: &[(&str, &str)] = &[
 /// A code inside a code span or block, kept as written, or an emoji's
 /// code: its name and, for a standard one, its skin tone (2 to 6).
 static CODES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?s)```.*?```|`[^`\n]*`|:([a-z0-9_+-]*[a-z+-][a-z0-9_+-]*):(?::skin-tone-([2-6]):)?",
-    )
-    .unwrap()
+    Regex::new(r"(?s)```.*?```|`[^`\n]*`|:([a-z0-9_+-]+):(?::skin-tone-([2-6]):)?").unwrap()
 });
 
 /// A standard emoji's character by Slack's name for it, with a skin tone
@@ -138,6 +135,34 @@ fn toned(e: &'static emojis::Emoji, tone: u8) -> Option<&'static emojis::Emoji> 
     e.with_skin_tone(tone)
 }
 
+/// The emoji codes in `text` outside code spans and blocks, each as the
+/// whole match, its name and its skin tone. A name of digits alone is a
+/// code only when it is a standard emoji's (`:100:`), so a time
+/// (`10:30:45`) is left alone, and a code right after a colon that closed
+/// no code is words, so a path (`std::fs::read`) is too.
+fn codes(text: &str) -> Vec<(std::ops::Range<usize>, &str, Option<u8>)> {
+    let mut out = Vec::new();
+    let mut last_end = 0;
+    for c in CODES.captures_iter(text) {
+        let whole = c.get(0).expect("a match");
+        let Some(name) = c.get(1).map(|n| n.as_str()) else {
+            continue;
+        };
+        let tone = c.get(2).and_then(|t| t.as_str().parse().ok());
+        let digits_alone = name.bytes().all(|b| b.is_ascii_digit());
+        if digits_alone && standard(name, None).is_none() {
+            continue;
+        }
+        let after_a_colon = text[..whole.start()].ends_with(':') && last_end != whole.start();
+        if after_a_colon {
+            continue;
+        }
+        last_end = whole.end();
+        out.push((whole.range(), name, tone));
+    }
+    out
+}
+
 /// A piece of a message's text: words as they are, or a workspace's own
 /// emoji's code, by its name.
 #[derive(Debug, PartialEq, Eq)]
@@ -152,16 +177,11 @@ pub enum Piece<'a> {
 pub fn with_standard(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
-    for c in CODES.captures_iter(text) {
-        let whole = c.get(0).expect("a match");
-        let Some(name) = c.get(1) else {
-            continue;
-        };
-        let tone = c.get(2).and_then(|t| t.as_str().parse().ok());
-        if let Some(drawn) = standard(name.as_str(), tone) {
-            out.push_str(&text[last..whole.start()]);
+    for (whole, name, tone) in codes(text) {
+        if let Some(drawn) = standard(name, tone) {
+            out.push_str(&text[last..whole.start]);
             out.push_str(&drawn);
-            last = whole.end();
+            last = whole.end;
         }
     }
     out.push_str(&text[last..]);
@@ -174,19 +194,15 @@ pub fn with_standard(text: &str) -> String {
 pub fn pieces(text: &str) -> Vec<Piece<'_>> {
     let mut out = Vec::new();
     let mut last = 0;
-    for c in CODES.captures_iter(text) {
-        let whole = c.get(0).expect("a match");
-        let Some(name) = c.get(1) else {
-            continue;
-        };
-        if c.get(2).is_some() || standard(name.as_str(), None).is_some() {
+    for (whole, name, tone) in codes(text) {
+        if tone.is_some() || standard(name, None).is_some() {
             continue;
         }
-        if whole.start() > last {
-            out.push(Piece::Text(&text[last..whole.start()]));
+        if whole.start > last {
+            out.push(Piece::Text(&text[last..whole.start]));
         }
-        out.push(Piece::Custom(name.as_str()));
-        last = whole.end();
+        out.push(Piece::Custom(name));
+        last = whole.end;
     }
     if last < text.len() {
         out.push(Piece::Text(&text[last..]));
@@ -465,6 +481,8 @@ mod tests {
     fn times_and_words_with_colons_are_left_alone() {
         assert!(custom_names("at 10:30:45, see: this").next().is_none());
         assert_eq!(with_standard("at 10:30:45"), "at 10:30:45");
+        assert!(custom_names("std::fs::read and a::b::c").next().is_none());
+        assert_eq!(with_standard(":tada::tada: :100:"), "🎉🎉 💯");
     }
 
     #[test]

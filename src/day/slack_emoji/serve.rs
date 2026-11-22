@@ -32,8 +32,9 @@ pub enum SlackEmojisEvent {
 }
 
 impl Server {
-    /// What each of `names` is, of those loaded, the rest loaded off the
-    /// task; nothing while Settings' `slack_emoji` is off.
+    /// What each of `names` is, of those loaded (a name whose load failed
+    /// as `Unknown`), the rest loaded off the task; nothing while Settings'
+    /// `slack_emoji` is off.
     pub fn slack_emoji(
         &mut self,
         names: impl IntoIterator<Item = String>,
@@ -53,11 +54,16 @@ impl Server {
                     out.insert(name.clone(), custom.clone());
                     *due <= now
                 }
-                None => self
-                    .slack_emojis
-                    .failed
-                    .get(&name)
-                    .is_none_or(|at| now - at >= RETRY_MS),
+                None => match self.slack_emojis.failed.get(&name) {
+                    // A name that couldn't be looked up (no sign-in, the
+                    // scope missing, Slack out of reach) is drawn as its code
+                    // until a retry finds it, never as a cut placeholder.
+                    Some(at) => {
+                        out.insert(name.clone(), Custom::Unknown);
+                        now - at >= RETRY_MS
+                    }
+                    None => true,
+                },
             };
             if due && !self.slack_emojis.loading.contains(&name) {
                 wanted.push(name);
@@ -95,7 +101,9 @@ impl Server {
             self.slack_emojis.held.insert(name, (custom, due));
             changed = true;
         }
+        // A failed name is now drawn as its code, so the board changes too.
         for name in asked.into_iter().filter(|n| !found_names.contains(n)) {
+            changed = true;
             // One held (its cache emptied underneath) waits as one never
             // loaded does.
             if let Some((_, due)) = self.slack_emojis.held.get_mut(&name) {
