@@ -104,12 +104,25 @@ function ago(ms) {
   return new Date(ms).toLocaleDateString();
 }
 
+// The desktop's spinner (switchboard-ui's `text::SPINNER`), a frame every
+// 120ms, read from the clock so a mark drawn again stays in step; every
+// `.spin` on the page turns with it, and with reduced motion it holds still.
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_MS = 120;
+const spinFrame = () => SPINNER[Math.floor(Date.now() / SPINNER_MS) % SPINNER.length];
+const spinner = () => el("span", { class: "spin" }, spinFrame());
+setInterval(() => {
+  if (document.hidden || still()) return;
+  const frame = spinFrame();
+  for (const node of document.querySelectorAll(".spin")) node.textContent = frame;
+}, SPINNER_MS);
+
 function markOf(tab) {
   // A pinned tab wears the flag in place of its state's mark (board 75).
   if (tab.pinned) return ["⚑", "pinned"];
   if (tab.state === "waiting") return ["●", "needs"];
   if (tab.state === "done") return ["✓", "passed"];
-  if (tab.state === "working" || tab.state === "background") return ["⠹", "working"];
+  if (tab.state === "working" || tab.state === "background") return [spinFrame(), "working spin"];
   return ["○", "idle"];
 }
 
@@ -164,7 +177,7 @@ async function pair() {
         el("h1", {}, "Pair this phone"),
         el("p", {}, "Type this code in Switchboard on " + computer + ", or run ", el("code", {}, "switchboard phone pair " + code.code.replace(" ", "")), " there:"),
         el("div", { class: "code" }, code.code),
-        el("p", {}, "⠹ Waiting for the code on " + computer),
+        el("p", {}, spinner(), " Waiting for the code on " + computer),
         el("p", { class: "faint" }, "The code lasts 5 minutes."),
       ),
     ),
@@ -1320,7 +1333,7 @@ function channel(stick) {
   const cardKey = tab.prompt ? "prompt:" + tab.prompt.id : newCard ? "answered" : "";
   const oldCard = shown.now.querySelector(".card");
   const wasTall = oldCard ? oldCard.getBoundingClientRect().height : 0;
-  shown.now.replaceChildren(...[newCard, working ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null].filter(Boolean));
+  shown.now.replaceChildren(...[newCard, working ? el("div", { class: "doing" }, spinner(), " " + doing(tab)) : null].filter(Boolean));
   if (kept && newCard && cardKey !== shown.cardKey) {
     const folds = cardKey === "answered" && shown.cardKey && shown.cardKey.startsWith("prompt:") && wasTall;
     if (folds) fold(newCard, wasTall);
