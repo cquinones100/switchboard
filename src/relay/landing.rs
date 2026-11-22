@@ -355,6 +355,7 @@ mod tests {
                 })
                 .collect(),
             multi: false,
+            preview: false,
             free: None,
             cursor: None,
             more: Vec::new(),

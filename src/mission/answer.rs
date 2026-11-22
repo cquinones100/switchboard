@@ -90,6 +90,9 @@ pub struct Prompt {
     pub question: String,
     pub options: Vec<PromptOption>,
     pub multi: bool,
+    /// Whether its options have a preview drawn in a box beside them, where
+    /// a number only moves the ❯ and Enter chooses.
+    pub preview: bool,
     pub free: Option<u32>,
     pub cursor: Option<Cursor>,
     /// The options whose screen shows more than their label: words cut
@@ -108,7 +111,8 @@ pub struct Prompt {
 /// `free`, found by its place. With several questions they come one at a
 /// time, under a line of their names marked ☐ or ☒. A question that takes
 /// several answers (`multi`) shows each option as [ ] or [✔], and a Submit
-/// row after the options moves on.
+/// row after the options moves on. One whose options carry a preview draws
+/// it in a box to their right (`preview`), its edge on the options' rows.
 ///
 /// A screen scrolled back (`scrolled_back`) shows none: the numbered lines
 /// on it are the transcript's, a question answered long ago, while the
@@ -117,16 +121,15 @@ pub fn options_in(text: &str) -> Option<Prompt> {
     if scrolled_back(text) {
         return None;
     }
-    let mapped: Vec<String> = text
-        .split('\n')
+    let raw: Vec<&str> = text.split('\n').collect();
+    let mapped: Vec<String> = raw
+        .iter()
         .map(|l| l.replace(['│', '┃'], " ").trim_end().to_string())
         .collect();
-    let lines: Vec<&str> = mapped
-        .iter()
-        .enumerate()
-        .filter(|(i, l)| !l.trim().is_empty() && (*i == 0 || **l != mapped[i - 1]))
-        .map(|(_, l)| l.as_str())
+    let kept: Vec<usize> = (0..mapped.len())
+        .filter(|&i| !mapped[i].trim().is_empty() && (i == 0 || mapped[i] != mapped[i - 1]))
         .collect();
+    let lines: Vec<&str> = kept.iter().map(|&i| mapped[i].as_str()).collect();
     struct Found {
         n: u32,
         label: String,
@@ -199,11 +202,22 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         .filter(|(o, under)| o.cut || !under.is_empty())
         .map(|(o, _)| o.n)
         .collect();
-    let between = |re: &Regex| (first + 1..last).find(|&i| re.is_match(lines[i]));
-    let rule = between(&RULE);
-    let submit = between(&SUBMIT_ROW);
+    let between = |is: &dyn Fn(&str) -> bool| (first + 1..last).find(|&i| is(lines[i]));
+    // A preview box's top or bottom edge is no rule: its corners give it away.
+    let rule = between(&|l| RULE.is_match(l) && !l.contains(['┌', '┐', '└', '┘']));
+    let submit = between(&|l| SUBMIT_ROW.is_match(l));
     let free = rule.and_then(|r| options.iter().rfind(|o| o.line < r).map(|o| o.n));
     let multi = options.iter().any(|o| o.checked.is_some());
+    // A preview's box edge past an option's number: its top corner, or a
+    // side with more after it (a prompt drawn in a box of its own has one
+    // side alone at the row's end).
+    let preview = options.iter().any(|o| {
+        let row = raw[kept[o.line]];
+        let past = row
+            .find(|c: char| c.is_ascii_digit())
+            .map_or("", |at| &row[at..]);
+        past.contains('┌') || past.matches('│').count() >= 2
+    });
     let cursor = match submit {
         Some(s) if lines[s].contains('❯') => Some(Cursor::Submit),
         _ => options
@@ -243,6 +257,7 @@ pub fn options_in(text: &str) -> Option<Prompt> {
             })
             .collect(),
         multi,
+        preview,
         free,
         cursor: free.and(cursor),
         more,
@@ -362,7 +377,8 @@ pub enum Press {
 /// or ticks its option; Submit and a free answer in a question that takes
 /// several are reached with the arrow keys from wherever the ❯ is, since a
 /// number only ticks; in one that takes one answer, the free option's
-/// number opens it for typing, and Enter sends what was typed.
+/// number opens it for typing, and Enter sends what was typed. Beside a
+/// preview a number only moves the ❯ to its option, so Enter follows it.
 pub fn presses(found: &Prompt, answer: &Answer) -> Vec<Press> {
     let rows = found.free.unwrap_or(found.options.len() as u32);
     let at = match found.cursor {
@@ -395,6 +411,9 @@ pub fn presses(found: &Prompt, answer: &Answer) -> Vec<Press> {
             Press::Settle,
             enter,
         ],
+        Answer::Choose(o) if found.preview => {
+            vec![Press::Text(o.n.to_string()), Press::Settle, enter]
+        }
         Answer::Choose(o) => vec![Press::Text(o.n.to_string())],
         Answer::Toggle(options) => options
             .iter()
@@ -1071,6 +1090,59 @@ Which colors?
             presses(&found, &Answer::Submit).len(),
             4,
             "three rows down to Submit, then Enter"
+        );
+    }
+
+    #[test]
+    fn a_choice_beside_a_preview_is_its_number_then_enter() {
+        let screen = "\
+ ☐ Layout
+
+Which layout?
+
+❯ 1. Sidebar          ┌──────────────────────┐
+  2. Top bar          │ ┌──────┐             │
+  3. Tabs             │ │ nav  │  content    │
+                      │ └──────┘             │
+                      └──────────────────────┘
+  4. Type something
+──────────────────
+  5. Chat about this";
+        let found = options_in(screen).expect("a prompt");
+        assert!(found.preview);
+        assert_eq!(found.free, Some(4));
+        let chose = answer_for(&found, "2").unwrap();
+        assert_eq!(answer_said(&chose), "Chose 2. Top bar");
+        assert_eq!(
+            presses(&found, &chose),
+            vec![
+                Press::Text("2".into()),
+                Press::Settle,
+                Press::Key(Key::new(KeyCode::Enter, Mods::NONE)),
+            ],
+            "the number only moves the ❯ there, and Enter chooses"
+        );
+        let plain = "\
+ ☐ Layout
+
+Which layout?
+
+❯ 1. Sidebar
+  2. Top bar
+  3. Type something
+──────────────────
+  4. Chat about this";
+        let found = options_in(plain).expect("a prompt");
+        assert!(!found.preview);
+        let chose = answer_for(&found, "2").unwrap();
+        assert_eq!(presses(&found, &chose), vec![Press::Text("2".into())]);
+        let boxed = "\
+│ Do you want to proceed?        │
+│ ❯ 1. Yes                       │
+│   2. No                        │";
+        assert!(
+            !options_in(boxed).expect("a prompt").preview,
+            "a prompt in a box of its own has no preview"
         );
     }
 

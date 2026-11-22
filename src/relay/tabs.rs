@@ -1030,6 +1030,7 @@ impl Dialog {
             question: self.question.clone(),
             options: self.options.clone(),
             multi: false,
+            preview: false,
             free: None,
             cursor: None,
             more: Vec::new(),
