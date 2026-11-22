@@ -1085,7 +1085,8 @@ impl Server {
         if self.autopilot.mode.on {
             palette::autopilot_on(&mut entries, &self.autopilot.mode.note);
         }
-        let entries = palette::recent_first(entries, &palette::read_recent());
+        let recent = palette::read_recent();
+        let entries = palette::recent_first(entries, &recent);
         let picks = if learn {
             palette::read_queries()
         } else {
@@ -1106,7 +1107,7 @@ impl Server {
             .collect();
         let order: Order = Box::new(move |query, matched| {
             let sub: Vec<(String, String)> = matched.iter().map(|&i| rows[i].clone()).collect();
-            palette::rank(query, &sub, &picks)
+            palette::order(query, &sub, &recent, &picks)
                 .into_iter()
                 .map(|j| matched[j])
                 .collect()
@@ -1133,7 +1134,7 @@ impl Server {
                 return;
             };
             if let Some(n) = notes.get(picked.index) {
-                palette::learn_query(&picked.value, &picked.query, learn);
+                palette::remember(&picked.value, &picked.query, learn);
                 match &n.pick {
                     palette::NotesPick::WorkNote(note) => server.work_note(client, note.clone()),
                     palette::NotesPick::Run(name) => {
