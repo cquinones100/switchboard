@@ -7,6 +7,7 @@
 
 use crate::common;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::TestServer;
@@ -1067,16 +1068,13 @@ fn wait_long(server: &TestServer, client: &mut common::TestClient, text: &str) -
     }
 }
 
-// A landing that leaves the running build behind main says so in one
-// notification, whose count a second landing updates rather than adding
-// another, and whose menu leads with the restart on the latest main.
-#[test]
-fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
-    let dir = common::TempDir::new("sbb");
-    let origin = dir.path().join("origin.git");
-    let main = dir.path().join("main");
+// Switchboard's clone, as src/dev.rs reads one, in `dir`, with its
+// origin beside it and one commit, the build's: the clone and the commit.
+fn switchboards_clone(dir: &Path) -> (PathBuf, String) {
+    let origin = dir.join("origin.git");
+    let main = dir.join("main");
     git(
-        dir.path(),
+        dir,
         &[
             "init",
             "-q",
@@ -1087,7 +1085,7 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
         ],
     );
     git(
-        dir.path(),
+        dir,
         &[
             "clone",
             "-q",
@@ -1119,6 +1117,16 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
     for dir in ["assets/skills", "src/mux"] {
         std::fs::create_dir_all(main.join(dir)).unwrap();
     }
+    (main, built)
+}
+
+// A landing that leaves the running build behind main says so in one
+// notification, whose count a second landing updates rather than adding
+// another, and whose menu leads with the restart on the latest main.
+#[test]
+fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
+    let dir = common::TempDir::new("sbb");
+    let (main, built) = switchboards_clone(dir.path());
     let server = TestServer::start_with_env(&[
         ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
         ("SWITCHBOARD_BUILT_FROM", &built),
@@ -1185,6 +1193,50 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
             .any(|l| l.contains('›') && l.contains("Restart Switchboard on the latest main")),
         "chosen as the menu opens: {all}"
     );
+}
+
+// A PR the merge queue merges on GitHub moves nothing in the clone, nor
+// does a push from another clone, and no tab says it landed: the count
+// fetches origin itself, so the next one (the hour's, here a second's)
+// finds the commits.
+#[test]
+fn main_moved_elsewhere_is_found_by_the_next_count() {
+    let dir = common::TempDir::new("sbf");
+    let (main, built) = switchboards_clone(dir.path());
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            dir.path().join("origin.git").to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    let server = TestServer::start_with_env(&[
+        ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
+        ("SWITCHBOARD_BUILT_FROM", &built),
+        ("SWITCHBOARD_BEHIND_EVERY", "1"),
+    ]);
+    let mut client = server.attach(200, 36);
+    client.wait_text("$");
+    for n in 1..=2 {
+        git(
+            &other,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("merged {n}"),
+            ],
+        );
+    }
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("vnotifications\r");
+    client.wait_text("Switchboard's main has 2 landings this build lacks");
 }
 
 // `switchboard upgrade --latest` reaches the server as `upgrade-latest`

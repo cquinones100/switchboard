@@ -121,6 +121,10 @@ impl Server {
         self.merge_queue.running.remove(&common);
         // A failed step is in the queue's file already (`failed`).
         if let Ok(told) = told {
+            // Main moved on GitHub: counted at once, not on the hour.
+            if told.iter().any(|t| t.words.starts_with(train::MERGED)) {
+                self.behind_check();
+            }
             for t in told {
                 let Some(pane) = t.pane.as_deref().and_then(|p| p.parse::<PaneId>().ok()) else {
                     continue;
