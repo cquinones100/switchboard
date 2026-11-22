@@ -20,6 +20,8 @@ use anyhow::{Result, anyhow};
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
 /// How long an image is kept.
 pub const KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How long a copy cut off as it was written is kept.
+const PART_KEEP: Duration = Duration::from_secs(60 * 60);
 /// The hex digits of a name's random ID.
 const ID_LEN: usize = 32;
 
@@ -91,6 +93,50 @@ pub fn save(dir: &Path, bytes: &[u8], random: &[u8]) -> Result<String> {
     Ok(name)
 }
 
+/// Keeps a copy of the picture at `file` in `dir`, named after its
+/// contents (so a picture shown twice is kept once, its time renewed for
+/// `prune`), and gives the name; `None` for what isn't a taken image, is
+/// too large or can't be read.
+pub fn keep_copy(dir: &Path, file: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if fs::metadata(file).ok()?.len() > MAX_BYTES as u64 {
+        return None;
+    }
+    let bytes = fs::read(file).ok()?;
+    let ext = kind(&bytes)?;
+    let digest = Sha256::digest(&bytes);
+    let id = &digest[..ID_LEN / 2];
+    let name = format!(
+        "{}.{ext}",
+        id.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
+    let kept = dir.join(&name);
+    // One of another length is a copy cut short, written again.
+    let whole = fs::metadata(&kept).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64);
+    if whole {
+        let renewed = fs::File::options()
+            .write(true)
+            .open(&kept)
+            .and_then(|f| f.set_modified(SystemTime::now()));
+        return renewed.is_ok().then_some(name);
+    }
+    // Written beside it under a name no request reaches, then renamed into
+    // place, so a write cut short never leaves a copy under the name.
+    make_dir(dir).ok()?;
+    let part = dir.join(format!(".{name}.part"));
+    let written = owner_only()
+        .create(true)
+        .truncate(true)
+        .open(&part)
+        .and_then(|mut f| f.write_all(&bytes))
+        .and_then(|()| fs::rename(&part, &kept));
+    if written.is_err() {
+        let _ = fs::remove_file(&part);
+        return None;
+    }
+    Some(name)
+}
+
 #[cfg(unix)]
 fn make_dir(dir: &Path) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -117,22 +163,31 @@ fn owner_only() -> fs::OpenOptions {
     options
 }
 
-/// Removes the images in `dir` last changed more than `KEEP` before `now`.
+/// Removes the images in `dir` last changed more than `KEEP` before `now`,
+/// and a copy `keep_copy` was cut off writing more than `PART_KEEP` before.
 pub fn prune(dir: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        if !is_name(&name.to_string_lossy()) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let part = name
+            .strip_prefix('.')
+            .and_then(|n| n.strip_suffix(".part"))
+            .is_some_and(is_name);
+        let keep = if part {
+            PART_KEEP
+        } else if is_name(&name) {
+            KEEP
+        } else {
             continue;
-        }
+        };
         let old = entry
             .metadata()
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age > KEEP);
+            .is_some_and(|age| age > keep);
         if old {
             let _ = fs::remove_file(entry.path());
         }
@@ -294,6 +349,27 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_is_copied_once_under_its_contents_name() {
+        let tmp = Temp::new("copy");
+        let dir = tmp.path().join("images");
+        let shot = tmp.path().join("shot.png");
+        fs::write(&shot, PNG).unwrap();
+        let name = keep_copy(&dir, &shot).unwrap();
+        assert!(is_name(&name) && name.ends_with(".png"));
+        assert_eq!(fs::read(dir.join(&name)).unwrap(), PNG);
+        assert_eq!(keep_copy(&dir, &shot).as_deref(), Some(name.as_str()));
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        // A copy cut short is written again.
+        fs::write(dir.join(&name), &PNG[..4]).unwrap();
+        assert_eq!(keep_copy(&dir, &shot).as_deref(), Some(name.as_str()));
+        assert_eq!(fs::read(dir.join(&name)).unwrap(), PNG);
+        let video = tmp.path().join("demo.mp4");
+        fs::write(&video, b"\0\0\0\x18ftypmp42").unwrap();
+        assert_eq!(keep_copy(&dir, &video), None);
+        assert_eq!(keep_copy(&dir, &tmp.path().join("gone.png")), None);
+    }
+
+    #[test]
     fn images_older_than_thirty_days_are_removed() {
         let tmp = Temp::new("prune");
         let dir = tmp.path();
@@ -302,7 +378,15 @@ mod tests {
         fs::write(dir.join(old), PNG).unwrap();
         fs::write(dir.join(new), PNG).unwrap();
         fs::write(dir.join("kept.txt"), "x").unwrap();
+        let part = format!(".{new}.part");
+        fs::write(dir.join(&part), PNG).unwrap();
         let now = SystemTime::now();
+        fs::File::options()
+            .write(true)
+            .open(dir.join(&part))
+            .unwrap()
+            .set_modified(now - PART_KEEP - Duration::from_secs(60))
+            .unwrap();
         let month_ago = now - KEEP - Duration::from_secs(60);
         fs::File::options()
             .write(true)
@@ -314,5 +398,6 @@ mod tests {
         assert!(!dir.join(old).exists());
         assert!(dir.join(new).exists());
         assert!(dir.join("kept.txt").exists());
+        assert!(!dir.join(&part).exists());
     }
 }

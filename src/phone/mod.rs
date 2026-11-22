@@ -7,6 +7,7 @@ pub mod config;
 pub mod guard;
 pub mod images;
 pub mod log;
+pub mod looks;
 pub mod pairing;
 #[cfg(feature = "net")]
 pub mod preview;

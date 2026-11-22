@@ -194,6 +194,10 @@ pub struct Handover {
     /// last.
     #[serde(default)]
     pub coordinator_state: crate::coordinator::Handed,
+    /// The pictures each Claude pane's Claude showed with `look`, for
+    /// its channel on the phone (src/phone/looks.rs).
+    #[serde(default)]
+    pub phone_looks: Vec<(PaneId, Vec<crate::phone::looks::Kept>)>,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -1044,6 +1048,12 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         written_panes: super::persist::written_panes(server),
         coordinator: server.coordinator.pane,
         coordinator_state: server.coordinator.handed(),
+        phone_looks: server
+            .phone
+            .looks
+            .iter()
+            .map(|(pane, kept)| (*pane, kept.clone()))
+            .collect(),
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -1248,6 +1258,11 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     for (id, links) in handover.given_links {
         if server.panes.contains_key(&id) {
             server.views.given.put(id, links);
+        }
+    }
+    for (id, kept) in handover.phone_looks {
+        if server.panes.contains_key(&id) {
+            server.phone.looks.insert(id, kept);
         }
     }
     server.awake.by_hand = handover.awake_by_hand;
@@ -1552,6 +1567,17 @@ mod tests {
             written_panes: Some(5),
             coordinator: None,
             coordinator_state: Default::default(),
+            phone_looks: vec![(
+                PaneId(4),
+                vec![crate::phone::looks::Kept {
+                    transcript: PathBuf::from("/t/s.jsonl"),
+                    look: crate::phone::looks::Look {
+                        at: 5,
+                        images: vec!["0123456789abcdef0123456789abcdef.png".into()],
+                        before_after: false,
+                    },
+                }],
+            )],
         }
     }
 

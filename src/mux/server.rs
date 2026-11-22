@@ -2136,6 +2136,7 @@ impl Server {
             return;
         };
         self.history.forget(pane);
+        self.phone.looks.remove(&pane);
         let tab_id = slot.tab;
         let Some(tab) = self.tabs.get_mut(&tab_id) else {
             return;

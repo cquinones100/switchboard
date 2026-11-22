@@ -19,7 +19,9 @@
 //! taken only when the server's own `watch` lists it as a Claude tab. An
 //! image from the phone's photo library is kept on the computer first
 //! (`images`, for that tab alone, under a name made here), and the message
-//! names it, its path typed after the text.
+//! names it, its path typed after the text. The pictures a tab's Claude
+//! showed with `look`, copied into the same folder by the server, come
+//! in the stream (`looks`) and go among its turns by time.
 //! What the drawer shows comes from that stream (`follow`), passed on as
 //! server-sent events, and a tab starting to wait, or a tab's reminder
 //! coming due, sends a Web Push naming it.
@@ -47,11 +49,11 @@ use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::{self, ServerConfig};
 
 use super::guard::{self, Refusal, Rules, WhoisCache};
-use super::images;
 use super::pairing;
 use super::push;
 use super::tailnet::{Peer, Status, peer_from};
 use super::turns;
+use super::{images, looks};
 use crate::mux::proto::{self, ClientMsg, ServerMsg};
 use crate::mux::socket;
 use crate::{assets, platform, settings, util};
@@ -642,9 +644,14 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Resp
     let Some(file) = tab["transcript"].as_str().map(PathBuf::from) else {
         return axum::Json(json!({"messages": []})).into_response();
     };
-    let messages = tokio::task::spawn_blocking(move || turns::recent(&file))
-        .await
-        .unwrap_or_default();
+    // The pictures its Claude showed with `look`, among them by time.
+    let shown: Vec<looks::Look> = serde_json::from_value(tab["looks"].clone()).unwrap_or_default();
+    let messages = tokio::task::spawn_blocking(move || {
+        let (messages, cut) = turns::recent(&file);
+        looks::merge(messages, &shown, turns::MOST, cut)
+    })
+    .await
+    .unwrap_or_default();
     // Another tab's message names its sender by its tab, as the drawer
     // lists it now, not by the address the transcript keeps.
     let tabs = app.tabs.borrow()["tabs"].clone();
@@ -809,7 +816,8 @@ async fn image(
     }
 }
 
-/// An image the phone sent, for its channel.
+/// An image the phone sent, or one a tab's Claude showed, for its
+/// channel: by its name in the images folder alone.
 async fn image_of(Path(name): Path<String>) -> Response {
     let read = tokio::task::spawn_blocking({
         let name = name.clone();

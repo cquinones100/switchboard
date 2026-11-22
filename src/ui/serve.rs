@@ -519,7 +519,9 @@ impl Server {
     /// may run this without asking and the desktop runs some kinds of file
     /// it is handed. Asked from a tab behind another or mission control
     /// whose pane would have the columns in front, they wait there, hidden
-    /// until the tab is in front with nothing over it.
+    /// until the tab is in front with nothing over it. In a tab running
+    /// Claude, the pictures go to its channel on the phone too
+    /// (`phone_look`), wherever they show here.
     pub fn cmd_look(
         &mut self,
         args: &[String],
@@ -589,6 +591,12 @@ impl Server {
                 let c = self.clients.get(&client?)?;
                 Some(self.session(&c.session)?.current)
             });
+        // Shown in the tab's channel on the phone too, wherever they go here.
+        self.phone_look(
+            tab,
+            files.iter().map(|(f, _)| f.clone()).collect(),
+            before_after,
+        );
         let pictures = files.iter().filter(|(_, k)| *k == Kind::Picture).count();
         // Why the pictures can't go beside the pane, said back so whoever
         // asked (Claude, mostly) can tell you where they went.

@@ -24,14 +24,19 @@ pub const MOST: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Message {
-    /// `you`, `tab` (another tab's Claude), `claude`, `tool`, or `turn`,
-    /// with no words, where a subagent's report back started a turn, which
-    /// the app starts there without drawing it.
+    /// `you`, `tab` (another tab's Claude), `claude`, `tool`, `look` for
+    /// the pictures Claude showed (`looks`), or `turn`, with no words,
+    /// where a subagent's report back started a turn, which the app starts
+    /// there without drawing it.
     pub who: &'static str,
     pub text: String,
-    /// The names of the images in `images::dir()` a message you sent
-    /// carries, in order.
+    /// The names of the images in `images::dir()` a message you sent, or
+    /// a look, carries, in order.
     pub images: Vec<String>,
+    /// What each image is titled, in order, where its look titled them
+    /// (Before and After); empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub titles: Vec<String>,
     /// When, in ms; 0 where the transcript doesn't say.
     pub at: i64,
     /// A `tab` message's sender: its address as the transcript gives it,
@@ -91,6 +96,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                     who: "tab",
                     text: body.trim().to_string(),
                     images: Vec::new(),
+                    titles: Vec::new(),
                     at,
                     from: entry
                         .pointer("/origin/from")
@@ -104,6 +110,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                     who: "turn",
                     text: String::new(),
                     images: Vec::new(),
+                    titles: Vec::new(),
                     at,
                     from: String::new(),
                     queued: false,
@@ -122,6 +129,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                         who: "you",
                         text,
                         images,
+                        titles: Vec::new(),
                         at,
                         from: String::new(),
                         queued: false,
@@ -146,6 +154,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                                     who: "claude",
                                     text: t.to_string(),
                                     images: Vec::new(),
+                                    titles: Vec::new(),
                                     at,
                                     from: String::new(),
                                     queued: false,
@@ -156,6 +165,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                             who: "tool",
                             text: tool_text(&part),
                             images: Vec::new(),
+                            titles: Vec::new(),
                             at,
                             from: String::new(),
                             queued: false,
@@ -171,21 +181,23 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
     out.split_off(skip)
 }
 
-/// The last messages of the transcript at `file`, read from its end.
-pub fn recent(file: &Path) -> Vec<Message> {
+/// The last messages of the transcript at `file`, read from its end, and
+/// whether the read began past its start, so older messages were left out.
+pub fn recent(file: &Path) -> (Vec<Message>, bool) {
     let Ok(mut f) = fs::File::open(file) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let size = f.metadata().map(|m| m.len()).unwrap_or(0);
     let take = TAIL.min(size);
     if f.seek(SeekFrom::Start(size - take)).is_err() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
     let mut buf = Vec::with_capacity(take as usize);
     if f.take(take).read_to_end(&mut buf).is_err() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    parse(&String::from_utf8_lossy(&buf), MOST, &images::dir())
+    let messages = parse(&String::from_utf8_lossy(&buf), MOST, &images::dir());
+    (messages, take < size)
 }
 
 #[cfg(test)]
