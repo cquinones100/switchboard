@@ -2319,10 +2319,18 @@ impl Server {
     /// another or off one to the tab is a visit. Run before each draw, so
     /// every way of moving between views counts.
     pub fn trail_sync(&mut self, client: ClientId) {
+        self.trail_sync_as(client, false);
+    }
+
+    /// `trail_sync`, `walked` when the view it finds settles a walk of
+    /// mission control's list of views that `trail_settle` already ended.
+    fn trail_sync_as(&mut self, client: ClientId, walked: bool) {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
         let mission = c.overlays.find::<crate::mission::Mission>();
+        // A walk of the list of views the view on the screen settles.
+        let walked = walked || mission.is_some_and(|m| m.nav_held.is_some());
         if let Some(asked) = c.view_held {
             let asking = !c.overlays.lets_through();
             let still_held = mission.is_none() && (asking || !asked);
@@ -2337,7 +2345,7 @@ impl Server {
         }
         c.trail_view = now.clone();
         let session = c.session.clone();
-        self.trail_view_is(&session, now);
+        self.trail_view_is(&session, now, walked);
     }
 
     /// A client's mission control just closed for a question that leads to
@@ -2362,19 +2370,20 @@ impl Server {
     /// it rested there: run before a step along the trail, by key, click or
     /// menu, so the step goes from the view on the screen.
     pub fn trail_settle(&mut self, client: ClientId) {
-        if let Some(m) = self
+        let walked = self
             .clients
             .get_mut(&client)
             .and_then(|c| c.overlays.find_mut::<crate::mission::Mission>())
-        {
-            m.nav_held = None;
-        }
-        self.trail_sync(client);
+            .is_some_and(|m| m.nav_held.take().is_some());
+        self.trail_sync_as(client, walked);
     }
 
     /// The session is on `now`'s view (none: on its tab): a visit when that
-    /// is somewhere else.
-    pub fn trail_view_is(&mut self, session: &str, now: Option<String>) {
+    /// is somewhere else. `walked` when `now` is a view mission control's
+    /// list of views was walked to (`Mission::nav_held`), whose own rule
+    /// decides it is a place, so it counts as in front long enough when it
+    /// is left, however soon after the walk settles.
+    pub fn trail_view_is(&mut self, session: &str, now: Option<String>, walked: bool) {
         let Some(s) = self.session_mut(session) else {
             return;
         };
@@ -2384,6 +2393,9 @@ impl Server {
         let left = s.trail.here(s.current);
         s.trail.visited_now(left);
         s.trail.view = now;
+        if walked {
+            s.trail.since = None;
+        }
         self.dirty_session(session);
     }
 
@@ -2828,7 +2840,7 @@ impl Server {
                     .is_some()
         });
         if !a_view_shows {
-            self.trail_view_is(session, None);
+            self.trail_view_is(session, None, false);
         }
     }
 

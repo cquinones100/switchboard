@@ -535,7 +535,7 @@ impl Server {
             .session(&session)
             .is_some_and(|s| s.trail.view.is_some());
         if on_a_view {
-            self.trail_view_is(&session, Some(shown));
+            self.trail_view_is(&session, Some(shown), true);
         }
     }
 
@@ -2518,9 +2518,9 @@ impl Server {
                 }
                 // The view the list's cursor rests on is a place to come
                 // back to, however briefly it rested there.
-                m.nav_held = None;
+                let walked = m.nav_held.take().is_some();
                 if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
-                    self.trail_view_is(&session, m.trail_view());
+                    self.trail_view_is(&session, m.trail_view(), walked);
                 }
                 self.mission.after_key = Some(Box::new(move |server: &mut Server| {
                     server.act(client, a);
