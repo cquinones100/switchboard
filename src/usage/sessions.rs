@@ -528,6 +528,27 @@ pub fn limit_name(key: &str) -> String {
     words(key)
 }
 
+/// A spend limit's dollars, as a gateway's `spend_limit` gives them: what
+/// is spent of the limit and in what period (`$314.12 of $500 a month`),
+/// or what is spent alone while the limit isn't given; `None` without a
+/// spent amount, as the 5-hour and weekly windows have.
+pub fn spent_of_limit(window: &Value) -> Option<String> {
+    let usd = window["used_usd"].as_f64().filter(|u| u.is_finite())?;
+    let Some(limit) = window["limit_usd"].as_f64().filter(|l| l.is_finite()) else {
+        return Some(format!("${usd:.2} spent"));
+    };
+    let period = match window["period"].as_str() {
+        Some("daily") => " a day",
+        Some("weekly") => " a week",
+        Some("monthly") => " a month",
+        _ => "",
+    };
+    Some(format!(
+        "${usd:.2} of ${}{period}",
+        util::js_string(&serde_json::json!(limit))
+    ))
+}
+
 /// The week's use of Claude Code's weekly rate limit, as the statusline
 /// last wrote it, read as the Usage view reads it: the percent used and
 /// when it resets (seconds); `None` while there is no current reading.
@@ -562,12 +583,7 @@ pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<I
             _ => format!("{} limit", limit_name(&key)),
         };
         let mut detail = Vec::new();
-        if let Some(usd) = window["used_usd"].as_f64() {
-            detail.push(format!(
-                "${usd:.2} of ${}",
-                util::js_string(&window["limit_usd"])
-            ));
-        }
+        detail.extend(spent_of_limit(window));
         detail.push(resets(resets_at, now));
         rows.push(
             Item::new(
