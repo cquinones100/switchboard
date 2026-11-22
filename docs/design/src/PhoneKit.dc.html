@@ -284,8 +284,9 @@ const tx = (x, y, w, h, text, color, size, bold, align) => K(x, y, w, h, 'displa
 
 // ── THE ATOMS ──
 // 1. TOUCH TARGET: 44 pt every way, for anything a finger presses; what is drawn may be smaller, the target never is.
-// 2. ICON BUTTON: 44 × 44, its glyph 18 pt; ghost (the glyph in the accent, no fill: + in the composer,
-//    × inside a field), filled (raised, so it stands off the screen behind it: ☰ and ⋯ in a header, × on a box, i beside a choice), lit (accent fill, ink glyph: send with something to send, i open).
+// 2. ICON BUTTON: 44 × 44, its glyph 18 pt; ghost (the glyph in the accent, no fill: × inside a field,
+//    which the field's own fill sets off), filled (raised, so it stands off the screen behind it: ☰ and ⋯ in a header, + in the
+//    composer, × on a box, i beside a choice), lit (accent fill, ink glyph: send with something to send, i open).
 const icon = (x, y, glyph, kind) => {
   const bg = kind === 'lit' ? C.accent : kind === 'fill' ? C.raised : 'transparent';
   K(x, y, Wd(44), PT(44), 'border-radius:50%;background:' + bg);
@@ -409,7 +410,7 @@ atom(42, y, 'Today, in app.css', []);
   T(sx + 4, 28, ['You', 't', 'b'], ['  9:39', 'd']); chipK(sx + 15, 27.7, 'phone', C.dim, C.raised);
   put(sx + 4, 29, 'Show me notes-big\'s timing too', 't');
   K(sx, 39.6, 36, 0.06, 'background:' + C.line);
-  icon(sx, 40.6, '+', 'ghost'); field(sx + Wd(44) + 0.2, 40.6, 36 - 2 * Wd(44) - 0.4, '', 'Your own answer'); icon(sx + 36 - Wd(44), 40.6, '➤', 'fill'); }
+  icon(sx + 0.4, 40.6, '+', 'fill'); field(sx + Wd(44) + 0.2, 40.6, 36 - 2 * Wd(44) - 0.4, '', 'Your own answer'); icon(sx + 36 - Wd(44), 40.6, '➤', 'fill'); }
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
