@@ -1330,3 +1330,78 @@ fn a_diff_that_finishes_loading_in_front_or_with_the_setting_off_marks_nothing()
         "{screen:#?}"
     );
 }
+
+#[test]
+fn lazygit_opens_beside_a_narrow_lone_pane_at_the_diffs_share() {
+    let server = TestServer::start();
+    let quiet = json!({"notifications": false, "tips": false, "github": false, "linear": false});
+    let with = |more: Value| {
+        let mut all = quiet.clone();
+        all.as_object_mut()
+            .unwrap()
+            .extend(more.as_object().unwrap().clone());
+        common::write_settings(&server.home, all);
+    };
+    with(json!({"lone_pane_width": "80"}));
+    stand_in_claude(&server.home);
+    stand_in::lazygit(&server.home.join("bin"));
+    let work = repository(server.dir.path());
+
+    let mut client = server.attach(240, 36);
+    client.wait_text("$");
+    let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd and the pane capped", || {
+        let now = panes(&server);
+        now[0]["cwd"].as_str().is_some_and(|d| d.ends_with("work")) && now[0]["cols"] == 80
+    });
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap();
+    let spread = 240 - side;
+
+    // Beside the pane, at the diff's share of the spread.
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("stand-in lazygit in");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 2, "beside the pane: {shown:?}");
+    assert_eq!(shown[0]["id"], first.as_str());
+    let share = spread * 3 / 4;
+    assert_eq!(shown[1]["cols"].as_u64().unwrap(), share);
+    assert_eq!(shown[0]["cols"].as_u64().unwrap(), spread - share - 1);
+    assert_eq!(shown[1]["options"]["@in_place"], "lazygit");
+    assert!(shown[0]["options"].get("@pane_parked").is_none());
+    // The same key quits it: one capped pane again.
+    server.ok(&["press", "lazygit"]);
+    wait_until("one capped pane again", || {
+        let now = panes(&server);
+        now.len() == 1 && now[0]["id"] == first.as_str() && now[0]["cols"] == 80
+    });
+
+    // One column too few to spare (79): in the pane's place.
+    let wider = spread - 1 - 79;
+    with(json!({"lone_pane_width": wider.to_string()}));
+    wait_until("the pane wider", || panes(&server)[0]["cols"] == wider);
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("stand-in lazygit in");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 1, "in the pane's place: {shown:?}");
+    assert_eq!(shown[0]["options"]["@parked_pane"], first.as_str());
+    server.ok(&["press", "lazygit"]);
+    wait_until("the pane back", || {
+        panes(&server)[0]["id"] == first.as_str()
+    });
+
+    // With the setting off: in the pane's place.
+    with(json!({"lone_pane_width": "80", "views_beside_narrow_pane": false}));
+    wait_until("capped again", || panes(&server)[0]["cols"] == 80);
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("stand-in lazygit in");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 1, "in the pane's place: {shown:?}");
+    assert_eq!(shown[0]["options"]["@in_place"], "lazygit");
+    server.ok(&["press", "lazygit"]);
+    wait_until("the pane back", || {
+        panes(&server)[0]["id"] == first.as_str()
+    });
+}

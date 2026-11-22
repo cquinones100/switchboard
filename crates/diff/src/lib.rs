@@ -159,7 +159,7 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_beside_share", json!("75"))
                 .said(
                     "Diff's share in the side panel",
-                    "How much of the width beside the sidebar M-d's diff takes when it opens in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives the diff more, it takes it. Dragging the line between them resizes for that diff alone",
+                    "How much of the width beside the sidebar M-d's diff and lazygit take when they open in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while one is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives them more, they take it. Dragging the line between them resizes for that one alone",
                 )
                 .only(Scope::Workspace),
             Setting::new(UPDATE_CHECK, true)

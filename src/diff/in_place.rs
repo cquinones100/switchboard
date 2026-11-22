@@ -27,9 +27,9 @@
 //! tool opens there instead, as "side" leaves it, the pane keeping its
 //! width and never parked, so the same key, `q` or M-w closes the tool and
 //! the tab is one capped pane again. The diff, with its file list and two
-//! sides, takes Settings' `diff_beside_share` of the spread (three quarters
-//! by default) when the spare columns give it less, the pane narrowed while
-//! it is open and capped again once it closes. New with the lone pane's
+//! sides, and lazygit, with its panels, take Settings' `diff_beside_share`
+//! of the spread (three quarters by default) when the spare columns give
+//! them less, the pane narrowed while one is open and capped again once it closes. New with the lone pane's
 //! cap, with no tmux-version file behind it.
 //!
 //! The PR view (M-v) opens there even when something else is beside the
@@ -55,10 +55,11 @@ pub const BESIDE_LEAST: u16 = crate::mux::layout::LONE_LEAST;
 
 /// The columns a tool opening beside a narrow lone pane takes, of a spread
 /// `spread` wide with `spare` columns right of the pane's rule: the spare
-/// columns, or for the diff Settings' `diff_beside_share` of the spread
-/// when that is more, always leaving the pane a column and the rule one.
+/// columns, or for the diff and lazygit, which need the room, Settings'
+/// `diff_beside_share` of the spread when that is more, always leaving the
+/// pane a column and the rule one.
 fn beside_width(tool: &str, spread: u16, spare: u16) -> u16 {
-    if tool != crate::diff::serve::TOOL {
+    if tool != crate::diff::serve::TOOL && tool != crate::diff::serve::LAZYGIT {
         return spare;
     }
     let setting = crate::settings::cached("diff_beside_share");
@@ -545,8 +546,9 @@ mod tests {
     }
 
     #[test]
-    fn only_the_diff_takes_a_share() {
-        assert_eq!(beside_width(crate::diff::serve::LAZYGIT, 210, 129), 129);
+    fn only_the_diff_and_lazygit_take_a_share() {
+        let diff = beside_width(crate::diff::serve::TOOL, 210, 129);
+        assert_eq!(beside_width(crate::diff::serve::LAZYGIT, 210, 129), diff);
         assert_eq!(beside_width("pr-view", 210, 129), 129);
     }
 }
