@@ -29,6 +29,14 @@ pub mod sandbox;
 /// "macOS" or "Linux", for words shown to the person.
 pub const NAME: &str = os::NAME;
 
+/// What a menu calls showing a file in the desktop's file manager
+/// (`reveal`): "Open in Finder" on macOS.
+pub const REVEAL_LABEL: &str = os::REVEAL_LABEL;
+
+/// What a menu calls opening a file with what the desktop opens it with
+/// (`open`): "Open in Preview" on macOS, a picture's viewer there.
+pub const VIEWER_LABEL: &str = os::VIEWER_LABEL;
+
 /// A secret stored for `service` (the Keychain's generic password with that
 /// service; on Linux the Secret Service's item with that `service`
 /// attribute, else `~/.config/switchboard/secrets.json`), trimmed, or `None`.

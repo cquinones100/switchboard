@@ -967,7 +967,14 @@
     "key": "images_beside_pane",
     "category": "Tabs and header",
     "label": "Show images in the side panel",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the side panel, the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or a click on them closes them, and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. Asked for from a tab not in front, they wait for its side panel until the tab is. With too few columns spare, a split, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the side panel, the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or the × closes them (a click on them too, with Choose a picture beside a pane and act on it off; on, a click chooses one), and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. Asked for from a tab not in front, they wait for its side panel until the tab is. With too few columns spare, a split, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
+    "default": true
+  },
+  {
+    "key": "pictures_menu",
+    "category": "Tabs and header",
+    "label": "Choose a picture beside a pane and act on it",
+    "description": "With pictures shown in the side panel (switchboard look), each is drawn in a card, the one under the mouse lit, and a click on one (or M-p's Choose a picture shown beside the pane, for the first) chooses it and gives the pictures the keys, the tab's pane greyed: j and k, the arrows and Tab move the choice, paging to keep it in view, Enter, Space or a right click open its menu (Open in Finder, Open in Preview, Copy its path, Close the pictures), Esc gives the keys back to the tab with the pictures still up, and M-Esc or the × closes them. Off, the pictures take no keys and a click on them closes them",
     "default": true
   },
   {

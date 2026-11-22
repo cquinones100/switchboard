@@ -11,6 +11,8 @@ use super::Presence;
 use crate::util;
 
 pub const NAME: &str = "macOS";
+pub const REVEAL_LABEL: &str = "Open in Finder";
+pub const VIEWER_LABEL: &str = "Open in Preview";
 
 /// Where Homebrew puts rustup's `cargo`, which it leaves off the PATH: Apple
 /// silicon's prefix, then Intel's.

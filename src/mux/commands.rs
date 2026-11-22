@@ -228,7 +228,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "look",
-        "look [-t pane] [--before-after <before> <after> | <file>...]: pictures shown in the side panel beside the tab's narrow lone pane or panes stacked one above another, stacked when there are several, the two --before-after takes headed Before and after, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, printing why, and a video or a PDF always",
+        "look [-t pane] [--before-after <before> <after> | <file>...]: pictures shown in the side panel beside the tab's narrow lone pane or panes stacked one above another, stacked when there are several, the two --before-after takes headed Before and after, M-Esc or the × closing them, a click choosing one and giving them the keys (closing them with Settings' pictures_menu off); opened with the desktop's viewer where there is no room beside it, printing why, and a video or a PDF always",
     ),
     (
         "seen",

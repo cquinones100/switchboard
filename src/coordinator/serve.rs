@@ -465,7 +465,7 @@ impl Server {
     }
 
     /// Whether a client shows it with the keys.
-    fn coordinator_focused(&self, client: ClientId) -> bool {
+    pub(crate) fn coordinator_focused(&self, client: ClientId) -> bool {
         self.coordinator
             .shown
             .get(&client)
@@ -568,6 +568,16 @@ impl Server {
     pub fn coordinator_action(&mut self, client: ClientId, action: &crate::mux::keys::Action) {
         if *action != crate::mux::keys::Action::Coordinator
             && let Some(shown) = self.coordinator.shown.get_mut(&client)
+            && shown.focused
+        {
+            shown.focused = false;
+            self.coordinator_redraw();
+        }
+    }
+
+    /// Takes the keys from it, as a picture chosen beside the pane does.
+    pub(crate) fn coordinator_unfocus(&mut self, client: ClientId) {
+        if let Some(shown) = self.coordinator.shown.get_mut(&client)
             && shown.focused
         {
             shown.focused = false;

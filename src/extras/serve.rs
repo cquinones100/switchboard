@@ -32,7 +32,7 @@ use crate::{paths, platform, settings, util, worktree};
 /// the server found as it started that the first client to attach is told.
 #[derive(Default)]
 pub struct Extras {
-    nav: HashSet<ClientId>,
+    pub(crate) nav: HashSet<ClientId>,
     on_attach: Vec<String>,
     /// keys.json's modification time when last read, so a change to it
     /// takes effect on the next tick, as a tmux.conf reload did.

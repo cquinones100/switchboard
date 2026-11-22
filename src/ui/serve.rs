@@ -37,7 +37,8 @@ enum Spare {
     /// The columns are behind another tab or mission control for now: the
     /// tab would have them were it in front with nothing over it.
     Hidden,
-    At(Rect),
+    /// The columns, and the tab's pane beside them.
+    At { room: Rect, pane: Rect },
 }
 
 /// Why pictures can't go beside a tab no client shows.
@@ -122,6 +123,9 @@ fn pictures_of(layer: &Layer) -> Option<&Pictures> {
 pub enum Handed {
     /// None of them took it: it is the tab's.
     Left(Parsed),
+    /// A key the chosen pictures beside the pane passed on: the workspace's
+    /// bindings' alone, never the greyed pane's.
+    Held(Parsed),
     /// One took it; `only_itself` while all it changed was that box (a key
     /// typed in it), not anything a box closing hands its opener.
     Took { only_itself: bool },
@@ -317,6 +321,20 @@ impl Server {
             let Some(top) = c.overlays.layers.last_mut() else {
                 return Handed::Left(parsed);
             };
+            // The key after the prefix (or C-w) is the bindings', never the
+            // pictures', which pass the prefix itself on.
+            let waiting = c.prefix || self.extras.nav.contains(&id);
+            if waiting
+                && matches!(parsed.input, Input::Key(_))
+                && top.overlay.as_any().is::<Pictures>()
+            {
+                // Still held from the pane while a picture is chosen.
+                if !top.overlay.lets_through() {
+                    return Handed::Held(parsed);
+                }
+                return Handed::Left(parsed);
+            }
+            let let_through = top.overlay.lets_through();
             let step = match &parsed.input {
                 Input::Key(k) => top.overlay.key(*k, &look),
                 // A right press on a box does nothing inside it and outside
@@ -353,6 +371,17 @@ impl Server {
                 Step::Same => return Handed::Took { only_itself },
                 Step::Redraw => {
                     c.dirty = true;
+                    let took_keys = let_through
+                        && c.overlays
+                            .layers
+                            .last()
+                            .is_some_and(|l| !l.overlay.lets_through());
+                    if took_keys {
+                        self.pictures_took_keys(id);
+                    }
+                    if self.picture_menu_asked(id) {
+                        return Handed::Took { only_itself: false };
+                    }
                     return Handed::Took { only_itself };
                 }
                 Step::Close(outcome) => {
@@ -363,7 +392,18 @@ impl Server {
                     closed = true;
                     self.finish_top(id, Outcome::Dismissed);
                 }
-                Step::Through => return Handed::Left(parsed),
+                Step::Through => {
+                    let now = c.overlays.layers.last().map(|l| l.overlay.lets_through());
+                    // A click past the pictures gives the tab its keys back,
+                    // which shows.
+                    if now != Some(let_through) {
+                        c.dirty = true;
+                    }
+                    if now == Some(false) && matches!(parsed.input, Input::Key(_)) {
+                        return Handed::Held(parsed);
+                    }
+                    return Handed::Left(parsed);
+                }
             }
         }
     }
@@ -486,7 +526,13 @@ impl Server {
                 // never take those beside the tab in front.
                 self.close_pictures(client, |p| p.tab == tab);
                 let about = format!("tab {} · {}", self.tab_number(tab), self.tab_label(tab));
-                let pictures = Pictures::new(tab, &about, shown, before_after);
+                let pictures = Pictures::new(
+                    tab,
+                    &about,
+                    shown,
+                    before_after,
+                    settings::is_on("pictures_menu"),
+                );
                 // Under every box already up: they pass keys on to the tab,
                 // which would take them from a menu or a question open
                 // when Claude shows them, were they on top of it.
@@ -678,7 +724,8 @@ impl Server {
         if self.graphics_of(c).is_none() {
             return Spare::Gone("this terminal doesn't draw the workspace's images");
         }
-        let Some(room) = crate::mux::beside::spare_of(s.spread_for(t), s.area_for(t))
+        let pane = s.area_for(t);
+        let Some(room) = crate::mux::beside::spare_of(s.spread_for(t), pane)
             .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
         else {
             return Spare::Gone(
@@ -689,7 +736,7 @@ impl Server {
         if s.current != tab || covered {
             return Spare::Hidden;
         }
-        Spare::At(room)
+        Spare::At { room, pane }
     }
 
     /// Keeps the pictures shown beside each tab's pane on its spare columns
@@ -720,18 +767,42 @@ impl Server {
         if !gone.is_empty() {
             self.close_pictures(id, |p| gone.contains(&p.tab));
         }
+        // The sidebar or the coordinator taken into has the keys, so a
+        // chosen picture gives them up.
+        let keys_elsewhere = self.coordinator_focused(id)
+            || self
+                .clients
+                .get(&id)
+                .is_some_and(|c| self.sidebar.focused(&c.session));
         let Some(c) = self.clients.get_mut(&id) else {
             return;
         };
+        // A box over them that passes keys on (the restart's steps) is
+        // another place the keys go, so they give them up too; the
+        // picture's own menu takes the keys and leaves the choice.
+        let covered_by_through = c
+            .overlays
+            .layers
+            .last()
+            .is_some_and(|l| l.overlay.lets_through() && !l.overlay.as_any().is::<Pictures>());
         for layer in &mut c.overlays.layers {
             let Some(p) = layer.overlay.as_any_mut().downcast_mut::<Pictures>() else {
                 continue;
             };
+            if keys_elsewhere || covered_by_through {
+                p.release();
+            }
             if let Some((_, spare)) = spares.iter().find(|(t, _)| *t == p.tab) {
-                p.area = match spare {
-                    Spare::At(area) => Some(*area),
-                    _ => None,
+                (p.area, p.pane) = match spare {
+                    Spare::At { room, pane } => (Some(*room), Some(*pane)),
+                    _ => (None, None),
                 };
+                // Hidden behind another tab or mission control, they give
+                // the keys back for good, so coming back to the tab finds
+                // its pane with them.
+                if p.area.is_none() {
+                    p.release();
+                }
             }
         }
         // Input reaches the top layer only, so hidden pictures go under
@@ -741,6 +812,96 @@ impl Server {
             .partition(|l| pictures_of(l).is_some_and(|p| p.area.is_none()));
         c.overlays.layers = hidden;
         c.overlays.layers.extend(rest);
+    }
+
+    /// Opens the menu of the picture chosen beside a pane (UX 2.0 board
+    /// 171), when the pictures on top asked for it (Enter, Space or a right
+    /// click, which it opens beside): showing its file in the desktop's
+    /// file manager, opening it in its viewer, copying its path and
+    /// closing the pictures. Whether it opened.
+    fn picture_menu_asked(&mut self, client: ClientId) -> bool {
+        let Some((tab, (file, title))) = self
+            .clients
+            .get_mut(&client)
+            .and_then(|c| c.overlays.layers.last_mut())
+            .and_then(|l| l.overlay.as_any_mut().downcast_mut::<Pictures>())
+            .and_then(|p| Some((p.tab, p.take_asked()?)))
+        else {
+            return false;
+        };
+        let options = [
+            crate::platform::REVEAL_LABEL,
+            crate::platform::VIEWER_LABEL,
+            "Copy its path",
+            "Close the pictures",
+        ];
+        self.choose(
+            client,
+            Menu::of(title, &options),
+            move |server, client, chose| {
+                let tx = server.tx.clone();
+                match chose {
+                    Some(0) => {
+                        tokio::task::spawn_blocking(move || {
+                            if let Err(e) = crate::platform::reveal(&file) {
+                                let _ = tx.send(Event::Ui(UiEvent::Said {
+                                    client: Some(client),
+                                    text: format!("Couldn't show it: {e:#}"),
+                                }));
+                            }
+                        });
+                    }
+                    Some(1) => {
+                        tokio::task::spawn_blocking(move || open_file(&file, &tx, Some(client)));
+                    }
+                    Some(2) => {
+                        let path = file.to_string_lossy();
+                        server.to_clipboard(Some(client), &path);
+                        server.say(Some(client), &format!("Copied {path}"));
+                    }
+                    Some(3) => server.close_pictures(client, |p| p.tab == tab),
+                    _ => {}
+                }
+            },
+        );
+        true
+    }
+
+    /// The palette's "Choose a picture shown beside the pane": the first
+    /// picture shown is chosen and the pictures take the keys, as a click on
+    /// one does; said when none are shown or `pictures_menu` is off.
+    pub fn choose_picture(&mut self, client: ClientId) {
+        let chosen = self.clients.get_mut(&client).is_some_and(|c| {
+            c.overlays
+                .layers
+                .iter_mut()
+                .rev()
+                .filter_map(|l| l.overlay.as_any_mut().downcast_mut::<Pictures>())
+                .any(Pictures::choose_first)
+        });
+        if chosen {
+            self.pictures_took_keys(client);
+        } else {
+            let why = if settings::is_on("pictures_menu") {
+                "No pictures are shown beside the pane to choose"
+            } else {
+                "Choosing a picture beside a pane is off in Settings (pictures_menu)"
+            };
+            return self.say(Some(client), why);
+        }
+        self.overlays_changed(client);
+    }
+
+    /// A picture chosen beside the pane takes the keys from the sidebar
+    /// and the coordinator, which would otherwise give it up on the next
+    /// draw (`looks_before_draw`).
+    fn pictures_took_keys(&mut self, client: ClientId) {
+        if let Some(session) = self.clients.get(&client).map(|c| c.session.clone())
+            && self.sidebar.focused(&session)
+        {
+            self.sidebar_leave(&session);
+        }
+        self.coordinator_unfocus(client);
     }
 
     /// Closes a client's pictures beside a pane that `which` picks.
