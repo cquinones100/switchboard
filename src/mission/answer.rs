@@ -48,6 +48,8 @@ static SUBMIT_ROW: LazyLock<Regex> =
 static RULE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\s\x{2500}-\x{257F}—-]+$").expect("a regex"));
 static QUESTION_TABS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[☐☒]").expect("a regex"));
+/// What a box's left edge is drawn with, on its rows top to bottom.
+const BOX_EDGE: [char; 7] = ['│', '┃', '├', '┌', '└', '╭', '╰'];
 static LABEL_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}.*$").expect("a regex"));
 static SCROLL_PILL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\S\s+·\s+\S+ to scroll$").expect("a regex"));
@@ -122,8 +124,24 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         return None;
     }
     let raw: Vec<&str> = text.split('\n').collect();
+    // A preview beside the options is a box whose top corner, the first of
+    // a box on its row, has words to its left (a prompt drawn in a box of
+    // its own has none); every row with the box's edge at that column is
+    // read without the box, so nothing drawn in it (a numbered list, a
+    // divider) passes for an option, a description or the rule.
+    let beside: Option<usize> = raw.iter().rev().find_map(|l| {
+        let chars: Vec<char> = l.chars().collect();
+        let at = chars.iter().position(|c| BOX_EDGE.contains(c))?;
+        let words_left = chars[..at].iter().any(|c| !c.is_whitespace());
+        (['┌', '╭'].contains(&chars[at]) && words_left).then_some(at)
+    });
+    let edge_at = |l: &str, at: usize| l.chars().nth(at).is_some_and(|c| BOX_EDGE.contains(&c));
     let mapped: Vec<String> = raw
         .iter()
+        .map(|l| match beside {
+            Some(at) if edge_at(l, at) => l.chars().take(at).collect(),
+            _ => l.to_string(),
+        })
         .map(|l| l.replace(['│', '┃'], " ").trim_end().to_string())
         .collect();
     let kept: Vec<usize> = (0..mapped.len())
@@ -202,23 +220,8 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         .filter(|(o, under)| o.cut || !under.is_empty())
         .map(|(o, _)| o.n)
         .collect();
-    // A preview's box edge past an option's number: its top corner (square
-    // or rounded), or a side with more after it (a prompt drawn in a box of
-    // its own has one side alone at the row's end).
-    let preview = options.iter().any(|o| {
-        let row = raw[kept[o.line]];
-        let past = row
-            .find(|c: char| c.is_ascii_digit())
-            .map_or("", |at| &row[at..]);
-        past.contains(['┌', '╭']) || past.matches('│').count() >= 2
-    });
-    // Beside a preview, a row of its box (an edge, or a divider drawn in
-    // it between the box's sides) is no rule.
-    let rule = (first + 1..last).find(|&i| {
-        let in_box =
-            preview && raw[kept[i]].contains(['│', '┌', '┐', '└', '┘', '╭', '╮', '╰', '╯']);
-        RULE.is_match(lines[i]) && !in_box
-    });
+    let preview = beside.is_some_and(|at| options.iter().any(|o| edge_at(raw[kept[o.line]], at)));
+    let rule = (first + 1..last).find(|&i| RULE.is_match(lines[i]));
     let submit = (first + 1..last).find(|&i| SUBMIT_ROW.is_match(lines[i]));
     let free = rule.and_then(|r| options.iter().rfind(|o| o.line < r).map(|o| o.n));
     let multi = options.iter().any(|o| o.checked.is_some());
@@ -1108,6 +1111,8 @@ Which layout?
   2. Top bar          │ ┌──────┐             │
   3. Tabs             │ │ nav  │  content    │
                       │ ──────────────────── │
+                      │ 1. Install           │
+                      │ 2. Run               │
                       │ └──────┘             │
                       └──────────────────────┘
   4. Type something
@@ -1115,7 +1120,20 @@ Which layout?
   5. Chat about this";
         let found = options_in(screen).expect("a prompt");
         assert!(found.preview);
-        assert_eq!(found.free, Some(4));
+        assert_eq!(found.free, Some(4), "a divider in the box is no rule");
+        let labels: Vec<&str> = found.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Sidebar",
+                "Top bar",
+                "Tabs",
+                "Type something",
+                "Chat about this"
+            ],
+            "nothing in the box passes for an option"
+        );
+        assert!(found.more.is_empty(), "nor for a description: {found:?}");
         let chose = answer_for(&found, "2").unwrap();
         assert_eq!(answer_said(&chose), "Chose 2. Top bar");
         assert_eq!(
