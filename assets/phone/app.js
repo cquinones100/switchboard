@@ -918,7 +918,8 @@ function message(m, i, all) {
   // between its blocks aren't counted.
   const shown = body ? body.textContent : "";
   const lines = body && body.lines !== undefined ? body.lines : m.text.split("\n").length;
-  const folded = (lines > 10 || shown.length > 700) && !state.unfolded.has(key);
+  const long = lines > 10 || shown.length > 700;
+  const folded = long && !state.unfolded.has(key);
   if (folded) body.classList.add("folded");
   const images = (m.images || []).length
     ? el(
@@ -935,15 +936,23 @@ function message(m, i, all) {
         }),
       )
     : null;
-  const more = folded
+  // Show all opens a long message whole, and Show less, in its place, folds
+  // it back, the message's top kept in view.
+  const more = long
     ? el("button", {
         class: "more",
         onclick: (e) => {
-          state.unfolded.add(key);
-          body.classList.remove("folded");
-          e.target.remove();
+          const opening = !state.unfolded.has(key);
+          if (opening) state.unfolded.add(key);
+          else state.unfolded.delete(key);
+          body.classList.toggle("folded", !opening);
+          e.currentTarget.textContent = opening ? "Show less" : "Show all";
+          if (!opening) {
+            const node = e.currentTarget.closest(".msg");
+            if (node.getBoundingClientRect().top < 0) node.scrollIntoView({ block: "start" });
+          }
         },
-      }, "Show all")
+      }, folded ? "Show all" : "Show less")
     : null;
   return el(
     "div",
