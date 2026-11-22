@@ -406,6 +406,7 @@ impl Server {
         }
         .filter(|at| m.grid_shown().iter().any(|(_, shown)| shown == at));
         if let Some(at) = shown_by_name {
+            m.slack_fresh = how == Opening::View("slack".into());
             show_view(&mut m, at);
             self.put_mission(client, m);
             self.mission_prepare(client);
@@ -414,6 +415,7 @@ impl Server {
         m.scope = None;
         m.picker = false;
         m.cursor = 0;
+        m.slack_fresh = how == Opening::View("slack".into());
         // The Landing view opens even with nothing landing, saying so.
         m.keep_landing = how == Opening::View("landing".into());
         m.keep_autopilot = how == Opening::View("autopilot".into());
@@ -1270,7 +1272,7 @@ impl Server {
                     }
                 }
                 // The Slack board lists its messages by section, so each
-                // section's are together, newest first.
+                // section's are together, oldest to newest.
                 if v.id == ViewId::Slack {
                     super::slack_board::in_order(
                         &mut v.data.items,
@@ -1317,6 +1319,13 @@ impl Server {
             .as_ref()
             .and_then(|_| m.chosen_item())
             .map(|i| i.id.clone());
+        // The Slack board's chosen row: its section, and whether it was
+        // that section's newest.
+        let slack_before = m.current().filter(|v| v.id == ViewId::Slack).and_then(|v| {
+            let items = &v.data.items;
+            super::slack_board::section_key_at(items, m.cursor)
+                .map(|key| (key, super::slack_board::on_newest(items, m.cursor)))
+        });
         if let Some(id) = was
             && views.get(m.view.wrapping_sub(1)).map(|v| &v.id) != Some(&id)
         {
@@ -1403,6 +1412,7 @@ impl Server {
         // A view shown at once stays as the one in front does.
         m.keep_landing |= m.grid_has("landing");
         m.keep_autopilot |= m.grid_has("autopilot");
+        let mut chosen_found = false;
         if let Some(id) = pilot_chosen
             && let Some(at) = m
                 .current()
@@ -1410,6 +1420,43 @@ impl Server {
                 .and_then(|v| v.data.items.iter().position(|i| i.id == id))
         {
             m.cursor = at as isize;
+            chosen_found = true;
+        }
+        // The Slack board opens its section at the newest row, as Slack
+        // opens a conversation: brought to the front, or opened by name
+        // while in front. A cursor on a section's newest row follows a new
+        // message landing below it, and one whose row went (dismissed)
+        // stays in its section, on its newest, or, with the section gone,
+        // goes to the newest of the one now in its place. Rows arriving
+        // where there were none open it too.
+        let slack_to = m.current().filter(|v| v.id == ViewId::Slack).and_then(|v| {
+            let items = &v.data.items;
+            let opened = m.slack_fresh || !m.slack_was_shown;
+            match &slack_before {
+                _ if opened => Some(super::slack_board::section_step(items, m.cursor, 0)),
+                None => Some(super::slack_board::section_step(items, m.cursor, 0)),
+                // An older row gone leaves the cursor on the row after it,
+                // in the same section.
+                Some((key, newest)) if *newest || !chosen_found => {
+                    match super::slack_board::newest_in(items, key) {
+                        Some(at) if *newest => Some(at),
+                        Some(_) => None,
+                        // The last section gone: the one now last.
+                        None => Some(super::slack_board::section_step(
+                            items,
+                            m.cursor.min(items.len() as isize - 1),
+                            0,
+                        )),
+                    }
+                }
+                _ => None,
+            }
+        });
+        if m.current().is_some_and(|v| v.id == ViewId::Slack) {
+            m.slack_fresh = false;
+        }
+        if let Some(to) = slack_to {
+            m.cursor = to;
         }
         m.settle_grid();
         fit_cursor(&mut m);
@@ -4716,6 +4763,7 @@ impl Server {
                 if let Some(at) = m.grid_shown().first().map(|(_, at)| *at) {
                     m.view = at;
                     m.cursor = 0;
+                    m.slack_fresh = m.current().is_some_and(|v| v.id == ViewId::Slack);
                 }
             }
             (Outcome::Yes, Some(choice)) if choice.views.len() == 1 => {
@@ -8516,6 +8564,9 @@ fn show_view(m: &mut Mission, to: usize) {
         m.focus = Some(Focus::Item);
     }
     m.cursor = 0;
+    // The Slack board brought to the front opens at its newest row, even
+    // picked again while in front.
+    m.slack_fresh = m.current().is_some_and(|v| v.id == ViewId::Slack);
     m.scope = None;
 }
 

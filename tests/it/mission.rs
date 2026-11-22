@@ -1176,6 +1176,8 @@ fn a_click_on_a_slack_notification_shows_it_in_the_slack_view() {
                 "text": "hello from ada", "ts": ts(100), "link": "https://slack.example/a" },
             { "kind": "channel", "channel": "C1", "from": "Ben", "where": "#dev",
                 "text": "a deploy question", "ts": ts(500), "link": "https://slack.example/b" },
+            { "kind": "channel", "channel": "C1", "from": "Cy", "where": "#dev",
+                "text": "a later word", "ts": ts(150), "link": "https://slack.example/c" },
         ] })
         .to_string(),
     )
@@ -1189,8 +1191,8 @@ fn a_click_on_a_slack_notification_shows_it_in_the_slack_view() {
     client.wait_text("$");
     open(&mut client);
     client.type_text("vnotifications\r");
-    // Ben's channel is the second section, so the board opens on it only
-    // by the cursor put on its row.
+    // Ben's channel is the second section, and his message the older of
+    // its two, so the board opens on it only by the cursor put on its row.
     let (row_text, text, other) = ("Ben · #dev", "a deploy question", "hello from ada");
     let screen = client.wait_for("the Notifications view in front", |s| {
         header(s).trim_start().starts_with("Notifications")
@@ -1849,10 +1851,10 @@ fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
 }
 
 // With UX 2.0 the Slack view lists its sections as Slack's sidebar does
-// (board 21), the chosen one's messages beside them, newest first: j in
-// the sections moves to the next and shows its messages, l then j moves
-// within them and stops at the section's end, and a click on a section
-// shows its messages.
+// (board 21), the chosen one's messages beside them, oldest to newest:
+// j in the sections moves to the next and shows its messages at its
+// newest, l then k moves up to older ones within them and stops at the
+// section's top, and a click on a section shows its messages.
 #[test]
 fn the_slack_views_sections_choose_the_messages_beside_them() {
     let server = TestServer::start();
@@ -1906,17 +1908,18 @@ fn the_slack_views_sections_choose_the_messages_beside_them() {
     let screen = client.wait_text("ops newer");
     let all = screen.join("\n");
     let at = |s: &str| all.find(s).unwrap_or_else(|| panic!("{s} in\n{all}"));
-    assert!(at("ops newer") < at("ops older"), "newest first: {all}");
-    // l gives the messages the focus; j moves within them, and stops at
-    // the section's end.
+    assert!(at("ops older") < at("ops newer"), "oldest first: {all}");
+    // l gives the messages the focus, on the newest; k moves up within
+    // them, and stops at the section's top.
     let chosen = |s: &[String], from: &str| {
         s.iter()
             .any(|l| l.contains(&format!("▌{}", &from[..1])) && l.contains(from))
     };
+    assert!(chosen(&screen, "Cy"), "opens on the newest: {all}");
     client.type_text("l");
-    client.type_text("j");
+    client.type_text("k");
     client.wait_for("Dee chosen", |s| chosen(s, "Dee"));
-    client.type_text("j");
+    client.type_text("k");
     std::thread::sleep(Duration::from_millis(300) * common::patience());
     let screen = client.screen();
     assert!(chosen(&screen, "Dee"), "{}", screen.join("\n"));
