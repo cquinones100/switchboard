@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-21 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-22 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -324,3 +324,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: a tab's reminder from the phone
 
 - [176. Remind me in a tab's menu in the phone's drawer: Remind me after Mark seen and before Close tab opens a sheet at the foot, When (the workspace's five times, each with its clock time, or one typed) and What for; the row then says ⏰, the time left and the note; on a tab with a reminder the menu offers Clear the reminder first and the sheet is Change the reminder; a time the server can't read is refused in the workspace's words, the sheet kept open](https://cquinones100.github.io/switchboard/design/176.html)
+
+## Proposal: a message from another tab on the phone
+
+- [182. A message from another tab in a tab's channel on the phone: what another tab's Claude sent this one, before Claude's reply to it, under the sending tab's number in its hue and its name, with an avatar color of its own; a tab since closed reads Another tab; two tabs' messages in a row each keep their header](https://cquinones100.github.io/switchboard/design/182.html)
