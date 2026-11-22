@@ -381,6 +381,27 @@ fn the_tabs_the_phone_reads_carry_their_repository_and_branch() {
     assert_eq!(tab["repo"], *home_name, "{seen}");
 }
 
+/// Each tab the phone reads carries its Claude's address, which names a
+/// message another tab's Claude sent in a channel (board 182).
+#[test]
+fn the_tabs_the_phone_reads_carry_their_claudes_address() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0].clone();
+    let pid = pane["pid"].as_u64().unwrap();
+    let dir = server.home.join(".claude/sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = json!({"pid": pid, "entrypoint": "cli", "sessionId": "s-phone", "messagingSocketPath": "/tmp/cc-socks/tab-one.sock"});
+    std::fs::write(dir.join(format!("{pid}.json")), file.to_string()).unwrap();
+
+    let mut stream = watch(&server);
+    let seen = next_line(&mut stream, |v| {
+        v["tabs"][0]["address"] == "uds:/tmp/cc-socks/tab-one.sock"
+    });
+    assert_eq!(seen["tabs"][0]["pane"], pane["id"], "{seen}");
+}
+
 /// Runs `script` in Node with assets/phone/app.js's path as its argument,
 /// returning what it printed, or None without Node.
 fn run_app_js(script: &str) -> Option<String> {

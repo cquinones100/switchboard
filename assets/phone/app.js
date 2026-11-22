@@ -694,17 +694,25 @@ function markdown(text) {
   return root;
 }
 
-// The messages as the channel draws them: each turn (what you said and
-// what followed it) with everything Claude did before its final reply (its
+// The messages as the channel draws them: each turn (what you said, or
+// another tab's Claude sent, and what followed it) with everything Claude did before its final reply (its
 // tool calls and the text it wrote between them) folded into one `steps`
 // row, the reply after its last tool call left open. The newest turn of a
 // working tab has no final reply yet, so all of it folds, and its row shows
 // the latest step. A turn with no tool calls has no row; one opened shows
 // its steps after the row.
+// What starts a turn: what you said, or what another tab's Claude sent,
+// both shown; or a subagent's report back (`turn`), which starts one
+// but isn't drawn.
+const starts = (m) => m.who === "you" || m.who === "tab" || m.who === "turn";
+
 function turns(messages, working) {
   const groups = [];
+  // Another tab's message that came in while Claude worked (`queued`) was
+  // queued into the running turn, as the relay reads it, so it sits among
+  // that turn's steps rather than starting one.
   for (const m of messages) {
-    if (m.who === "you" || !groups.length) groups.push([]);
+    if ((starts(m) && !m.queued) || !groups.length) groups.push([]);
     groups[groups.length - 1].push(m);
   }
   // Each turn's key is what you said, which stays put as Claude adds steps.
@@ -714,17 +722,18 @@ function turns(messages, working) {
   // first step moves as the window does. A message you just sent (`sent`)
   // is the phone's copy until the computer's replaces it, so its key is
   // never carried.
-  const keys = groups.map((turn) => (turn[0].who !== "you" ? "" : (turn[0].sent ? "sent:" : "steps:") + messageKey(turn[0])));
+  const keys = groups.map((turn) => (!starts(turn[0]) ? "" : (turn[0].sent ? "sent:" : "steps:") + messageKey(turn[0])));
   if (groups.length && !keys[0]) {
     const gone = state.turnKeys.filter((k) => k.startsWith("steps:") && !keys.includes(k));
     keys[0] = gone.length ? gone[gone.length - 1] : "steps:" + messageKey(groups[0][0]);
   }
   state.turnKeys = keys;
   return groups.flatMap((turn, g) => {
-    const said = turn[0].who === "you" ? [turn[0]] : [];
-    const rest = turn.slice(said.length);
+    const opened = starts(turn[0]) ? 1 : 0;
+    const said = opened && turn[0].who !== "turn" ? [turn[0]] : [];
+    const rest = turn.slice(opened);
     const last = rest.map((m) => m.who).lastIndexOf("tool");
-    if (last < 0) return turn;
+    if (last < 0) return [...said, ...rest];
     const unanswered = working && g === groups.length - 1;
     const steps = unanswered ? rest : rest.slice(0, last + 1);
     const key = keys[g];
@@ -769,8 +778,14 @@ function message(m, i, all) {
   if (m.who === "steps") return stepsRow(m);
   if (m.who === "tool") return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, m.text));
   const prev = all[i - 1];
-  const same = prev && prev.who === m.who && prev.who !== "tool";
-  const who = m.who === "you" ? "You" : "Claude";
+  // One header over messages in a row only from the same sender: two
+  // tabs' messages in a row each keep theirs (board 182).
+  const same = prev && prev.who === m.who && prev.who !== "tool" && (m.who !== "tab" || prev.from === m.from);
+  const who = m.who === "you" ? "You" : m.who === "tab" ? m.from || "Another tab" : "Claude";
+  const name = m.who === "tab" && m.tab
+    ? el("span", { class: "who" }, el("span", { class: "num " + hue({ index: m.tab }) }, String(m.tab)), who.slice(String(m.tab).length))
+    : el("span", { class: "who" }, who);
+  const initial = m.who === "tab" ? (m.tab ? String(m.tab) : "↪") : who[0];
   const when = el("span", { class: "when" }, ago(m.at));
   when.at = m.at;
   const key = messageKey(m);
@@ -807,8 +822,8 @@ function message(m, i, all) {
   return el(
     "div",
     { class: "msg" },
-    same ? el("span") : el("span", { class: "avatar " + m.who }, who[0]),
-    same ? null : el("div", {}, el("span", { class: "who" }, who), when),
+    same ? el("span") : el("span", { class: "avatar " + m.who }, initial),
+    same ? null : el("div", {}, name, when),
     body,
     more,
     images,

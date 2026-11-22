@@ -645,7 +645,41 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Resp
     let messages = tokio::task::spawn_blocking(move || turns::recent(&file))
         .await
         .unwrap_or_default();
+    // Another tab's message names its sender by its tab, as the drawer
+    // lists it now, not by the address the transcript keeps.
+    let tabs = app.tabs.borrow()["tabs"].clone();
+    let tabs = tabs.as_array().map(Vec::as_slice).unwrap_or_default();
+    let messages: Vec<Value> = messages
+        .into_iter()
+        .map(|m| {
+            let tab = (m.who == "tab").then(|| sender_name(&m.from, tabs));
+            let mut m = json!(m);
+            if let Some((index, name)) = tab {
+                m["from"] = json!(name);
+                m["tab"] = json!(index);
+            }
+            m
+        })
+        .collect();
     axum::Json(json!({"messages": messages})).into_response()
+}
+
+/// Who sent a message from another tab: the number and name of the tab
+/// whose Claude has `address`, else "Another tab" (its tab gone, or a
+/// session outside the workspace) with no number.
+fn sender_name(address: &str, tabs: &[Value]) -> (Option<u64>, String) {
+    tabs.iter()
+        .find(|t| !address.is_empty() && t["address"] == address)
+        .map(|t| {
+            let index = t["index"].as_u64();
+            let name = t["name"].as_str().unwrap_or("");
+            let words = match index {
+                Some(n) => format!("{n} {name}").trim().to_string(),
+                None => name.to_string(),
+            };
+            (index, words)
+        })
+        .unwrap_or((None, "Another tab".to_string()))
 }
 
 /// Asks the server, off this task.
@@ -1000,6 +1034,23 @@ async fn follow_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_tabs_message_is_named_by_its_tab() {
+        let tabs = [
+            json!({"index": 6, "name": "review PR 41", "address": "uds:/tmp/six.sock"}),
+            json!({"index": 3, "name": "planning", "address": null}),
+        ];
+        assert_eq!(
+            sender_name("uds:/tmp/six.sock", &tabs),
+            (Some(6), "6 review PR 41".to_string())
+        );
+        assert_eq!(
+            sender_name("uds:/tmp/gone.sock", &tabs),
+            (None, "Another tab".to_string())
+        );
+        assert_eq!(sender_name("", &tabs), (None, "Another tab".to_string()));
+    }
 
     #[test]
     fn only_tailnet_addresses_are_listened_on() {

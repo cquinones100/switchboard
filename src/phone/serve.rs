@@ -576,6 +576,14 @@ impl Server {
                     .get(&pane)
                     .and_then(|r| r.transcript.as_ref())
                     .map(|p| p.to_string_lossy().into_owned());
+                // What another tab's Claude reaches it by, `SendMessage`'s
+                // address, which names a message it sent (`web::sender_name`).
+                let address = self
+                    .sidebar
+                    .panes
+                    .get(&pane)
+                    .and_then(|r| r.session.as_ref()?.socket.as_ref())
+                    .map(|s| format!("uds:{s}"));
                 let branch = self
                     .tab_names
                     .shown
@@ -593,6 +601,7 @@ impl Server {
                     "pane": pane.to_string(),
                     "wait": t.wait,
                     "transcript": transcript,
+                    "address": address,
                     "turn": t.turn.as_ref().map(|turn| json!({
                         "prompt": turn.prompt,
                         "reply": turn.reply,
