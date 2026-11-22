@@ -68,6 +68,7 @@ use super::proto::{self, ServerMsg};
 use super::server::{Answer, ClientId, Event, Held, Hold, Loop, PaneSlot, Reply, Server};
 use super::{PaneId, pty};
 use crate::agent::PaneAgent;
+use crate::ui::message::ListRow;
 use crate::{paths, settings};
 
 /// The handover file's shape, which `server --handover-version` prints: a
@@ -111,6 +112,10 @@ pub struct Handover {
     /// The build handing over, as `switchboard --version` names it.
     #[serde(default)]
     pub from: String,
+    /// The commit the build handing over was made from, so the new one
+    /// can list the commits between them; empty from a build before it.
+    #[serde(default)]
+    pub from_commit: String,
     /// What M-p's build adds to the message after the restart (whether it
     /// built, a fetch that failed), else empty.
     #[serde(default)]
@@ -386,6 +391,65 @@ pub enum UpgradeEvent {
     /// The commits main has that this build lacks, and main's commit
     /// (src/mux/behind.rs).
     Behind(Option<(usize, String)>),
+    /// The commits a restart brought in, read off the server's task, for
+    /// its done message.
+    Brought(Box<Done>, Vec<ListRow>),
+}
+
+/// The message after a restart, waiting on the commits it brought in.
+#[derive(Debug)]
+pub struct Done {
+    client: Option<ClientId>,
+    /// The `switchboard upgrade` that asked, answered with it.
+    asker: Option<OwnedFd>,
+    text: String,
+    lost: bool,
+    say_too: bool,
+}
+
+/// The most commits the done message lists.
+const BROUGHT_MAX: usize = 15;
+
+/// The done message's list from `git log --format='%h %s'`'s output, the
+/// newest first, cut at `BROUGHT_MAX` with "and N more" after them.
+pub fn brought_rows(log: &str) -> Vec<ListRow> {
+    let all: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut rows: Vec<ListRow> = all
+        .iter()
+        .take(BROUGHT_MAX)
+        .map(|l| {
+            let (hash, words) = l.split_once(' ').unwrap_or((l, ""));
+            ListRow {
+                hash: hash.to_string(),
+                words: words.to_string(),
+            }
+        })
+        .collect();
+    if all.len() > BROUGHT_MAX {
+        rows.push(ListRow {
+            hash: String::new(),
+            words: format!("and {} more", all.len() - BROUGHT_MAX),
+        });
+    }
+    rows
+}
+
+/// The commits in `clone` from `old` to `new`, merges left out; none when
+/// git can't say (a commit it lacks).
+pub fn brought(clone: &Path, old: &str, new: &str) -> Vec<ListRow> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(clone)
+        .args(["log", "--no-merges", "--format=%h %s"])
+        .arg(format!("{old}..{new}"))
+        .arg("--")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match out {
+        Ok(o) if o.status.success() => brought_rows(&String::from_utf8_lossy(&o.stdout)),
+        _ => Vec::new(),
+    }
 }
 
 /// How often the build's spinner turns while it builds.
@@ -688,6 +752,10 @@ impl Server {
                 self.behind_counted(found);
                 return;
             }
+            UpgradeEvent::Brought(done, list) => {
+                self.restart_done(*done, list);
+                return;
+            }
             UpgradeEvent::Tick => {
                 self.upgrade.ticking = false;
                 self.upgrade.frame = self.upgrade.frame.wrapping_add(1);
@@ -940,6 +1008,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     let handover = Handover {
         version: VERSION,
         from: crate::update::version_line(),
+        from_commit: super::behind::built_from().unwrap_or_default(),
         note: pending_note,
         say_too,
         listener: listener.as_raw_fd(),
@@ -1219,29 +1288,78 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     eprintln!("switchboard server: {text}");
     server.restarted();
     server.phone_after_upgrade();
-    let client = handover.client.map(ClientId);
-    match handover.asker.filter(|fd| pty::is_open(*fd)) {
-        Some(fd) => {
-            let _ = pty::set_cloexec(fd, true);
-            // SAFETY: handed over open, and owned by nothing else here.
-            let stream = unsafe { OwnedFd::from_raw_fd(fd) };
-            let reply = if lost.is_empty() {
-                Reply::ok(format!("{text}\n"))
-            } else {
-                Reply {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: format!("{text}\n"),
-                }
-            };
-            tokio::spawn(answer(stream, reply));
-            // What was lost is said on the screen too, whoever asked, and
-            // everything for `upgrade --latest`, whose command may have gone.
-            if !lost.is_empty() || handover.say_too {
-                server.say(client, &text);
-            }
+    let asker = handover.asker.filter(|fd| pty::is_open(*fd)).map(|fd| {
+        let _ = pty::set_cloexec(fd, true);
+        // SAFETY: handed over open, and owned by nothing else here.
+        unsafe { OwnedFd::from_raw_fd(fd) }
+    });
+    let done = Done {
+        client: handover.client.map(ClientId),
+        asker,
+        text,
+        lost: !lost.is_empty(),
+        say_too: handover.say_too,
+    };
+    // The commits between the two builds, read from the clone off the
+    // server's task; none to read (a release build, a build before the
+    // handover named its commit) and it is said as it is.
+    let new = super::behind::built_from();
+    let old = Some(handover.from_commit).filter(|c| !c.is_empty());
+    match (old, new) {
+        (Some(old), Some(new)) if old != new && tokio::runtime::Handle::try_current().is_ok() => {
+            let tx = server.tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let list = super::latest::checkout()
+                    .map(|c| brought(&c.dir, &old, &new))
+                    .unwrap_or_default();
+                let _ = tx.send(Event::Upgrade(UpgradeEvent::Brought(Box::new(done), list)));
+            });
         }
-        None => server.say(client, &text),
+        _ => server.restart_done(done, Vec::new()),
+    }
+}
+
+impl Server {
+    /// Says the restart's done message, the commits it brought under it: to
+    /// the `switchboard upgrade` that asked, and on the screen.
+    fn restart_done(&mut self, done: Done, list: Vec<ListRow>) {
+        let Done {
+            client,
+            asker,
+            text,
+            lost,
+            say_too,
+        } = done;
+        match asker {
+            Some(stream) => {
+                let mut said = format!("{text}\n");
+                if !list.is_empty() {
+                    said.push_str("\nIt brought in:\n");
+                    for row in &list {
+                        match row.hash.as_str() {
+                            "" => said.push_str(&format!("  {}\n", row.words)),
+                            hash => said.push_str(&format!("  {hash} {}\n", row.words)),
+                        }
+                    }
+                }
+                let reply = if lost {
+                    Reply {
+                        code: 1,
+                        stdout: String::new(),
+                        stderr: said,
+                    }
+                } else {
+                    Reply::ok(said)
+                };
+                tokio::spawn(answer(stream, reply));
+                // What was lost is said on the screen too, whoever asked, and
+                // everything for `upgrade --latest`, whose command may have gone.
+                if lost || say_too {
+                    self.say_list(client, &text, list);
+                }
+            }
+            None => self.say_list(client, &text, list),
+        }
     }
 }
 
@@ -1289,6 +1407,7 @@ mod tests {
         Handover {
             version: VERSION,
             from: "0.1.0 (abc)".into(),
+            from_commit: "0123456789ab".into(),
             note: String::new(),
             say_too: false,
             listener: 7,
@@ -1451,11 +1570,61 @@ mod tests {
         fields.remove("asked_cell");
         fields.remove("awake_by_hand");
         fields.remove("written_panes");
+        fields.remove("from_commit");
         let read: Handover = serde_json::from_value(json).unwrap();
+        assert_eq!(read.from_commit, "", "no commit, so the message lists none");
         assert_eq!(read.written_panes, None);
         assert!(read.images.is_empty());
         assert_eq!(read.asked_cell, None);
         assert!(!read.awake_by_hand, "nothing held by hand");
+    }
+
+    #[test]
+    fn a_restart_lists_the_commits_between_the_builds_newest_first() {
+        let dir = temp_dir("brought");
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "Old build"]);
+        let old = git(&["rev-parse", "--short=12", "HEAD"]);
+        for words in ["First", "Second", "Third"] {
+            git(&["commit", "-q", "--allow-empty", "-m", words]);
+        }
+        let new = git(&["rev-parse", "--short=12", "HEAD"]);
+        let list = brought(&dir, &old, &new);
+        let words: Vec<&str> = list.iter().map(|r| r.words.as_str()).collect();
+        assert_eq!(words, ["Third", "Second", "First"]);
+        assert!(list.iter().all(|r| r.hash.len() >= 7), "{list:?}");
+        assert!(
+            brought(&dir, "0123456789ab", &new).is_empty(),
+            "a commit it lacks"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let log: String = (1..=18).map(|n| format!("h{n} Commit {n}\n")).collect();
+        let rows = brought_rows(&log);
+        assert_eq!(rows.len(), BROUGHT_MAX + 1);
+        assert_eq!(rows[0].words, "Commit 1");
+        assert_eq!(rows[BROUGHT_MAX - 1].hash, "h15");
+        assert_eq!(rows[BROUGHT_MAX].hash, "");
+        assert_eq!(rows[BROUGHT_MAX].words, "and 3 more");
     }
 
     #[test]

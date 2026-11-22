@@ -911,6 +911,22 @@ impl Server {
         self.open(id, Box::new(Message::new(text, seconds)), None);
     }
 
+    /// `say` with a list under the text (the commits a restart brought
+    /// in), up until a key closes it; with no list, `say` itself.
+    pub fn say_list(&mut self, client: Option<ClientId>, text: &str, list: Vec<message::ListRow>) {
+        if list.is_empty() {
+            return self.say(client, text);
+        }
+        let Some(id) = client
+            .filter(|c| self.clients.contains_key(c))
+            .or_else(|| self.latest_client())
+        else {
+            return;
+        };
+        self.close_overlays(id, "message");
+        self.open(id, Box::new(Message::with_list(text, list)), None);
+    }
+
     /// What a client's message says while it is up, in its box.
     pub fn message_shown(&self, client: ClientId) -> Option<String> {
         let c = self.clients.get(&client)?;
