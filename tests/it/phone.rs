@@ -406,13 +406,10 @@ fn run_app_js(script: &str) -> Option<String> {
     Some(stdout)
 }
 
-/// An open tab's channel (assets/phone/app.js's `channel`), run in Node over
-/// a page of its own: an update from the stream, and new turns, leave the
-/// composer's field in place, focused and with what was typed, and a message
-/// opened with Show all open; skipped without Node.
-#[test]
-fn an_update_keeps_the_composer_and_the_messages_opened() {
-    let script = r##"
+/// A page of its own for assets/phone/app.js's channel, in Node: a stand-in
+/// for the DOM's few parts the app uses, `app` its root, and the app loaded
+/// into `ctx`, its stream in `source`.
+const CHANNEL_PAGE: &str = r##"
 const vm = require("vm");
 const fs = require("fs");
 class Node {
@@ -442,7 +439,8 @@ class Node {
   replaceWith(n) { const p = this.parentNode; const i = p.children.indexOf(this); if (n.parentNode) n.remove(); p.children[i] = n; n.parentNode = p; this.parentNode = null; }
   contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
   all() { return this.children.flatMap((c) => [c, ...c.all()]); }
-  // Selectors of "tag.class" parts, each part a descendant of the one before.
+  // Selectors of "tag.class" parts, each part a descendant of the one before;
+  // an array without `find`, which a page's NodeList lacks.
   querySelectorAll(sel) {
     let found = [this];
     for (const part of sel.split(" ")) {
@@ -451,7 +449,7 @@ class Node {
         (n) => (!tag || n.tagName === tag) && classes.every((c) => n.classList.has(c)),
       );
     }
-    return found;
+    return Object.assign(found, { find: undefined });
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
@@ -474,6 +472,15 @@ const ctx = vm.createContext({
   fetch: () => new Promise(() => {}),
 });
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+"##;
+
+/// An open tab's channel (assets/phone/app.js's `channel`), run in Node over
+/// a page of its own: an update from the stream, and new turns, leave the
+/// composer's field in place, focused and with what was typed, and a message
+/// opened with Show all open; skipped without Node.
+#[test]
+fn an_update_keeps_the_composer_and_the_messages_opened() {
+    let script = [CHANNEL_PAGE, r##"
 const tab = (state, wait) => ({ pane: "%5", index: 2, name: "phone", state, wait, turn: { prompt: "go" } });
 const long = { who: "claude", text: "line\n".repeat(20), at: 1 };
 vm.runInContext(`
@@ -501,8 +508,9 @@ console.log("after turns=" + (app.querySelector(".composer textarea") === field)
 console.log("at end=" + (app.querySelector(".channel").scrollTop === 1000));
 update(tab("waiting", ""));
 console.log("chip=" + app.querySelector(".head .chip").textContent);
-"##;
-    let Some(stdout) = run_app_js(script) else {
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
         return;
     };
     let lines: Vec<&str> = stdout.lines().collect();
@@ -518,6 +526,115 @@ console.log("chip=" + app.querySelector(".head .chip").textContent);
             "after turns=true true",
             "at end=true",
             "chip=waiting",
+        ],
+        "{stdout}"
+    );
+}
+
+/// A turn's steps folded into one row (assets/phone/app.js's `turns`): a
+/// turn of 12 tool calls with text between them and a final reply shows what
+/// you said, `▸ 12 steps` and the reply; a tap opens the steps in order, kept
+/// open across a redraw, and a second folds them; a working turn's row shows
+/// its latest step; a turn with only a reply has no row. Skipped without Node.
+#[test]
+fn a_turns_steps_fold_into_one_row() {
+    let script = [CHANNEL_PAGE, r##"
+const tab = (state) => ({ pane: "%5", index: 2, name: "phone", state, turn: { prompt: "go" } });
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac" };
+  listen();
+  state.open = "5";
+`, ctx);
+const update = (t) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [t] }) });
+const steps = [];
+for (let i = 1; i <= 12; i++) {
+  steps.push({ who: "tool", text: "Bash: step " + i, at: 10 + i });
+  if (i === 6) steps.push({ who: "claude", text: "Halfway.", at: 16 });
+}
+const done = [
+  { who: "you", text: "Yep", at: 1 },
+  ...steps,
+  { who: "claude", text: "I filed the issue.", at: 30 },
+  { who: "you", text: "Thanks", at: 40 },
+  { who: "claude", text: "Anytime.", at: 41 },
+];
+const draw = (messages) => vm.runInContext("state.messages = " + JSON.stringify(messages) + "; render(true);", ctx);
+const said = () => app.querySelectorAll("div.msg").map((m) => {
+  const row = m.querySelector("button.steps");
+  if (row) return "[" + row.textContent + " " + row["aria-expanded"] + "]";
+  const tool = m.querySelector("div.tool");
+  if (tool) return "tool:" + tool.textContent.replace("Bash: ", "");
+  return m.querySelector("div.body").textContent.trim();
+}).join(" | ");
+update(tab("done"));
+draw(done);
+console.log("folded=" + said());
+app.querySelector("button.steps").click();
+const opened = said();
+console.log("opened=" + opened);
+console.log("focused=" + (document.activeElement === app.querySelector("button.steps")));
+update(tab("idle"));
+draw([...done]);
+console.log("kept=" + (said() === opened));
+app.querySelector("button.steps").click();
+console.log("folded again=" + said());
+update(tab("working"));
+draw([{ who: "you", text: "Go", at: 50 }, { who: "tool", text: "Read app.js", at: 51 }, { who: "claude", text: "Now the tests.", at: 52 }, { who: "tool", text: "Bash: cargo test", at: 53 }]);
+console.log("working=" + said());
+// A turn longer than the window the computer sends, opened, stays open as
+// the window slides past its first steps.
+const window = (from) => Array.from({ length: 5 }, (_, i) => ({ who: "tool", text: "Bash: step " + (from + i), at: 100 + from + i }));
+draw([{ who: "you", text: "Long", at: 99 }, ...window(1)]);
+app.querySelector("button.steps").click();
+draw(window(1));
+console.log("left=" + said());
+draw(window(2));
+console.log("slid=" + said());
+// A newer turn, once its message leaves too, takes none of that open state.
+draw([...window(2), { who: "you", text: "Next", at: 200 }, { who: "tool", text: "Bash: next", at: 201 }]);
+console.log("next=" + said());
+// The phone's copy of a message sent from it, then the computer's.
+vm.runInContext("state.messages.push({ who: \"you\", text: \"Then\", at: 300, sent: true }); render(true);", ctx);
+draw([...window(3), { who: "you", text: "Next", at: 200 }, { who: "tool", text: "Bash: next", at: 201 }, { who: "you", text: "Then", at: 301 }]);
+console.log("sent=" + said());
+draw([{ who: "tool", text: "Bash: next", at: 201 }, { who: "tool", text: "Bash: after", at: 202 }]);
+console.log("newer=" + said());
+// A tab in the background (a Monitor, a /loop between runs) has ended its turn.
+update(tab("background"));
+draw([{ who: "you", text: "Go", at: 50 }, { who: "tool", text: "Monitor: CI", at: 51 }, { who: "claude", text: "Watching CI.", at: 52 }]);
+console.log("background=" + said());
+draw([{ who: "you", text: "Hi", at: 60 }, { who: "claude", text: "Hello.", at: 61 }]);
+console.log("no tools=" + said());
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    let opened = [
+        "opened=Yep | [▾ 12 steps true]",
+        " | tool:step 1 | tool:step 2 | tool:step 3 | tool:step 4 | tool:step 5 | tool:step 6",
+        " | Halfway.",
+        " | tool:step 7 | tool:step 8 | tool:step 9 | tool:step 10 | tool:step 11 | tool:step 12",
+        " | I filed the issue. | Thanks | Anytime.",
+    ]
+    .concat();
+    assert_eq!(
+        lines,
+        [
+            "folded=Yep | [▸ 12 steps false] | I filed the issue. | Thanks | Anytime.",
+            opened.as_str(),
+            "focused=true",
+            "kept=true",
+            "folded again=Yep | [▸ 12 steps false] | I filed the issue. | Thanks | Anytime.",
+            "working=Go | [▸ 2 steps · Bash: cargo test false]",
+            "left=[▾ 5 steps · Bash: step 5 true] | tool:step 1 | tool:step 2 | tool:step 3 | tool:step 4 | tool:step 5",
+            "slid=[▾ 5 steps · Bash: step 6 true] | tool:step 2 | tool:step 3 | tool:step 4 | tool:step 5 | tool:step 6",
+            "next=[▾ 5 steps true] | tool:step 2 | tool:step 3 | tool:step 4 | tool:step 5 | tool:step 6 | Next | [▸ 1 step · Bash: next false]",
+            "sent=[▾ 5 steps true] | tool:step 3 | tool:step 4 | tool:step 5 | tool:step 6 | tool:step 7 | Next | [▸ 1 step false] | Then",
+            "newer=[▸ 2 steps · Bash: after false]",
+            "background=Go | [▸ 1 step false] | Watching CI.",
+            "no tools=Hi | Hello.",
         ],
         "{stdout}"
     );

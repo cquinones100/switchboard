@@ -189,6 +189,9 @@ button {
 .msg .more { grid-column: 2; color: var(--accent); text-align: left; padding: 4px 0; }
 .tool { grid-column: 2; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool::before { content: "▸ "; color: var(--faint); }
+/* A turn's steps folded into one row (app.js's `turns`), a tap opening them. */
+.msg .steps { grid-column: 2; color: var(--dim); font-size: 12px; text-align: left; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.msg .steps .latest { color: var(--faint); }
 .doing { color: var(--dim); padding: 4px 16px; font-size: 12px; }
 
 /* ── The prompt card ── */
