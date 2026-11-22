@@ -321,7 +321,11 @@ button {
   padding: 8px 14px;
   max-height: 8em;
   min-height: 38px;
+  min-width: 0;
+  field-sizing: content;
 }
+/* Empty, it keeps its one row rather than growing to fit a long placeholder. */
+.composer textarea:placeholder-shown { field-sizing: fixed; }
 .composer textarea::placeholder { color: var(--faint); }
 .composer .send {
   width: 38px;
