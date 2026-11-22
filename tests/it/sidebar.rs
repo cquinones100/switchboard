@@ -545,10 +545,48 @@ fn short_screen_of_tabs(server: &TestServer) -> TestClient {
         "-t",
         tabs(&server.list())[0]["id"].as_str().unwrap(),
     ]);
-    client.wait_for("tabs cut below", |s| {
-        s.iter().any(|l| left(l, 34).contains("▼"))
+    // All eight drawn, the first under the cursor's mark, since the first
+    // wheel step measures half a screen from what was last drawn.
+    client.wait_for("all eight tabs, cut below", |s| {
+        left(&s[0], 34).contains("8 tabs")
+            && s.iter().any(|l| left(l, 34).contains("▼"))
+            && s.iter().any(|l| left(l, 34).contains("1 home"))
+            && every_tab_says_idle(s)
     });
     client
+}
+
+/// Whether every tab the sidebar draws has its second line, how long it
+/// has been idle: a wheel step moves half a screen of lines, so one drawn
+/// before a slow shell's tab got its line would land a tab further.
+fn every_tab_says_idle(screen: &[String]) -> bool {
+    let lines: Vec<String> = screen.iter().map(|l| left(l, 34)).collect();
+    lines.iter().enumerate().all(|(i, l)| {
+        !l.trim_start_matches(['▌', ' ']).starts_with('○')
+            || lines
+                .get(i + 1)
+                .is_some_and(|next| next.contains("idle for") || next.contains("▼"))
+    })
+}
+
+/// Waits for the sidebar drawn with its cursor on the tab `list` has in
+/// front, the tab counts above it shown or not, so the next wheel step
+/// measures half a screen from where this one landed.
+fn cursor_drawn_on_front(client: &mut TestClient, list: &Value, above: bool) {
+    let tab = &tabs(list)[in_front(list)];
+    let row = format!(
+        "{} {}",
+        tab["options"]["@tab_number"].as_str().unwrap(),
+        tab["name"].as_str().unwrap()
+    );
+    client.wait_for(&format!("the cursor drawn on {row}"), |s| {
+        left(&s[1], 34).contains("▲") == above
+            && every_tab_says_idle(s)
+            && s.iter().any(|l| {
+                let l = left(l, 34);
+                l.starts_with('▌') && l.contains(&row)
+            })
+    });
 }
 
 #[test]
@@ -557,26 +595,24 @@ fn the_wheel_over_the_sidebar_moves_half_a_screen_once_a_flick() {
     let mut client = short_screen_of_tabs(&server);
     // One wheel-down: half a screen on, as C-d, the focus in the sidebar.
     client.send(b"\x1b[<65;6;5M");
-    wait_list(&server, "half a screen down", |l| {
+    let list = wait_list(&server, "half a screen down", |l| {
         focused(l) && in_front(l) > 1
     });
-    client.wait_for("tabs above counted", |s| left(&s[1], 34).contains("▲"));
+    cursor_drawn_on_front(&mut client, &list, true);
     // One wheel-up, the other way: back to the first, as C-u.
     client.send(b"\x1b[<64;6;5M");
-    wait_list(&server, "back at the first", |l| in_front(l) == 0);
-    client.wait_for("back at the top", |s| !left(&s[1], 34).contains("▲"));
+    let list = wait_list(&server, "back at the first", |l| in_front(l) == 0);
+    cursor_drawn_on_front(&mut client, &list, false);
     // Half a screen measured with the sidebar focused, as the flick finds
     // it: the first wheel-down was drawn from the sidebar without the focus,
     // whose rows can sit a line apart.
     client.send(b"\x1b[<65;6;5M");
     let list = wait_list(&server, "half a screen down, focused", |l| in_front(l) > 1);
     let half = in_front(&list);
-    client.wait_for("tabs above counted again", |s| {
-        left(&s[1], 34).contains("▲")
-    });
+    cursor_drawn_on_front(&mut client, &list, true);
     client.send(b"\x1b[<64;6;5M");
-    wait_list(&server, "back at the first again", |l| in_front(l) == 0);
-    client.wait_for("back at the top again", |s| !left(&s[1], 34).contains("▲"));
+    let list = wait_list(&server, "back at the first again", |l| in_front(l) == 0);
+    cursor_drawn_on_front(&mut client, &list, false);
     // A flick of five: half a screen once.
     client.send("\x1b[<65;6;5M".repeat(5).as_bytes());
     wait_list(&server, "half a screen down again", |l| in_front(l) > 0);
@@ -1631,13 +1667,30 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
     );
 
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
-    let fold = row_of(&mut client, "OTHER REPOS") + 1;
-    let needs = row_of(&mut client, "NEEDS YOU");
-    let mine = row_of(&mut client, "ant");
-    let group = row_of(&mut client, "REMINDERS ELSEWHERE");
-    let row = row_of(&mut client, "bee");
-    assert!(needs < mine && mine < group && group < row && row < fold);
-    let screen = client.screen();
+    // The rows read from one screen, once the filter has put all five in
+    // place: each read from a screen of its own could come from a draw
+    // before the next.
+    let rows = |s: &[String]| {
+        [
+            "NEEDS YOU",
+            "ant",
+            "REMINDERS ELSEWHERE",
+            "bee",
+            "OTHER REPOS",
+        ]
+        .map(|text| s.iter().position(|l| left(l, 34).contains(text)))
+    };
+    let in_order = |s: &[String]| match rows(s) {
+        [Some(needs), Some(mine), Some(group), Some(row), Some(other)] => {
+            needs < mine && mine < group && group < row && row < other
+        }
+        _ => false,
+    };
+    let screen = client.wait_for("the reminders' groups in order", in_order);
+    let [_, _, _, Some(row), Some(other)] = rows(&screen) else {
+        unreachable!()
+    };
+    let fold = other + 1;
     assert!(
         screen[row + 1..fold - 1]
             .iter()
