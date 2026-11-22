@@ -2537,11 +2537,11 @@ impl Server {
         let sidebar = s.sidebar > 0 && !tab.zoomed;
         let side_ways = matches!(dir, super::Direction::Left | super::Direction::Right);
         let name = s.name.clone();
-        if let Some(next) = tab.layout.neighbor(s.spread_for(tab), pane, dir) {
+        if let Some(next) = tab.layout.neighbor(s.area_for(tab), pane, dir) {
             self.focus_pane(next);
         } else if sidebar && side_ways {
             self.sidebar_enter(&name, None);
-        } else if let Some(next) = tab.layout.wrap(s.spread_for(tab), pane, dir) {
+        } else if let Some(next) = tab.layout.wrap(s.area_for(tab), pane, dir) {
             self.focus_pane(next);
         }
     }
@@ -3275,7 +3275,7 @@ impl Server {
             .session(&c.session)
             .and_then(|s| {
                 let tab = self.tabs.get(&s.current).filter(|t| !t.zoomed)?;
-                tab.layout.place(s.spread_for(tab)).border_at(col, row)
+                tab.layout.place(s.area_for(tab)).border_at(col, row)
             })
             .map(|(_, _, vertical)| vertical);
         border.map_or(Pointer::Arrow, Pointer::border)
@@ -4422,8 +4422,7 @@ impl Server {
         let Some(tab) = self.tabs.get(&s.current).filter(|t| !t.zoomed) else {
             return;
         };
-        let Some((before, after, vertical)) =
-            tab.layout.place(s.spread_for(tab)).border_at(col, row)
+        let Some((before, after, vertical)) = tab.layout.place(s.area_for(tab)).border_at(col, row)
         else {
             return;
         };
@@ -4460,7 +4459,7 @@ impl Server {
             .session(&c.session)
             .filter(|s| s.current == tab)
             .zip(self.tabs.get(&tab))
-            .map(|(s, t)| s.spread_for(t))
+            .map(|(s, t)| s.area_for(t))
         else {
             return;
         };
