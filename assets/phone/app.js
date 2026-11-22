@@ -106,6 +106,8 @@ function ago(ms) {
 }
 
 function markOf(tab) {
+  // A pinned tab wears the flag in place of its state's mark (board 75).
+  if (tab.pinned) return ["⚑", "pinned"];
   if (tab.state === "waiting") return ["●", "needs"];
   if (tab.state === "done") return ["✓", "passed"];
   if (tab.state === "working" || tab.state === "background") return ["⠹", "working"];
@@ -211,6 +213,9 @@ function groups(words) {
     else if (t.state === "working" || t.state === "background") working.push(t);
     else idle.push(t);
   }
+  // The pinned and the reminders come due lead Needs you, as in the sidebar.
+  const first = (t) => t.pinned === true || !!(t.remind && t.remind.due);
+  needs.sort((a, b) => first(b) - first(a));
   return [
     ["Needs you", "y", needs],
     ["Working", "b", working],
@@ -420,13 +425,14 @@ function boxHead(title) {
   return el("div", { class: "box-head" }, el("span", { class: "box-title" }, title), el("button", { class: "box-close", "aria-label": "Close", onclick: () => closeMenu() }, "×"));
 }
 
-// The kit's box under the row: Mark seen on a finished tab, Clear the
-// reminder on a tab with one, Remind me (board 176), then Close tab in the
-// failed tone, as it ends the tab.
+// The kit's box under the row: Mark seen on a finished tab, Pin it (Unpin
+// it on a pinned tab), Clear the reminder on a tab with one, Remind me
+// (board 176), then Close tab in the failed tone, as it ends the tab.
 function showMenu(tab) {
   const n = number(tab);
   const options = [];
   if (tab.state === "done") options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => markSeen(n) }, "Mark seen"));
+  options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => pin(n, !tab.pinned) }, tab.pinned ? "Unpin it" : "Pin it"));
   if (state.reminders && tab.remind) options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => clearReminder(n) }, "Clear the reminder"));
   if (state.reminders) options.push(el("button", { class: "menu-option", role: "menuitem", onclick: () => remindSheet(n) }, "Remind me"));
   if (state.close) options.push(el("button", { class: "menu-option r", role: "menuitem", onclick: () => ask(n) }, "Close tab"));
@@ -545,6 +551,15 @@ async function markSeen(n) {
   closeMenu();
   try {
     await api("/api/tabs/" + n + "/seen", {});
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
+async function pin(n, on) {
+  closeMenu();
+  try {
+    await api("/api/tabs/" + n + "/pin", { pin: on });
   } catch (e) {
     toast(String(e.message || e), true);
   }

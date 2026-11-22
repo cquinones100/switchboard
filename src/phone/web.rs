@@ -12,10 +12,11 @@
 //! why. No response allows another origin (no CORS headers), and each
 //! carries a strict Content-Security-Policy.
 //!
-//! Five things change anything, each asked of the server over its socket,
+//! Six things change anything, each asked of the server over its socket,
 //! which refuses a pane not running Claude: answering a tab's prompt,
 //! sending its Claude a message, marking it seen, setting or clearing its
-//! reminder, and closing it (which the app asks about first). A pane is
+//! reminder, pinning or unpinning it, and closing it (which the app asks
+//! about first). A pane is
 //! taken only when the server's own `watch` lists it as a Claude tab. An
 //! image from the phone's photo library is kept on the computer first
 //! (`images`, for that tab alone, under a name made here), and the message
@@ -257,6 +258,7 @@ fn routes(app: Arc<App>) -> Router {
         .route("/api/tabs/{pane}/seen", post(seen))
         .route("/api/tabs/{pane}/close", post(close))
         .route("/api/tabs/{pane}/remind", post(remind))
+        .route("/api/tabs/{pane}/pin", post(pin))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(subscribe))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -898,6 +900,28 @@ async fn remind(
     ask(args).await
 }
 
+/// A tab pinned, or, with `pin` false, unpinned.
+async fn pin(
+    State(app): State<Arc<App>>,
+    Path(pane): Path<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let Some(tab) = claude_tab(&app, &pane) else {
+        return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
+    };
+    let mut args = vec![
+        "pin".into(),
+        "-t".into(),
+        pane_of(&tab),
+        "-s".into(),
+        "phone".into(),
+    ];
+    if body["pin"] != true {
+        args.push("-u".into());
+    }
+    ask(args).await
+}
+
 async fn push_key(State(app): State<Arc<App>>) -> Response {
     match &app.push_key {
         Some(key) => axum::Json(json!({"key": push::public_key(key)})).into_response(),
@@ -1172,6 +1196,7 @@ mod tests {
         assert!(!before_pairing("/api/tabs/%1/answer", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/close", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/remind", &Method::POST));
+        assert!(!before_pairing("/api/tabs/1/pin", &Method::POST));
         assert!(!before_pairing("/", &Method::POST));
     }
 

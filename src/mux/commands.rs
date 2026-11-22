@@ -74,6 +74,8 @@
 //!                                        a Claude pane's tab's reminder set
 //!                                        for when (as the reminder box reads
 //!                                        it) or cleared (src/phone)
+//! pin [-t pane] [-s from] [-u]           a Claude pane's tab pinned as M-f
+//!                                        pins it, or unpinned (src/phone)
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up
@@ -130,6 +132,7 @@ pub const NAMES: &[&str] = &[
     "prompt",
     "answer",
     "remind",
+    "pin",
     "watch",
     "phone-pair",
     "ready",
@@ -242,6 +245,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "remind",
         "remind [-t pane] [-s from] [-n note] (-c | <when>): the reminder of the tab of a pane running Claude set for <when> (one of the reminder box's times, or one typed: 45m, 3pm, tue 9am, nov 20) with -n's note, or cleared with -c, as the box sets it; refused with Settings' Reminders off, for a pane not running Claude, and for a time it can't read; -s names who asked (phone), written in the server's log",
+    ),
+    (
+        "pin",
+        "pin [-t pane] [-s from] [-u]: the tab of a pane running Claude pinned at the top of Needs you, as M-f pins it, or unpinned with -u; refused for a pane not running Claude; -s names who asked (phone), written in the server's log",
     ),
     (
         "watch",
@@ -568,6 +575,10 @@ impl Server {
                     a.value('n').unwrap_or(""),
                     a.value('s'),
                 )
+            }),
+            "pin" => Args::parse(rest, "ts").and_then(|a| {
+                let pane = self.pane_from(&a, caller)?;
+                self.phone_pin(pane, !a.has('u'), a.value('s'))
             }),
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.

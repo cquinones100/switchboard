@@ -150,16 +150,24 @@ impl Data {
     fn set_state(&mut self, n: &str, state: &str, wait: Option<&str>) {
         if let Some(tab) = self.tab(n) {
             tab["state"] = json!(state);
-            tab["needs"] = json!(state == "waiting" || state == "done");
             tab["wait"] = json!(wait);
             tab["since"] = json!(crate::util::now_ms() / 1000);
             if state != "waiting" {
                 tab["prompt"] = Value::Null;
             }
         }
-        // Needs you first, as the server sorts them.
-        self.tabs
-            .sort_by_key(|t| !t["needs"].as_bool().unwrap_or(false));
+        self.sort();
+    }
+
+    /// Needs you first, the pinned and the reminders come due leading it,
+    /// as the server sorts them.
+    fn sort(&mut self) {
+        let first = |t: &Value| t["pinned"] == true || t["remind"]["due"] == true;
+        for tab in &mut self.tabs {
+            let state = tab["state"].as_str().unwrap_or("");
+            tab["needs"] = json!(first(tab) || state == "waiting" || state == "done");
+        }
+        self.tabs.sort_by_key(|t| (t["needs"] != true, !first(t)));
     }
 
     /// What the stream sends.
@@ -309,6 +317,7 @@ fn routes(preview: Arc<Preview>) -> Router {
         .route("/api/tabs/{pane}/seen", post(seen))
         .route("/api/tabs/{pane}/close", post(close))
         .route("/api/tabs/{pane}/remind", post(remind))
+        .route("/api/tabs/{pane}/pin", post(pin))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
         .layer(middleware::from_fn_with_state(
             preview.clone(),
@@ -774,6 +783,7 @@ async fn remind(
         let index = tab["index"].clone();
         if clear {
             tab["remind"] = Value::Null;
+            d.sort();
             return said(format!("Cleared the reminder for tab {index}"));
         }
         let now = crate::util::local_now();
@@ -785,7 +795,32 @@ async fn remind(
         };
         let due = at <= now.timestamp().as_second();
         tab["remind"] = json!({"at": at, "note": note.trim(), "due": due});
+        d.sort();
         said(format!("Reminder for tab {index} at {}", remind::said(at)))
+    })
+}
+
+/// A tab pinned, or, with `pin` false, unpinned.
+async fn pin(
+    State(preview): State<Arc<Preview>>,
+    UrlPath(n): UrlPath<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let pin = body["pin"] == true;
+    preview.change(|d| {
+        if !d.live {
+            return offline();
+        }
+        let Some(tab) = d.tab(&n) else {
+            return no_tab();
+        };
+        let index = tab["index"].clone();
+        tab["pinned"] = json!(pin);
+        d.sort();
+        said(format!(
+            "{} tab {index}",
+            if pin { "Pinned" } else { "Unpinned" }
+        ))
     })
 }
 

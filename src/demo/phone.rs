@@ -348,6 +348,7 @@ pub fn tabs(now_ms: i64) -> Vec<Value> {
                 "branch": t.branch,
                 "state": t.state,
                 "needs": t.state == "waiting" || t.state == "done",
+                "pinned": false,
                 "since": at / 1000,
                 "pane": format!("%{}", t.pane),
                 "wait": t.wait,

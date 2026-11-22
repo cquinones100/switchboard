@@ -965,17 +965,26 @@ impl Server {
     /// "done": visiting the tab doesn't clear it, and pinned tabs lead M-a's
     /// walk (and the sidebar's Needs you). The first pin brings its tip.
     pub fn toggle_pin(&mut self, tab: TabId) {
+        let pinning = !self
+            .tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get("@pinned"))
+            .is_some_and(|v| pinned(v));
+        self.set_pin(tab, pinning);
+    }
+
+    /// The tab pinned or unpinned, as M-f does, whichever it was.
+    pub fn set_pin(&mut self, tab: TabId, pin: bool) {
         let Some(t) = self.tabs.get_mut(&tab) else {
             return;
         };
-        let pinning = !t.opts.get("@pinned").is_some_and(|v| pinned(v));
-        if pinning {
+        if pin {
             t.opts.insert("@pinned".into(), "1".into());
         } else {
             t.opts.remove("@pinned");
         }
         self.redraw_tab(tab);
-        if pinning {
+        if pin {
             self.tip("pinned", None);
         }
     }
