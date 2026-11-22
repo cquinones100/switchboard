@@ -845,7 +845,13 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
         format!("{date}T{hour:02}:00:00"),
         format!("{date}T{hour:02}:59:00"),
     );
-    let label = format!("{:>4}:00 ", (hour + 11) % 12 + 1);
+    // The line marking now takes the label of the row it is on, which in
+    // the first minutes of an hour is that hour's, so the hour before or
+    // after it, one of which the view always shows, counts too.
+    let labels: Vec<String> = (hour - 1..=hour + 1)
+        .filter(|h| (0..24).contains(h))
+        .map(|h| format!("{:>4}:00 ", (h + 11) % 12 + 1))
+        .collect();
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("calendar.json"),
@@ -868,7 +874,7 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let has = |text: &str| screen.iter().any(|l| l.contains(text));
     assert!(has("all day   Offsite"), "{}", screen.join("\n"));
     assert!(
-        has(&label),
+        labels.iter().any(|l| has(l)),
         "the hours down the side: {}",
         screen.join("\n")
     );
