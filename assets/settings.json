@@ -838,6 +838,13 @@
     "default": true
   },
   {
+    "key": "tab_header_bottom",
+    "category": "Tabs and header",
+    "label": "Repeat the tab's header at the bottom",
+    "description": "Every tab with a header draws the same header again under its panes, its keys, History, ⌘ Commands and buttons taking the same clicks, so a program whose actions sit at the bottom, as Claude Code's prompt does, has the tab's state and keys beside it; it takes four more rows from every tab's panes. Notes' own tab, which has no header while the sidebar shows, and a zoomed pane have none there either. Off, the header is only at the top and the panes reach the bottom of the screen",
+    "default": false
+  },
+  {
     "key": "tab_search_panes",
     "category": "Tabs and header",
     "label": "Search what panes show",
