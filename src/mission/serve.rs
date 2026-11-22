@@ -1773,7 +1773,6 @@ impl Server {
             let shown = super::keymap::Shown {
                 github: on("github"),
                 linear: on("linear"),
-                ask: on("diff_ask"),
                 easy: on("easy_keys"),
             };
             let counts = self.keys_week();
@@ -4612,7 +4611,6 @@ impl Server {
         let shown = super::keymap::Shown {
             github: on("github"),
             linear: on("linear"),
-            ask: on("diff_ask"),
             easy: on("easy_keys"),
         };
         let counts = self.keys_week();

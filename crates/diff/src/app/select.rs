@@ -2,8 +2,8 @@
 //! diffview.nvim's place but the terminal's own selection, lost once the
 //! diff took the mouse for its clicks, wheel and scroll bars. A drag
 //! selects by characters within the pane it starts in (the list, a side of
-//! the diff, the rows across both sides, the heading over the diff, an
-//! answer), a double click a word and a triple click a line; the release
+//! the diff, the rows across both sides, the heading over the diff), a
+//! double click a word and a triple click a line; the release
 //! copies it, as a terminal with copy-on-select does, and `y` copies it
 //! again while it shows.
 //!
@@ -12,13 +12,13 @@
 //! the drawn cells are read back from the buffer once the frame is done. A
 //! side of the diff's spots leave out its line numbers and the other side,
 //! so a copy has neither. Rows are numbered by their place in what scrolls
-//! (the list's row, the answer's line, the diff's rows counted from where
+//! (the list's row, the diff's rows counted from where
 //! it was first drawn), so the selection stays on its text as the wheel
 //! scrolls, and the text of each row is kept as it is seen, so what is
 //! copied holds the rows scrolled out of sight too.
 //!
-//! With the keys, `v` and `V` select lines (in a side of the diff, the list
-//! and an answer) and `y` copies their text, from the file's lines rather
+//! With the keys, `v` and `V` select lines (in a side of the diff and the
+//! list) and `y` copies their text, from the file's lines rather
 //! than the screen's, so a line wrapped is copied whole and a tab as a tab.
 
 use std::collections::BTreeMap;
@@ -45,7 +45,6 @@ pub(super) enum Pane {
     /// A row of the diff across both sides: a fold, a note, the rule and
     /// the bar between two files of the one scroll.
     Wide,
-    Answer,
 }
 
 /// A row of text as it was last drawn: its pane, the cells of its text,
@@ -313,14 +312,8 @@ impl App {
     }
 
     /// Once the frame's panes are drawn: reads each row's text back from
-    /// the cells, keeps the selection's, and lights it. Under a box only
-    /// the box's own rows are there to select.
+    /// the cells, keeps the selection's, and lights it.
     pub(super) fn read_spots(&mut self, buf: &mut Buffer) {
-        if self.ask_box.is_some() {
-            self.spots.clear();
-        } else if self.answer.is_some() {
-            self.spots.retain(|s| s.pane == Pane::Answer);
-        }
         // A row with no cells (a note on a side too narrow to show) has no
         // text to select, nor a column to put the selection's end on.
         self.spots.retain(|s| s.rect.width > 0);
@@ -467,18 +460,11 @@ impl App {
         Act::Redraw
     }
 
-    /// The button let go: what was selected since it was pressed is copied,
-    /// and with nothing selected a press on an answer's path:line goes
-    /// there.
+    /// The button let go: what was selected since it was pressed is copied.
     pub(super) fn release_select(&mut self) -> Act {
         self.pressed = None;
-        let cite = self.pressed_cite.take();
         let Some(sel) = &mut self.selection else {
-            let Some(cite) = cite else {
-                return Act::Same;
-            };
-            self.cited(cite);
-            return Act::Redraw;
+            return Act::Same;
         };
         if !sel.fresh {
             return Act::Same;
@@ -584,35 +570,5 @@ impl App {
             ListRow::Header(section) => Some(section.heading().to_string()),
             ListRow::Loading | ListRow::Blank | ListRow::Totals | ListRow::Hint(_) => None,
         }
-    }
-
-    /// `y` on the lines `v` selected in an answer: their text, as laid out,
-    /// less the margin they share.
-    pub(super) fn copy_answer_lines(&mut self) {
-        let Some((from, cursor)) = self
-            .answer
-            .as_ref()
-            .and_then(|a| Some((a.visual?, a.cursor)))
-        else {
-            return;
-        };
-        let lines = self.answer_lines(self.answer_width());
-        let last = lines.len().saturating_sub(1);
-        let (a, b) = (from.min(cursor).min(last), from.max(cursor).min(last));
-        let text: Vec<&str> = lines
-            .get(a..=b)
-            .unwrap_or_default()
-            .iter()
-            .map(|l| l.0.trim_end())
-            .collect();
-        let margin = text
-            .iter()
-            .filter(|l| !l.is_empty())
-            .map(|l| l.len() - l.trim_start_matches(' ').len())
-            .min()
-            .unwrap_or(0);
-        let text: Vec<&str> = text.iter().map(|l| l.get(margin..).unwrap_or("")).collect();
-        self.yanked = true;
-        self.copy_text(text.join("\n").trim_end());
     }
 }

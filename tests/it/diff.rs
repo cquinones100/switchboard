@@ -235,23 +235,6 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
             .unwrap_or(false)
     });
 
-    // ga's box takes a question pasted whole, and Shift-Enter adds a line:
-    // the workspace passes both on as the diff asked for them (bracketed
-    // paste, keys told apart).
-    client.type_text("ga");
-    client.wait_text("Ask about this diff");
-    client.send(b"\x1b[200~First line\nSecond line\x1b[201~");
-    client.send(b"\x1b[13;2u");
-    client.type_text("Third");
-    let shown = client.wait_text("Third");
-    for line in ["First line", "Second line"] {
-        assert!(shown.iter().any(|l| l.contains(line)), "{line}: {shown:?}");
-    }
-    client.send(b"\x1b");
-    client.wait_for("the box closed", |s| {
-        !s.iter().any(|l| l.contains("Ask about this diff"))
-    });
-
     client.type_text("q");
     wait_until("the pane back", || {
         let now = panes(&server);
@@ -1014,97 +997,6 @@ fn clearing_the_tabs_diff_cache_removes_its_story_order_and_base_after_a_yes() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(kept, ["unrelated.txt"]);
-}
-
-/// The lines of the stand-in's record that are questions about the diff,
-/// told by the question's own prompt.
-fn questions_asked(home: &Path) -> Vec<String> {
-    std::fs::read_to_string(home.join("claude-asked"))
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| l.contains("reviewer's question"))
-        .map(str::to_string)
-        .collect()
-}
-
-#[test]
-fn ga_asks_a_copy_of_the_tabs_own_session_and_haiku_with_the_setting_off() {
-    let server = TestServer::start();
-    settings(&server);
-    stand_in_claude(&server.home);
-    let work = repository(server.dir.path());
-    // A stand-in for the tab's Claude: a process in front on the pane with
-    // a session file of its own, as Claude Code writes one.
-    let sessions = server.home.join(".claude/sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    // Where Claude Code keeps the tab's session and would keep its copy.
-    let project = server.home.join(".claude/projects/-work");
-    std::fs::create_dir_all(&project).unwrap();
-    std::fs::write(project.join("s1.jsonl"), "{}\n").unwrap();
-    std::fs::write(project.join("copy-1.jsonl"), "{}\n").unwrap();
-    let tab_claude = server.dir.path().join("tab-claude.sh");
-    std::fs::write(
-        &tab_claude,
-        format!(
-            "printf '{{\"pid\":%s,\"sessionId\":\"s1\",\"entrypoint\":\"cli\",\"cwd\":\"%s\"}}' $$ \"$PWD\" > {}/$$.json\necho tab-claude-ready\nexec sleep 600\n",
-            sh_quote(&sessions.to_string_lossy())
-        ),
-    )
-    .unwrap();
-
-    let mut client = server.attach(140, 36);
-    client.wait_text("$");
-    client.type_text(&format!(
-        "cd {} && sh {}\r",
-        work.display(),
-        tab_claude.display()
-    ));
-    client.wait_text("tab-claude-ready");
-
-    let ask = |client: &mut common::TestClient, question: &str| {
-        client.send(b"\x1bd");
-        client.wait_text(" 1 Change the core");
-        client.type_text("ga");
-        client.wait_text("Ask about this diff");
-        client.type_text(question);
-        client.send(b"\r");
-    };
-    ask(&mut client, "Why this?");
-    wait_until("the question asked", || {
-        !questions_asked(&server.home).is_empty()
-    });
-    let asked = questions_asked(&server.home);
-    assert!(
-        asked[0].contains("--resume s1 --fork-session"),
-        "a copy of the tab's session: {asked:?}"
-    );
-    assert!(!asked[0].contains("--model"), "on its own model: {asked:?}");
-    assert!(asked[0].contains("--append-system-prompt"), "{asked:?}");
-    client.wait_text("Asked in the tab's session (Opus)");
-    wait_until("the copy removed", || {
-        !project.join("copy-1.jsonl").exists()
-    });
-    assert!(
-        project.join("s1.jsonl").exists(),
-        "the tab's own session kept"
-    );
-
-    // Off, a fresh Haiku is asked.
-    common::write_settings(
-        &server.home,
-        json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_ask_session": false}),
-    );
-    // M-d closes the diff, its answer and all.
-    client.send(b"\x1bd");
-    client.wait_text("tab-claude-ready");
-    ask(&mut client, "And this?");
-    wait_until("the second question asked", || {
-        questions_asked(&server.home).len() == 2
-    });
-    let asked = questions_asked(&server.home);
-    assert!(asked[1].contains("--model haiku"), "{asked:?}");
-    assert!(!asked[1].contains("--resume"), "{asked:?}");
-    client.wait_text("Asked Haiku");
 }
 
 #[test]

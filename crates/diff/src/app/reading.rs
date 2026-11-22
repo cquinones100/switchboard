@@ -2672,27 +2672,6 @@ impl App {
         self.say(format!("Copied {place}"));
     }
 
-    /// Where the column's cursor is, for a question: the change under it,
-    /// while the column has the keys.
-    pub(super) fn reading_cursor(&mut self) -> crate::ask::Cursor {
-        let row = self.row_at_cur();
-        match row.map(|r| r.does) {
-            Some(Does::Change { path, new, old, .. }) if self.focus != Focus::List => {
-                crate::ask::Cursor {
-                    path: Some(path),
-                    line: new.or(old),
-                    old_side: new.is_none(),
-                    hunk: None,
-                }
-            }
-            Some(Does::File { path, .. }) if self.focus != Focus::List => crate::ask::Cursor {
-                path: Some(path),
-                ..crate::ask::Cursor::default()
-            },
-            _ => crate::ask::Cursor::default(),
-        }
-    }
-
     // ── The keys ────────────────────────────────────────────────────────────
 
     /// A key in the Story view; `None` for one the diff takes anywhere
@@ -2801,7 +2780,6 @@ impl App {
             ('g', 'f') => self.show_files(false),
             ('g', 'g') if self.focus == Focus::List => self.choose_item(0),
             ('g', 'g') => self.move_reading(isize::MIN / 2),
-            ('g', 'a') if self.opts.ask => self.open_ask(),
             ('y', 'S') => self.copy_story(),
             ('y', 'l') => self.say(
                 "A link to a line is the files' to copy: Enter on the change, Show it in the files, then yl.",

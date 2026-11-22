@@ -84,7 +84,6 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("haiku_summaries", "false"),
     ("turn_summaries", "false"),
     ("diff_story", "false"),
-    ("diff_ask", "false"),
     ("photos", "false"),
     ("image_cache", "false"),
     ("relay_draft_check", "false"),

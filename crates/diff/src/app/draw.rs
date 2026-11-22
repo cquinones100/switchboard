@@ -1,8 +1,8 @@
 //! Drawing the diff's screen, split from app.rs for its length: the list
 //! with its pages' headings, the two sides with their bars and notes,
-//! the cover while the story is told, the row of buttons, and the boxes
-//! for a question and its answer, into a cell buffer, as
-//! nvim/lua/plugins/diffview.lua's highlights, winbars and floats drew them.
+//! the cover while the story is told and the row of buttons, into a cell
+//! buffer, as nvim/lua/plugins/diffview.lua's highlights and winbars drew
+//! them.
 
 use std::collections::HashSet;
 
@@ -13,8 +13,7 @@ use ratatui::text::{Line as Spans, Span};
 
 use super::select::{Pane, Spot};
 use super::{
-    ACCENT, ADDED, App, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED, Telling, blend,
-    own,
+    ADDED, App, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED, Telling, blend, own,
 };
 use crate::git::{self, Entry, Section};
 use crate::sides::{self, Kind};
@@ -104,9 +103,6 @@ impl App {
         self.buttons.clear();
         self.spots.clear();
         self.hits.clear();
-        self.ask_rect = None;
-        self.answer_rect = None;
-        self.answer_shown.clear();
         self.diff_bar = None;
         self.body_top = None;
         if let Some(text) = self.failed.clone() {
@@ -174,12 +170,6 @@ impl App {
                 &Spans::from(kit::hints(&self.footer_keys(), &self.theme())),
             );
         }
-        if self.ask_box.is_some() {
-            cursor = self.draw_ask_box(buf);
-        } else if self.answer.is_some() {
-            self.draw_answer(buf);
-            cursor = None;
-        }
         self.read_spots(buf);
         if self.draw_message(buf) {
             cursor = None;
@@ -188,8 +178,7 @@ impl App {
             self.draw_menu(buf);
             cursor = None;
         }
-        // The question's draft keeps its caret over the Story view.
-        if (self.focus == Focus::List || self.on_story()) && self.ask_box.is_none() {
+        if self.focus == Focus::List || self.on_story() {
             cursor = None;
         }
         cursor
@@ -1393,9 +1382,6 @@ impl App {
             "Esc back to the diff".to_string()
         } else if self.opts.easy && self.opts.key_help {
             let mut help = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · R refresh".to_string();
-            if self.opts.ask {
-                help.push_str(" · ga ask Claude");
-            }
             if self.opts.alone {
                 help.push_str(" · M-m settings");
             }
@@ -1417,231 +1403,6 @@ impl App {
             &help,
             self.faint(),
         );
-    }
-
-    /// A box with a rounded edge in the accent colour, its title in the top
-    /// edge and its footer in the bottom, cleared inside; gives its inside.
-    fn frame(buf: &mut Buffer, area: Rect, title: &str, footer: &str) -> Rect {
-        let area = area.intersection(buf.area);
-        if area.width < 4 || area.height < 3 {
-            return Rect::default();
-        }
-        let edge = Style::new().fg(ACCENT);
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                buf[(x, y)].reset();
-            }
-        }
-        let (l, r, t, b) = (area.left(), area.right() - 1, area.top(), area.bottom() - 1);
-        for x in l..=r {
-            buf[(x, t)].set_symbol("─").set_style(edge);
-            buf[(x, b)].set_symbol("─").set_style(edge);
-        }
-        for y in t..=b {
-            buf[(l, y)].set_symbol("│").set_style(edge);
-            buf[(r, y)].set_symbol("│").set_style(edge);
-        }
-        buf[(l, t)].set_symbol("╭");
-        buf[(r, t)].set_symbol("╮");
-        buf[(l, b)].set_symbol("╰");
-        buf[(r, b)].set_symbol("╯");
-        let room = area.width.saturating_sub(4);
-        for (y, text, style) in [
-            (t, title, edge.add_modifier(Modifier::BOLD)),
-            (b, footer, Style::new().fg(Color::Indexed(244))),
-        ] {
-            if text.is_empty() {
-                continue;
-            }
-            let text = switchboard_ui::draw::cut(text, room as usize);
-            let x = l + (area.width.saturating_sub(width(&text) as u16)) / 2;
-            Self::put(buf, x, y, room, &text, style);
-        }
-        Rect::new(l + 1, t + 1, area.width - 2, area.height - 2)
-    }
-
-    /// A row of buttons along a box's top line inside.
-    fn box_buttons(&mut self, buf: &mut Buffer, inner: Rect, buttons: &[(Button, &str)]) {
-        let mut x = inner.x + 1;
-        let theme = self.theme();
-        for (button, label) in buttons {
-            let w = width(label) as u16 + 2;
-            let hover = self.hover == Some(*button);
-            let spans = own::button(label, hover, false, self.round, &theme);
-            put_line(buf, x, inner.y, w, &Spans::from(spans));
-            self.buttons.push((*button, Rect::new(x, inner.y, w, 1)));
-            x += w + 1;
-        }
-    }
-
-    /// The box a question is typed in, in the middle of the diff.
-    fn draw_ask_box(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
-        let w = 80.min(self.cols.saturating_sub(8)) + 2;
-        let h = 7;
-        let x = self.cols.saturating_sub(w) / 2;
-        let y = self.rows.saturating_sub(h) / 2;
-        let area = Rect::new(x, y, w, h);
-        let inner = Self::frame(
-            buf,
-            area,
-            " Ask about this diff ",
-            " Enter ask · Shift-Enter new line · Esc cancel ",
-        );
-        self.ask_rect = Some(area);
-        self.box_buttons(
-            buf,
-            inner,
-            &[(Button::AskSend, "Ask"), (Button::AskCancel, "Cancel")],
-        );
-        let (text, pos) = self
-            .ask_box
-            .as_ref()
-            .map(|b| (b.text.clone(), b.pos))
-            .unwrap_or_default();
-        let room = (inner.width.saturating_sub(2) as usize).max(1);
-        // The text wrapped at the box's width, and the typing cursor's row
-        // and column in it, a character after a full row starting the next.
-        let mut lines = vec![String::new()];
-        let (mut row, mut col) = (0, 0);
-        let mut at = None;
-        for (i, ch) in text.char_indices() {
-            if i == pos {
-                at = Some(if col == room {
-                    (row + 1, 0)
-                } else {
-                    (row, col)
-                });
-            }
-            if ch == '\n' || col == room {
-                lines.push(String::new());
-                row += 1;
-                col = 0;
-                if ch == '\n' {
-                    continue;
-                }
-            }
-            lines[row].push(ch);
-            col += 1;
-        }
-        let (row, col) = at.unwrap_or(if col == room {
-            (row + 1, 0)
-        } else {
-            (row, col)
-        });
-        let shown = (inner.height.saturating_sub(1)) as usize;
-        let from = (row + 1).saturating_sub(shown);
-        for (i, line) in lines.iter().skip(from).take(shown).enumerate() {
-            Self::put(
-                buf,
-                inner.x + 1,
-                inner.y + 1 + i as u16,
-                inner.width.saturating_sub(2),
-                line,
-                Style::new(),
-            );
-        }
-        let before: String = lines
-            .get(row)
-            .map(|l| l.chars().take(col).collect())
-            .unwrap_or_default();
-        let x = width(&before) as u16;
-        Some((
-            inner.x + 1 + x.min(inner.width.saturating_sub(3)),
-            inner.y + 1 + (row - from) as u16,
-        ))
-    }
-
-    /// The answer's window, on the right half, titled with the question.
-    fn draw_answer(&mut self, buf: &mut Buffer) {
-        let w = self.answer_width();
-        let h = self.rows.saturating_sub(2).max(5);
-        let x = self.cols.saturating_sub(w + 1);
-        let area = Rect::new(x, 1, w, h.min(self.rows.saturating_sub(1)));
-        let question = self
-            .answer
-            .as_ref()
-            .map(|a| a.question.split_whitespace().collect::<Vec<_>>().join(" "))
-            .unwrap_or_default();
-        let title = format!(
-            " {} ",
-            switchboard_ui::draw::cut(&question, w.saturating_sub(6) as usize)
-        );
-        let inner = Self::frame(
-            buf,
-            area,
-            &title,
-            " q close · ga ask again · gf open path:line · yy copy ",
-        );
-        self.answer_rect = Some(area);
-        self.box_buttons(
-            buf,
-            inner,
-            &[
-                (Button::AnswerClose, "Close"),
-                (Button::AnswerAgain, "Ask again"),
-                (Button::AnswerCopy, "Copy"),
-            ],
-        );
-        let lines = self.answer_lines(w);
-        let body = inner.height.saturating_sub(1) as usize;
-        let Some(a) = &mut self.answer else {
-            return;
-        };
-        if a.cursor < a.top {
-            a.top = a.cursor;
-        } else if a.cursor >= a.top + body {
-            a.top = a.cursor + 1 - body;
-        }
-        a.top = a.top.min(lines.len().saturating_sub(1));
-        let (top, cursor) = (a.top, a.cursor);
-        // The rows shown, kept for the pointer's shape over them.
-        self.answer_shown = lines
-            .iter()
-            .skip(top)
-            .take(body)
-            .map(|(plain, _)| plain.clone())
-            .collect();
-        // Its scroll bar in the column the text leaves at its right.
-        self.answer_bar = None;
-        if self.opts.scroll_bars {
-            let (x, y) = (inner.right().saturating_sub(1), inner.y + 1);
-            let theme = self.theme();
-            if kit::draw_scrollbar(buf, (x, y, body as u16), (lines.len(), top, body), &theme) {
-                self.answer_bar = Some((x, y, body));
-            }
-        }
-        let selected = self
-            .answer
-            .as_ref()
-            .and_then(|a| a.visual)
-            .map(|from| from.min(cursor)..=from.max(cursor));
-        let text = Rect::new(inner.x + 1, 0, inner.width.saturating_sub(2), 1);
-        for (k, (_, spans)) in lines.iter().skip(top).take(body).enumerate() {
-            let y = inner.y + 1 + k as u16;
-            let row = Rect { y, ..text };
-            self.spot(Pane::Answer, row, inner.x, (top + k) as i64, false);
-            let mut x = inner.x + 1;
-            for (text, style) in spans {
-                x = Self::put(
-                    buf,
-                    x,
-                    y,
-                    (inner.right().saturating_sub(1)).saturating_sub(x),
-                    text,
-                    *style,
-                );
-            }
-            if top + k == cursor {
-                for cx in inner.x..inner.right() {
-                    buf[(cx, y)].set_bg(Color::Indexed(if self.opts.light { 254 } else { 236 }));
-                }
-            }
-            if selected.as_ref().is_some_and(|s| s.contains(&(top + k))) {
-                for cx in inner.x..inner.right() {
-                    buf[(cx, y)].modifier.insert(Modifier::REVERSED);
-                }
-            }
-        }
     }
 }
 

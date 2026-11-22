@@ -583,7 +583,6 @@ mod tests {
     const ALL: Shown = Shown {
         github: true,
         linear: true,
-        ask: true,
         easy: false,
     };
 

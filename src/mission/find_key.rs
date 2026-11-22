@@ -588,7 +588,6 @@ mod tests {
         let shown = Shown {
             github: true,
             linear: true,
-            ask: true,
             easy: false,
         };
         let counts: HashMap<String, u64> = [("M-j".to_string(), 212)].into_iter().collect();
@@ -695,7 +694,6 @@ mod tests {
         let shown = Shown {
             github: true,
             linear: true,
-            ask: true,
             easy: true,
         };
         easy.rows = items(&easy.bindings, shown, &HashMap::new());

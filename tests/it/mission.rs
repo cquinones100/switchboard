@@ -1058,11 +1058,8 @@ fn m_slash_opens_every_key_and_enter_presses_one_in_the_pane_below() {
     client.type_text(&format!("{ALT}/"));
     let screen = client.wait_text("MISSION CONTROL");
     let all = screen.join("\n");
-    assert!(all.contains("PANES"), "the workspace's by tag: {all}");
-    assert!(
-        all.contains("jk move  Enter actions  m view actions"),
-        "{all}"
-    );
+    assert!(all.contains("#panes"), "the workspace's by tag: {all}");
+    assert!(all.contains("Enter actions  m view actions"), "{all}");
     // The filter finds a key by what it does, the cursor on it rather than
     // on its group's heading.
     client.type_text("/split pane to the right\r");
@@ -2245,7 +2242,7 @@ fn resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
 fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_list() {
     let (server, mut client) = two_tabs(json!({"view_keys": true}));
     client.type_text(&format!("{ALT}/"));
-    client.wait_text("PANES");
+    client.wait_text("#panes");
     // The view's menu looks a key up without pressing it: j is the
     // sidebar's.
     client.type_text("m");

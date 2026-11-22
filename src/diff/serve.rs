@@ -55,7 +55,6 @@ impl Server {
             // own keys from a box being typed in, as tmux.conf's palette
             // entries pressed them in Neovim.
             Command::CopyStory => self.press_in_diff(client, b"\x1c\x0eyS"),
-            Command::Ask => self.press_in_diff(client, b"\x1c\x0ega"),
             Command::Lazygit => self.toggle_lazygit(client),
             Command::ClearCache => self.clear_diff_cache(client),
         }
@@ -189,8 +188,7 @@ impl Server {
 
     /// Which of the diff's commands the palette lists for a client: those
     /// for the diff (`#diffview`) only while its pane has the diff in it,
-    /// as palette.sh's filter listed them, asking only with diff_ask on,
-    /// and "side" and "full" only where a tool stands in for a pane. Any
+    /// as palette.sh's filter listed them, and "side" and "full" only where a tool stands in for a pane. Any
     /// other action is listed.
     pub fn diff_palette(&self, client: ClientId) -> impl Fn(&Action) -> bool + use<> {
         let diff = self.diff_here(client).is_some();
@@ -198,10 +196,8 @@ impl Server {
             .current_pane(client)
             .and_then(|p| self.tool_for(p))
             .is_some();
-        let ask = settings::is_on("diff_ask");
         move |action| match action {
             Action::Diff(Command::CopyStory) => diff,
-            Action::Diff(Command::Ask) => diff && ask,
             Action::Diff(Command::Side | Command::Full) => tool,
             _ => true,
         }
@@ -249,22 +245,6 @@ impl Server {
         let mut command = vec![exe(), "diff".into()];
         if working {
             command.push("--working".into());
-        }
-        // The pane's own Claude session, for `ga` to ask a copy of.
-        if settings::is_on("diff_ask")
-            && settings::is_on("diff_ask_session")
-            && let Some(slot) = self.panes.get(&pane)
-            && let Some(session) = crate::agent::sessions::of_pids(
-                &crate::agent::sessions::sessions_dir(),
-                &slot.pane.foreground_pids(),
-            )
-        {
-            command.extend([
-                "--session".into(),
-                session.session_id,
-                "--session-dir".into(),
-                session.cwd,
-            ]);
         }
         // The keys bound to moving a pane's divider left or right, which
         // set its file list's width while the list has the keys.

@@ -5,12 +5,12 @@
 //! first of its tags, the biggest group first; then the sidebar's and
 //! mission control's own (the lists their `?` shows), the keys of a box
 //! that takes typing (`ui::field::KEYS`), M-d's diff's
-//! (`diff::app::KEYS`, the cover, the box `ga` opens and its answer, those
-//! only with diff_ask) and Notes' (`notes::app::key_groups`: a note's, with
-//! its leader keys and, while easy_keys is on, easy mode's Cmd keys, then
-//! the list's), each from the table its own code keeps; last the commands
-//! no key is bound to, reached only through M-p. A key column as wide as
-//! the widest key cuts none (`render`).
+//! (`diff::app::KEYS`, its cover and its views) and Notes'
+//! (`notes::app::key_groups`: a note's, with its leader keys and, while
+//! easy_keys is on, easy mode's Cmd keys, then the list's), each from the
+//! table its own code keeps; last the commands no key is bound to, reached
+//! only through M-p. A key column as wide as the widest key cuts none
+//! (`render`).
 //!
 //! Each row carries its group, its tags whole, whether `keys.json` bound it
 //! (`Bindings::yours`, "yours") and how often it was pressed this week, from
@@ -47,8 +47,6 @@ use crate::ui::palette;
 pub struct Shown {
     pub github: bool,
     pub linear: bool,
-    /// `ga` and its boxes, in the diff and the palette (diff_ask).
-    pub ask: bool,
     /// Easy mode's Cmd keys in Notes (easy_keys).
     pub easy: bool,
 }
@@ -202,7 +200,6 @@ fn workspace(bindings: &Bindings, shown: Shown, counts: &HashMap<String, u64>) -
             keys: keys_of(bindings, &Action::Palette),
         });
     }
-    entries.retain(|e| shown.ask || e.action != Action::Diff(crate::diff::Command::Ask));
     // A command no key is bound to is reached through the palette.
     let through = keys_of(bindings, &Action::Palette)
         .first()
@@ -317,7 +314,7 @@ pub fn items(bindings: &Bindings, shown: Shown, counts: &HashMap<String, u64>) -
     out.extend(part("Sidebar", &owned(crate::sidebar::KEYS)));
     out.extend(part("Mission control", &owned(super::serve::KEYS)));
     out.extend(part("Boxes", &owned(crate::ui::field::KEYS)));
-    for (title, rows) in crate::diff::app::key_groups(shown.ask) {
+    for (title, rows) in crate::diff::app::key_groups() {
         out.extend(part(title, &rows));
     }
     for (title, rows) in crate::notes::app::key_groups(shown.easy) {
@@ -407,7 +404,6 @@ mod tests {
     const ALL: Shown = Shown {
         github: true,
         linear: true,
-        ask: true,
         easy: false,
     };
 
@@ -458,29 +454,16 @@ mod tests {
     }
 
     #[test]
-    fn the_diffs_commands_are_listed_but_not_pressed_and_ga_goes_with_diff_ask() {
+    fn the_diffs_ask_is_no_command_and_ga_is_notes_alone() {
         let all = items(&Bindings::default(), ALL, &HashMap::new());
-        let ask = all
-            .iter()
-            .find(|i| i.title.starts_with("Ask Claude about the diff"))
-            .unwrap();
-        assert_eq!(press_of(ask), None, "only the diff takes it");
-        assert!(titles(&all).contains(&"M-d: an answer (ga)"));
-        let without = items(
-            &Bindings::default(),
-            Shown { ask: false, ..ALL },
-            &HashMap::new(),
-        );
         assert!(
-            !without
-                .iter()
+            !all.iter()
                 .any(|i| i.title.starts_with("Ask Claude about the diff"))
         );
-        assert!(!titles(&without).contains(&"M-d: an answer (ga)"));
-        // Notes' own ga, Add an item, stays.
+        assert!(!titles(&all).iter().any(|t| t.contains("(ga)")));
+        // Notes' own ga, Add an item, is the one left.
         assert!(
-            !without
-                .iter()
+            !all.iter()
                 .any(|i| key_of(i) == Some("ga") && !i.title.contains("Add an item"))
         );
     }

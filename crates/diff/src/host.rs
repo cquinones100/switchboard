@@ -288,11 +288,6 @@ pub mod paths {
     pub fn cache_dir() -> PathBuf {
         folders().cache
     }
-
-    /// `~/.claude`, where Claude Code keeps its sessions.
-    pub fn claude_dir() -> PathBuf {
-        home_join(".claude")
-    }
 }
 
 /// The settings, as the diff's host has them.

@@ -354,7 +354,6 @@ impl App {
         // the new width has moved.
         self.selection = None;
         self.pressed = None;
-        self.pressed_cite = None;
         // Nor a click held on a chapter or an "also in" line, which its
         // release would otherwise follow.
         self.open_on_up = None;
@@ -604,8 +603,6 @@ impl App {
             && self.loading.is_none()
             && self.failed.is_none()
             && self.nothing.is_none()
-            && self.ask_box.is_none()
-            && self.answer.is_none()
             && self.menu.is_none()
             && self.settings.is_none()
             && !(self.cover.is_some() && self.telling == Telling::Waiting)

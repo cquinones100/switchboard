@@ -28,9 +28,6 @@
 //! code, `−` and `+` zooming, `←` and `→` between the slides; `g t` shows
 //! it from the other views.
 //!
-//! `ga` asks Haiku a question about the change (ask.rs): a box to type it
-//! in, then a window on the right half with the answer streamed in.
-//!
 //! `c` goes through the branch's commits one at a time, oldest first, as
 //! diffview's `:DiffviewFileHistory --reverse` did: each commit's own diff,
 //! a diff of its own (`History`) drawn in this one's place, `]p` and `[p`
@@ -79,7 +76,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -91,10 +88,9 @@ use crossterm::event::{
 };
 use crossterm::terminal;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Color;
 use ratatui::text::Span;
 
-use super::ask::{self, Asking, Said};
 use super::git::{self, Change, Entry, Section};
 use super::highlight::{self, Hl};
 use super::order;
@@ -140,14 +136,12 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 /// shows a diff.
 const ADDED: u32 = 0x2ea043;
 const REMOVED: u32 = 0xf85149;
-const ACCENT: Color = Color::Indexed(81);
 
 /// Which of the diff's scroll bars a press is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BarDrag {
     List,
     Diff,
-    Answer,
     /// The Story view's column.
     Story,
 }
@@ -170,8 +164,6 @@ pub struct Options {
     /// M-d's change runs to the working tree, what isn't committed yet
     /// marked apart (diff_uncommitted); off, the commits alone.
     pub uncommitted: bool,
-    /// ga asks Haiku about the diff (diff_ask).
-    pub ask: bool,
     /// A row of buttons for the list's keys (easy_keys), with the keys
     /// named after them (key_help_line).
     pub easy: bool,
@@ -232,7 +224,6 @@ impl Options {
             notes: story && on("diff_story_notes"),
             list_wide: on("diff_list_wide"),
             uncommitted: on("diff_uncommitted"),
-            ask: on("diff_ask"),
             easy: on("easy_keys"),
             key_help: on("key_help_line"),
             hover: on("hover_highlight"),
@@ -286,8 +277,6 @@ pub enum Msg {
     /// The Story column's hunks colored, by the hash of each hunk's
     /// path and lines (`reading::hunk_key`).
     HunksColored(Vec<(u64, Option<reading::HunkColors>)>),
-    /// What a question's answer says, by the question's number.
-    Asked(u64, Said),
     /// What a commit's diff of the history was told, by its number.
     History(u64, Box<Msg>),
     /// What a reading of the change asked for by a setting said, by its
@@ -441,61 +430,6 @@ enum Telling {
     Untold(String),
 }
 
-/// The box a question is typed in: its text, the byte the typing cursor is
-/// at, and where the diff's cursor was.
-struct AskBox {
-    text: String,
-    pos: usize,
-    at: ask::Cursor,
-}
-
-impl AskBox {
-    fn insert(&mut self, text: &str) {
-        self.text.insert_str(self.pos, text);
-        self.pos += text.len();
-    }
-
-    /// The character before the cursor's start, or after it.
-    fn char_before(&self) -> Option<usize> {
-        self.text[..self.pos]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-    }
-
-    fn char_after(&self) -> Option<usize> {
-        let c = self.text[self.pos..].chars().next()?;
-        Some(self.pos + c.len_utf8())
-    }
-
-    /// The start of the cursor's line, and its end.
-    fn line_start(&self) -> usize {
-        self.text[..self.pos].rfind('\n').map_or(0, |i| i + 1)
-    }
-
-    fn line_end(&self) -> usize {
-        self.text[self.pos..]
-            .find('\n')
-            .map_or(self.text.len(), |i| self.pos + i)
-    }
-}
-
-/// The window an answer streams into.
-struct Answer {
-    id: u64,
-    question: String,
-    body: String,
-    done: bool,
-    top: usize,
-    cursor: usize,
-    asking: Asking,
-    /// Who was asked, once that is known: the tab's session on its model,
-    /// or Haiku in its place.
-    who: Option<String>,
-    /// Where a selection of lines started (`v`), as a line of the answer.
-    visual: Option<usize>,
-}
-
 /// A button of the row at the bottom, a row of the settings view, or a
 /// button of a box's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -511,16 +445,11 @@ enum Button {
     Option(usize),
     /// One of the two modes, in the switch at the head of the row.
     Mode(Mode),
-    AskSend,
-    AskCancel,
-    AnswerClose,
-    AnswerAgain,
-    AnswerCopy,
 }
 
 /// The row's buttons (easy mode's, and the diff alone's): each presses its
 /// keys in the list.
-const BUTTONS: [(&str, &str); 9] = [
+const BUTTONS: [(&str, &str); 8] = [
     ("◀ Chapter", "[c"),
     ("Chapter ▶", "]c"),
     ("◀ Page", "[p"),
@@ -528,7 +457,6 @@ const BUTTONS: [(&str, &str); 9] = [
     ("Widen", "E"),
     ("Copy link", "yl"),
     ("Refresh", "R"),
-    ("Ask", "ga"),
     ("Close", "q"),
 ];
 
@@ -538,27 +466,14 @@ const FILES_ONLY: &str = "In the files only";
 
 /// One of the diff's keys for mission control's Keys view: the keys that do
 /// it, apart by spaces and written as the views write keys (`esc`, `↵`,
-/// `^c`), what it does, and whether it is `ga`'s (the diff_ask setting).
+/// `^c`), and what it does.
 pub struct KeyRow {
     pub keys: &'static str,
     pub does: &'static str,
-    pub ask: bool,
 }
 
 const fn key_row(keys: &'static str, does: &'static str) -> KeyRow {
-    KeyRow {
-        keys,
-        does,
-        ask: false,
-    }
-}
-
-const fn ask_row(keys: &'static str, does: &'static str) -> KeyRow {
-    KeyRow {
-        keys,
-        does,
-        ask: true,
-    }
+    KeyRow { keys, does }
 }
 
 /// The diff's own keys where each works, for mission control's Keys view
@@ -614,7 +529,6 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "m",
                 "the view's menu: the talk, the story, the map or the files, Tell it again",
             ),
-            ask_row("ga", "ask Claude about the diff"),
             key_row(
                 "m",
                 "the diff's menu, in the file list: its settings, and what its buttons do",
@@ -691,44 +605,19 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row("t", "show Haiku's answer so far, or the pages again"),
         ],
     ),
-    (
-        "M-d: asking a question (ga)",
-        &[
-            ask_row("↵", "ask it"),
-            ask_row("⇧↵ ^j", "a new line"),
-            ask_row("esc ^c", "cancel"),
-        ],
-    ),
-    (
-        "M-d: an answer (ga)",
-        &[
-            ask_row("ga", "ask another question"),
-            ask_row("v", "select lines of the answer; y copies them"),
-            ask_row("yy", "copy the answer"),
-            ask_row("yS", "copy the story as Markdown"),
-            ask_row(
-                "gf",
-                "open the path:line under the cursor, in the diff when the change has that file",
-            ),
-            ask_row("q esc", "close the answer, stopping it while it runs"),
-        ],
-    ),
 ];
 
 /// The diff's keys as mission control's Keys view lists them, a group
-/// each, `ga`'s only with `ask` (diff_ask), a group left with none left
-/// out.
-pub fn key_groups(ask: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
+/// each.
+pub fn key_groups() -> Vec<(&'static str, Vec<(String, String)>)> {
     KEYS.iter()
         .map(|(title, rows)| {
             let rows: Vec<(String, String)> = rows
                 .iter()
-                .filter(|r| ask || !r.ask)
                 .map(|r| (r.keys.to_string(), r.does.to_string()))
                 .collect();
             (*title, rows)
         })
-        .filter(|(_, rows)| !rows.is_empty())
         .collect()
 }
 
@@ -758,9 +647,6 @@ pub struct App {
     /// and how many files (by path) the list may show before it filters.
     left: Totals,
     listed_files: usize,
-    /// The diff as the story reads it: its hunks and what Haiku is given.
-    hunks: story::Hunks,
-    input: String,
     reading: Reading,
     /// Indexes into the change's files, in the order shown (a page's alone).
     order: Vec<usize>,
@@ -876,12 +762,6 @@ pub struct App {
     also_on_up: Option<(usize, Option<String>)>,
     /// Where Files mode was left, for the way back from the Story view.
     files_place: Option<Place_>,
-    ask_box: Option<AskBox>,
-    answer: Option<Answer>,
-    asks: u64,
-    /// The tab's own Claude session, which a question asks a copy of
-    /// (diff_ask_session), when the diff was opened in its pane's place.
-    session: Option<ask::Session>,
     /// A message in a box over the screen, and when it was said.
     message: Option<(String, Instant)>,
     /// The first key of a pair (y, g, ], [, z, C-w as w), and a count typed.
@@ -901,9 +781,6 @@ pub struct App {
     spots: Vec<select::Spot>,
     pressed: Option<(u16, u16)>,
     clicks: Option<(Instant, u16, u16, u8)>,
-    /// The path:line of an answer the button was pressed on, gone to when
-    /// it is let go with nothing selected, so a drag can select it.
-    pressed_cite: Option<ask::Cited>,
     /// Where the diff's rows were last drawn from, how many rows that is
     /// from where they were first, and what a screen row adds to for its
     /// row's number.
@@ -926,9 +803,6 @@ pub struct App {
     /// (trail.rs).
     back: Vec<trail::Spot>,
     ahead: Vec<trail::Spot>,
-    /// Where the boxes were last drawn, for clicks outside them.
-    ask_rect: Option<Rect>,
-    answer_rect: Option<Rect>,
     /// The list as last drawn: how many rows it has, and how many of them
     /// run down to its last file (none with no file), which a click shows
     /// a file from; the pointer's shape is read from these, so a movement
@@ -943,13 +817,6 @@ pub struct App {
     /// Who tells the workspace the pointer's shape, off the thread that
     /// draws and reads the keys, started with the first shape (`tell`).
     pointer_tx: Option<(Sender<Option<&'static str>>, std::thread::JoinHandle<()>)>,
-    /// The rows of the answer last drawn, as text, from its window's first:
-    /// the pointer's shape over them is read from these, so a movement of
-    /// the mouse never lays the whole answer out again.
-    answer_shown: Vec<String>,
-    /// The answer window's scroll bar where it was last drawn: its column,
-    /// first row and height.
-    answer_bar: Option<(u16, u16, usize)>,
     /// Escapes to write after the frame: the clipboard's.
     pub out: Vec<u8>,
     teller: Teller,
@@ -1033,8 +900,6 @@ impl App {
             totals: Totals::default(),
             left: Totals::default(),
             listed_files: 0,
-            hunks: Default::default(),
-            input: String::new(),
             reading: Reading::default(),
             order: Vec::new(),
             at: 0,
@@ -1089,10 +954,6 @@ impl App {
             up_at: (0, 0),
             also_on_up: None,
             files_place: None,
-            ask_box: None,
-            answer: None,
-            asks: 0,
-            session: None,
             message: None,
             pending: None,
             visual: None,
@@ -1102,7 +963,6 @@ impl App {
             spots: Vec::new(),
             pressed: None,
             clicks: None,
-            pressed_cite: None,
             diff_drawn: None,
             diff_scrolled: 0,
             diff_base: 0,
@@ -1115,14 +975,10 @@ impl App {
             bar: Vec::new(),
             back: Vec::new(),
             ahead: Vec::new(),
-            ask_rect: None,
-            answer_rect: None,
             list_drawn: (0, None),
             diff_bar: None,
             body_top: None,
             pointer_tx: None,
-            answer_shown: Vec::new(),
-            answer_bar: None,
             out: Vec::new(),
             teller: Teller::default(),
             history: None,
@@ -1179,9 +1035,6 @@ impl App {
             host().pointer(None);
         }
         self.teller.stop();
-        if let Some(a) = &self.answer {
-            a.asking.stop();
-        }
         if let Some(h) = &mut self.history {
             h.app.stop();
         }
@@ -1213,7 +1066,6 @@ impl App {
             || self.cover.is_some()
             || self.message.is_some()
             || self.telling == Telling::Waiting
-            || self.answer.as_ref().is_some_and(|a| !a.done)
             || self.history.as_ref().is_some_and(|h| h.app.ticking())
     }
 
@@ -1269,7 +1121,6 @@ impl App {
             msg,
             Msg::Coloured { .. }
                 | Msg::HunksColored(_)
-                | Msg::Asked(..)
                 | Msg::History(..)
                 | Msg::Heard(_, Heard::Progress(_))
                 | Msg::Newer(_)
@@ -1297,33 +1148,7 @@ impl App {
                     self.lines.clear();
                     self.visual = None;
                 }
-                // A question being typed stays about its file where the
-                // change read anew still has it.
-                let asked_about = self.ask_box.as_ref().and(self.current()).map(Entry::key);
                 self.loaded(*change);
-                if self.ask_box.is_some() {
-                    let entries = self.entries();
-                    let found = asked_about
-                        .as_ref()
-                        .and_then(|key| self.order.iter().position(|&i| entries[i].key() == *key));
-                    match found {
-                        // Its file is still there: the question keeps the
-                        // place it was typed about, side and line.
-                        Some(at) => {
-                            self.moved = true;
-                            self.show_at(at);
-                        }
-                        None => {
-                            self.say(
-                                "The file the question was about is no longer in the diff: it asks about the one shown now.",
-                            );
-                            let at = self.ask_cursor();
-                            if let Some(b) = &mut self.ask_box {
-                                b.at = at;
-                            }
-                        }
-                    }
-                }
                 if let Some(said) = said {
                     self.say(said);
                 }
@@ -1372,7 +1197,6 @@ impl App {
                 }
             }
             Msg::HunksColored(colored) => self.hunks_colored(colored),
-            Msg::Asked(id, said) => self.asked(id, said),
             Msg::Reloaded(..) => {}
             // One found before the look was turned off is not said.
             Msg::Newer(newer) => {
@@ -1396,7 +1220,6 @@ impl App {
 
     fn loaded_now(&mut self, change: Change) {
         self.loading = None;
-        self.read_input(&change);
         self.totals = Totals::of(&change.entries);
         // The header's words for the repository, worked out here rather
         // than as it draws.
@@ -1430,17 +1253,6 @@ impl App {
         } else {
             String::new()
         }
-    }
-
-    /// What Haiku is given of the whole change for a question (`ga`), and
-    /// its hunks, which a question's cursor is found in: the whole diff
-    /// shown, what isn't committed yet included.
-    fn read_input(&mut self, change: &Change) {
-        let (diffs, hunks) = story::split(&change.runs());
-        let commits = story::commits(&change.raw_commits);
-        // Never the tab's plan: diff_story_plan gives it to the story alone.
-        self.input = story::input(&story_entries(change), &diffs, &hunks, &commits, "");
-        self.hunks = hunks;
     }
 
     /// The change has nothing to show, as pane-in-place.sh found before it
@@ -1568,7 +1380,6 @@ impl App {
             .retain(|(commit, _), _| commit != git::INDEX && commit != git::WORK_TREE);
         self.lines.clear();
         self.visual = None;
-        self.read_input(&change);
         // In the shape the open story was asked in, so a setting changed
         // since reads no unchanged story as another.
         let (key, _) = story::key_of_shaped(change.told_part(), self.opts.map);
@@ -1801,7 +1612,7 @@ impl App {
         let entries = story_entries(told);
         let (diffs, hunks) = story::split(&told.runs());
         // Made from the told part each time, so a retell's plan read anew
-        // goes to the story alone, never into what a question sends.
+        // goes into it.
         let commits = story::commits(&told.raw_commits);
         let input = story::input(&entries, &diffs, &hunks, &commits, &context);
         let nothing_committed = change.to_work_tree() && told.entries.is_empty();
@@ -2725,8 +2536,7 @@ impl App {
         // M-m, alone: the settings view, opened or closed. In the workspace
         // the key is the workspace's, and never taken here.
         let alt_m = key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('m');
-        // With nothing to show, or a change that couldn't be read, too;
-        // over a question being typed, whose draft waits under the view.
+        // With nothing to show, or a change that couldn't be read, too.
         if alt_m && self.opts.alone && !self.in_history {
             self.toggle_settings();
             return Act::Redraw;
@@ -2772,20 +2582,19 @@ impl App {
             let act = h.app.key(key);
             return self.after_history(act);
         }
-        if ctrl && key.code == KeyCode::Char('c') && self.ask_box.is_none() {
+        if ctrl && key.code == KeyCode::Char('c') {
             return Act::Quit;
         }
         // C-\ C-n, which the palette's commands press first: back to the
         // diff's own keys from wherever typing is.
         if ctrl && matches!(key.code, KeyCode::Char('\\') | KeyCode::Char('4')) {
-            self.ask_box = None;
             self.pending = None;
             self.message = None;
             self.filtering = false;
             self.menu = None;
             return Act::Redraw;
         }
-        if ctrl && key.code == KeyCode::Char('n') && self.ask_box.is_none() {
+        if ctrl && key.code == KeyCode::Char('n') {
             return Act::Same;
         }
         // A refreshed story still being told moves no focus among files out
@@ -2805,8 +2614,6 @@ impl App {
             if self.opts.pane_arrows {
                 let windows = self.loading.is_none()
                     && self.failed.is_none()
-                    && self.ask_box.is_none()
-                    && self.answer.is_none()
                     && !(self.cover.is_some() && self.telling == Telling::Waiting);
                 if windows {
                     self.window_move(dir);
@@ -2852,12 +2659,6 @@ impl App {
                 }
                 _ => Act::Same,
             };
-        }
-        if self.ask_box.is_some() {
-            return self.ask_key(key);
-        }
-        if self.answer.is_some() {
-            return self.answer_key(key);
         }
         if self.filtering {
             // S-F10 opens the menu from the filter too, the filter kept,
@@ -3044,7 +2845,7 @@ impl App {
         };
         let count = self.count.take().unwrap_or(1);
         // The map has no file or line under a cursor: its pairs are the
-        // views', the story's copy and a question.
+        // views' and the story's copy.
         if self.on_map() || self.on_talk() {
             match (first, c) {
                 ('g', 't') => self.open_talk_view(),
@@ -3053,7 +2854,6 @@ impl App {
                 ('g', 'f') => self.show_files(false),
                 ('g', 's') => self.open_story_view(),
                 ('y', 'S') => self.copy_story(),
-                ('g', 'a') if self.opts.ask => self.open_ask(),
                 ('w', dir @ ('h' | 'j' | 'k' | 'l')) => self.beside(dir),
                 _ => {}
             }
@@ -3075,11 +2875,6 @@ impl App {
             ('y', 'S') => self.copy_story(),
             ('g', 'g') if self.focus == Focus::List => self.move_list(isize::MIN / 2),
             ('g', 'g') => self.move_cursor(isize::MIN / 2),
-            ('g', 'a') if self.opts.ask => self.open_ask(),
-            // A commit of the history asks nothing, which is said.
-            ('g', 'a') if self.in_history => {
-                self.say("Ask works in the diff, not in the history");
-            }
             (']', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(1),
             ('[', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(-1),
             (']', 'c') if self.focus == Focus::List => self.page_jump(1),
@@ -3341,13 +3136,8 @@ impl App {
     /// Where a press on a scroll bar lands, the list's or the diff's, and
     /// the row in the bar.
     fn on_scroll_bar(&mut self, x: u16, y: u16) -> Option<(BarDrag, usize)> {
-        if !self.opts.scroll_bars || self.ask_box.is_some() {
+        if !self.opts.scroll_bars {
             return None;
-        }
-        if self.answer.is_some() {
-            let (bx, by, body) = self.answer_bar?;
-            let on = x == bx && y >= by && ((y - by) as usize) < body;
-            return on.then(|| (BarDrag::Answer, (y - by) as usize));
         }
         // The Story view's column, at its right edge while it runs past.
         if self.on_story() {
@@ -3382,18 +3172,14 @@ impl App {
 
     /// Whether the mouse is over a scroll bar a press would take
     /// (`on_scroll_bar`), found from what was last drawn, so a movement of
-    /// the mouse measures nothing: the answer's and the diff's by where
-    /// they were drawn, the list's by its rows then, with the filter's
+    /// the mouse measures nothing: the diff's by where it was drawn, the list's by its rows then, with the filter's
     /// typing ended as a press ends it before it looks.
     fn over_scroll_bar(&mut self, x: u16, y: u16) -> bool {
         let at = |bar: Option<(u16, u16, usize)>| {
             bar.is_some_and(|(bx, by, h)| x == bx && y >= by && usize::from(y - by) < h)
         };
-        if !self.opts.scroll_bars || self.ask_box.is_some() {
+        if !self.opts.scroll_bars {
             return false;
-        }
-        if self.answer.is_some() {
-            return at(self.answer_bar);
         }
         let pinned = u16::from(!self.path_filter.is_empty());
         let h = usize::from(self.diff_area().height.saturating_sub(pinned));
@@ -3407,16 +3193,8 @@ impl App {
         match bar {
             BarDrag::List => self.list_top,
             BarDrag::Diff => self.diff_extent().1,
-            BarDrag::Answer => self.answer.as_ref().map_or(0, |a| a.top),
             BarDrag::Story => self.reader.top,
         }
-    }
-
-    /// The answer window's lines in all, its first shown and how many show.
-    fn answer_extent(&self) -> (usize, usize, usize) {
-        let total = self.answer_lines(self.answer_width()).len();
-        let top = self.answer.as_ref().map_or(0, |a| a.top);
-        (total, top, self.answer_bar.map_or(1, |(_, _, body)| body))
     }
 
     /// A press or a drag (`drag`, the thumb's row it was taken by) on a
@@ -3451,22 +3229,6 @@ impl App {
                     self.scroll_diff_to_start();
                 } else {
                     self.scroll_diff_to(to);
-                }
-            }
-            BarDrag::Answer => {
-                let (total, top, body) = self.answer_extent();
-                let to = if let Some(grab) = drag {
-                    kit::scroll_drag(total, body, body, row, grab)
-                } else {
-                    kit::scroll_press(total, top, body, body, row).unwrap_or(top)
-                };
-                // The cursor brought into the view, as the wheel does.
-                if let Some(a) = &mut self.answer {
-                    a.top = to;
-                    a.cursor = a
-                        .cursor
-                        .clamp(to, to + body - 1)
-                        .min(total.saturating_sub(1));
                 }
             }
             BarDrag::Story => self.scroll_story_to(row, drag),
@@ -4129,7 +3891,6 @@ impl App {
             pages_alone: false,
             progress: false,
             notes: false,
-            ask: false,
             haiku: false,
             ..self.opts
         };
@@ -4321,98 +4082,7 @@ impl App {
         self.say(format!("Copied the story as Markdown, {n} pages"));
     }
 
-    // ── Asking ──────────────────────────────────────────────────────────────
-
-    /// Where the cursor is, for a question: the file and line of the diff
-    /// side it is in, or the file under it in the list.
-    fn ask_cursor(&mut self) -> ask::Cursor {
-        // In the Story view, the change under the column's cursor; the
-        // file list's is out of sight, and not what the question is about.
-        if self.on_story() {
-            return self.reading_cursor();
-        }
-        let Some(entry) = self.current().cloned() else {
-            return ask::Cursor::default();
-        };
-        if self.focus == Focus::List {
-            return ask::Cursor {
-                path: Some(entry.path),
-                ..ask::Cursor::default()
-            };
-        }
-        let new_side = self.focus == Focus::New && entry.status != 'D';
-        let line = self.line_under(self.focus == Focus::New);
-        let side = if new_side {
-            ask::Side::New
-        } else {
-            ask::Side::Old
-        };
-        let hunk = line
-            .and_then(|l| ask::hunk_at(&self.hunks, &entry.path, l, self.run_of(&entry), side))
-            .map(|h| h.id.clone());
-        ask::Cursor {
-            path: Some(entry.path),
-            line,
-            old_side: !new_side,
-            hunk,
-        }
-    }
-
-    fn open_ask(&mut self) {
-        // Never with Ask Claude about the diff off, turned off since an
-        // answer opened included.
-        if self.change.is_none() || !self.opts.ask {
-            return;
-        }
-        let at = self.ask_cursor();
-        self.ask_box = Some(AskBox {
-            text: String::new(),
-            pos: 0,
-            at,
-        });
-    }
-
-    fn ask_key(&mut self, key: KeyEvent) -> Act {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        let Some(b) = &mut self.ask_box else {
-            return Act::Same;
-        };
-        match key.code {
-            KeyCode::Esc => self.ask_box = None,
-            KeyCode::Char('c') if ctrl => self.ask_box = None,
-            KeyCode::Enter if shift => b.insert("\n"),
-            KeyCode::Char('j') if ctrl => b.insert("\n"),
-            KeyCode::Enter => self.send_question(),
-            KeyCode::Backspace => {
-                if let Some(at) = b.char_before() {
-                    b.text.replace_range(at..b.pos, "");
-                    b.pos = at;
-                }
-            }
-            KeyCode::Delete => {
-                if let Some(end) = b.char_after() {
-                    b.text.replace_range(b.pos..end, "");
-                }
-            }
-            KeyCode::Left => b.pos = b.char_before().unwrap_or(b.pos),
-            KeyCode::Right => b.pos = b.char_after().unwrap_or(b.pos),
-            KeyCode::Home => b.pos = b.line_start(),
-            KeyCode::Char('a') if ctrl => b.pos = b.line_start(),
-            KeyCode::End => b.pos = b.line_end(),
-            KeyCode::Char('e') if ctrl => b.pos = b.line_end(),
-            KeyCode::Char('u') if ctrl => {
-                b.text.clear();
-                b.pos = 0;
-            }
-            KeyCode::Char(c) if !ctrl => b.insert(c.encode_utf8(&mut [0; 4])),
-            _ => return Act::Same,
-        }
-        Act::Redraw
-    }
-
-    /// Text pasted: into the question being typed, line breaks and all
-    /// (the terminal's bracketed paste), and nowhere else.
+    /// Text pasted: into the path filter being typed, and nowhere else.
     pub fn paste(&mut self, text: &str) -> Act {
         // Pasted into the menu's search; nothing else is typed into under
         // the menu or the settings view.
@@ -4426,374 +4096,17 @@ impl App {
             let act = h.app.paste(text);
             return self.after_history(act);
         }
-        if self.ask_box.is_none() && self.filtering {
-            self.path_filter.extend(
-                text.chars()
-                    .map(|c| if c.is_whitespace() { ' ' } else { c })
-                    .filter(|c| !c.is_control()),
-            );
-            self.refilter();
-            self.read_view();
-            return Act::Redraw;
-        }
-        let Some(b) = &mut self.ask_box else {
+        if !self.filtering {
             return Act::Same;
-        };
-        b.insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
+        }
+        self.path_filter.extend(
+            text.chars()
+                .map(|c| if c.is_whitespace() { ' ' } else { c })
+                .filter(|c| !c.is_control()),
+        );
+        self.refilter();
+        self.read_view();
         Act::Redraw
-    }
-
-    fn send_question(&mut self) {
-        let Some(b) = self.ask_box.take() else {
-            return;
-        };
-        // Never with Ask turned off since the box opened.
-        if !self.opts.ask {
-            return;
-        }
-        let question = b.text.trim().to_string();
-        if question.is_empty() {
-            return;
-        }
-        let Some(change) = &self.change else {
-            return;
-        };
-        // A question gets only a story told from the commits and the diff alone: one that
-        // read the tab's plan (or may have, kept before that was known)
-        // carries its words, which diff_story_plan gives the story alone.
-        let story = self.story.as_ref().filter(|s| s.from_plan == Some(false));
-        let question_for = ask::Question {
-            top: change.top.clone(),
-            session_input: ask::session_input(story, &self.input, &change.top, &b.at, &question),
-            input: ask::input(story, Some(&self.input), &b.at, &question),
-            session: self.session.clone(),
-        };
-        self.asks += 1;
-        let id = self.asks;
-        let asking = Asking::default();
-        if let Some(old) = self.answer.take() {
-            old.asking.stop();
-        }
-        self.answer = Some(Answer {
-            id,
-            question,
-            body: String::new(),
-            done: false,
-            top: 0,
-            cursor: 0,
-            asking: asking.clone(),
-            who: None,
-            visual: None,
-        });
-        if !self.opts.haiku {
-            return;
-        }
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            ask::run(&question_for, &asking, &|said| {
-                let _ = tx.send(Msg::Asked(id, said));
-            });
-        });
-    }
-
-    fn asked(&mut self, id: u64, said: Said) {
-        let Some(a) = self.answer.as_mut().filter(|a| a.id == id) else {
-            return;
-        };
-        match said {
-            Said::Text(text) => a.body.push_str(&text),
-            Said::Who(who) => a.who = Some(who),
-            Said::Tool(line) => {
-                if !a.body.is_empty() {
-                    a.body.push_str("\n\n");
-                }
-                a.body.push_str(&line);
-                a.body.push_str("\n\n");
-            }
-            Said::Done(Ok(text)) => {
-                a.done = true;
-                if a.body.trim().is_empty() {
-                    a.body = text;
-                }
-            }
-            // Claude Code missing is all there is to say, as diffview.lua
-            // said it.
-            Said::Done(Err(why)) if why == ask::NOT_INSTALLED => {
-                a.done = true;
-                a.body = why;
-            }
-            Said::Done(Err(why)) => {
-                a.done = true;
-                if !a.body.is_empty() {
-                    a.body.push_str("\n\n");
-                }
-                let asked_the_session = a
-                    .who
-                    .as_ref()
-                    .is_some_and(|w| w != ask::FELL_BACK && w != ask::ASKED_HAIKU);
-                a.body.push_str(if asked_the_session {
-                    "**The tab's session couldn't answer**"
-                } else {
-                    "**Haiku couldn't answer**"
-                });
-                if !why.is_empty() {
-                    a.body.push_str(&format!(": {why}"));
-                }
-            }
-        }
-    }
-
-    fn close_answer(&mut self) {
-        if let Some(a) = self.answer.take() {
-            a.asking.stop();
-        }
-        // A key typed in the answer, or a copy made in it, was the
-        // answer's, never the first of a pair in the diff.
-        self.pending = None;
-        self.count = None;
-        self.yanked = false;
-    }
-
-    fn answer_key(&mut self, key: KeyEvent) -> Act {
-        if let Some(first) = self.pending.take() {
-            // After a y that copied the lines selected, the selection ends:
-            // Esc and v do nothing more, and a key that isn't y's does its
-            // own work.
-            if std::mem::take(&mut self.yanked) {
-                if let Some(a) = &mut self.answer {
-                    a.visual = None;
-                }
-                if matches!(key.code, KeyCode::Esc | KeyCode::Char('v' | 'V')) {
-                    return Act::Redraw;
-                }
-                if !matches!(key.code, KeyCode::Char('y' | 'S')) {
-                    return self.answer_key(key);
-                }
-            }
-            let KeyCode::Char(c) = key.code else {
-                return Act::Redraw;
-            };
-            match (first, c) {
-                ('g', 'g') => {
-                    if let Some(a) = &mut self.answer {
-                        a.cursor = 0;
-                    }
-                }
-                ('g', 'a') => {
-                    self.close_answer();
-                    self.open_ask();
-                }
-                ('g', 'f') => self.go_to_cited(),
-                ('y', 'y') => self.copy_answer(),
-                ('y', 'S') => self.copy_story(),
-                _ => {}
-            }
-            return Act::Redraw;
-        }
-        let lines = self.answer_lines(self.answer_width()).len();
-        let half = (self.answer_body() / 2).max(1);
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let Some(a) = &mut self.answer else {
-            return Act::Same;
-        };
-        let last = lines.saturating_sub(1);
-        match key.code {
-            KeyCode::Esc if a.visual.is_some() => a.visual = None,
-            KeyCode::Char('q') | KeyCode::Esc => self.close_answer(),
-            KeyCode::Char('d') if ctrl => a.cursor = (a.cursor + half).min(last),
-            KeyCode::Char('u') if ctrl => a.cursor = a.cursor.saturating_sub(half),
-            KeyCode::Char('v' | 'V') if !ctrl => {
-                a.visual = match a.visual {
-                    Some(_) => None,
-                    None => Some(a.cursor),
-                };
-            }
-            KeyCode::Char(c @ ('g' | 'y')) if !ctrl => {
-                self.pending = Some(c);
-                // y on the lines selected copies their text.
-                if c == 'y' {
-                    self.copy_answer_lines();
-                }
-            }
-            KeyCode::Char('j') | KeyCode::Down => a.cursor = (a.cursor + 1).min(last),
-            KeyCode::Char('k') | KeyCode::Up => a.cursor = a.cursor.saturating_sub(1),
-            KeyCode::Char('G') | KeyCode::End => a.cursor = last,
-            KeyCode::Home => a.cursor = 0,
-            _ => return Act::Same,
-        }
-        Act::Redraw
-    }
-
-    fn copy_answer(&mut self) {
-        let Some(body) = self.answer.as_ref().map(|a| a.body.trim().to_string()) else {
-            return;
-        };
-        self.clip(&format!("{body}\n"));
-        self.say("Copied the answer");
-    }
-
-    /// gf: the path:line under the answer's cursor, in the diff when the
-    /// change has that file.
-    fn go_to_cited(&mut self) {
-        let lines = self.answer_lines(self.answer_width());
-        let cursor = self.answer.as_ref().map_or(0, |a| a.cursor);
-        let Some(line) = lines.get(cursor) else {
-            return;
-        };
-        let Some((_, cited)) = ask::all_cited(&line.0).into_iter().next() else {
-            return self.say("No path:line under the cursor");
-        };
-        self.cited(cited);
-    }
-
-    fn cited(&mut self, cited: ask::Cited) {
-        let Some(top) = self
-            .change
-            .as_ref()
-            .map(|c| c.top.to_string_lossy().into_owned())
-        else {
-            return;
-        };
-        let path = cited.path.strip_prefix("./").unwrap_or(&cited.path);
-        let path = path
-            .strip_prefix(&format!("{top}/"))
-            .unwrap_or(path)
-            .to_string();
-        self.close_answer();
-        // From the Story view, the line cited is in the files.
-        // Only for a file the diff has: one outside it opens beside, the
-        // Story view left as it is.
-        let changed = self.entries().iter().any(|e| e.path == path);
-        if changed && self.mapped() && self.mode != Mode::Files {
-            self.whole_files();
-        }
-        let found = self
-            .order
-            .iter()
-            .position(|&i| self.entries()[i].path == path);
-        let Some(at) = found else {
-            let file = Path::new(&top).join(&path);
-            let inside = file
-                .canonicalize()
-                .ok()
-                .zip(Path::new(&top).canonicalize().ok())
-                .is_some_and(|(f, t)| f.starts_with(t) && f.is_file());
-            if !inside {
-                return self.say(format!("{path} isn't in the repository"));
-            }
-            if !self.open_beside(&top, &file, cited.line) {
-                self.say(format!("{path} isn't changed in this diff"));
-            }
-            return;
-        };
-        self.moved = true;
-        self.show_at(at);
-        self.focus = self.main_side();
-        let new_side = self.focus == Focus::New;
-        let lines = self.screen_lines().to_vec();
-        let found = lines.iter().position(|l| match l {
-            Line::Pair { old, new, .. } => matches!(if new_side { new } else { old }, Cell::Text { line, range } if *line + 1 == cited.line && range.start == 0),
-            _ => false,
-        });
-        if let Some(i) = found {
-            self.cur = i;
-            self.col = 0;
-            self.top = i.saturating_sub(self.body_height() / 2);
-        }
-    }
-
-    /// The answer window's rows of text: the window less its edges and its
-    /// row of buttons.
-    fn answer_body(&self) -> usize {
-        let h = self
-            .rows
-            .saturating_sub(2)
-            .max(5)
-            .min(self.rows.saturating_sub(1));
-        h.saturating_sub(3) as usize
-    }
-
-    /// A file the diff doesn't change, opened in a pane below it at a line,
-    /// as the answer's `gf` opened one in a split below the diff: in your
-    /// `$VISUAL` or `$EDITOR` (`+<line>`, as Vim, Neovim, nano and Emacs
-    /// take it), else read as plain text (`switchboard view +<line>`). False
-    /// outside the workspace, which has no pane to open it in.
-    fn open_beside(&self, top: &str, file: &Path, line: usize) -> bool {
-        if !self.opts.server {
-            return false;
-        }
-        let file = file.to_string_lossy().into_owned();
-        let editor = ["VISUAL", "EDITOR"]
-            .iter()
-            .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()));
-        let mut args: Vec<String> = ["split", "-D", "-c", top, "--"]
-            .iter()
-            .map(|a| a.to_string())
-            .collect();
-        match editor {
-            Some(editor) => args.extend([
-                "sh".to_string(),
-                "-c".into(),
-                format!("exec {editor} \"+$1\" \"$2\""),
-                "sh".into(),
-                line.to_string(),
-                file,
-            ]),
-            None => {
-                let exe = util::exe()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| "switchboard".into());
-                args.extend([exe, "view".into(), format!("+{line}"), file]);
-            }
-        }
-        std::thread::spawn(move || {
-            let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let _ = host().command(&args);
-        });
-        true
-    }
-
-    fn answer_width(&self) -> u16 {
-        (self.cols / 2)
-            .saturating_sub(2)
-            .max(40)
-            .min(self.cols.saturating_sub(2))
-    }
-
-    /// The answer as lines for its window: its Markdown laid out as the
-    /// PR view lays it out, with a spinner while it comes.
-    fn answer_lines(&self, cols: u16) -> Vec<(String, Vec<(String, Style)>)> {
-        let Some(a) = &self.answer else {
-            return Vec::new();
-        };
-        let inner = cols.saturating_sub(4).max(10) as usize;
-        let mut text = a
-            .who
-            .as_ref()
-            .map(|who| format!("_{who}_\n\n"))
-            .unwrap_or_default();
-        text.push_str(&a.body);
-        if !a.done {
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str(self.spinner());
-            if a.body.is_empty() {
-                text.push_str(" reading the diff");
-            }
-        }
-        let doc = switchboard_ui::markdown::Markdown::parse(&text, "").layout(inner);
-        doc.lines
-            .iter()
-            .map(|l| {
-                let spans = l
-                    .spans
-                    .iter()
-                    .map(|s| (s.text.clone(), s.style.ratatui()))
-                    .collect();
-                (l.plain(), spans)
-            })
-            .collect()
     }
 
     // ── The mouse ───────────────────────────────────────────────────────────
@@ -4942,9 +4255,8 @@ impl App {
     /// The pointer's shape over a cell, by what a click there does
     /// (`mouse_now`): the hand over a button, the list's rows down to its
     /// last file (a click on a row over a file shows that file), a fold in
-    /// the diff and a `path:line` in an answer;
-    /// the text beam over the diff's text, an answer's, and where a click
-    /// types (the filter's line, the question's box); the arrow over the
+    /// the diff; the text beam over the diff's text and where a click
+    /// types (the filter's line); the arrow over the
     /// rest, a scroll bar included, as the workspace's own have it.
     fn shape_at(&mut self, x: u16, mut y: u16) -> Pointer {
         // The header's row takes no click, the row of buttons its own; the
@@ -5003,9 +4315,6 @@ impl App {
             let inert = map_told && matches!(button, Button::Bar(i) if self.bar_keys(i) != "q");
             return if inert { Pointer::Arrow } else { Pointer::Hand };
         }
-        let inside = |r: Option<Rect>| {
-            r.is_some_and(|r| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
-        };
         // As a click: the cover, and a refreshed story still being told,
         // take nothing but the row's buttons.
         let waiting = self.cover.is_some() && self.telling == Telling::Waiting;
@@ -5020,42 +4329,18 @@ impl App {
         // The Story view: a hand over an entry of the outline, a line of
         // the column that does something and a step of What runs, which a
         // click takes; the text's shape over the rest of the column.
-        if self.ask_box.is_none() && self.answer.is_none() {
-            if self.hit_at(x, y).is_some() {
-                return Pointer::Hand;
-            }
-            if self.on_story() {
-                return if x > self.list_cols() && y < self.diff_area().bottom() {
-                    Pointer::Text
-                } else {
-                    Pointer::Arrow
-                };
-            }
+        if self.hit_at(x, y).is_some() {
+            return Pointer::Hand;
         }
-        if self.over_scroll_bar(x, y) {
-            return Pointer::Arrow;
-        }
-        if self.ask_box.is_some() {
-            return if inside(self.ask_rect) {
+        if self.on_story() {
+            return if x > self.list_cols() && y < self.diff_area().bottom() {
                 Pointer::Text
             } else {
                 Pointer::Arrow
             };
         }
-        if self.answer.is_some() {
-            let Some(r) = self.answer_rect.filter(|r| inside(Some(*r))) else {
-                return Pointer::Arrow;
-            };
-            let Some((row, col)) = self.answer_cell(r, x, y) else {
-                return Pointer::Arrow;
-            };
-            let cells = usize::from(r.width.saturating_sub(4));
-            let cited = self
-                .answer_shown
-                .get(row)
-                .and_then(|line| Self::cited_shown(line, col, cells))
-                .is_some();
-            return if cited { Pointer::Hand } else { Pointer::Text };
+        if self.over_scroll_bar(x, y) {
+            return Pointer::Arrow;
         }
         let area = self.diff_area();
         if y >= area.bottom() {
@@ -5211,35 +4496,21 @@ impl App {
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let down = m.kind == MouseEventKind::ScrollDown;
-                if self.on_talk() && self.answer.is_none() && self.ask_box.is_none() {
+                if self.on_talk() {
                     self.talk_wheel(down);
                     return Act::Redraw;
                 }
                 // Over the map, the wheel reads on from the goal down.
-                if self.on_map() && self.answer.is_none() && self.ask_box.is_none() {
+                if self.on_map() {
                     self.map_step(if down { 1 } else { -1 });
                     return Act::Redraw;
                 }
                 // Over the Story view, the outline moves and the column scrolls.
-                if self.on_story() && self.answer.is_none() && self.ask_box.is_none() {
+                if self.on_story() {
                     self.story_wheel(x, down);
                     return Act::Redraw;
                 }
-                if self.answer.is_some() {
-                    // The view moved and the cursor brought into it, as
-                    // the answer's window was a Neovim float's.
-                    let lines = self.answer_lines(self.answer_width()).len();
-                    let body = self.answer_body().max(1);
-                    if let Some(a) = &mut self.answer {
-                        let last = lines.saturating_sub(1);
-                        a.top = if down {
-                            (a.top + 3).min(lines.saturating_sub(body))
-                        } else {
-                            a.top.saturating_sub(3)
-                        };
-                        a.cursor = a.cursor.clamp(a.top, a.top + body - 1).min(last);
-                    }
-                } else if x < self.list_cols() {
+                if x < self.list_cols() {
                     // The list alone moves; the cursor stays on its file.
                     // Reading the list: a story arriving keeps it.
                     self.moved = true;
@@ -5258,9 +4529,7 @@ impl App {
                 let shown = self.failed.is_none()
                     && self.nothing.is_none()
                     && self.loading.is_none()
-                    && !(self.cover.is_some() && self.telling == Telling::Waiting)
-                    && self.ask_box.is_none()
-                    && self.answer.is_none();
+                    && !(self.cover.is_some() && self.telling == Telling::Waiting);
                 // Only where a click takes a menu's option (menu_mouse), so
                 // none opens that the mouse couldn't close.
                 if !shown || !switchboard_ui::settings::is_on("menu_mouse") {
@@ -5277,7 +4546,6 @@ impl App {
         // a scroll bar, which scrolls under a selection, it ends what was
         // selected.
         self.pressed = None;
-        self.pressed_cite = None;
         let closed = self.message.take().is_some();
         // A click anywhere but the filter's line ends typing in it, the
         // filter kept, so a button's keys or a click in the diff act as
@@ -5320,10 +4588,7 @@ impl App {
         }
         // A press on something of the Story view does what it does, and a
         // drag from it still selects its text.
-        if self.ask_box.is_none()
-            && self.answer.is_none()
-            && let Some(hit) = self.hit_at(x, y)
-        {
+        if let Some(hit) = self.hit_at(x, y) {
             self.selection = None;
             self.pressed = Some((x, y));
             self.up_at = (x, y);
@@ -5331,11 +4596,7 @@ impl App {
         }
         // Nothing else of the Story view takes a click but the pane it is
         // in, which takes the keys.
-        if self.on_story()
-            && self.ask_box.is_none()
-            && self.answer.is_none()
-            && self.on_scroll_bar(x, y).is_none()
-        {
+        if self.on_story() && self.on_scroll_bar(x, y).is_none() {
             let column = self.column_rect();
             if y < self.diff_area().bottom() {
                 self.focus = if x < self.list_cols() {
@@ -5361,7 +4622,7 @@ impl App {
                 BarDrag::List => self.focus = Focus::List,
                 BarDrag::Diff if self.focus == Focus::List => self.focus = self.main_side(),
                 BarDrag::Story => self.focus = Focus::New,
-                BarDrag::Diff | BarDrag::Answer => {}
+                BarDrag::Diff => {}
             }
             // The drag goes on from where the press left it, the diff's real
             // end included, which reading files on the way can move.
@@ -5375,47 +4636,11 @@ impl App {
         self.selection = None;
         self.visual = None;
         self.list_visual = None;
-        if let Some(a) = &mut self.answer {
-            a.visual = None;
-        }
         // A drag from here selects; a second press on the cell selects its
         // word and a third its line, in place of what a click does.
         self.pressed = Some((x, y));
         let clicks = self.count_click(x, y);
         if clicks > 1 && self.select_unit(x, y, clicks == 3) {
-            return Act::Redraw;
-        }
-        // A click outside a box closes it.
-        let inside = |r: Option<Rect>| {
-            r.is_some_and(|r| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
-        };
-        if self.ask_box.is_some() {
-            if !inside(self.ask_rect) {
-                self.ask_box = None;
-            }
-            return Act::Redraw;
-        }
-        if self.answer.is_some() {
-            if !inside(self.answer_rect) {
-                self.close_answer();
-                return Act::Redraw;
-            }
-            if let Some(r) = self.answer_rect
-                && let Some((row, col)) = self.answer_cell(r, x, y)
-            {
-                let lines = self.answer_lines(r.width);
-                let mut found = None;
-                if let Some(a) = &mut self.answer {
-                    let at = a.top + row;
-                    a.cursor = at.min(lines.len().saturating_sub(1));
-                    let cells = usize::from(r.width.saturating_sub(4));
-                    found = lines
-                        .get(at)
-                        .and_then(|line| Self::cited_shown(&line.0, col, cells));
-                }
-                // Gone to once the button is let go, unless it dragged.
-                self.pressed_cite = found;
-            }
             return Act::Redraw;
         }
         if y >= self.diff_area().bottom() {
@@ -5496,66 +4721,11 @@ impl App {
         Act::Redraw
     }
 
-    /// The line of an answer's body and the column of its text a screen
-    /// cell is, in its window `r`: none on the window's edges, its
-    /// padding, its scroll bar's column and its heading, which hold none
-    /// of the answer's text, for a click and for the pointer's shape alike.
-    fn answer_cell(&self, r: Rect, x: u16, y: u16) -> Option<(usize, usize)> {
-        let row = usize::from(y.checked_sub(r.y + 2)?);
-        let col = usize::from(x.checked_sub(r.x + 2)?);
-        (row < self.answer_body() && x + 2 < r.right()).then_some((row, col))
-    }
-
-    /// The `path:line` drawn at column `col` of an answer's line shown in
-    /// `cells` columns: only one the window shows whole, since a line cut
-    /// at its right edge (a row of code, which doesn't wrap) may show
-    /// `a.rs:12` of `a.rs:1234`, which names another line.
-    fn cited_shown(line: &str, col: usize, cells: usize) -> Option<ask::Cited> {
-        let shown = line
-            .char_indices()
-            .map(|(i, c)| i + c.len_utf8())
-            .take_while(|end| width(&line[..*end]) <= cells)
-            .last()
-            .map_or("", |end| &line[..end]);
-        // What is shown is looked in first, so a movement over a row with
-        // no path:line under the mouse reads no more than the window shows;
-        // then the line on to the end of the word cut at the window's edge,
-        // whose path:line must be the same.
-        let seen = Self::cited_at(shown, col)?;
-        let end = line[shown.len()..]
-            .find(char::is_whitespace)
-            .map_or(line.len(), |i| shown.len() + i);
-        (Self::cited_at(&line[..end], col).as_ref() == Some(&seen)).then_some(seen)
-    }
-
-    /// The `path:line` drawn at column `col` of an answer's line, the
-    /// column counted in cells as the line is drawn, whatever bytes its
-    /// characters before it take.
-    fn cited_at(line: &str, col: usize) -> Option<ask::Cited> {
-        // The text up to and with each character is measured whole, as it
-        // is drawn, so characters drawn as one (an emoji of several) count
-        // the cells they take together.
-        let (byte, _) = line
-            .char_indices()
-            .find(|(i, c)| width(&line[..i + c.len_utf8()]) > col)?;
-        ask::cited(line, byte)
-    }
-
     /// The keys easy mode's `i`th button presses, as the row is drawn.
     fn bar_keys(&self, i: usize) -> &'static str {
-        BUTTONS
-            .iter()
-            .filter(|(_, k)| self.opts.ask || *k != "ga")
-            .nth(i)
-            .map(|(_, k)| *k)
-            .unwrap_or("")
+        BUTTONS.get(i).map_or("", |(_, k)| *k)
     }
 
-    /// The button at a cell, as a click and the pointer's shape find it:
-    /// while the question's box or an answer is open, only its own, since
-    /// the row's keys would go to the box (typed into the question, or not
-    /// an answer's keys); a click on another closes the box, as a click
-    /// anywhere outside it does.
     /// A button pressed, as its keys would be.
     fn press(&mut self, button: Button) -> Act {
         // A button does its own work, never finishing a pair, a count or
@@ -5569,23 +4739,12 @@ impl App {
                 self.go_along(button == Button::Forward);
                 return Act::Redraw;
             }
-            // While a question is typed, the row's buttons do nothing: its
-            // keys would be typed into the draft.
-            // While a question is typed, the row is Settings and Close
-            // alone (`bar_buttons`), Close closing the question, draft and
-            // all, as Esc does.
-            Button::Bar(_) if self.ask_box.is_some() && self.settings.is_none() => {
-                self.ask_box = None;
-                return Act::Redraw;
-            }
             Button::Bar(i) => {
                 let keys = self.bar_keys(i);
                 // Over the settings view, a button goes back to the diff
-                // and does its work there; Close only closes the view, and
-                // so does any of them over a question's draft, which its
-                // keys would be typed into.
+                // and does its work there; Close only closes the view.
                 let over_view = self.settings.take().is_some();
-                if over_view && (keys == "q" || self.ask_box.is_some()) {
+                if over_view && keys == "q" {
                     return Act::Redraw;
                 }
                 // Its keys may go on to a commit's diff of the history,
@@ -5597,13 +4756,6 @@ impl App {
                     h.app.count = None;
                     h.app.yanked = false;
                     h.app.filtering = false;
-                }
-                // Over an answer, whose keys they aren't, the answer goes
-                // first, so the button does its work in the diff.
-                // Over an answer, whose keys they aren't, the answer goes
-                // first, so the button does its work in the diff.
-                if self.answer.is_some() {
-                    self.close_answer();
                 }
                 self.focus = Focus::List;
                 // In the Story view ] and [ alone turn the pages: the page
@@ -5635,14 +4787,6 @@ impl App {
             Button::Settings => self.toggle_settings(),
             Button::Option(_) => {}
             Button::Mode(mode) => self.choose_mode(mode),
-            Button::AskSend => self.send_question(),
-            Button::AskCancel => self.ask_box = None,
-            Button::AnswerClose => self.close_answer(),
-            Button::AnswerAgain => {
-                self.close_answer();
-                self.open_ask();
-            }
-            Button::AnswerCopy => self.copy_answer(),
         }
         Act::Redraw
     }
@@ -5777,10 +4921,9 @@ fn load(dir: PathBuf, base: Option<String>, working: bool, uncommitted: bool, tx
 /// The terminal as the diff wants it while it runs, and put back however
 /// it ends: raw, on the alternate screen, clicks, drags and the wheel
 /// reported, and every movement too with the hover on; text pasted
-/// bracketed, so a question pasted into `ga`'s box keeps its line breaks;
-/// and keys told apart (the kitty keyboard protocol's flag 1, which
-/// crossterm reads), so Shift-Enter there adds a line, as Neovim asked
-/// for them. In a pane the workspace sends keys so only while the diff
+/// bracketed, so a paste into the filter or the menu's search arrives
+/// whole; and keys told apart (the kitty keyboard protocol's flag 1, which
+/// crossterm reads), as Neovim asked for them. In a pane the workspace sends keys so only while the diff
 /// asks.
 struct Term {
     /// Whether the diff set the mouse pointer's shape, so the terminal's
@@ -5829,7 +4972,6 @@ pub fn run(
     dir: PathBuf,
     base: Option<String>,
     working: bool,
-    session: Option<ask::Session>,
     resize_keys: Vec<ResizeKey>,
     several: bool,
 ) -> ExitCode {
@@ -5837,7 +4979,6 @@ pub fn run(
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
     let opts = Options::read();
     let mut app = App::new(opts, cols, rows, tx.clone());
-    app.session = session.filter(|_| settings::is_on("diff_ask_session"));
     app.opened = Some((dir.clone(), base.clone(), working));
     app.round = host().draws("round");
     app.several = several && opts.server;
@@ -6041,6 +5182,7 @@ pub fn run(
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use std::path::Path;
     use switchboard_ui::kit::Surface;
 
     fn opts() -> Options {
@@ -6052,7 +5194,6 @@ mod tests {
             notes: true,
             list_wide: false,
             uncommitted: true,
-            ask: true,
             easy: false,
             key_help: true,
             hover: true,
@@ -6338,72 +5479,11 @@ mod tests {
             over(&mut app, 3, rows.len() as u16 + 1),
             Some(Pointer::Arrow)
         );
-        // The filter's line takes typing, the question's box too; outside
-        // the box a click only closes it.
+        // The filter's line takes typing.
         app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         assert_eq!(over(&mut app, 3, 0), Some(Pointer::Text));
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(over(&mut app, 3, 0), Some(Pointer::Hand));
-        for c in "ga".chars() {
-            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-        }
-        screen(&mut app);
-        let ask = app.ask_rect.expect("the question's box");
-        let send = app
-            .buttons
-            .iter()
-            .find(|(b, _)| *b == Button::AskSend)
-            .map(|(_, r)| *r)
-            .expect("the box's Send");
-        assert_ne!(send.y, ask.y + 2, "the typing is on a row of its own");
-        assert_eq!(over(&mut app, ask.x + 2, ask.y + 2), Some(Pointer::Text));
-        assert_eq!(over(&mut app, send.x, send.y), Some(Pointer::Hand));
-        // Outside the box, over the list, the arrow: a click there only
-        // closes the box.
-        assert_eq!(over(&mut app, 3, y), Some(Pointer::Arrow));
-        // While a question is typed the row is Close alone, which closes
-        // it: a hand.
-        let (_, close) = *app
-            .bar
-            .iter()
-            .find(|(b, _)| matches!(b, Button::Bar(_)))
-            .unwrap();
-        assert_eq!(on_screen(&mut app, close.x, close.y), Some(Pointer::Hand));
-        app.mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: close.x,
-            row: close.y,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(app.ask_box.is_none(), "the click closed the box");
-    }
-
-    #[test]
-    fn a_citation_is_found_by_the_cell_it_is_drawn_at() {
-        let line = "See ‘src/a.rs:12’.";
-        let at = |col| App::cited_at(line, col).map(|c| c.line);
-        // The quote before it and the quote and the full stop after it are
-        // no part of it, though the quotes take three bytes each.
-        assert_eq!(at(4), None);
-        assert_eq!(at(5), Some(12));
-        assert_eq!(at(15), Some(12));
-        assert_eq!(at(16), None);
-        assert_eq!(at(17), None);
-        assert_eq!(at(40), None);
-        // Cut at the window's edge, a citation that shows another line is
-        // none; one shown whole is.
-        assert_eq!(App::cited_shown("src/a.rs:1234", 2, 11), None);
-        assert_eq!(
-            App::cited_shown("src/a.rs:1234", 2, 13).map(|c| c.line),
-            Some(1234)
-        );
-        // An emoji of several characters is drawn as one, two cells wide.
-        let line = "👩‍💻 src/a.rs:12.";
-        let at = |col| App::cited_at(line, col).map(|c| c.line);
-        assert_eq!(at(2), None);
-        assert_eq!(at(3), Some(12));
-        assert_eq!(at(13), Some(12));
-        assert_eq!(at(14), None);
     }
 
     #[test]
@@ -6453,11 +5533,11 @@ mod tests {
             "Widen",
             "Copy link",
             "Refresh",
-            "Ask",
             "Close",
         ] {
             assert!(bar.contains(label), "{label} in {bar:?}");
         }
+        assert!(!bar.contains("Ask"), "{bar:?}");
         assert!(bar.contains("R refresh"), "{bar:?}");
         assert!(
             bar.contains("choose a file"),
@@ -6479,7 +5559,7 @@ mod tests {
             said.starts_with("No story for this diff: Haiku isn't asked here."),
             "{said:?}"
         );
-        let (_, close) = *app.bar.iter().find(|(b, _)| *b == Button::Bar(8)).unwrap();
+        let (_, close) = *app.bar.iter().find(|(b, _)| *b == Button::Bar(7)).unwrap();
         let click = MouseEvent {
             column: close.x + 1,
             row: close.y,
@@ -6595,7 +5675,6 @@ mod tests {
         for (label, key) in [
             ("Files in reading order", "diff_order"),
             ("Diff told as a story", "diff_story"),
-            ("Ask Claude about the diff", "diff_ask"),
             ("Check for a newer switchboard-diff", "diff_update_check"),
         ] {
             let row = shown.iter().find(|l| l.contains(label)).unwrap();
@@ -6605,8 +5684,13 @@ mod tests {
             text.contains("OPTIONS") && text.contains("UPDATES"),
             "{text}"
         );
-        // What only the workspace has a use for is none of its rows.
-        assert!(!text.contains("diff_ask_session") && !text.contains("diff_beside_share"));
+        // What only the workspace has a use for is none of its rows, and
+        // Ask, removed, is no row at all.
+        assert!(!text.contains("diff_beside_share"));
+        assert!(
+            !text.contains("diff_ask") && !text.contains("Ask Claude"),
+            "{text}"
+        );
         // The chosen row is opened to its default and what Enter does.
         assert!(text.contains("default on  ·  Enter: on or off"), "{text}");
         // The row of buttons stays, Settings lit, and says how to go back.
@@ -7758,7 +6842,8 @@ mod tests {
             {"title": "Say so", "why": "The README says it.", "hunks": ["README.md#1", "src/new.js#1"]}
         ]}"#;
         let paths: Vec<String> = vec!["README.md".into(), "src/a.js".into(), "src/new.js".into()];
-        let told = story::parse(answer, &paths, order::generated, &app.hunks).unwrap();
+        let (_, hunks) = story::split(&app.change.as_ref().unwrap().runs());
+        let told = story::parse(answer, &paths, order::generated, &hunks).unwrap();
         app.told(told);
         let shown = screen(&mut app);
         let names = list(&shown);
@@ -7924,7 +7009,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wheel_scrolls_the_list_and_the_answer_past_their_cursors() {
+    fn the_wheel_scrolls_the_list_past_its_cursor() {
         let mut app = app();
         screen(&mut app);
         let wheel = |app: &mut App, column: u16, down: bool| {
@@ -7949,28 +7034,10 @@ mod tests {
         press(&mut app, "j");
         screen(&mut app);
         assert_eq!(app.list_top, 4, "a key brings the cursor back in sight");
-        // The answer's window: the view moves, the cursor along with it.
-        press(&mut app, "ga");
-        press(&mut app, "Why?");
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let id = app.answer.as_ref().unwrap().id;
-        let long: String = (1..=60).map(|i| format!("Point {i}.\n\n")).collect();
-        app.event(Msg::Asked(id, Said::Done(Ok(long))));
-        screen(&mut app);
-        for _ in 0..4 {
-            wheel(&mut app, 90, true);
-        }
-        screen(&mut app);
-        let a = app.answer.as_ref().unwrap();
-        assert_eq!(a.top, 12);
-        assert!(a.cursor >= a.top, "{} {}", a.cursor, a.top);
-        press(&mut app, "gg");
-        screen(&mut app);
-        assert_eq!(app.answer.as_ref().unwrap().top, 0);
     }
 
     #[test]
-    fn a_merge_conflict_unresolved_has_no_story_and_ga_in_a_commit_says_so() {
+    fn a_merge_conflict_unresolved_has_no_story() {
         let (tx, _rx) = channel();
         let mut app = App::new(opts(), 100, 16, tx);
         app.loaded(Change {
@@ -7982,14 +7049,26 @@ mod tests {
             app.telling,
             Telling::Untold("a merge conflict is unresolved".into())
         );
-        app.in_history = true;
-        app.opts.ask = false;
+    }
+
+    #[test]
+    fn ga_does_nothing_in_the_list_the_diff_or_a_commit_of_the_history() {
+        let mut app = app();
+        let before = screen(&mut app);
         press(&mut app, "ga");
-        let said = app.message.take().map(|(t, _)| t);
-        assert_eq!(
-            said.as_deref(),
-            Some("Ask works in the diff, not in the history")
-        );
+        assert!(app.message.is_none(), "{:?}", app.message);
+        assert_eq!(screen(&mut app), before, "nothing opens over the list");
+        // The pair is over: the key after it does its own work.
+        press(&mut app, "j");
+        assert_eq!(app.current().unwrap().path, "src/a.js", "j moved");
+        press(&mut app, "l");
+        let before = screen(&mut app);
+        press(&mut app, "ga");
+        assert!(app.message.is_none(), "{:?}", app.message);
+        assert_eq!(screen(&mut app), before, "nothing opens over the diff");
+        app.in_history = true;
+        press(&mut app, "ga");
+        assert!(app.message.is_none(), "{:?}", app.message);
     }
 
     #[test]
@@ -8022,33 +7101,6 @@ mod tests {
         // over: the theme's own is.
         app.opts.light = true;
         assert_eq!(app.palette().0, blend(REMOVED, 0xffffff, 0.14));
-    }
-
-    #[test]
-    fn a_question_takes_a_paste_whole_and_shift_enter_adds_a_line() {
-        let mut app = app();
-        press(&mut app, "ga");
-        app.paste("Why this?\r\nAnd that?");
-        assert!(app.ask_box.is_some(), "a pasted line break doesn't send it");
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
-        press(&mut app, "More");
-        for _ in 0..4 {
-            app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        }
-        press(&mut app, "Even ");
-        app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        press(&mut app, "!");
-        let text = app.ask_box.as_ref().unwrap().text.clone();
-        assert_eq!(text, "Why this?\nAnd that?\nEven More!");
-        let shown = screen(&mut app);
-        for line in ["Why this?", "And that?", "Even More!"] {
-            assert!(
-                shown.iter().any(|l| l.contains(line)),
-                "{line} in {shown:?}"
-            );
-        }
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.answer.as_ref().unwrap().question, text);
     }
 
     /// A key as the Keys view writes it, as the terminal sends it.
@@ -8331,12 +7383,6 @@ mod tests {
                     app.telling = Telling::Waiting;
                     app.cover = Some(Instant::now());
                 }
-                "M-d: asking a question (ga)" => press(&mut app, "ga"),
-                "M-d: an answer (ga)" => {
-                    press(&mut app, "gaWhy?");
-                    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                    assert!(app.answer.is_some());
-                }
                 other => panic!("no place for {other}"),
             }
             app
@@ -8359,57 +7405,16 @@ mod tests {
                 }
             }
         }
-        // ga and its boxes only with diff_ask.
-        let without: Vec<String> = key_groups(false)
+        // ga is none of them.
+        let keys: Vec<String> = key_groups()
             .into_iter()
             .flat_map(|(_, rows)| rows.into_iter().map(|(k, _)| k))
             .collect();
-        assert!(!without.contains(&"ga".to_string()));
-        assert_eq!(key_groups(false).len(), 5);
-        assert_eq!(key_groups(true).len(), 7);
-    }
-
-    #[test]
-    fn ga_opens_a_box_and_a_question_opens_its_answer_beside_the_diff() {
-        let mut app = app();
-        press(&mut app, "ga");
         assert!(
-            screen(&mut app)
-                .iter()
-                .any(|l| l.contains("Ask about this diff"))
+            !keys.iter().any(|k| k.split(' ').any(|t| t == "ga")),
+            "{keys:?}"
         );
-        press(&mut app, "Why?");
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let id = app.answer.as_ref().unwrap().id;
-        app.event(Msg::Asked(id, Said::Text("It returns ".into())));
-        app.event(Msg::Asked(id, Said::Tool("_Read src/b.js_".into())));
-        app.event(Msg::Asked(id, Said::Text("2, see src/a.js:2.".into())));
-        app.event(Msg::Asked(id, Said::Done(Ok("whole".into()))));
-        let shown = screen(&mut app);
-        assert!(
-            shown.iter().any(|l| l.contains("Why?")),
-            "titled with the question"
-        );
-        assert!(
-            shown.iter().any(|l| l.contains("Read src/b.js")),
-            "{shown:?}"
-        );
-        assert!(
-            shown
-                .iter()
-                .any(|l| l.contains("Close") && l.contains("Ask again"))
-        );
-        // gf on the cited line opens src/a.js at line 2.
-        let lines = app.answer_lines(app.answer_width());
-        let at = lines
-            .iter()
-            .position(|l| l.0.contains("src/a.js:2"))
-            .unwrap();
-        app.answer.as_mut().unwrap().cursor = at;
-        press(&mut app, "gf");
-        assert!(app.answer.is_none());
-        assert_eq!(app.current().unwrap().path, "src/a.js");
-        assert_eq!(app.line_under(true), Some(2));
+        assert_eq!(key_groups().len(), 5);
     }
 
     fn mouse(app: &mut App, kind: MouseEventKind, x: u16, y: u16) -> Act {
@@ -8705,57 +7710,6 @@ mod tests {
             mouse(&mut app, UP, x + 2, y + 1);
         }
         assert_eq!(clipboard(&mut app), long);
-    }
-
-    #[test]
-    fn a_drag_over_an_answers_path_selects_it_and_a_click_still_goes_there() {
-        let mut app = app();
-        press(&mut app, "gaWhy?");
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let id = app.answer.as_ref().unwrap().id;
-        app.event(Msg::Asked(id, Said::Text("See src/a.js:2 there.".into())));
-        app.event(Msg::Asked(id, Said::Done(Ok("whole".into()))));
-        let shown = screen(&mut app);
-        let (x, y) = place_of(&shown, "src/a.js:2");
-        mouse(&mut app, DOWN, x, y);
-        mouse(&mut app, DRAG, x + 9, y);
-        mouse(&mut app, UP, x + 9, y);
-        assert_eq!(clipboard(&mut app), "src/a.js:2");
-        assert!(app.answer.is_some(), "the answer stays under a drag");
-        // A press and a release on it goes to the line.
-        app.message = None;
-        draw(&mut app);
-        mouse(&mut app, DOWN, x + 1, y);
-        assert!(app.answer.is_some());
-        mouse(&mut app, UP, x + 1, y);
-        assert!(app.answer.is_none());
-        assert_eq!(app.current().unwrap().path, "src/a.js");
-    }
-
-    #[test]
-    fn v_in_an_answer_selects_lines_and_y_copies_them() {
-        let mut app = app();
-        press(&mut app, "gaWhy?");
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let id = app.answer.as_ref().unwrap().id;
-        app.event(Msg::Asked(id, Said::Text("One.\n\nTwo.\n\nThree.".into())));
-        app.event(Msg::Asked(id, Said::Done(Ok("whole".into()))));
-        let lines = app.answer_lines(app.answer_width());
-        let one = lines.iter().position(|l| l.0.contains("One.")).unwrap();
-        app.answer.as_mut().unwrap().cursor = one;
-        press(&mut app, "vjjy");
-        assert_eq!(clipboard(&mut app), "One.\n\nTwo.");
-        // A drag in the answer selects its words.
-        press(&mut app, "j");
-        assert_eq!(app.answer.as_ref().unwrap().visual, None);
-        app.message = None;
-        let shown = screen(&mut app);
-        let (x, y) = place_of(&shown, "Three.");
-        mouse(&mut app, DOWN, x, y);
-        mouse(&mut app, DRAG, x + 3, y);
-        mouse(&mut app, UP, x + 3, y);
-        assert_eq!(clipboard(&mut app), "Thre");
-        assert!(app.answer.is_some());
     }
 
     /// The answer `map_app` is told: what changes, a first chapter of four

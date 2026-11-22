@@ -289,6 +289,15 @@ mod tests {
                 option.key
             );
         }
+        // Ask was removed: neither of its settings is a row of Settings
+        // or the diff's own view, so a value left in a file is ignored.
+        for gone in ["diff_ask", "diff_ask_session"] {
+            assert!(!schema.iter().any(|o| o.key == gone), "{gone} listed");
+            assert!(
+                manifest.default_of(gone).is_none(),
+                "{gone} in the manifest"
+            );
+        }
     }
 
     #[test]

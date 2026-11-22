@@ -110,8 +110,8 @@ pub fn run_with_timeout(mut cmd: Command, input: &[u8], seconds: u64) -> Result<
     ))
 }
 
-/// One line of `claude -p --output-format stream-json`, as the story and a
-/// question about the diff read them.
+/// One line of `claude -p --output-format stream-json`, as the story reads
+/// them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Streamed {
     /// A piece of the answer's text.

@@ -98,7 +98,6 @@ pub const SEALED_OFF: &[(&str, &str)] = &[
     ("diff_order", "false"),
     ("diff_story", "false"),
     ("diff_story_ahead", "false"),
-    ("diff_ask", "false"),
     ("diff_story_notes", "false"),
     ("slack_background", "false"),
     ("view_slack", "false"),
