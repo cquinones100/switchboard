@@ -32,6 +32,7 @@ const state = {
   menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question or the reminder's sheet does
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
+  haptics: true, // whether the app buzzes (Settings' phone_haptics), from the stream
 };
 
 function el(tag, attrs, ...kids) {
@@ -47,6 +48,28 @@ function el(tag, attrs, ...kids) {
     node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   }
   return node;
+}
+
+// A short tap of feedback (Settings' phone_haptics): `navigator.vibrate`
+// where the browser has it, as Android's does; else, where inputs take
+// `switch` (Safari, whose iOS 18 and later answer a switch toggled during a
+// tap with a haptic tick), a click on a hidden switch's label; else nothing.
+let haptic = null; // the hidden switch's label, made on the first buzz that needs it
+
+function buzz() {
+  if (!state.haptics) return;
+  if (typeof navigator.vibrate === "function") {
+    navigator.vibrate(10);
+    return;
+  }
+  const hasSwitch = typeof HTMLInputElement !== "undefined" && "switch" in HTMLInputElement.prototype;
+  if (!hasSwitch) return;
+  if (!haptic) {
+    const input = el("input", { type: "checkbox", switch: true, tabindex: "-1", "aria-hidden": "true" });
+    haptic = el("label", { class: "haptic", "aria-hidden": "true" }, input);
+    document.body.append(haptic);
+  }
+  haptic.click();
 }
 
 async function api(path, body) {
@@ -343,6 +366,7 @@ function held(row, tab) {
     hold.timer = setTimeout(() => {
       hold.timer = null;
       if (state.open || state.menu) return;
+      buzz();
       hold.swallow = true;
       openMenu(number(tab));
     }, HOLD_MS);
@@ -350,7 +374,9 @@ function held(row, tab) {
   row.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     // Sent by a long press too, on Android, whose click then waits.
-    if (hold.timer) hold.swallow = true;
+    const isLongPress = !!hold.timer;
+    if (isLongPress && !state.menu) buzz();
+    if (isLongPress) hold.swallow = true;
     letGo();
     if (!state.menu) openMenu(number(tab));
   });
@@ -940,6 +966,9 @@ async function answer(reply) {
   const tab = current();
   const p = tab && tab.prompt;
   if (!p) return;
+  // Ticking an option of a question that takes several answers buzzes nothing; its Submit does.
+  const isTick = p.multi && p.options.some((o) => String(o.n) === reply);
+  if (!isTick) buzz();
   // One answer for the prompt shown: its buttons wait for the next one.
   state.sent = { pane: tab.pane, key: promptKey(p) };
   render();
@@ -1021,6 +1050,7 @@ function composer() {
     try {
       if (answering) await answer(text);
       else {
+        buzz();
         const images = [];
         for (const c of chosen) images.push(await upload(n, c.file));
         await api("/api/tabs/" + n + "/message", { text, images });
@@ -1149,7 +1179,7 @@ const SWIPE_DECIDES = 10; // px moved before a touch counts as sideways or not
 const SWIPE_FLICK = 0.5; // px a millisecond rightward that open the drawer however far it went
 const SWIPE_MS = 200;
 const SWIPE_FLICK_MS = 100; // a flick lets go within this of its last move
-let swipe = null; // { screen, x, y, dx, at, speed, under, wanted, sliding }: the touch under way, or the slide after it
+let swipe = null; // { screen, x, y, dx, at, speed, under, wanted, buzzed, sliding }: the touch under way, or the slide after it
 
 function swipeable(screen) {
   screen.addEventListener("touchstart", (e) => {
@@ -1184,6 +1214,11 @@ function swipeable(screen) {
     if (elapsed > 0) swipe.speed = (dx - swipe.dx) / elapsed;
     swipe.at = e.timeStamp;
     swipe.dx = Math.max(0, dx);
+    // Once a swipe, as it crosses where letting go opens the drawer.
+    if (!swipe.buzzed && swipe.dx > window.innerWidth / 3) {
+      swipe.buzzed = true;
+      buzz();
+    }
     screen.style.transform = "translateX(" + swipe.dx + "px)";
   }, { passive: false });
   const end = (e) => {
@@ -1254,6 +1289,7 @@ function listen() {
     const turned = before && after && said(before) !== said(after);
     if (after && after.prompt) state.answered = null;
     state.close = data.close !== false;
+    state.haptics = data.haptics !== false;
     state.reminders = data.reminders !== false;
     state.remindTimes = data.remind_times || state.remindTimes;
     if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
@@ -1452,6 +1488,7 @@ async function start() {
   state.tabs = (r && r.tabs) || [];
   state.live = !!(r && r.live);
   state.close = !r || r.close !== false;
+  state.haptics = !r || r.haptics !== false;
   state.lastHeard = Date.now();
   const wanted = decodeURIComponent(location.hash.slice(1));
   if (wanted && state.tabs.some((t) => number(t) === wanted)) openTab(wanted);

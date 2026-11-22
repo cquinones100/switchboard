@@ -493,8 +493,10 @@ const document = {
 };
 let source = null;
 const addresses = [];
+let buzzes = 0;
 const ctx = vm.createContext({
   document, Node, Event, console,
+  navigator: { vibrate: () => buzzes++ },
   EventSource: class { constructor() { source = this; } },
   history: { replaceState: (_, __, url) => addresses.push(url) },
   window: { addEventListener: () => {}, innerWidth: 390 },
@@ -749,13 +751,14 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
   touch("touchmove", 300, 300, 400);
   touch("touchend", 0, 0, 500);
   await slid();
-  console.log("on the drawer=" + vm.runInContext("state.open", ctx) + " " + screens());
+  console.log("on the drawer=" + vm.runInContext("state.open", ctx) + " " + screens() + " buzzes=" + buzzes);
   // Past a third of the width.
   addresses.length = 0;
-  swipe([[20, 300], [60, 300], [200, 310]], 100);
-  touch("touchend", 0, 0, 400);
+  // Past it, back short of it and past it again: one buzz, as it first crosses.
+  swipe([[20, 300], [60, 300], [200, 310], [100, 310], [200, 310]], 100);
+  touch("touchend", 0, 0, 600);
   await slid();
-  console.log("far=" + vm.runInContext("state.open", ctx) + " " + screens() + " " + addresses.join(""));
+  console.log("far=" + vm.runInContext("state.open", ctx) + " " + screens() + " " + addresses.join("") + " buzzes=" + buzzes);
   // A flick: short, but quick.
   open();
   swipe([[20, 300], [40, 300], [90, 300]], 10);
@@ -782,8 +785,8 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
             r#"back=5 channel drawn 1 ⠹ Bash: cargo test """#,
             "paused=5 channel",
             r#"second finger=5 channel """#,
-            "on the drawer=5 channel",
-            "far=null drawer #",
+            "on the drawer=5 channel buzzes=0",
+            "far=null drawer # buzzes=1",
             "flick=null drawer",
         ],
         "{stdout}"
@@ -1362,8 +1365,10 @@ const app = new Node("div"), body = new Node("body");
 const doc = { on: {} };
 const timers = [];
 const posted = [];
+let buzzes = 0;
 const ctx = vm.createContext({
   Node,
+  navigator: { vibrate: () => buzzes++ },
   document: {
     getElementById: () => app,
     body,
@@ -1411,7 +1416,7 @@ const out = [];
   timers.splice(0).forEach((f) => f && f());
   row("4").fire("pointerup");
   row("4").fire("click");
-  out.push("menu=" + options().join(",") + " open=" + vm.runInContext("state.open", ctx));
+  out.push("menu=" + options().join(",") + " open=" + vm.runInContext("state.open", ctx) + " buzzes=" + buzzes);
   // Close tab asks first; No leaves the tab.
   button("Close tab").fire("click");
   out.push("asks=" + body.text.includes("Close tab 4 full titles? [Y/n]") + " posted=" + posted.length);
@@ -1427,7 +1432,7 @@ const out = [];
   out.push("closed=" + posted.join(",") + " tabs=" + vm.runInContext("state.tabs.map((t) => t.index).join()", ctx));
   // On a tab still working, Close tab alone; a tap opens the tab.
   row("3").fire("contextmenu");
-  out.push("working=" + options().join(","));
+  out.push("working=" + options().join(",") + " buzzes=" + buzzes);
   button("×").fire("click");
   row("3").fire("pointerdown");
   row("3").fire("pointerup");
@@ -1440,6 +1445,12 @@ const out = [];
   row("5").fire("pointerup");
   timers.splice(0).forEach((f) => f && f());
   out.push("redrawn=" + vm.runInContext("state.menu", ctx));
+  // Android's long press: the context menu while the hold's timer runs buzzes, once.
+  row("5").fire("pointerdown");
+  row("5").fire("contextmenu");
+  timers.splice(0).forEach((f) => f && f());
+  out.push("android=" + vm.runInContext("state.menu.pane", ctx) + " buzzes=" + buzzes);
+  button("×").fire("click");
   // A tap on the lit row, outside the menu, closes it.
   row("5").fire("contextmenu");
   row("5").fire("pointerdown");
@@ -1474,14 +1485,15 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "menu=Mark seen,Remind me,Close tab open=null",
+            "menu=Mark seen,Remind me,Close tab open=null buzzes=1",
             "asks=true posted=0",
             "answers=Close*,No",
             "no=0 menu=null",
             "closed=/api/tabs/4/close tabs=3",
-            "working=Remind me,Close tab",
+            "working=Remind me,Close tab buzzes=1",
             "tap=3",
             "redrawn=null",
+            "android=5 buzzes=2",
             "lit row=null open=null",
             "off=null ",
         ],
@@ -2225,5 +2237,99 @@ console.log("whole=" + vm.runInContext("state.full", ctx));
         lines,
         ["shots=2", "titles=Before,After", "whole=b.png"],
         "{stdout}"
+    );
+}
+
+/// Settings' "Buzz the phone" (`phone_haptics`) reaches the phone with the
+/// drawer's snapshot, as `haptics`, on by default and false once turned off.
+#[test]
+fn the_phone_reads_whether_to_buzz_with_the_tabs() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    claude_pane(&server);
+    let mut stream = watch(&server);
+    let first = next_line(&mut stream, |v| v["tabs"].as_array().is_some());
+    assert_eq!(first["haptics"], true, "{first}");
+    common::write_settings(&server.home, json!({ "phone_haptics": false }));
+    next_line(&mut stream, |v| v["haptics"] == false);
+}
+
+/// assets/phone/app.js's `buzz`, in Node over a stand-in for the page:
+/// `navigator.vibrate` where the browser has it, else a click on the hidden
+/// switch's label where inputs take `switch`, made once, and neither with
+/// Settings' `phone_haptics` off. Skipped without Node.
+#[test]
+fn buzz_vibrates_or_clicks_the_hidden_switch_unless_turned_off() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+class Node { constructor() { this.kids = []; } append(...k) { this.kids.push(...k); } }
+class Element extends Node {
+  constructor(tag) { super(); this.tag = tag; this.attrs = {}; this.clicks = 0; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener() {}
+  click() { this.clicks++; }
+}
+class HTMLInputElement {}
+HTMLInputElement.prototype.switch = false;
+const body = new Element("body");
+const vibrated = [];
+const navigator = {};
+const ctx = vm.createContext({
+  Node,
+  HTMLInputElement,
+  navigator,
+  document: {
+    body,
+    getElementById: () => null,
+    addEventListener: () => {},
+    createElement: (tag) => new Element(tag),
+    createTextNode: (t) => Object.assign(new Node(), { text: t }),
+  },
+  window: { addEventListener: () => {} },
+  history: { replaceState: () => {} },
+  location: { hash: "" },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const run = (code) => vm.runInContext(code, ctx);
+const label = () => body.kids[0];
+const seen = () => console.log(vibrated.join(",") + " " + body.kids.length + " " + (label() ? label().tag + ":" + label().clicks + ":" + label().kids[0].attrs.type + ":" + label().kids[0].attrs.tabindex : "-"));
+
+navigator.vibrate = (ms) => vibrated.push(ms);
+run("buzz()");
+seen();
+run("state.haptics = false; buzz()");
+seen();
+delete navigator.vibrate;
+run("state.haptics = true; buzz(); buzz()");
+seen();
+run("state.haptics = false; buzz()");
+seen();
+// Answering: a tick of a question that takes several answers buzzes nothing, its Submit does.
+navigator.vibrate = (ms) => vibrated.push(ms);
+run(`state.haptics = true;
+  state.open = "4";
+  state.tabs = [{ index: 4, pane: "%4", name: "t", state: "waiting", prompt: { id: "q", multi: true, options: [{ n: 1 }, { n: 2 }] } }];`);
+vibrated.length = 0;
+run(`answer("1"); state.sent = null; answer("submit")`);
+console.log("answered=" + vibrated.length);
+"#;
+    let Some(out) = run_app_js(script) else {
+        return;
+    };
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "10 0 -",
+            "10 0 -",
+            "10 1 label:2:checkbox:-1",
+            "10 1 label:2:checkbox:-1",
+            "answered=1",
+        ],
+        "{out}"
     );
 }
