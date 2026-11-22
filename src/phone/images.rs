@@ -20,6 +20,8 @@ use anyhow::{Result, anyhow};
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
 /// How long an image is kept.
 pub const KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How long a copy cut off as it was written is kept.
+const PART_KEEP: Duration = Duration::from_secs(60 * 60);
 /// The hex digits of a name's random ID.
 const ID_LEN: usize = 32;
 
@@ -161,22 +163,31 @@ fn owner_only() -> fs::OpenOptions {
     options
 }
 
-/// Removes the images in `dir` last changed more than `KEEP` before `now`.
+/// Removes the images in `dir` last changed more than `KEEP` before `now`,
+/// and a copy `keep_copy` was cut off writing more than `PART_KEEP` before.
 pub fn prune(dir: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        if !is_name(&name.to_string_lossy()) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let part = name
+            .strip_prefix('.')
+            .and_then(|n| n.strip_suffix(".part"))
+            .is_some_and(is_name);
+        let keep = if part {
+            PART_KEEP
+        } else if is_name(&name) {
+            KEEP
+        } else {
             continue;
-        }
+        };
         let old = entry
             .metadata()
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age > KEEP);
+            .is_some_and(|age| age > keep);
         if old {
             let _ = fs::remove_file(entry.path());
         }
@@ -367,7 +378,15 @@ mod tests {
         fs::write(dir.join(old), PNG).unwrap();
         fs::write(dir.join(new), PNG).unwrap();
         fs::write(dir.join("kept.txt"), "x").unwrap();
+        let part = format!(".{new}.part");
+        fs::write(dir.join(&part), PNG).unwrap();
         let now = SystemTime::now();
+        fs::File::options()
+            .write(true)
+            .open(dir.join(&part))
+            .unwrap()
+            .set_modified(now - PART_KEEP - Duration::from_secs(60))
+            .unwrap();
         let month_ago = now - KEEP - Duration::from_secs(60);
         fs::File::options()
             .write(true)
@@ -379,5 +398,6 @@ mod tests {
         assert!(!dir.join(old).exists());
         assert!(dir.join(new).exists());
         assert!(dir.join("kept.txt").exists());
+        assert!(!dir.join(&part).exists());
     }
 }

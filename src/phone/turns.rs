@@ -179,21 +179,23 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
     out.split_off(skip)
 }
 
-/// The last messages of the transcript at `file`, read from its end.
-pub fn recent(file: &Path) -> Vec<Message> {
+/// The last messages of the transcript at `file`, read from its end, and
+/// whether the read began past its start, so older messages were left out.
+pub fn recent(file: &Path) -> (Vec<Message>, bool) {
     let Ok(mut f) = fs::File::open(file) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let size = f.metadata().map(|m| m.len()).unwrap_or(0);
     let take = TAIL.min(size);
     if f.seek(SeekFrom::Start(size - take)).is_err() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
     let mut buf = Vec::with_capacity(take as usize);
     if f.take(take).read_to_end(&mut buf).is_err() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    parse(&String::from_utf8_lossy(&buf), MOST, &images::dir())
+    let messages = parse(&String::from_utf8_lossy(&buf), MOST, &images::dir());
+    (messages, take < size)
 }
 
 #[cfg(test)]

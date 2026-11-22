@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use super::images;
 use super::turns::Message;
 
-/// How many looks a pane keeps, the newest.
-pub const MOST: usize = 20;
+/// How many looks a pane keeps, the newest: as many as the channel's
+/// window holds messages.
+pub const MOST: usize = super::turns::MOST;
 
 /// One `look`: when it ran (ms), the copies' names in the images folder,
 /// in the order shown, and whether they are a before and after.
@@ -80,10 +81,11 @@ pub fn message(look: &Look) -> Message {
 
 /// `messages` with `looks` among them by time, each after the messages
 /// written before it ran, the last `most` kept. A look from before the
-/// first message of a window the transcript's end filled is left out with
-/// what came before it.
-pub fn merge(mut messages: Vec<Message>, looks: &[Look], most: usize) -> Vec<Message> {
-    let first = (messages.len() >= most)
+/// first message of a window that leaves the transcript's start out (`cut`,
+/// read from past its start, or `most` messages filling it) is left out
+/// with what came before it.
+pub fn merge(mut messages: Vec<Message>, looks: &[Look], most: usize, cut: bool) -> Vec<Message> {
+    let first = (cut || messages.len() >= most)
         .then(|| messages.iter().map(|m| m.at).find(|at| *at != 0))
         .flatten();
     for look in looks {
@@ -139,7 +141,7 @@ mod tests {
             said("tool", "Bash: switchboard look a.png", 20),
             said("claude", "Here they are", 40),
         ];
-        let merged = merge(messages, &[look(30, 2, false)], 80);
+        let merged = merge(messages, &[look(30, 2, false)], 80, false);
         let order: Vec<&str> = merged.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(
             order,
@@ -156,9 +158,16 @@ mod tests {
     #[test]
     fn a_look_before_a_full_window_is_left_out() {
         let messages = vec![said("you", "a", 10), said("claude", "b", 20)];
-        let merged = merge(messages.clone(), &[look(5, 1, false)], 2);
+        let merged = merge(messages.clone(), &[look(5, 1, false)], 2, false);
         assert_eq!(merged, messages);
-        let merged = merge(messages, &[look(25, 1, false)], 2);
+        // A window read from past the transcript's start, however short.
+        let merged = merge(messages.clone(), &[look(5, 1, false)], 80, true);
+        assert_eq!(merged, messages);
+        assert_eq!(
+            merge(messages.clone(), &[look(5, 1, false)], 80, false).len(),
+            3
+        );
+        let merged = merge(messages, &[look(25, 1, false)], 2, false);
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[1].who, "look");
     }

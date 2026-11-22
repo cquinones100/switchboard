@@ -647,7 +647,8 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Resp
     // The pictures its Claude showed with `look`, among them by time.
     let shown: Vec<looks::Look> = serde_json::from_value(tab["looks"].clone()).unwrap_or_default();
     let messages = tokio::task::spawn_blocking(move || {
-        looks::merge(turns::recent(&file), &shown, turns::MOST)
+        let (messages, cut) = turns::recent(&file);
+        looks::merge(messages, &shown, turns::MOST, cut)
     })
     .await
     .unwrap_or_default();

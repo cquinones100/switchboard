@@ -2240,7 +2240,7 @@
     "key": "phone_look_pictures",
     "category": "Phone app",
     "label": "Show the pictures a tab's Claude shows on the phone",
-    "description": "Each switchboard look of pictures (a PNG, JPEG, GIF or WebP) in a tab running Claude copies them into the phone app's images folder, readable only by you and removed after 30 days, and adds a message holding them to the tab's channel on the phone, each shown whole on a tap. The pictures stay on your computer and your phone on your tailnet. Off, look copies nothing and the channel shows no such message",
+    "description": "While the phone app is on, each switchboard look of pictures (a PNG, JPEG, GIF or WebP, up to 20 MB) in a tab running Claude copies them into the phone app's images folder, readable only by you and removed after 30 days, and adds a message holding them to the tab's channel on the phone, each shown whole on a tap. The pictures stay on your computer and your phone on your tailnet. Off, look copies nothing and the channel shows no such message",
     "default": true
   },
   {
