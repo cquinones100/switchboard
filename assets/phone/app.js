@@ -952,10 +952,27 @@ function composer() {
     return !!(tab && tab.prompt && tab.prompt.free);
   };
   const ready = () => field.value.trim() !== "" || (!free() && state.chosen.length > 0);
-  const resize = () => {
-    send.classList.toggle("lit", ready());
+  // CSS grows the box with its text (`field-sizing: content`). Where that
+  // isn't supported it is measured here, which forces a layout of the whole
+  // page, its channel included, so only when the text's line count could
+  // have changed: a newline more or fewer, or its length crossing a line's
+  // worth of characters, the line's width read only as the box is measured.
+  const sizedByCss = !!globalThis.CSS?.supports("field-sizing", "content");
+  let measured = { lines: -1, row: -1, perLine: 1 };
+  const fit = () => {
+    if (sizedByCss) return;
+    const lines = field.value.split("\n").length;
+    const row = Math.floor(field.value.length / measured.perLine);
+    if (lines === measured.lines && row === measured.row) return;
     field.style.height = "auto";
     field.style.height = field.scrollHeight + "px";
+    // About half an em a character, less the box's padding.
+    const perLine = Math.max(1, Math.floor((field.clientWidth - 28) / 8));
+    measured = { lines, row: Math.floor(field.value.length / perLine), perLine };
+  };
+  const resize = () => {
+    send.classList.toggle("lit", ready());
+    fit();
   };
   field.addEventListener("input", resize);
   send.addEventListener("click", async () => {

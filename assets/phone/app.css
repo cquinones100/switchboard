@@ -311,6 +311,7 @@ button {
   padding: 8px 14px;
   max-height: 8em;
   min-height: 38px;
+  field-sizing: content;
 }
 .composer textarea::placeholder { color: var(--faint); }
 .composer .send {
