@@ -829,22 +829,10 @@ impl Server {
             };
         }
         let stopped = work.api_error.clone();
-        // A turn that ends while only watches run is Done, under Needs you,
-        // until you see it (the hook state goes Idle), as a question is
-        // Waiting whatever runs behind it; then Monitoring.
-        let finished_over_watches = base == TabState::Done
-            && work.count > 0
-            && work.monitors.len() == work.count
-            && work.loop_run.is_none()
-            && work.scheduled.is_none();
         let state = if stopped.is_some() {
             TabState::Waiting
-        } else if finished_over_watches {
-            base
-        } else if work.count > 0 || work.scheduled.is_some() {
-            TabState::Background
         } else {
-            base
+            filed_state(base, &work)
         };
         let agent = claude_pane.and_then(|p| self.agents.get(p));
         let opt = |k: &str| tab.opts.get(k).filter(|v| !v.is_empty()).cloned();
@@ -3292,9 +3280,80 @@ impl Server {
     }
 }
 
+/// The group a tab's Claude files it under, from its hook state and the
+/// work its conversation has running. A turn that ends is Done, under Needs
+/// you, until you see it (the hook state goes Idle), whatever still runs
+/// behind it (background shells, watches, subagents), as a question is
+/// Waiting whatever runs behind it; then Background, or Monitoring for
+/// watches alone. A loop between its rounds, or waiting on its next tick,
+/// isn't waiting on you, so it stays Background.
+pub fn filed_state(base: TabState, work: &claude::Work) -> TabState {
+    let between_rounds = work.loop_run.is_some() || work.scheduled.is_some();
+    if base == TabState::Done && !between_rounds {
+        base
+    } else if work.count > 0 || work.scheduled.is_some() {
+        TabState::Background
+    } else {
+        base
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn running(count: usize, monitors: &[&str]) -> claude::Work {
+        claude::Work {
+            count,
+            monitors: monitors.iter().map(|m| m.to_string()).collect(),
+            ..claude::Work::default()
+        }
+    }
+
+    #[test]
+    fn a_turn_ending_over_a_background_shell_is_done_until_seen_then_background() {
+        let shell = running(1, &[]);
+        assert_eq!(filed_state(TabState::Done, &shell), TabState::Done);
+        assert_eq!(filed_state(TabState::Idle, &shell), TabState::Background);
+        assert_eq!(filed_state(TabState::Working, &shell), TabState::Background);
+    }
+
+    #[test]
+    fn a_turn_ending_over_watches_alone_is_done_until_seen() {
+        let watches = running(1, &["CI on #12"]);
+        assert_eq!(filed_state(TabState::Done, &watches), TabState::Done);
+        assert_eq!(filed_state(TabState::Idle, &watches), TabState::Background);
+    }
+
+    #[test]
+    fn a_loop_between_rounds_stays_background() {
+        let looping = claude::Work {
+            loop_run: Some(claude::LoopRun {
+                kind: "review",
+                round: 2,
+            }),
+            ..running(1, &[])
+        };
+        assert_eq!(filed_state(TabState::Done, &looping), TabState::Background);
+        let scheduled = claude::Work {
+            scheduled: Some(claude::Scheduled {
+                prompt: "/ci-loop".into(),
+                at: 0,
+            }),
+            ..claude::Work::default()
+        };
+        assert_eq!(
+            filed_state(TabState::Done, &scheduled),
+            TabState::Background
+        );
+    }
+
+    #[test]
+    fn a_turn_ending_with_nothing_running_is_done() {
+        let idle = claude::Work::default();
+        assert_eq!(filed_state(TabState::Done, &idle), TabState::Done);
+        assert_eq!(filed_state(TabState::Idle, &idle), TabState::Idle);
+    }
 
     #[test]
     fn a_labels_pr_is_split_from_its_name() {

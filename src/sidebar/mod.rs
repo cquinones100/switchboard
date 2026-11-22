@@ -43,7 +43,7 @@ pub use switchboard_ui::text;
 
 pub use model::{Rules, Stage, TabModel, TabState};
 pub use render::{Filter, Owner};
-pub use serve::KEYS;
+pub use serve::{KEYS, filed_state};
 
 /// What the server's timers tell the sidebar.
 #[derive(Debug)]
