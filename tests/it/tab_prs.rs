@@ -3,7 +3,8 @@
 //! another repository, and the tab lists them beside its branch's, its
 //! label leading with the current one, the sidebar showing how many more;
 //! "Show another of this tab's PRs" makes another current, which M-v then
-//! opens; a merged one leaves the list once the tab has been in front; the
+//! opens; a merged one leaves the list once the tab has been in front, but
+//! one it made stays current back on the default branch until other work; the
 //! list survives a restart; and with Settings' `tab_prs` off only the
 //! branch's PR shows. GitHub is a stand-in on 127.0.0.1.
 
@@ -306,4 +307,66 @@ fn a_tab_follows_every_pr_its_session_opens() {
     );
     let t = wait_tab(&server, "only the branch's PR", |t| prs(t).len() == 1);
     assert_eq!(t["pr"], 2040);
+}
+
+#[test]
+fn a_tab_whose_made_pr_merged_stays_under_merged_back_on_the_default_branch() {
+    let states: States = Arc::default();
+    let github = github(states.clone());
+    let server = start(&github);
+    // The main clone on its default branch, as queue-and-clean leaves the
+    // tab once the worktree is removed.
+    let dir = clone(&server);
+    git(&dir, &["checkout", "-q", "-b", "main"]);
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", dir.display()));
+    wait_tab(&server, "the tab in the clone", |t| t["label"] == "web-app");
+    let pane = tab(&server)["panes"][0]["id"].as_str().unwrap().to_string();
+    bash_ended(
+        &server,
+        &pane,
+        "gh pr create --head web-150",
+        "https://github.com/acme/web-app/pull/2050\n",
+    );
+    wait_tab(&server, "the made PR current", |t| t["pr"] == 2050);
+    states
+        .lock()
+        .unwrap()
+        .insert("acme/web-app#2050".into(), "MERGED");
+    let deadline = common::deadline(Duration::from_secs(30));
+    while tab(&server)["stage"]["key"] != "merged" {
+        assert!(
+            Instant::now() < deadline,
+            "never under Merged: {}",
+            tab(&server)
+        );
+        server.ok(&["sources", "refresh"]);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    // Answers enough to have taken a merged PR off the list once the tab
+    // was in front, and it stays current, under Merged.
+    for _ in 0..5 {
+        server.ok(&["sources", "refresh"]);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let t = tab(&server);
+    assert_eq!(t["pr"], 2050, "{t}");
+    assert!(t["label"].as_str().unwrap().starts_with("#2050 "), "{t}");
+    assert_eq!(t["stage"]["key"], "merged", "{t}");
+
+    // Other work on a new branch takes it out of Merged and off the list.
+    git(&dir, &["checkout", "-q", "-b", "web-151"]);
+    let deadline = common::deadline(Duration::from_secs(30));
+    // The sidebar's facts follow at the lookups' next answer.
+    let left = |t: &Value| prs(t).is_empty() && t["pr"].is_null() && t["stage"]["key"] != "merged";
+    while !left(&tab(&server)) {
+        assert!(
+            Instant::now() < deadline,
+            "still under Merged: {}",
+            tab(&server)
+        );
+        server.ok(&["sources", "refresh"]);
+        std::thread::sleep(Duration::from_millis(300));
+    }
 }

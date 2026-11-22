@@ -186,6 +186,15 @@ impl Sources {
         self.kept.origin_kept(dir).map(ToString::to_string)
     }
 
+    /// The repositories a directory's PRs are looked for in (origin's,
+    /// then upstream's in a fork's clone), `owner/name` each, as the
+    /// lookups last read them; `None` before they have.
+    pub(crate) fn repos_kept(&self, dir: &std::path::Path) -> Option<Vec<String>> {
+        self.kept
+            .remotes_kept(dir)
+            .map(|r| r.all().map(ToString::to_string).collect())
+    }
+
     /// A view's data, or `None` while its settings keep it out of mission
     /// control (the service off, or the view): `PRS`, `CI`, `TICKETS` or
     /// `INBOX`; `LANDING`'s is only how its merge queues were last asked,

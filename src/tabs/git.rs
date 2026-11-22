@@ -269,6 +269,16 @@ pub fn local_branches(common_dir: &Path) -> Vec<String> {
     out
 }
 
+/// Whether `branch` is the repository's default branch: the one
+/// `refs/remotes/origin/HEAD` names, else `main` or `master`. Reads that one
+/// file, never the list of branches, so naming a tab can ask it.
+pub fn is_default_branch(common_dir: &Path, branch: &str) -> bool {
+    match fs::read_to_string(common_dir.join("refs/remotes/origin/HEAD")) {
+        Ok(head) => head.trim().strip_prefix("ref: refs/remotes/origin/") == Some(branch),
+        Err(_) => branch == "main" || branch == "master",
+    }
+}
+
 /// The repository's default branch: what `refs/remotes/origin/HEAD` names,
 /// else `main` or `master`, whichever is a local branch.
 /// Whether origin has `branch`, as the clone last fetched it, from its
