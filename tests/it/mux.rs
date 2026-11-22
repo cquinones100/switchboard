@@ -1644,9 +1644,12 @@ fn a_chosen_pictures_menu_copies_its_path() {
     }
     client.send(b"\x1b[B\x1b[B\r");
     wait_copied(&mut client, &shot);
+    // The desktop's clipboard too, through the stand-in pbcopy; on Linux
+    // with no display there is no clipboard tool to stand in for.
     let copied = server.home.join("copied");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
-    while std::fs::read_to_string(&copied).unwrap_or_default() != shot {
+    while cfg!(target_os = "macos") && std::fs::read_to_string(&copied).unwrap_or_default() != shot
+    {
         assert!(
             std::time::Instant::now() < deadline,
             "the stand-in clipboard holds {:?}",
