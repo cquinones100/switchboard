@@ -1527,7 +1527,8 @@ impl Server {
         let first = self.settings_seen == (None, None, None) && seen != (None, None, None);
         self.settings_seen = seen;
         crate::settings::reload_settings();
-        // The phone's drawer offers Close tab as phone_close_tabs says.
+        // The phone's drawer offers Close tab as phone_close_tabs says, and
+        // the app buzzes as phone_haptics does.
         self.phone_changed();
         // The tabs opened for work follow "Land without asking" as it
         // changes, a tab's own menu deciding for it meanwhile.
