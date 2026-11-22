@@ -96,6 +96,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                     who: "tab",
                     text: body.trim().to_string(),
                     images: Vec::new(),
+                    titles: Vec::new(),
                     at,
                     from: entry
                         .pointer("/origin/from")
@@ -109,6 +110,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                     who: "turn",
                     text: String::new(),
                     images: Vec::new(),
+                    titles: Vec::new(),
                     at,
                     from: String::new(),
                     queued: false,

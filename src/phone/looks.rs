@@ -76,6 +76,8 @@ pub fn message(look: &Look) -> Message {
         images: look.images.clone(),
         titles,
         at: look.at,
+        from: String::new(),
+        queued: false,
     }
 }
 
@@ -113,6 +115,8 @@ mod tests {
             images: Vec::new(),
             titles: Vec::new(),
             at,
+            from: String::new(),
+            queued: false,
         }
     }
 
