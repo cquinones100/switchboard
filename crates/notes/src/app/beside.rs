@@ -78,10 +78,10 @@ pub struct Beside {
     /// Tab moved to another card, or the cursor moved: the next drawing
     /// scrolls it into view.
     pub follow: bool,
-    /// The width and room `line` and `scroll` were counted at, as last
-    /// drawn: drawn at another, the plan rewraps, and both move to the rows
-    /// of what they were on.
-    pub laid: Option<(u16, Room)>,
+    /// The plan's width and the app's that `line` and `scroll` were
+    /// counted at, as last drawn: drawn at others, the plan rewraps, and
+    /// both move to the rows of what they were on.
+    pub laid: Option<(u16, u16)>,
     /// What the cursor and the first row shown were on as the plan last
     /// rewrapped, and the rows that put them on: while the reader hasn't
     /// moved them since, the next rewrap starts from these, so a drag
@@ -286,14 +286,14 @@ fn wrapped(line: &str, cols: usize) -> Vec<String> {
     out
 }
 
-/// The panel's rows, `cols` wide: the header, the sections, the choice's
-/// cards and the steps, and where each card is (its first row, x, width
-/// and height, and its letter).
+/// The panel's rows, `cols` wide in an app `app` wide: the header, the
+/// sections, the choice's cards and the steps, and where each card is (its
+/// first row, x, width and height, and its letter).
 pub fn lines(
     beside: &Beside,
     folder: &str,
     cols: usize,
-    room: Room,
+    app: u16,
     easy: bool,
     caps: bool,
     theme: &Theme,
@@ -306,6 +306,9 @@ pub fn lines(
     // of its own.
     let mut more: Vec<(usize, usize)> = Vec::new();
     let inner = cols.saturating_sub(2);
+    let room = room(app);
+    // Narrower than board 8's share, by a width of its own.
+    let narrowed = cols < split(app, false, None).1.map_or(0, |(_, w)| w as usize);
     // What Tab lit shows only while the plan has the keys, and comes back
     // with them.
     let stop = beside.stop.filter(|_| beside.focused);
@@ -412,9 +415,9 @@ pub fn lines(
             carded = true;
             out.push(Vec::new());
             let n = choice.options.len().max(1);
-            // Side by side only where every card gets its least width and,
-            // with the mocks shown, its widest mock line whole, the plan's own
-            // width narrower than the app's share.
+            // At board 8's share, side by side as it draws them; narrowed,
+            // only where every card gets its least width and, with the mocks
+            // shown, its widest mock line whole.
             let mocks = room > Room::NoMocks;
             let widest_mock = choice
                 .options
@@ -425,7 +428,7 @@ pub fn lines(
                 .filter(|_| mocks)
                 .unwrap_or(0);
             let need = CARD_LEAST.max(widest_mock);
-            let fits = n * need + (n - 1) * 2 <= inner;
+            let fits = !narrowed || n * need + (n - 1) * 2 <= inner;
             let side_by_side = room > Room::Stacked && n > 1 && fits;
             let places: Vec<(usize, usize)> = if side_by_side {
                 let col = Col::Stretch {
@@ -597,7 +600,7 @@ impl App {
             b,
             &self.plan_folder(&b.path),
             width as usize,
-            room(self.cols),
+            self.cols,
             self.opts.easy,
             self.opts.caps,
             &self.look.theme,
@@ -1046,11 +1049,11 @@ impl App {
         self.geo.plan_hits.clear();
         let b = self.beside.as_ref()?;
         let folder = self.plan_folder(&b.path);
-        let (fits, easy, caps) = (room(self.cols), self.opts.easy, self.opts.caps);
-        let draw = |b: &Beside, (width, fits): (u16, Room)| {
-            lines(b, &folder, width as usize, fits, easy, caps, &theme)
+        let (app, easy, caps) = (self.cols, self.opts.easy, self.opts.caps);
+        let draw = |b: &Beside, (width, app): (u16, u16)| {
+            lines(b, &folder, width as usize, app, easy, caps, &theme)
         };
-        let now = (area.width, fits);
+        let now = (area.width, app);
         let laid = draw(b, now);
         // Rewrapped (its edge moved, Notes resized): the cursor and the
         // first row shown go to the rows of what they were on, so no card
