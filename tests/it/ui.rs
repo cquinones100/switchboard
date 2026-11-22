@@ -211,7 +211,7 @@ fn active_pane(list: &serde_json::Value) -> String {
 }
 
 #[test]
-fn m_0_asks_for_a_tab_number_and_goes_there() {
+fn go_to_tab_asks_for_a_tab_number_and_goes_there() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
     client.wait_text("$");
@@ -221,14 +221,14 @@ fn m_0_asks_for_a_tab_number_and_goes_there() {
     client.wait_for("the first tab current", |_| {
         current_tab(&server.list()) == 1
     });
-    client.type_text(&format!("{ALT}0"));
+    server.ok(&["press", "go-to-tab"]);
     client.wait_text("Go to tab");
     client.type_text("3\r");
     client.wait_for("the third tab current", |_| {
         current_tab(&server.list()) == 3
     });
     // A number past the last tab is said.
-    client.type_text(&format!("{ALT}0"));
+    server.ok(&["press", "go-to-tab"]);
     client.wait_text("Go to tab");
     client.type_text("12\r");
     client.wait_text("There is no tab 12.");
