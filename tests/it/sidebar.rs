@@ -327,6 +327,49 @@ fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitori
     });
 }
 
+#[test]
+fn a_turn_that_ends_over_a_background_shell_is_under_needs_you_until_seen_then_working() {
+    let server = start(json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2 other");
+    // Its turn starts a server as a background shell and ends while it runs.
+    let project = server.home.join(".claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let at = jiff::Timestamp::now().to_string();
+    let lines = [
+        json!({"type": "user", "timestamp": at, "message": {"content": "start the preview"}}),
+        json!({"type": "assistant", "timestamp": at, "message": {"content": [
+            {"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "switchboard phone preview", "run_in_background": true}}
+        ]}}),
+        json!({"type": "user", "timestamp": at, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": "Command running in background with ID: b1. Output is being written to: /tmp/x"}
+        ]}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(project.join("s-1.jsonl"), text).unwrap();
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    hook(&server, &pane, "Stop", json!({}));
+    let screen = client.wait_for("Needs you", |s| {
+        s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
+    });
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("WORKING")),
+        "{}",
+        screen.join("\n")
+    );
+    // Seen: under Working, in the background, while the shell runs.
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_for("Working once seen", |s| {
+        s.iter().any(|l| left(l, 34).contains("WORKING"))
+            && !s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
+    });
+}
+
 // With "Enter opens the row's menu" off, Enter in the sidebar goes into
 // the chosen tab's pane at once, as before.
 #[test]
