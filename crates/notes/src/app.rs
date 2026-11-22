@@ -103,6 +103,10 @@ const JUMPS: &str = "jumps";
 /// would have every open Notes read the notes again for a width.
 const LIST_WIDTH: &str = "notes-list-width";
 
+/// The file in the state folder holding the plan's own width beside its
+/// note, as the list's is kept.
+const PLAN_WIDTH: &str = "notes-plan-width";
+
 /// The least width the list is given by hand, which keeps "⌘ Commands" and
 /// "/ search" on its top line; the most is half the app's.
 const LIST_LEAST: u16 = 30;
@@ -483,6 +487,9 @@ struct Geo {
     /// The line right of the list, where it was drawn, while a drag moves
     /// it (notes_resize).
     list_edge: Option<Rect>,
+    /// The rule left of the plan beside its note, while a drag moves it
+    /// (notes_resize).
+    plan_edge: Option<Rect>,
 }
 
 /// The note's scroll bar as it was drawn, for the mouse.
@@ -798,14 +805,23 @@ pub struct App {
     /// When the resize keys last moved the list's edge, its width kept
     /// once they stop.
     keys_moved: Option<Instant>,
+    /// Whether those keys moved the plan's edge, else the list's.
+    keys_plan: bool,
     /// Whether the list's edge is being dragged, and when it was last
     /// pressed, for a double click.
     edge_drag: bool,
     edge_pressed_at: Option<Instant>,
     /// Whether the press held is a double click's second.
     edge_double: bool,
-    /// The list's own width as the press found it, and the width shown.
+    /// The edge's own width as the press found it, and the width shown.
     edge_start: (Option<u16>, u16),
+    /// The plan's own width beside its note, from a drag of its edge or the
+    /// pane resize keys while it has the keys; none for board 8's share.
+    /// Kept in the state folder (`notes-plan-width`), followed only while
+    /// Settings' notes_resize is on.
+    plan_width: Option<u16>,
+    /// The edge pressed last is the plan's, else the list's.
+    edge_plan: bool,
     parser: Parser,
     last_input: Instant,
 }
@@ -920,10 +936,13 @@ impl App {
             list_built_for: 0,
             list_width_seen: (0, None),
             keys_moved: None,
+            keys_plan: false,
             edge_drag: false,
             edge_pressed_at: None,
             edge_double: false,
             edge_start: (None, 0),
+            plan_width: None,
+            edge_plan: false,
             parser: Parser::new(),
             last_input: Instant::now(),
             opts,
@@ -1003,6 +1022,7 @@ impl App {
             return;
         }
         self.list_width = self.kept_width();
+        self.plan_width = self.kept_plan_width();
         let mut meta = self.store.meta();
         let saved = meta.remove(JUMPS).unwrap_or_default();
         self.jumps = Jumps::from_saved(&saved, |rel| self.store.absolute(rel), Path::is_file);
@@ -1041,9 +1061,7 @@ impl App {
         if self.locked_by.is_some() {
             return;
         }
-        if self.keys_moved.take().is_some() {
-            self.keep_width();
-        }
+        self.keep_keyed();
         self.put_title_back();
         self.save();
         self.follow_jumps();
@@ -3391,8 +3409,7 @@ impl App {
                 .keys_moved
                 .is_some_and(|at| now.duration_since(at) >= LIST_SETTLES)
         {
-            self.keys_moved = None;
-            self.keep_width();
+            self.keep_keyed();
         }
         let width = self.list_cols(self.cols);
         // With notes_resize off the list is as on main: nothing done for a
@@ -3791,7 +3808,13 @@ impl App {
         }
         // Offered while a width is kept here, or in the state folder by another
         // tab's Notes since this one started, read as the palette opens.
-        let kept = self.list_width.is_some() || self.kept_width().is_some();
+        // With a plan showing it is the plan's width; a plan hidden behind
+        // its note leaves it the list's.
+        let kept = if self.plan_cols() > 0 {
+            self.plan_width.is_some() || self.kept_plan_width().is_some()
+        } else {
+            self.list_width.is_some() || self.kept_width().is_some()
+        };
         if self.opts.resize && kept {
             commands.push(palette::default_width());
         }
@@ -3924,6 +3947,9 @@ impl App {
         match act {
             PaletteAct::ToggleList => self.toggle_list(),
             // A palette open as notes_resize was turned off keeps the widths.
+            PaletteAct::DefaultWidth if self.opts.resize && self.plan_cols() > 0 => {
+                self.default_plan_width()
+            }
             PaletteAct::DefaultWidth if self.opts.resize => self.default_width(),
             PaletteAct::DefaultWidth => {}
             PaletteAct::Find => self.finder(),
@@ -4684,11 +4710,20 @@ impl App {
             (MouseKind::Press, MouseButton::WheelDown | MouseButton::WheelUp) => {
                 let down = m.button == MouseButton::WheelDown;
                 if let Some(b) = self.beside.as_mut().filter(|_| inside(self.geo.plan)) {
+                    let was = b.scroll;
+                    // Never past the plan's end as last drawn, so a turn at
+                    // the bottom moves nothing.
                     b.scroll = if down {
-                        b.scroll + 3
+                        (b.scroll + 3).min(b.end.max(was))
                     } else {
                         b.scroll.saturating_sub(3)
                     };
+                    // The reader moved the view: the next rewrap starts from
+                    // here, and what the view shows is the reader's doing.
+                    if b.scroll != was {
+                        b.held = None;
+                        b.rewrapped_unseen = false;
+                    }
                 } else if inside(self.geo.list) {
                     self.list_top = if down {
                         (self.list_top + 3).min(self.list_rows.len().saturating_sub(1))
@@ -4699,21 +4734,66 @@ impl App {
                     self.scroll(3, down);
                 }
             }
+            // The plan's edge, as the list's below: a drag sets its width,
+            // kept once let go, and a double click puts it back.
+            (MouseKind::Press, MouseButton::Left) if self.on_plan_edge(x, y) => {
+                self.edge_double = self.edge_plan
+                    && self
+                        .edge_pressed_at
+                        .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
+                self.edge_plan = true;
+                self.edge_drag = true;
+                self.edge_moved = false;
+                self.edge_from = x;
+                self.keep_keyed();
+                self.edge_start = (self.plan_width, self.plan_cols());
+                self.edge_pressed_at = (!self.edge_double).then(Instant::now);
+            }
+            (MouseKind::Drag, MouseButton::Left) if self.edge_drag && self.edge_plan => {
+                // The mouse is where the drag is, so no card under the
+                // column it left is lit.
+                self.mouse_at = Some((x, y));
+                self.edge_double = false;
+                if self.edge_moved || x != self.edge_from {
+                    let was = (self.plan_cols(), self.plan_width);
+                    self.drag_plan_edge(x);
+                    self.edge_moved |= was != (self.plan_cols(), self.plan_width);
+                }
+            }
+            (MouseKind::Release, _) if self.edge_drag && self.edge_plan => {
+                self.edge_drag = false;
+                self.mouse_at = Some((x, y));
+                if std::mem::take(&mut self.edge_double) {
+                    self.default_plan_width();
+                } else if self.edge_moved {
+                    self.edge_pressed_at = None;
+                    let (kept, shown) = self.edge_start;
+                    // Let go where it started keeps what was kept, writing
+                    // nothing over what another tab may have kept since,
+                    // unless it ended on board 8's share, which clears it.
+                    let back = self.plan_cols() == shown;
+                    if back && (self.plan_width.is_some() || kept.is_none()) {
+                        self.plan_width = kept;
+                    } else {
+                        self.keep_plan_width();
+                    }
+                }
+            }
             (MouseKind::Press, MouseButton::Left) if self.on_edge(x, y) => {
+                self.edge_double = !self.edge_plan
+                    && self
+                        .edge_pressed_at
+                        .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
+                self.edge_plan = false;
                 // A second press within a moment is a double click: "Use
                 // the default width", which the palette offers too, on its
                 // release, so that release lands on nothing else.
-                self.edge_double = self
-                    .edge_pressed_at
-                    .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
                 self.edge_drag = true;
                 self.edge_moved = false;
                 self.edge_from = x;
                 // A width the keys set and not yet kept is kept first, so the
                 // drag starts from it and the tick never keeps a drag's.
-                if self.keys_moved.take().is_some() {
-                    self.keep_width();
-                }
+                self.keep_keyed();
                 self.edge_start = (self.list_width, self.list_cols(self.cols));
                 self.edge_pressed_at = (!self.edge_double).then(Instant::now);
             }
@@ -4746,9 +4826,7 @@ impl App {
                     let (kept, shown) = self.edge_start;
                     if self.list_cols(self.cols) == shown {
                         self.list_width = kept;
-                        if self.keys_moved.take().is_some() {
-                            self.keep_width();
-                        }
+                        self.keep_keyed();
                     } else {
                         self.keep_width();
                     }
@@ -4980,6 +5058,11 @@ impl App {
         if self.edge_drag {
             return;
         }
+        // The plan with the keys beside its note moves its own edge.
+        if !elsewhere && self.opts.resize && self.plan_resize_key(by) {
+            self.keys_moved_on(true);
+            return;
+        }
         // A list that can't move the way the key asks (a Notes under twice
         // its least width, or the list at its limit that way) hands the key
         // back, so the pane's divider still moves.
@@ -5019,7 +5102,7 @@ impl App {
         // With notes_resize off the key is the workspace's everywhere.
         if !elsewhere && self.opts.resize && list && moves {
             self.set_list_width(to);
-            self.keys_moved = Some(Instant::now());
+            self.keys_moved_on(false);
         } else if self.opts.server {
             let action = if by < 0 {
                 format!("resize-left-{}", -by)
@@ -5036,7 +5119,9 @@ impl App {
     /// gives it, and nothing kept.
     fn default_width(&mut self) {
         self.list_width = None;
-        self.keys_moved = None;
+        if !self.keys_plan {
+            self.keys_moved = None;
+        }
         self.lay_out_list();
         // The list's own half-typed command (the d of dd), shown or not,
         // never a Ctrl-W waiting for its direction.
@@ -5048,16 +5133,33 @@ impl App {
 
     /// The list's width written to the state folder, so Notes started
     /// again has it: after a drag is let go and after a key, never as the
-    /// mouse moves.
+    /// mouse moves. Only the width that moved is written, so one another
+    /// tab's Notes kept since this one read it stays.
     fn keep_width(&mut self) {
-        let file = self.store.state.join(LIST_WIDTH);
-        if self.kept_width() == self.list_width {
+        keep_in(&self.store.state.join(LIST_WIDTH), self.list_width);
+    }
+
+    /// The width the resize keys set kept, the list's or the plan's,
+    /// once they stop (or a drag starts, or Notes ends).
+    fn keep_keyed(&mut self) {
+        if self.keys_moved.take().is_none() {
             return;
         }
-        let _ = match self.list_width {
-            Some(width) => util::write_atomic(&file, width.to_string()),
-            None => std::fs::remove_file(&file),
-        };
+        if self.keys_plan {
+            self.keep_plan_width();
+        } else {
+            self.keep_width();
+        }
+    }
+
+    /// A resize key moved the plan's edge (`plan`) or the list's: one the
+    /// other edge's keys set and not yet kept is kept first.
+    fn keys_moved_on(&mut self, plan: bool) {
+        if self.keys_plan != plan {
+            self.keep_keyed();
+        }
+        self.keys_plan = plan;
+        self.keys_moved = Some(Instant::now());
     }
 
     /// The list's width as the state folder keeps it, another tab's Notes
@@ -5190,6 +5292,19 @@ fn rekey<V>(map: &mut HashMap<PathBuf, V>, follow: &dyn Fn(&Path) -> Option<Path
             map.insert(to, v);
         }
     }
+}
+
+/// A width of its own written to `file`, or the file removed for none;
+/// nothing written when the file already says it.
+fn keep_in(file: &Path, width: Option<u16>) {
+    let kept = util::read_text(file).and_then(|text| text.trim().parse::<u16>().ok());
+    if kept == width {
+        return;
+    }
+    let _ = match width {
+        Some(width) => util::write_atomic(file, width.to_string()),
+        None => std::fs::remove_file(file),
+    };
 }
 
 /// How soon a second press on the list's edge makes a double click.

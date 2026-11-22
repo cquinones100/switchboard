@@ -108,7 +108,7 @@ impl App {
         let split = self
             .beside
             .as_ref()
-            .map(|b| super::beside::split(area.width, b.show_note));
+            .map(|b| self.plan_split(area.width, b.show_note));
         let list_w = if self.list_shown && split.is_none() {
             self.list_cols(area.width)
                 .min(area.width.saturating_sub(10))
@@ -126,7 +126,10 @@ impl App {
         };
         // The note hidden (Notes narrowed under the plan), the plan takes
         // the keys, so nothing typed reaches what can't be seen.
+        // A plan scrolled without the keys keeps its view as it takes them,
+        // the cursor brought into it rather than it to the cursor.
         if let (Some((None, _)), Some(b)) = (split, self.beside.as_mut()) {
+            b.took_keys |= !b.focused;
             b.focused = true;
         }
         // The edge a drag moves (notes_resize): the line right of the list.
@@ -138,6 +141,7 @@ impl App {
             }
             _ => {
                 self.geo.plan = Rect::default();
+                self.geo.plan_edge = None;
                 self.geo.plan_hits.clear();
                 None
             }
