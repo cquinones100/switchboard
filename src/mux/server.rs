@@ -2199,7 +2199,10 @@ impl Server {
             s.current = s.last.take().unwrap_or(s.tabs[at.min(s.tabs.len() - 1)]);
             // The tab it falls back to is a new place, as a visit is.
             s.trail.forward.clear();
-            s.trail.came_to_front();
+            // A view over it stays the place in front, its time with it.
+            if s.trail.view.is_none() {
+                s.trail.came_to_front();
+            }
             came_to = Some(s.current);
         }
         let name = s.name.clone();
@@ -3493,11 +3496,17 @@ impl Server {
                     return;
                 };
                 let last = self.session(&session).and_then(|s| {
+                    let back_where_a_pass_started =
+                        s.trail.last.as_ref().is_some_and(|p| p.same(&here));
                     s.trail
                         .last
                         .clone()
-                        .filter(|p| place_usable(p) && !p.same(&here))
-                        .or_else(|| s.trail.peek_back(&here, place_usable))
+                        .filter(|p| place_usable(p) && !back_where_a_pass_started)
+                        .or_else(|| {
+                            back_where_a_pass_started
+                                .then(|| s.trail.peek_back(&here, place_usable))
+                                .flatten()
+                        })
                         .or(s.last.map(Place::Tab))
                 });
                 if let Some(place) = last {
