@@ -265,7 +265,7 @@ impl Command {
                 "The menu a right click on the sidebar's ⊞ opens: each view that is on, by group, the Tabs view with how many tabs need you; a choice opens mission control on it."
             }
             Command::DefaultWidth => {
-                "A drag of a lone pane's right edge, or the pane resize keys in a tab with one pane, gives that tab a width of its own, kept through restarts; this clears it, the pane taking Settings' \"Widest a lone pane gets\" (lone_pane_width) again."
+                "A drag of a lone pane's right edge, or the pane resize keys in a tab with one pane or panes stacked one above another, gives that tab a width of its own, kept through restarts; this clears it, the pane taking Settings' \"Widest a lone pane gets\" (lone_pane_width) again."
             }
             Command::SidebarDefaultWidth => {
                 "A drag of the sidebar's edge, or the pane resize keys while it has them, gives the sidebar a width of its own, kept through restarts, which mission control's list of views in its place shares; this clears it, the sidebar taking sidebar.json's width again, as its own menu's \"Use the default width\" does. Settings' \"Resize the sidebar by dragging or the pane resize keys\" (sidebar_resize)."

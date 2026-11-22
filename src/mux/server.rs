@@ -4360,7 +4360,7 @@ impl Server {
         }
     }
 
-    /// The rule at the right edge of the current tab's capped lone pane,
+    /// The rule at the right edge of the current tab's capped lone pane or column,
     /// when (`col`, `row`) is on it: the tab, and the spread it is capped in.
     fn lone_edge_at(&self, id: ClientId, col: u16, row: u16) -> Option<(TabId, Rect)> {
         let s = self.session(&self.clients.get(&id)?.session)?;

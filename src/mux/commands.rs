@@ -55,7 +55,7 @@
 //!                                        where the terminal draws no images
 //!                                        (src/ui/picture.rs)
 //! look [-t pane] <file>...               pictures shown beside the tab's
-//!                                        narrow lone pane, stacked when
+//!                                        narrow lone pane or column, stacked when
 //!                                        several; in the desktop's viewer
 //!                                        with no room there, and a video
 //!                                        or a PDF always (src/ui/pictures.rs)
@@ -225,7 +225,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "look",
-        "look [-t pane] [--before-after <before> <after> | <file>...]: pictures shown in the side panel beside the tab's narrow lone pane, stacked when there are several, the two --before-after takes headed Before and after, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, printing why, and a video or a PDF always",
+        "look [-t pane] [--before-after <before> <after> | <file>...]: pictures shown in the side panel beside the tab's narrow lone pane or panes stacked one above another, stacked when there are several, the two --before-after takes headed Before and after, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, printing why, and a video or a PDF always",
     ),
     (
         "seen",
