@@ -3183,6 +3183,8 @@ mod tests {
             hover: None,
             hover_section: None,
             sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
         };
         let short = texts(&board(&view, &look).0).join("\n");
         assert!(short.contains("Cy") && !short.contains("Ann"), "{short}");
