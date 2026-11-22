@@ -103,13 +103,37 @@ fn default_branch(clone: &Path) -> String {
     .unwrap_or_else(|| "main".to_string())
 }
 
+/// How long a fetch may take before it is ended, so one stalled on a dead
+/// connection never holds the counts after it.
+const FETCH_FOR: Duration = Duration::from_secs(60);
+
 /// Brings the clone's `origin/<default>` to where it is on origin, by name
-/// whatever origin's refspec fetches; a fetch that fails (offline) leaves
-/// it as it was, and the count is made from that.
+/// whatever origin's refspec fetches; a fetch that fails (offline) or runs
+/// past `FETCH_FOR` leaves it as it was, and the count is made from that.
 pub fn fetch(clone: &Path) {
     let default = default_branch(clone);
     let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
-    let _ = git(clone, &["fetch", "-q", "--no-tags", "origin", &refspec]);
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(clone)
+        .args(["fetch", "-q", "--no-tags", "origin", &refspec])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let started = Instant::now();
+    while matches!(child.try_wait(), Ok(None)) {
+        if started.elapsed() >= FETCH_FOR {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// The commits on `clone`'s main that `commit` lacks, and the commit main
