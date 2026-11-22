@@ -2308,6 +2308,14 @@ run("state.haptics = true; buzz(); buzz()");
 seen();
 run("state.haptics = false; buzz()");
 seen();
+// Answering: a tick of a question that takes several answers buzzes nothing, its Submit does.
+navigator.vibrate = (ms) => vibrated.push(ms);
+run(`state.haptics = true;
+  state.open = "4";
+  state.tabs = [{ index: 4, pane: "%4", name: "t", state: "waiting", prompt: { id: "q", multi: true, options: [{ n: 1 }, { n: 2 }] } }];`);
+vibrated.length = 0;
+run(`answer("1"); state.sent = null; answer("submit")`);
+console.log("answered=" + vibrated.length);
 "#;
     let Some(out) = run_app_js(script) else {
         return;
@@ -2320,6 +2328,7 @@ seen();
             "10 0 -",
             "10 1 label:2:checkbox:-1",
             "10 1 label:2:checkbox:-1",
+            "answered=1",
         ],
         "{out}"
     );

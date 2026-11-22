@@ -966,7 +966,9 @@ async function answer(reply) {
   const tab = current();
   const p = tab && tab.prompt;
   if (!p) return;
-  buzz();
+  // Ticking an option of a question that takes several answers buzzes nothing; its Submit does.
+  const isTick = p.multi && p.options.some((o) => String(o.n) === reply);
+  if (!isTick) buzz();
   // One answer for the prompt shown: its buttons wait for the next one.
   state.sent = { pane: tab.pane, key: promptKey(p) };
   render();
