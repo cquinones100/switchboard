@@ -139,6 +139,9 @@ pub enum Event {
     },
     /// Time for a client's held ESC to count as the Escape key.
     FlushInput(ClientId),
+    /// Time for a client's held tab digits to go to their tab, unless
+    /// another digit put the wait off (src/mux/tab_digits.rs).
+    TabDigits(ClientId),
     /// The save `restore-layout` asked for, read (src/mux/persist.rs).
     RestoreLayout(Box<super::persist::LayoutRead>),
     /// A tab focused `agent::SEEN_DELAY` ago, to clear what it showed as
@@ -458,6 +461,9 @@ pub struct Client {
     pub term: String,
     parser: Parser,
     prefix: bool,
+    /// The digits of a tab's number typed after M-1 to M-9, and when the
+    /// wait for the next one ends (src/mux/tab_digits.rs).
+    tab_digits: Option<(String, Instant)>,
     pub(super) screen: Screen,
     pub dirty: bool,
     drag: Option<Drag>,
@@ -1355,6 +1361,16 @@ impl Server {
                 }
                 let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref(), by_hand);
                 let _ = reply.send(Answer::Reply(answer));
+            }
+            Event::TabDigits(id) => {
+                let due = self
+                    .clients
+                    .get(&id)
+                    .and_then(|c| c.tab_digits.as_ref())
+                    .is_some_and(|(_, until)| Instant::now() >= *until);
+                if due {
+                    self.end_tab_digits(id);
+                }
             }
             Event::FlushInput(id) => {
                 let parsed = match self.clients.get_mut(&id) {
@@ -2564,6 +2580,7 @@ impl Server {
             term,
             parser: Parser::new(),
             prefix: false,
+            tab_digits: None,
             screen: Screen::default(),
             dirty: true,
             drag: None,
@@ -2653,6 +2670,7 @@ impl Server {
             term,
             parser: Parser::new(),
             prefix: false,
+            tab_digits: None,
             screen: Screen::default(),
             dirty: true,
             drag: None,
@@ -2913,6 +2931,83 @@ impl Server {
         }
     }
 
+    /// M-1 to M-9: the tab at once, or, while an open tab's number is
+    /// longer and starts with the digit, the digit held for the ones typed
+    /// after it (src/mux/tab_digits.rs).
+    fn select_tab_key(&mut self, id: ClientId, n: usize) {
+        let digits = n.to_string();
+        if super::tab_digits::could_grow(&digits, self.open_tab_numbers()) {
+            self.hold_tab_digits(id, digits);
+        } else {
+            self.act(id, Action::SelectTab(n));
+        }
+    }
+
+    /// The open tabs' numbers, in every session.
+    fn open_tab_numbers(&self) -> Vec<usize> {
+        self.sessions
+            .iter()
+            .flat_map(|s| s.tabs.iter())
+            .map(|t| self.tab_number(*t))
+            .filter(|n| *n > 0)
+            .collect()
+    }
+
+    /// Holds a client's tab digits for Settings' `tab_digit_delay`.
+    fn hold_tab_digits(&mut self, id: ClientId, digits: String) {
+        let delay = super::tab_digits::delay();
+        if let Some(c) = self.clients.get_mut(&id) {
+            c.tab_digits = Some((digits, Instant::now() + delay));
+            self.send_later(delay, Event::TabDigits(id));
+        }
+    }
+
+    /// Ends a client's wait for a tab's digits: the tab they name, or
+    /// nothing with no tab numbered that.
+    fn end_tab_digits(&mut self, id: ClientId) {
+        let held = self.clients.get_mut(&id).and_then(|c| c.tab_digits.take());
+        if let Some(n) = held.and_then(|(digits, _)| digits.parse().ok()) {
+            self.act(id, Action::SelectTab(n));
+        }
+    }
+
+    /// What a client types while its tab digits are held: a plain digit is
+    /// taken for the number, going at once when no open tab's number could
+    /// still grow from it; any other key or a paste goes to their tab first
+    /// and is then handled as usual. True when it was taken.
+    fn tab_digit_input(&mut self, id: ClientId, input: &Input) -> bool {
+        let Some(digits) = self
+            .clients
+            .get(&id)
+            .and_then(|c| c.tab_digits.as_ref())
+            .map(|(d, _)| d.clone())
+        else {
+            return false;
+        };
+        match input {
+            Input::Key(Key {
+                code: KeyCode::Char(c @ '0'..='9'),
+                mods,
+            }) if mods.is_empty() => {
+                let digits = format!("{digits}{c}");
+                if super::tab_digits::could_grow(&digits, self.open_tab_numbers()) {
+                    self.hold_tab_digits(id, digits);
+                } else {
+                    if let Some(c) = self.clients.get_mut(&id) {
+                        c.tab_digits = Some((digits, Instant::now()));
+                    }
+                    self.end_tab_digits(id);
+                }
+                true
+            }
+            Input::Key(_) | Input::Paste(_) => {
+                self.end_tab_digits(id);
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Asks for what a client's parser holds to be let go after `after`.
     fn flush_later(&self, id: ClientId, after: Duration) {
         let tx = self.tx.clone();
@@ -3152,6 +3247,11 @@ impl Server {
                 return;
             }
         }
+        // A tab's digits held after M-1 to M-9 take the next digit, and
+        // any other key goes to their tab first (src/mux/tab_digits.rs).
+        if self.tab_digit_input(id, &parsed.input) {
+            return;
+        }
         // The sidebar's edge takes a press and the drag after it, before
         // mission control, whose list of views shares that edge.
         if let Input::Mouse(m) = &parsed.input
@@ -3267,6 +3367,10 @@ impl Server {
             // the habits' keys, as tmux.conf counted it nowhere.
             if action != Action::Extra(crate::extras::Command::PaneNav) {
                 self.count_key(&key.notation());
+            }
+            if let Action::SelectTab(n) = action {
+                self.select_tab_key(id, n);
+                return;
             }
             self.act(id, action.pressed(crate::settings::is_on("reopen_tab_key")));
             return;

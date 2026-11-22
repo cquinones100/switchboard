@@ -34,6 +34,8 @@
 //!   programs, its socket and its terminals handed over across an exec.
 //! - `trail`: the tabs and mission control views a session visited, for
 //!   M-{ and M-} to go back and forward through and M-Tab to go back to.
+//! - `tab_digits`: M-1 to M-9 followed by digits typed within a short
+//!   wait, for a tab past 9.
 //! - `latest`: M-p's restart building the checkout first, and telling
 //!   whether there is anything new to restart on.
 //! - `behind`: the notification that main has landings the running build
@@ -63,6 +65,7 @@ pub mod respawn;
 pub mod server;
 pub mod sixel;
 pub mod socket;
+pub mod tab_digits;
 pub mod terminal;
 pub mod trail;
 pub mod upgrade;

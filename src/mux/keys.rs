@@ -5,7 +5,7 @@
 //! M-f to pin a tab), M-h for the tab's history (new,
 //! src/history), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-S-f, M-u, src/views), M-d (src/diff) and Notes'
-//! M-N and M-e (src/notes/serve.rs), M-0, C-w, M-R and M-O (src/extras), under the
+//! M-N and M-e (src/notes/serve.rs), C-w, M-R and M-O (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
 //! `~/.config/switchboard/keys.json` adds to or changes them:
 //!
@@ -193,7 +193,7 @@ pub enum Action {
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::Command),
-    /// The rest of tmux.conf's keys and M-p's commands: M-0, C-w, renaming
+    /// The rest of tmux.conf's keys and M-p's commands: C-w, renaming
     /// the tab, mission control on a view and the rest (src/extras).
     Extra(crate::extras::Command),
     /// Autopilot (src/autopilot).
@@ -556,7 +556,7 @@ impl Action {
                 "Pressed again, it goes back the other way, so two tabs can be swapped between with one key.".into()
             }
             Action::SelectTab(_) => {
-                "M-1 to M-9 go to the tab with that number, the one the header and the sidebar show, in whichever session it is; a tab keeps its number while it is open, so with no tab numbered that, nothing happens. M-0 asks for a number, for the tabs past 9.".into()
+                "M-1 to M-9 go to the tab with that number, the one the header and the sidebar show, in whichever session it is; a tab keeps its number while it is open, so with no tab numbered that, nothing happens. For a tab past 9, digits typed right after it finish the number (M-1 then 6 for tab 16), within Settings' tab_digit_delay; with no open tab whose number could grow from it, it goes at once.".into()
             }
             Action::NewTab => {
                 "The tab runs your shell in the current pane's directory and goes right after the current one.".into()
@@ -847,7 +847,9 @@ impl Action {
     /// notes_preview is off.
     pub fn palette_note(&self) -> Option<(String, String)> {
         let words = match self {
-            Action::SelectTab(1) => "Go to a tab by number (M-1 to M-9)".to_string(),
+            Action::SelectTab(1) => {
+                "Go to a tab by number (M-1 to M-9, then more digits for a tab past 9)".to_string()
+            }
             Action::SelectTab(_) => return None,
             Action::TabStatus if !crate::settings::is_on("tab_status_by_hand") => return None,
             Action::Extra(command) if !command.in_palette() => return None,
@@ -1341,7 +1343,7 @@ mod tests {
         );
         assert_eq!(
             Action::SelectTab(1).palette_note().unwrap().0,
-            "Go to a tab by number (M-1 to M-9)"
+            "Go to a tab by number (M-1 to M-9, then more digits for a tab past 9)"
         );
         assert_eq!(Action::SelectTab(4).palette_note(), None);
     }
