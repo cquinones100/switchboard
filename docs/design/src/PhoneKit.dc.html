@@ -291,8 +291,8 @@ const icon = (x, y, glyph, kind) => {
   K(x, y, Wd(44), PT(44), 'border-radius:50%;background:' + bg);
   tx(x, y, Wd(44), PT(44), glyph, kind === 'lit' ? C.ink : C.accent, 14, true, 'center');
 };
-// 3. BUTTON: a pill 44 pt high, 16 pt of padding, its words 16 pt; plain (raised), lit (accent, ink, bold: the one to press),
-//    danger (raised, red words: Close tab, Close); full width, or side by side with 8 pt between.
+// 3. BUTTON: a pill 44 pt high, 16 pt of padding, its words 16 pt; plain (raised), lit (accent, ink, bold: the one to press, as a question's
+//    yes, Close, is), danger (raised, red words: an option that ends something, Close tab in a menu); full width, or side by side with 8 pt between.
 const btn = (x, y, w, text, kind, center) => {
   K(x, y, w, PT(44), 'border-radius:999px;background:' + (kind === 'lit' ? C.accent : C.raised));
   tx(x + 1.2, y, w - 2.4, PT(44), text, kind === 'lit' ? C.ink : kind === 'danger' ? C.red : C.text, 12, kind === 'lit', center ? 'center' : 'flex-start');
