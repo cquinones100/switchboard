@@ -8334,9 +8334,12 @@ fn follows(m: &Mission) -> bool {
 }
 
 /// Enter on the list's row of the view in front: the keys go to the view,
-/// its first pane, as `C-w l` gives them, and the view joins the trail now.
+/// its first pane, as `C-w l` gives them, and the view joins the trail now:
+/// a walk to it rests at once, settled at the next sync as a rest is.
 fn into_view(m: &mut Mission) {
-    m.nav_held = None;
+    if let Some(held) = m.nav_held.as_mut() {
+        held.1 = 0;
+    }
     if let Some(&first) = m.panes().first() {
         m.pane = Some((m.view, first));
     }
@@ -9434,6 +9437,8 @@ mod tests {
         assert!(m.nav_held.is_some());
         into_view(&mut m);
         assert_eq!((m.view, m.focus), (1, Some(Focus::Item)));
+        assert_eq!(m.trail_view(), Some(m.current().unwrap().slug()));
+        assert!(m.take_settled_walk(), "the walk settles at the next sync");
         assert!(m.nav_held.is_none());
         // With the list's filter hiding the view in front, Shift-Tab comes
         // back to the first row it leaves, which Enter opens.

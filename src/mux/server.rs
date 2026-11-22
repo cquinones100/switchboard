@@ -2328,9 +2328,14 @@ impl Server {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
+        // A walk of the list of views that has rested (or Enter ended)
+        // settles now, once: the view on the screen joins the trail.
+        let settles = c
+            .overlays
+            .find_mut::<crate::mission::Mission>()
+            .is_some_and(crate::mission::Mission::take_settled_walk);
+        let walked = walked || settles;
         let mission = c.overlays.find::<crate::mission::Mission>();
-        // A walk of the list of views the view on the screen settles.
-        let walked = walked || mission.is_some_and(|m| m.nav_held.is_some());
         if let Some(asked) = c.view_held {
             let asking = !c.overlays.lets_through();
             let still_held = mission.is_none() && (asking || !asked);
@@ -3481,7 +3486,9 @@ impl Server {
                 // off now, or the server restarted since, which keeps no
                 // place. Pressed again within a second, the place left was
                 // passed through and isn't the trail's `last`, so it is
-                // made so here for the press to come back.
+                // made so here for the press to come back. Back where a pass
+                // started, `last` is here, so it is the place a step back
+                // goes to.
                 let Some(here) = self.session(&session).map(|s| s.trail.here(s.current)) else {
                     return;
                 };
@@ -3490,6 +3497,7 @@ impl Server {
                         .last
                         .clone()
                         .filter(|p| place_usable(p) && !p.same(&here))
+                        .or_else(|| s.trail.peek_back(&here, place_usable))
                         .or(s.last.map(Place::Tab))
                 });
                 if let Some(place) = last {
