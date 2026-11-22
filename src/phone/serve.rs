@@ -3,7 +3,8 @@
 //! JSON), `answer` (an option pressed, or a message typed, in a Claude
 //! pane), `kill-tab -s` (a Claude tab closed, which the phone asks about
 //! first), `remind` (a Claude tab's reminder set or cleared, as the
-//! workspace's reminder box does) and `watch` (every Claude tab's state and last turn, streamed as
+//! workspace's reminder box does), `pin` (a Claude tab pinned or unpinned,
+//! as M-f does) and `watch` (every Claude tab's state and last turn, streamed as
 //! a line of JSON each time they change), and the server's log's line for
 //! what your phone did, with no notification, since you know what you did
 //! and the tab shows it; and, after the server takes over from another
@@ -381,7 +382,7 @@ impl Server {
         let ask = crate::mission::ask::Ask::new(
             "Pair a phone?",
             format!(
-                "{device}, signed in to Tailscale as you, wants to answer, message, set reminders on and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
+                "{device}, signed in to Tailscale as you, wants to answer, message, set reminders on, pin and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
             ),
         );
         self.open(
