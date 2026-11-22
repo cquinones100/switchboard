@@ -2934,7 +2934,7 @@ impl Server {
     /// M-1 to M-9: the tab at once, or, while an open tab's number is
     /// longer and starts with the digit, the digit held for the ones typed
     /// after it (src/mux/tab_digits.rs).
-    fn select_tab_key(&mut self, id: ClientId, n: usize) {
+    pub(crate) fn select_tab_key(&mut self, id: ClientId, n: usize) {
         let digits = n.to_string();
         if super::tab_digits::could_grow(&digits, self.open_tab_numbers()) {
             self.hold_tab_digits(id, digits);

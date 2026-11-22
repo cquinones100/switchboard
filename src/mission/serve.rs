@@ -2486,7 +2486,7 @@ impl Server {
         };
         // The workspace's own keys for going to a tab and the palette, as
         // keys.json binds them: a tab by its number closes mission control
-        // and goes there; the palette opens over it. Before a filter or a
+        // and goes there, holding its digit for a tab past 9 as outside it; the palette opens over it. Before a filter or a
         // view's name being typed, which take no Alt keys.
         match self
             .bindings
@@ -2497,7 +2497,7 @@ impl Server {
             Some(crate::mux::keys::Action::SelectTab(n)) => {
                 let n = *n;
                 self.mission_close_from(client, m);
-                self.act(client, crate::mux::keys::Action::SelectTab(n));
+                self.select_tab_key(client, n);
                 return;
             }
             // Back, forward and M-Tab go from the view in front, once its
