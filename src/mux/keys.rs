@@ -214,6 +214,7 @@ impl Action {
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
     /// `next-idle`, `focus-claude`, `copy-reply`, `toggle-pin`, `palette`,
+    /// `choose-picture`,
     /// `reset-tips`, `toggle-theme`, `focus-sidebar`, `toggle-sidebar`,
     /// `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,

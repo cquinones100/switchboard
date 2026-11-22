@@ -318,9 +318,10 @@ impl Server {
             let Some(top) = c.overlays.layers.last_mut() else {
                 return Handed::Left(parsed);
             };
-            // The key after the prefix is the bindings', never the
+            // The key after the prefix (or C-w) is the bindings', never the
             // pictures', which pass the prefix itself on.
-            if c.prefix
+            let waiting = c.prefix || self.extras.nav.contains(&id);
+            if waiting
                 && matches!(parsed.input, Input::Key(_))
                 && top.overlay.as_any().is::<Pictures>()
             {
@@ -779,6 +780,12 @@ impl Server {
                     Spare::At { room, pane } => (Some(*room), Some(*pane)),
                     _ => (None, None),
                 };
+                // Hidden behind another tab or mission control, they give
+                // the keys back for good, so coming back to the tab finds
+                // its pane with them.
+                if p.area.is_none() {
+                    p.release();
+                }
             }
         }
         // Input reaches the top layer only, so hidden pictures go under
