@@ -4,7 +4,8 @@
 //! `phone_snapshot`), and a few turns each, as `phone::turns` reads them
 //! from a transcript. One waits on a question with choices, one on a
 //! question that takes several, one finished with a long reply in
-//! Markdown, one finished on a failure, one with images you sent; the rest
+//! Markdown, one finished on a failure, one with images you sent and a
+//! before and after its Claude showed with `look`; the rest
 //! work, wait in the background or sit idle. Every name is made up, in the
 //! demo's style (`acme/` repositories, people by first name).
 
@@ -137,6 +138,13 @@ const TABS: &[Tab] = &[
                 40,
             ),
             ("tool", "Edit src/checkout/Summary.tsx", &[], 33),
+            (
+                "tool",
+                "Bash: switchboard look --before-after before.png after.png",
+                &[],
+                26,
+            ),
+            ("look", "", &["demo-before.svg", "demo-after.svg"], 26),
             (
                 "claude",
                 "Fixed: the total and the button sit in one row that wraps the button, not the total, under 360 pixels.",
@@ -367,7 +375,17 @@ pub fn turns(now_ms: i64) -> Vec<(String, Vec<Value>)> {
                 .turns
                 .iter()
                 .map(|(who, text, images, ago)| {
-                    json!({"who": who, "text": text, "images": images, "at": now_ms - ago * 60_000})
+                    let at = now_ms - ago * 60_000;
+                    if *who == "look" {
+                        // A look of two is a before and after.
+                        let look = crate::phone::looks::Look {
+                            at,
+                            images: images.iter().map(|i| i.to_string()).collect(),
+                            before_after: images.len() == 2,
+                        };
+                        return json!(crate::phone::looks::message(&look));
+                    }
+                    json!({"who": who, "text": text, "images": images, "at": at})
                 })
                 .collect();
             (format!("%{}", t.pane), messages)
@@ -380,6 +398,8 @@ pub fn image(name: &str) -> Option<String> {
     let (title, line) = match name {
         "demo-checkout.svg" => ("Checkout", "Total $48.20 wraps"),
         "demo-total.svg" => ("Order summary", "Pay now ⟶"),
+        "demo-before.svg" => ("Order summary", "Total $48.20 wraps"),
+        "demo-after.svg" => ("Order summary", "Total $48.20 · Pay"),
         _ => return None,
     };
     Some(format!(
@@ -401,6 +421,12 @@ mod tests {
         }
         assert!(tabs.iter().any(|t| t["prompt"]["multi"] == false));
         assert!(tabs.iter().any(|t| t["prompt"]["multi"] == true));
+        assert!(
+            turns(1_000_000_000)
+                .iter()
+                .flat_map(|(_, m)| m)
+                .any(|m| m["who"] == "look" && m["titles"] == json!(["Before", "After"]))
+        );
         let turns = turns(1_000_000_000);
         assert!(
             turns

@@ -736,6 +736,8 @@ function turns(messages, working) {
     if (last < 0) return [...said, ...rest];
     const unanswered = working && g === groups.length - 1;
     const steps = unanswered ? rest : rest.slice(0, last + 1);
+    // The pictures Claude showed stay in sight with the steps folded.
+    const looks = steps.filter((m) => m.who === "look");
     const key = keys[g];
     const open = state.unfolded.has(key);
     const row = {
@@ -745,7 +747,7 @@ function turns(messages, working) {
       count: steps.filter((m) => m.who === "tool").length,
       latest: unanswered ? steps[steps.length - 1].text : "",
     };
-    return [...said, row, ...(open ? steps : []), ...rest.slice(steps.length)];
+    return [...said, row, ...(open ? steps : looks), ...rest.slice(steps.length)];
   });
 }
 
@@ -779,8 +781,10 @@ function message(m, i, all) {
   if (m.who === "tool") return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, m.text));
   const prev = all[i - 1];
   // One header over messages in a row only from the same sender: two
-  // tabs' messages in a row each keep theirs (board 182).
-  const same = prev && prev.who === m.who && prev.who !== "tool" && (m.who !== "tab" || prev.from === m.from);
+  // tabs' messages in a row each keep theirs (board 182). A look is
+  // Claude's showing pictures: Claude's, as its words are.
+  const speaker = (x) => (x.who === "look" ? "claude" : x.who);
+  const same = prev && prev.who !== "tool" && prev.who !== "steps" && speaker(prev) === speaker(m) && (m.who !== "tab" || prev.from === m.from);
   const who = m.who === "you" ? "You" : m.who === "tab" ? m.from || "Another tab" : "Claude";
   const name = m.who === "tab" && m.tab
     ? el("span", { class: "who" }, el("span", { class: "num " + hue({ index: m.tab }) }, String(m.tab)), who.slice(String(m.tab).length))
@@ -800,13 +804,15 @@ function message(m, i, all) {
     ? el(
         "div",
         { class: "shots" },
-        m.images.map((name) =>
-          el(
+        m.images.map((name, n) => {
+          const title = (m.titles || [])[n];
+          const shot = el(
             "button",
-            { class: "shot", "aria-label": "Show the image", onclick: () => { state.full = name; render(); } },
-            el("img", { src: imageUrl(name), alt: "An image you sent", loading: "lazy" }),
-          ),
-        ),
+            { class: "shot", "aria-label": "Show " + (title ? title : "the image") + " whole", onclick: () => { state.full = name; render(); } },
+            el("img", { src: imageUrl(name), alt: m.who === "you" ? "An image you sent" : "A picture Claude showed", loading: "lazy" }),
+          );
+          return title ? el("figure", { class: "titled" }, shot, el("figcaption", {}, title)) : shot;
+        }),
       )
     : null;
   const more = folded
@@ -822,7 +828,7 @@ function message(m, i, all) {
   return el(
     "div",
     { class: "msg" },
-    same ? el("span") : el("span", { class: "avatar " + m.who }, initial),
+    same ? el("span") : el("span", { class: "avatar " + speaker(m) }, initial),
     same ? null : el("div", {}, name, when),
     body,
     more,
@@ -840,7 +846,7 @@ function full() {
     "div",
     { class: "full", onclick: close },
     el("button", { class: "close", "aria-label": "Close" }, "×"),
-    el("img", { src: imageUrl(state.full), alt: "An image you sent" }),
+    el("img", { src: imageUrl(state.full), alt: "The image, whole" }),
   );
 }
 

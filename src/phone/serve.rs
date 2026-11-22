@@ -24,6 +24,8 @@
 //! out a moment after anything happens (`SETTLE`), at most that often, and
 //! sent only when it differs from the last, so a burst of hooks costs one.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -38,7 +40,7 @@ use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{Rules, by_need, needs_tab, reminder_due};
 use crate::{settings, util};
 
-use super::cli;
+use super::{cli, images, looks};
 
 /// How long after a change `watch` waits before it sends, so a burst of
 /// changes goes as one.
@@ -46,18 +48,23 @@ const SETTLE: Duration = Duration::from_millis(250);
 /// The longest a message's words run in the log's line.
 const SAID_WIDTH: usize = 80;
 
-/// The phone's watchers and what they were last sent.
+/// The phone's watchers and what they were last sent, and the pictures
+/// each Claude pane's Claude showed with `look` (`looks`), the newest
+/// `looks::MOST`, handed over to a new build with the panes.
 #[derive(Default)]
 pub struct Phone {
     watchers: Vec<mpsc::UnboundedSender<String>>,
     last: String,
     due: bool,
+    pub looks: HashMap<PaneId, Vec<looks::Kept>>,
 }
 
 #[derive(Debug)]
 pub enum PhoneEvent {
     /// Send the watchers what changed.
     Publish,
+    /// A tab's Claude showed pictures with `look`, copied for the phone.
+    Looked { pane: PaneId, kept: looks::Kept },
     /// The app an older build ran has exited: its tab's pane starts it
     /// again on this one.
     OldExited { pane: PaneId, old: i64 },
@@ -394,6 +401,41 @@ impl Server {
         }
     }
 
+    /// `look`'s pictures for the phone (`looks`): with Settings' "Phone
+    /// app" and `phone_look_pictures` on, in a tab whose Claude has a
+    /// transcript, the pictures the phone can draw among `files` copied
+    /// into its images folder off the server's task (none from a PR's
+    /// untrusted worktree), and kept on the tab's Claude pane.
+    pub(crate) fn phone_look(&self, tab: Option<TabId>, files: Vec<PathBuf>, before_after: bool) {
+        if !settings::is_on("phone") || !settings::is_on("phone_look_pictures") {
+            return;
+        }
+        let Some(pane) = tab.and_then(|t| self.tab_claude_pane(t)) else {
+            return;
+        };
+        let Some(transcript) = self
+            .sidebar
+            .panes
+            .get(&pane)
+            .filter(|r| r.claude)
+            .and_then(|r| r.transcript.clone())
+        else {
+            return;
+        };
+        let at = util::now_ms();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let files: Vec<PathBuf> = files
+                .into_iter()
+                .filter(|f| !f.parent().is_some_and(crate::trust::is_untrusted))
+                .collect();
+            if let Some(look) = looks::copy(&images::dir(), &files, before_after, at) {
+                let kept = looks::Kept { transcript, look };
+                let _ = tx.send(Event::Phone(PhoneEvent::Looked { pane, kept }));
+            }
+        });
+    }
+
     /// `watch`: the connection kept, sent the Claude tabs now and each time
     /// they change.
     pub(crate) fn phone_watch(&mut self, reply: oneshot::Sender<Answer>) {
@@ -485,6 +527,16 @@ impl Server {
 
     pub(crate) fn phone_event(&mut self, event: PhoneEvent) {
         match event {
+            PhoneEvent::Looked { pane, kept } => {
+                if !self.panes.contains_key(&pane) {
+                    return;
+                }
+                let all = self.phone.looks.entry(pane).or_default();
+                all.push(kept);
+                let over = all.len().saturating_sub(looks::MOST);
+                all.drain(..over);
+                self.phone_changed();
+            }
             PhoneEvent::OldExited { pane, old } => {
                 match self.replace_program(pane, Some(cli::tab_command())) {
                     Ok(()) => {
@@ -570,12 +622,12 @@ impl Server {
                     .then(|| self.phone_prompt_of(pane))
                     .flatten()
                     .map(|p| prompt_json(&p));
-                let transcript = self
+                let file = self
                     .sidebar
                     .panes
                     .get(&pane)
-                    .and_then(|r| r.transcript.as_ref())
-                    .map(|p| p.to_string_lossy().into_owned());
+                    .and_then(|r| r.transcript.as_ref());
+                let transcript = file.map(|p| p.to_string_lossy().into_owned());
                 // What another tab's Claude reaches it by, `SendMessage`'s
                 // address, which names a message it sent (`web::sender_name`).
                 let address = self
@@ -584,6 +636,16 @@ impl Server {
                     .get(&pane)
                     .and_then(|r| r.session.as_ref()?.socket.as_ref())
                     .map(|s| format!("uds:{s}"));
+                // The pictures its Claude showed in this conversation.
+                let shown: Vec<&looks::Look> = self
+                    .phone
+                    .looks
+                    .get(&pane)
+                    .into_iter()
+                    .flatten()
+                    .filter(|k| Some(&k.transcript) == file)
+                    .map(|k| &k.look)
+                    .collect();
                 let branch = self
                     .tab_names
                     .shown
@@ -602,6 +664,7 @@ impl Server {
                     "wait": t.wait,
                     "transcript": transcript,
                     "address": address,
+                    "looks": shown,
                     "turn": t.turn.as_ref().map(|turn| json!({
                         "prompt": turn.prompt,
                         "reply": turn.reply,

@@ -24,14 +24,19 @@ pub const MOST: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Message {
-    /// `you`, `tab` (another tab's Claude), `claude`, `tool`, or `turn`,
-    /// with no words, where a subagent's report back started a turn, which
-    /// the app starts there without drawing it.
+    /// `you`, `tab` (another tab's Claude), `claude`, `tool`, `look` for
+    /// the pictures Claude showed (`looks`), or `turn`, with no words,
+    /// where a subagent's report back started a turn, which the app starts
+    /// there without drawing it.
     pub who: &'static str,
     pub text: String,
-    /// The names of the images in `images::dir()` a message you sent
-    /// carries, in order.
+    /// The names of the images in `images::dir()` a message you sent, or
+    /// a look, carries, in order.
     pub images: Vec<String>,
+    /// What each image is titled, in order, where its look titled them
+    /// (Before and After); empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub titles: Vec<String>,
     /// When, in ms; 0 where the transcript doesn't say.
     pub at: i64,
     /// A `tab` message's sender: its address as the transcript gives it,
@@ -122,6 +127,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                         who: "you",
                         text,
                         images,
+                        titles: Vec::new(),
                         at,
                         from: String::new(),
                         queued: false,
@@ -146,6 +152,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                                     who: "claude",
                                     text: t.to_string(),
                                     images: Vec::new(),
+                                    titles: Vec::new(),
                                     at,
                                     from: String::new(),
                                     queued: false,
@@ -156,6 +163,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                             who: "tool",
                             text: tool_text(&part),
                             images: Vec::new(),
+                            titles: Vec::new(),
                             at,
                             from: String::new(),
                             queued: false,

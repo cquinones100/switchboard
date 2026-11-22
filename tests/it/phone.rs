@@ -2099,3 +2099,131 @@ mod preview_server {
         }
     }
 }
+
+/// The Claude pane's conversation given a transcript, as Claude Code
+/// writes one, and `watch` followed until its tab names it.
+fn with_transcript(server: &TestServer) -> UnixStream {
+    let dir = server.home.join(".claude/projects/phone");
+    std::fs::create_dir_all(&dir).unwrap();
+    let line = json!({"type": "user", "message": {"content": "show me"}});
+    std::fs::write(dir.join("s-phone.jsonl"), format!("{line}\n")).unwrap();
+    let mut stream = watch(server);
+    next_line(&mut stream, |v| v["tabs"][0]["transcript"].is_string());
+    stream
+}
+
+/// Waits a moment for what would come of a `look` that should add nothing.
+fn grace() {
+    std::thread::sleep(Duration::from_millis(1500) * common::patience());
+}
+
+/// `look` in a Claude tab (src/phone/looks.rs): its pictures copied into
+/// the phone's images folder and listed on the tab's Claude pane in what
+/// `watch` sends, a before and after marked so, and a video adding none.
+#[test]
+fn a_look_in_a_claude_tab_reaches_its_channel_on_the_phone() {
+    let server = TestServer::start_with_settings(r#"{"phone": true}"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = claude_pane(&server);
+    let mut stream = with_transcript(&server);
+    let picture = |name: &str, size: u32| {
+        let file = server.dir.path().join(name);
+        common::four_colours(&file, size);
+        file.to_string_lossy().into_owned()
+    };
+    let (a, b) = (picture("a.png", 64), picture("b.png", 32));
+    server.ok(&["look", "-t", &pane, &a, &b]);
+    let looked = next_line(&mut stream, |v| {
+        v["tabs"][0]["looks"]
+            .as_array()
+            .is_some_and(|l| l.len() == 1)
+    });
+    let look = &looked["tabs"][0]["looks"][0];
+    assert_eq!(look["before_after"], false);
+    let images = server.state.join("phone/images");
+    let names: Vec<&str> = look["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{look}");
+    for name in &names {
+        assert!(images.join(name).is_file(), "{name} copied");
+    }
+
+    server.ok(&["look", "-t", &pane, "--before-after", &a, &b]);
+    let both = next_line(&mut stream, |v| {
+        v["tabs"][0]["looks"]
+            .as_array()
+            .is_some_and(|l| l.len() == 2)
+    });
+    assert_eq!(both["tabs"][0]["looks"][1]["before_after"], true);
+
+    let video = server.dir.path().join("demo.mp4");
+    std::fs::write(&video, b"\0\0\0\x18ftypmp42").unwrap();
+    server.ok(&["look", "-t", &pane, video.to_str().unwrap()]);
+    grace();
+    server.ok(&["set", "-t", &pane, "@agent_state", "waiting"]);
+    let after = next_line(&mut stream, |v| v["tabs"][0]["state"] == "waiting");
+    assert_eq!(after["tabs"][0]["looks"].as_array().unwrap().len(), 2);
+}
+
+/// With Settings' `phone_look_pictures` off, `look` copies nothing for the
+/// phone and its tab lists no look.
+#[test]
+fn a_look_with_the_setting_off_reaches_nothing_on_the_phone() {
+    let server =
+        TestServer::start_with_settings(r#"{"phone": true, "phone_look_pictures": false}"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = claude_pane(&server);
+    let mut stream = with_transcript(&server);
+    let file = server.dir.path().join("a.png");
+    common::four_colours(&file, 64);
+    server.ok(&["look", "-t", &pane, file.to_str().unwrap()]);
+    grace();
+    server.ok(&["set", "-t", &pane, "@agent_state", "waiting"]);
+    let after = next_line(&mut stream, |v| v["tabs"][0]["state"] == "waiting");
+    assert_eq!(after["tabs"][0]["looks"], json!([]));
+    assert!(!server.state.join("phone/images").exists());
+}
+
+/// A look's message in the channel (assets/phone/app.js's `message`): its
+/// thumbnails titled Before and After, still in sight with the turn's steps
+/// folded, and a tap on one showing it whole; skipped without Node.
+#[test]
+fn a_looks_pictures_show_in_the_channel_and_whole_on_a_tap() {
+    let script = [CHANNEL_PAGE, r##"
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac" };
+  listen();
+  state.open = "5";
+`, ctx);
+source.onmessage({ data: JSON.stringify({ live: true, tabs: [{ pane: "%5", index: 2, name: "phone", state: "done", turn: { prompt: "go" } }] }) });
+const messages = [
+  { who: "you", text: "Show me", at: 1 },
+  { who: "tool", text: "Bash: switchboard look --before-after a.png b.png", at: 2 },
+  { who: "look", text: "Showed a before and after", images: ["a.png", "b.png"], titles: ["Before", "After"], at: 3 },
+  { who: "tool", text: "Bash: cargo test", at: 4 },
+  { who: "claude", text: "Here they are.", at: 5 },
+];
+vm.runInContext("state.messages = " + JSON.stringify(messages) + "; render(true);", ctx);
+const shots = app.querySelectorAll("button.shot");
+console.log("shots=" + shots.length);
+console.log("titles=" + app.querySelectorAll("figcaption").map((c) => c.textContent).join(","));
+shots[1].click();
+console.log("whole=" + vm.runInContext("state.full", ctx));
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        ["shots=2", "titles=Before,After", "whole=b.png"],
+        "{stdout}"
+    );
+}

@@ -91,6 +91,39 @@ pub fn save(dir: &Path, bytes: &[u8], random: &[u8]) -> Result<String> {
     Ok(name)
 }
 
+/// Keeps a copy of the picture at `file` in `dir`, named after its
+/// contents (so a picture shown twice is kept once, its time renewed for
+/// `prune`), and gives the name; `None` for what isn't a taken image, is
+/// too large or can't be read.
+pub fn keep_copy(dir: &Path, file: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if fs::metadata(file).ok()?.len() > MAX_BYTES as u64 {
+        return None;
+    }
+    let bytes = fs::read(file).ok()?;
+    let ext = kind(&bytes)?;
+    let digest = Sha256::digest(&bytes);
+    let id = &digest[..ID_LEN / 2];
+    let name = format!(
+        "{}.{ext}",
+        id.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
+    let kept = dir.join(&name);
+    if kept.is_file() {
+        let renewed = fs::File::options()
+            .write(true)
+            .open(&kept)
+            .and_then(|f| f.set_modified(SystemTime::now()));
+        return renewed.is_ok().then_some(name);
+    }
+    match save(dir, &bytes, id) {
+        Ok(name) => Some(name),
+        // Kept by another look of the same picture at the same moment.
+        Err(_) if kept.is_file() => Some(name),
+        Err(_) => None,
+    }
+}
+
 #[cfg(unix)]
 fn make_dir(dir: &Path) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -291,6 +324,23 @@ mod tests {
         assert_eq!(images, [a]);
         let (words, images) = split(&dir.join(a).display().to_string(), dir);
         assert_eq!((words.as_str(), images.len()), ("", 1));
+    }
+
+    #[test]
+    fn a_picture_is_copied_once_under_its_contents_name() {
+        let tmp = Temp::new("copy");
+        let dir = tmp.path().join("images");
+        let shot = tmp.path().join("shot.png");
+        fs::write(&shot, PNG).unwrap();
+        let name = keep_copy(&dir, &shot).unwrap();
+        assert!(is_name(&name) && name.ends_with(".png"));
+        assert_eq!(fs::read(dir.join(&name)).unwrap(), PNG);
+        assert_eq!(keep_copy(&dir, &shot).as_deref(), Some(name.as_str()));
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        let video = tmp.path().join("demo.mp4");
+        fs::write(&video, b"\0\0\0\x18ftypmp42").unwrap();
+        assert_eq!(keep_copy(&dir, &video), None);
+        assert_eq!(keep_copy(&dir, &tmp.path().join("gone.png")), None);
     }
 
     #[test]
