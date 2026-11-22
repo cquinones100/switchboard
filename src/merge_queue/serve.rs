@@ -48,8 +48,8 @@ pub enum MergeQueueEvent {
     Stepped {
         common: PathBuf,
         told: Result<Vec<Told>, String>,
-        /// The step recorded a PR merged, whether or not it went on to fail
-        /// after, so main has moved.
+        /// The step recorded a PR merged, or failed, maybe after a merge, so
+        /// main may have moved.
         merged: bool,
     },
 }
@@ -117,7 +117,9 @@ impl Server {
                 if let Err(e) = &told {
                     let _ = super::change(&common, |q| q.failed = Some(e.clone()));
                 }
-                let merged = last_merge(&common) != before;
+                // A step that failed may have merged on GitHub before it
+                // failed (its fetch after the merge), recording nothing.
+                let merged = told.is_err() || last_merge(&common) != before;
                 let _ = tx.send(Event::MergeQueue(MergeQueueEvent::Stepped {
                     common,
                     told,

@@ -31,7 +31,7 @@
 //!   (`SIDE_BY_SIDE`), `switchboard headless`'s size.
 //! - `picture`: a picture shown full size over its pane, in place of
 //!   Quick Look.
-//! - `message`: say.sh's box in the middle, which any key closes.
+//! - `message`: say.sh's box in the middle, which any key closes (but `j` and `k`, which scroll one taller than the screen).
 //! - `tip`: tip.sh's box in the top-right corner, once each.
 //! - `confirm`: a yes/no question, Enter yes ([Y/n]).
 //! - `menu`: menu.sh's and mission control's menus.
