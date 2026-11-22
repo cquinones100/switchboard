@@ -963,7 +963,7 @@ impl SearchBox {
                 let mut spans = Vec::new();
                 if digits > 0 {
                     let tone = if lit { Tone::Accent } else { Tone::Faint };
-                    let number = if row.part.start == 0 {
+                    let number = if row.first {
                         (first + row.line).to_string()
                     } else {
                         String::new()
@@ -973,11 +973,9 @@ impl SearchBox {
                         tone.style(theme),
                     ));
                 }
-                // A wrapped row under its line's indentation, so a nested
-                // item reads as one.
-                if row.part.start > 0 {
-                    spans.push(Span::raw(" ".repeat(row.indent)));
-                }
+                // Every row under its line's indentation, so a nested item
+                // reads as one.
+                spans.push(Span::raw(" ".repeat(row.indent)));
                 spans.extend(slice_spans(&marked[row.line], row.part.clone()));
                 out.push(kit::row(spans, cols, lit, theme));
             }
@@ -1002,13 +1000,15 @@ struct Wrapped {
 }
 
 /// One of the wrapped context's rows: its line, the part of the line's
-/// text it holds, and the indentation it is drawn under when it continues
-/// the line.
+/// text it holds after its indentation, the indentation it is drawn under
+/// (the line's own, at most half the row, so no indent leaves a line
+/// without room), and whether it starts the line.
 #[derive(Debug, PartialEq, Eq)]
 struct PeekRow {
     line: usize,
     part: Range<usize>,
     indent: usize,
+    first: bool,
 }
 
 impl Wrapped {
@@ -1038,20 +1038,23 @@ impl Wrapped {
             let lead = text.len() - text.trim_start_matches(' ').len();
             // Never so deep that a wrapped row has less than half the room.
             let indent = lead.min(text_cols / 2);
-            let first_row = wrap_at(text, 0, text_cols);
-            rows.push(PeekRow {
-                line,
-                part: first_row.clone(),
-                indent,
-            });
-            let mut from = first_row.end;
-            while from < text.len() {
+            let mut from = lead;
+            loop {
                 let part = wrap_at(text, from, text_cols - indent);
-                if part.is_empty() {
+                let first = from == lead;
+                if part.is_empty() && !first {
                     break;
                 }
                 from = part.end;
-                rows.push(PeekRow { line, part, indent });
+                rows.push(PeekRow {
+                    line,
+                    part,
+                    indent,
+                    first,
+                });
+                if from >= text.len() {
+                    break;
+                }
             }
         }
         Wrapped {
@@ -1066,11 +1069,7 @@ impl Wrapped {
 /// the last space that fits, or inside a word where none does, the spaces
 /// at the break left out of both rows.
 fn wrap_at(text: &str, from: usize, cols: usize) -> Range<usize> {
-    let from = if from == 0 {
-        0
-    } else {
-        text.len() - text[from..].trim_start_matches(' ').len()
-    };
+    let from = text.len() - text[from..].trim_start_matches(' ').len();
     let rest = &text[from..];
     if draw::width(rest) <= cols {
         return from..text.len();
@@ -1078,13 +1077,10 @@ fn wrap_at(text: &str, from: usize, cols: usize) -> Range<usize> {
     let mut used = 0;
     let mut end = from;
     let mut space = None;
-    let mut words = false;
     for (i, g) in rest.grapheme_indices(true) {
-        // A space after a word, never within the indentation.
-        if g == " " && words {
+        if g == " " {
             space = Some(from + i);
         }
-        words |= g != " ";
         let w = draw::width(g);
         if used + w > cols {
             break;
@@ -2142,6 +2138,19 @@ mod tests {
         assert_eq!(lit.style.fg, Some(Tone::Accent.fg(&look.theme)));
         assert!(context.iter().any(|r| r.contains("before it")));
         assert!(context.iter().any(|r| r.contains("after it")));
+    }
+
+    #[test]
+    fn a_line_indented_past_the_preview_s_width_still_shows_its_words() {
+        let deep = format!("{}zebra at the end", " ".repeat(60));
+        let b = previewing_lines(&[&deep], 0);
+        let rows = text_of(&b.preview_lines(40, PREVIEW_HEAD + 5, &Look::default()));
+        assert!(
+            rows[PREVIEW_HEAD..]
+                .iter()
+                .any(|r| r.contains("zebra at the end")),
+            "{rows:#?}"
+        );
     }
 
     #[test]
