@@ -546,8 +546,9 @@ mod tests {
     }
 
     #[test]
-    fn only_the_diff_takes_a_share() {
-        assert_eq!(beside_width(crate::diff::serve::LAZYGIT, 210, 129), 129);
+    fn only_the_diff_and_lazygit_take_a_share() {
+        let diff = beside_width(crate::diff::serve::TOOL, 210, 129);
+        assert_eq!(beside_width(crate::diff::serve::LAZYGIT, 210, 129), diff);
         assert_eq!(beside_width("pr-view", 210, 129), 129);
     }
 }
