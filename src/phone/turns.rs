@@ -1,5 +1,6 @@
 //! A tab's recent turns as a channel's messages (board 165): what you
-//! typed, what Claude said, and each tool it ran as one dim line, read
+//! typed, what Claude said, and each tool it ran (which the app folds
+//! into a turn's steps, `turns` in assets/phone/app.js), read
 //! from the end of its transcript, as the sidebar reads a turn
 //! (`sidebar::claude`). A subagent's messages and Claude Code's own are
 //! left out. A line of what you typed that is the path of an image the

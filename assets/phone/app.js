@@ -26,7 +26,8 @@ const state = {
   whole: false, // the open tab's name shown whole at the top, until another tab or the drawer shows
   error: "",
   explained: "", // promptKey's id and the option's number whose explainer shows, kept across redraws
-  unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), kept across redraws
+  turnKeys: [], // the keys of the open tab's turns last drawn, oldest first (`turns`)
+  unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
   menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question or the reminder's sheet does
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
@@ -593,6 +594,7 @@ async function openTab(n) {
   state.answered = null;
   state.error = "";
   state.unfolded = new Set();
+  state.turnKeys = [];
   while (state.chosen.length) drop(0);
   state.full = null;
   state.whole = false;
@@ -684,7 +686,79 @@ function markdown(text) {
   return root;
 }
 
+// The messages as the channel draws them: each turn (what you said and
+// what followed it) with everything Claude did before its final reply (its
+// tool calls and the text it wrote between them) folded into one `steps`
+// row, the reply after its last tool call left open. The newest turn of a
+// working tab has no final reply yet, so all of it folds, and its row shows
+// the latest step. A turn with no tool calls has no row; one opened shows
+// its steps after the row.
+function turns(messages, working) {
+  const groups = [];
+  for (const m of messages) {
+    if (m.who === "you" || !groups.length) groups.push([]);
+    groups[groups.length - 1].push(m);
+  }
+  // Each turn's key is what you said, which stays put as Claude adds steps.
+  // The first group's message may have left the 80 the computer sends: it
+  // keeps the key its turn had when last drawn, the newest of those keys no
+  // turn drawn now has (older turns have left the window whole), since its
+  // first step moves as the window does. A message you just sent (`sent`)
+  // is the phone's copy until the computer's replaces it, so its key is
+  // never carried.
+  const keys = groups.map((turn) => (turn[0].who !== "you" ? "" : (turn[0].sent ? "sent:" : "steps:") + messageKey(turn[0])));
+  if (groups.length && !keys[0]) {
+    const gone = state.turnKeys.filter((k) => k.startsWith("steps:") && !keys.includes(k));
+    keys[0] = gone.length ? gone[gone.length - 1] : "steps:" + messageKey(groups[0][0]);
+  }
+  state.turnKeys = keys;
+  return groups.flatMap((turn, g) => {
+    const said = turn[0].who === "you" ? [turn[0]] : [];
+    const rest = turn.slice(said.length);
+    const last = rest.map((m) => m.who).lastIndexOf("tool");
+    if (last < 0) return turn;
+    const unanswered = working && g === groups.length - 1;
+    const steps = unanswered ? rest : rest.slice(0, last + 1);
+    const key = keys[g];
+    const open = state.unfolded.has(key);
+    const row = {
+      who: "steps",
+      key,
+      open,
+      count: steps.filter((m) => m.who === "tool").length,
+      latest: unanswered ? steps[steps.length - 1].text : "",
+    };
+    return [...said, row, ...(open ? steps : []), ...rest.slice(steps.length)];
+  });
+}
+
+// A turn's steps folded into one row, a button that opens them and folds
+// them again, kept with the open tab's messages opened (`state.unfolded`).
+function stepsRow(m) {
+  const words = (m.open ? "▾ " : "▸ ") + m.count + (m.count === 1 ? " step" : " steps");
+  const node = el(
+    "button",
+    {
+      class: "steps",
+      "aria-expanded": String(m.open),
+      onclick: () => {
+        if (m.open) state.unfolded.delete(m.key);
+        else state.unfolded.add(m.key);
+        if (shown) shown.drawn = null;
+        render();
+        const again = shown && Array.from(shown.messages.querySelectorAll("button.steps")).find((b) => b.key === m.key);
+        if (again) again.focus();
+      },
+    },
+    words,
+    m.latest ? el("span", { class: "latest" }, " · " + m.latest.split("\n")[0]) : null,
+  );
+  node.key = m.key;
+  return el("div", { class: "msg" }, el("span"), node);
+}
+
 function message(m, i, all) {
+  if (m.who === "steps") return stepsRow(m);
   if (m.who === "tool") return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, m.text));
   const prev = all[i - 1];
   const same = prev && prev.who === m.who && prev.who !== "tool";
@@ -904,7 +978,7 @@ function composer() {
         for (const c of chosen) images.push(await upload(n, c.file));
         await api("/api/tabs/" + n + "/message", { text, images });
         for (const c of chosen) URL.revokeObjectURL(c.url);
-        state.messages.push({ who: "you", text, images, at: Date.now() });
+        state.messages.push({ who: "you", text, images, at: Date.now(), sent: true });
         render(true);
       }
     } catch (e) {
@@ -967,7 +1041,7 @@ function channelHead(tab) {
 // prompt card, "doing" line and image shown whole, the messages only when
 // the turns changed, and leaves the composer where it is, since taking a
 // focused field out of the page closes the keyboard.
-let shown = null; // { open, screen, head, list, messages, drawn, count, now, composer, full }
+let shown = null; // { open, screen, head, list, messages, drawn, count, working, now, composer, full }
 
 function channel(stick) {
   const tab = current();
@@ -991,15 +1065,18 @@ function channel(stick) {
   const head = channelHead(tab);
   shown.head.replaceWith(head);
   shown.head = head;
-  if (shown.drawn !== state.messages || shown.count !== state.messages.length) {
-    shown.messages.replaceChildren(...state.messages.map(message));
+  const working = tab.state === "working" || tab.state === "background";
+  // A tab in the background (a Monitor, a /loop between runs) has ended its turn.
+  const answering = tab.state === "working";
+  if (shown.drawn !== state.messages || shown.count !== state.messages.length || shown.working !== answering) {
+    shown.messages.replaceChildren(...turns(state.messages, answering).map(message));
     shown.drawn = state.messages;
     shown.count = state.messages.length;
+    shown.working = answering;
   } else {
     // Kept, so their times ("now", "3m ago") are worked out again in place.
     for (const when of shown.messages.querySelectorAll(".when")) when.textContent = ago(when.at);
   }
-  const working = tab.state === "working" || tab.state === "background";
   shown.now.replaceChildren(...[card(tab), working ? el("div", { class: "doing" }, "⠹ " + doing(tab)) : null].filter(Boolean));
   shown.composer.sync(tab);
   const whole = full() || el("div");
