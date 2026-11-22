@@ -38,8 +38,8 @@
 //! behind, so a build put there by hand is the latest. The message after
 //! the restart says which it was (`BUILT`, `ALREADY_BUILT`), and, when a
 //! commit reached the clone's `origin/<default>` while it built that
-//! the build lacks (a tab's landing pushed, or another fetch here; one
-//! merged elsewhere and not fetched isn't seen), that main moved on (`moved_on`), rather than passing
+//! the build lacks (a tab's landing pushed, or another fetch here, as
+//! src/mux/behind.rs's count makes), that main moved on (`moved_on`), rather than passing
 //! for main. Each step is
 //! written to the server's log (`log`): origin before and after the
 //! fetch, the commit built, an installed build's commit and whether it was

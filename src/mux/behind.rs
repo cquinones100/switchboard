@@ -10,12 +10,15 @@
 //! is, has no main to fall behind; nor does one whose clone isn't
 //! Switchboard's, `dev::build_is_from_clone`). The commits on the clone's
 //! `origin/<default>` (else its local default branch) that the build lacks
-//! are counted with git, off the server's task: as the server starts, once
-//! an hour on its tick, and whenever a tab says it landed (`land-lock
-//! landed` setting `@tab_landed`), whose push moved `origin/<default>` in
-//! the clone. No fetch is made here: the landing's push, and the restart's
-//! own fetch, keep that ref current, and nothing reaches GitHub on the
-//! hour. The notification is one, its count updated as landings come,
+//! are counted with git, off the server's task: as the server starts (so a
+//! restart on the latest main counts from there), once an hour on its tick,
+//! whenever a tab says it landed straight on main (`land-lock landed`
+//! setting `@tab_landed`), and whenever the merge queue merges a PR
+//! (src/merge_queue/serve.rs). Each count first fetches the clone's
+//! `origin/<default>` while Settings' GitHub is on: a PR the merge queue
+//! squash-merges on GitHub, or a push made from another clone, moves
+//! nothing in this one, so without the fetch no notice came for them. The
+//! notification is one, its count updated as landings come,
 //! dismissing it holding until main moves again (the commit it is at, in
 //! its data); a server started on a build at or past main finds nothing and
 //! shows none. Settings' `build_behind_notice` off, nothing is counted or
@@ -25,6 +28,7 @@
 //! commit to count from, for the tests, whose own build's commit isn't in
 //! the repository they make.
 
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -37,8 +41,16 @@ use crate::settings;
 pub const SETTING: &str = "build_behind_notice";
 /// The notifications' source it is listed under.
 pub const SOURCE: &str = "behind";
-/// How often the count is made again with nothing landing.
-const EVERY: Duration = Duration::from_secs(60 * 60);
+/// How often the count is made again with nothing landing,
+/// `SWITCHBOARD_BEHIND_EVERY` seconds for the tests.
+fn every() -> Duration {
+    std::env::var("SWITCHBOARD_BEHIND_EVERY")
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .map(Duration::from_secs_f64)
+        .unwrap_or(Duration::from_secs(60 * 60))
+}
 
 /// What the server keeps: when the count was last asked for, whether one
 /// is under way, and the id of the notification put away.
@@ -67,24 +79,74 @@ pub fn built_from() -> Option<String> {
     (!commit.is_empty() && commit != "unknown").then(|| commit.to_string())
 }
 
+/// Runs git in `clone`, giving what it printed when it succeeded.
+fn git(clone: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(clone)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// The clone's default branch: `origin/HEAD`'s, else `main`.
+fn default_branch(clone: &Path) -> String {
+    git(
+        clone,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .and_then(|r| r.trim().strip_prefix("origin/").map(String::from))
+    .unwrap_or_else(|| "main".to_string())
+}
+
+/// How long a fetch may take before it is ended, so one stalled on a dead
+/// connection never holds the counts after it.
+const FETCH_FOR: Duration = Duration::from_secs(60);
+
+/// Brings the clone's `origin/<default>` to where it is on origin, by name
+/// whatever origin's refspec fetches; a fetch that fails (offline) or runs
+/// past `FETCH_FOR` leaves it as it was, and the count is made from that.
+pub fn fetch(clone: &Path) {
+    let default = default_branch(clone);
+    let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(clone)
+        .args(["fetch", "-q", "--no-tags", "origin", &refspec])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        // A group of its own, so ending it ends the transport it started
+        // (git remote-https, ssh), which is what holds a dead connection.
+        .process_group(0)
+        .spawn()
+    else {
+        return;
+    };
+    let started = Instant::now();
+    while matches!(child.try_wait(), Ok(None)) {
+        if started.elapsed() >= FETCH_FOR {
+            // SAFETY: signals only the fetch's own process group.
+            unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// The commits on `clone`'s main that `commit` lacks, and the commit main
 /// is at; `None` when git can't say (no such commit, no main).
 pub fn count(clone: &Path, commit: &str) -> Option<(usize, String)> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(clone)
-            .args(args)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    };
-    let default = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-        .and_then(|r| r.trim().strip_prefix("origin/").map(String::from))
-        .unwrap_or_else(|| "main".to_string());
+    let git = |args: &[&str]| git(clone, args);
+    let default = default_branch(clone);
     let upstream = [format!("origin/{default}"), default]
         .into_iter()
         .find(|r| git(&["rev-parse", "--verify", "-q", &format!("{r}^{{commit}}")]).is_some())?;
@@ -126,7 +188,7 @@ impl Server {
                 .upgrade
                 .behind
                 .asked
-                .is_none_or(|at| at.elapsed() >= EVERY)
+                .is_none_or(|at| at.elapsed() >= every())
         {
             self.behind_check();
         }
@@ -156,8 +218,13 @@ impl Server {
             return;
         }
         behind.counting = true;
+        let fetching = crate::integrations::ensure_on("github", "GitHub").is_ok();
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
+            if fetching {
+                crate::requests::count("GitHub", "git", SOURCE);
+                fetch(&clone);
+            }
             let found = count(&clone, &commit);
             let _ = tx.send(Event::Upgrade(super::upgrade::UpgradeEvent::Behind(found)));
         });
@@ -279,6 +346,24 @@ mod tests {
         git(&clone, &["push", "-q", "origin", "HEAD:main"]);
         let head = git(&clone, &["rev-parse", "HEAD"]);
         assert_eq!(count(&clone, &built), Some((3, head)));
+        // Merged on origin by something else (the merge queue on GitHub, a
+        // push from another clone): counted once fetched.
+        let other = dir.join("other");
+        git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git(&other, &["commit", "-q", "--allow-empty", "-m", "merged"]);
+        git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        assert_eq!(count(&clone, &built).map(|(n, _)| n), Some(3));
+        fetch(&clone);
+        let head = git(&other, &["rev-parse", "HEAD"]);
+        assert_eq!(count(&clone, &built), Some((4, head)));
         assert_eq!(
             words(3),
             "Switchboard's main has 3 landings this build lacks"

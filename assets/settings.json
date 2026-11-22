@@ -2195,7 +2195,7 @@
     "key": "build_behind_notice",
     "category": "Developing Switchboard",
     "label": "Say when main is ahead of this build",
-    "description": "When Switchboard's main clone has commits on its default branch (as origin last answered) that the running build lacks, a notification says how many landings the build lacks, counted as the server starts, after each landing and every hour, and its menu restarts on the latest main; off, nothing is counted or shown",
+    "description": "When Switchboard's main has commits on its default branch that the running build lacks, a notification says how many landings the build lacks, counted (after fetching origin's default branch into the main clone, while GitHub is on) as the server starts, after each landing or merge queue merge and every hour, and its menu restarts on the latest main; off, nothing is counted or shown",
     "default": true
   },
   {

@@ -88,6 +88,8 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("image_cache", "false"),
     ("relay_draft_check", "false"),
     ("build_before_restart", "false"),
+    // Its count fetches the clone the binary was built from from GitHub.
+    ("build_behind_notice", "false"),
     ("chrome_profiles", "false"),
     ("tips", "false"),
     // Its services are on this computer, so its lookups cost nothing:

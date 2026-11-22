@@ -48,6 +48,9 @@ pub enum MergeQueueEvent {
     Stepped {
         common: PathBuf,
         told: Result<Vec<Told>, String>,
+        /// The step recorded a PR merged, or failed, maybe after a merge, so
+        /// main may have moved.
+        merged: bool,
     },
 }
 
@@ -80,6 +83,9 @@ impl Server {
             let tx = self.tx.clone();
             let handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
+                let last_merge =
+                    |common: &PathBuf| super::read(common).merged.iter().map(|m| m.at).max();
+                let before = last_merge(&common);
                 // A clone with no origin/HEAD (made with git init and a
                 // remote added) asks GitHub for its default branch.
                 let branch = match branch {
@@ -111,14 +117,29 @@ impl Server {
                 if let Err(e) = &told {
                     let _ = super::change(&common, |q| q.failed = Some(e.clone()));
                 }
-                let _ = tx.send(Event::MergeQueue(MergeQueueEvent::Stepped { common, told }));
+                // A step that failed may have merged on GitHub before it
+                // failed (its fetch after the merge), recording nothing.
+                let merged = told.is_err() || last_merge(&common) != before;
+                let _ = tx.send(Event::MergeQueue(MergeQueueEvent::Stepped {
+                    common,
+                    told,
+                    merged,
+                }));
             });
         }
     }
 
     pub fn merge_queue_event(&mut self, event: MergeQueueEvent) {
-        let MergeQueueEvent::Stepped { common, told } = event;
+        let MergeQueueEvent::Stepped {
+            common,
+            told,
+            merged,
+        } = event;
         self.merge_queue.running.remove(&common);
+        // Main moved on GitHub: counted at once, not on the hour.
+        if merged {
+            self.behind_check();
+        }
         // A failed step is in the queue's file already (`failed`).
         if let Ok(told) = told {
             for t in told {
