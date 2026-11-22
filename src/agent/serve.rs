@@ -528,8 +528,8 @@ impl Server {
 
     /// Each tick: a waiting pane whose turn is over (its Stop came, or
     /// Claude Code says its session is idle) and whose screen shows no
-    /// prompt Claude draws (a permission, a question, a dialog) for a few
-    /// seconds is done (`Agents::unprompted`), so a wait nothing keeps up
+    /// prompt Claude draws (a permission, a question, a dialog), and isn't
+    /// scrolled back, for a few seconds is done (`Agents::unprompted`), so a wait nothing keeps up
     /// leaves Needs you once seen. A pane whose program in front isn't
     /// Claude is left as it is, since its screen isn't Claude's.
     pub fn unprompted_tick(&mut self) {
@@ -542,7 +542,11 @@ impl Server {
                 .and_then(|r| r.session.as_ref())
                 .is_some_and(|s| s.idle_since.is_some());
             let turn_over = self.agents.turn_over(pane) || session_idle;
-            let prompted = !claude_in_front || !turn_over || self.prompt_shown(pane);
+            // A wait already marked stays while its screen is scrolled back.
+            let prompted = !claude_in_front
+                || !turn_over
+                || self.prompt_shown(pane)
+                || self.scrolled_back(pane);
             let Some(tab) = self.panes.get(&pane).map(|slot| slot.tab) else {
                 continue;
             };
@@ -554,16 +558,22 @@ impl Server {
     }
 
     /// Whether a pane's screen shows a prompt Claude draws: a permission or
-    /// a question, its cursor on a choice, or a dialog. A screen scrolled
-    /// back counts as showing one, since what waits is out of sight below.
+    /// a question, its cursor on a choice, or a dialog.
     pub(crate) fn prompt_shown(&self, pane: PaneId) -> bool {
         use crate::mission::answer;
         self.panes.get(&pane).is_some_and(|slot| {
             let screen = slot.pane.text(0);
-            answer::scrolled_back(&screen)
-                || (answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
+            (answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
                 || crate::relay::tabs::dialog_in(&screen).is_some()
         })
+    }
+
+    /// Whether a pane's Claude is scrolled back in its fullscreen view, so
+    /// a prompt it waits on may be out of sight below.
+    fn scrolled_back(&self, pane: PaneId) -> bool {
+        self.panes
+            .get(&pane)
+            .is_some_and(|slot| crate::mission::answer::scrolled_back(&slot.pane.text(0)))
     }
 
     /// A pane's record for `switchboard list`, or null.
