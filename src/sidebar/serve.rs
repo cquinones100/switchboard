@@ -1292,6 +1292,10 @@ impl Server {
                 .and_then(|x| x.select.as_ref())
                 .filter(|_| focused && settings::is_on("sidebar_select")),
             buttons: buttons.as_ref(),
+            caps: self
+                .clients
+                .get(&client)
+                .is_some_and(|c| crate::mux::graphics::round_ends(&c.term)),
         };
         let out = render::sidebar_lines(
             &tabs,

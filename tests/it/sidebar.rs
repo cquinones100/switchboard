@@ -2643,13 +2643,18 @@ fn cell_of(screen: &[String], text: &str) -> Option<(usize, usize)> {
 /// A server with UX 2.0 and three tabs, opened one after another, so the
 /// third is in front with the second and the first behind it.
 fn three_visited(extra: Value) -> (TestServer, TestClient) {
+    three_visited_as("xterm-256color", extra)
+}
+
+/// The same, from a terminal that names itself `term`.
+fn three_visited_as(term: &str, extra: Value) -> (TestServer, TestClient) {
     let server = TestServer::start();
     let mut all = json!({"sidebar": true});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
     settings(&server, all);
-    let mut client = server.attach(140, 36);
+    let mut client = server.attach_as(term, 140, 36);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["new-tab", "-n", "third"]);
@@ -2697,6 +2702,26 @@ fn the_top_lines_arrows_step_back_and_forward_and_a_right_click_shows_the_trail(
         screen.join("\n")
     );
     assert!(cell_of(&screen, "← 1").is_none(), "{}", screen.join("\n"));
+}
+
+#[test]
+fn where_the_terminal_rounds_ends_the_top_lines_buttons_are_rounded_and_still_click() {
+    let (server, mut client) = three_visited_as("xterm-ghostty", json!({}));
+    let rounded = |glyph: &str| format!("\u{E0B6}{glyph}\u{E0B4}");
+    let screen = client.wait_for("the rounded buttons on the top line", |s| {
+        s[0].contains(&rounded("←")) && s[0].contains(&rounded("→"))
+    });
+    assert!(screen[0].contains("\u{E0B6}⊞"), "{}", screen[0]);
+    press(&mut client, 0, cell_of(&screen, "←").unwrap());
+    wait_list(&server, "back to the second", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    press(&mut client, 0, cell_of(&screen, "→").unwrap());
+    wait_list(&server, "forward to the third", |l| {
+        tabs(l)[2]["current"] == true
+    });
+    press(&mut client, 0, cell_of(&screen, "⊞").unwrap());
+    client.wait_text("MISSION CONTROL");
 }
 
 #[test]
