@@ -193,6 +193,10 @@ pub struct View<'a> {
     pub selected: Option<&'a std::collections::BTreeSet<TabId>>,
     /// The workspace's own buttons, first on the top line.
     pub buttons: Option<&'a Buttons>,
+    /// Whether its buttons and chips have the kit's rounded ends, from the
+    /// client's terminal (src/mux/graphics.rs's `round_ends`), as the
+    /// header's do; padded with a space of their fill otherwise.
+    pub caps: bool,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -341,6 +345,7 @@ fn buttons(
     row: &mut Row,
     b: &Buttons,
     hover: Option<&Owner>,
+    caps: bool,
     theme: &Theme,
 ) -> Vec<(Owner, usize, usize)> {
     let press = |owner: &Owner, idle: bool| {
@@ -373,7 +378,7 @@ fn buttons(
     for (owner, glyph, count, press) in list {
         let from: usize = row.spans.iter().map(|s| width(&s.content)).sum();
         row.spans
-            .extend(kit::button(glyph, count, press, false, theme));
+            .extend(kit::button(glyph, count, press, caps, theme));
         let to: usize = row.spans.iter().map(|s| width(&s.content)).sum();
         row.put(" ", Style::new());
         at.push((owner, from, to));
@@ -439,7 +444,7 @@ pub fn sidebar_lines(
         } else {
             format!("{} ×", text::cut(repo, name_room))
         };
-        let chip = kit::chip(&label, Tone::Accent, false, theme);
+        let chip = kit::chip(&label, Tone::Accent, view.caps, theme);
         let used: usize = chip.iter().map(|s| width(&s.content)).sum::<usize>() + width(&said);
         row.spans.extend(chip);
         row.put(said, fg(theme.dim));
@@ -453,7 +458,12 @@ pub fn sidebar_lines(
             return None;
         }
         let from: usize = row.spans.iter().map(|s| width(&s.content)).sum();
-        let chip = kit::chip(&format!("⏰ {}", view.reminders), Tone::Dim, false, theme);
+        let chip = kit::chip(
+            &format!("⏰ {}", view.reminders),
+            Tone::Dim,
+            view.caps,
+            theme,
+        );
         let to = from + chip.iter().map(|s| width(&s.content)).sum::<usize>();
         row.spans.extend(chip);
         Some((from, to))
@@ -481,7 +491,7 @@ pub fn sidebar_lines(
     let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
     pill_row.put(" ", Style::new());
     if let Some(b) = view.buttons {
-        buttons_at = buttons(&mut pill_row, b, view.hover, theme);
+        buttons_at = buttons(&mut pill_row, b, view.hover, view.caps, theme);
     }
     // Under the mouse, a button names where it goes in place of the
     // rest of the line.
@@ -552,7 +562,7 @@ pub fn sidebar_lines(
         pill_row.spans.extend(kit::chip(
             &format!("{n} selected"),
             Tone::Accent,
-            false,
+            view.caps,
             theme,
         ));
         pill_row
@@ -778,7 +788,7 @@ pub fn sidebar_lines(
             // A status you set: the kit's chip after its name (board 158).
             let by_you = model::by_hand(tab, r)
                 .is_some()
-                .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
+                .then(|| kit::chip(model::BY_YOU, Tone::Dim, view.caps, theme));
             let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
             // A tab following several PRs: the current one's number
             // before its name, how many more after it, dim (board 127).
@@ -1257,6 +1267,7 @@ mod tests {
             repo: None,
             folded: &NONE_FOLDED,
             buttons: None,
+            caps: false,
             notices_folded: false,
             reminders: 0,
             build: None,
@@ -1460,6 +1471,48 @@ mod tests {
                 .any(|l| l.ends_with("    ✕ 2 failing · waiting on you")),
             "{text:?}"
         );
+    }
+
+    #[test]
+    fn the_top_lines_buttons_and_chips_round_their_ends_where_the_terminal_can() {
+        let tabs = vec![tab(1, "planning", TabState::Working)];
+        let b = Buttons {
+            trail: Some((None, None)),
+            mission_open: false,
+            needs: 1,
+        };
+        let draw = |caps: bool| {
+            sidebar_lines(
+                &tabs,
+                None,
+                &[],
+                &[],
+                60,
+                20,
+                &View {
+                    buttons: Some(&b),
+                    repo: Some("switchboard"),
+                    reminders: 2,
+                    caps,
+                    ..view(1)
+                },
+                &rules(),
+                &Theme::DARK,
+            )
+        };
+        let (l, r) = (kit::CAP_LEFT, kit::CAP_RIGHT);
+        let round = draw(true);
+        let top = &texts(&round)[0];
+        for inner in ["←", "→", "⊞ 1", "switchboard ×", "⏰ 2"] {
+            assert!(top.contains(&format!("{l}{inner}{r}")), "{inner}: {top:?}");
+        }
+        // The click boxes cover the drawn ends, as the padded ones do.
+        let square = draw(false);
+        assert_eq!(round.buttons_at, square.buttons_at);
+        assert_eq!(round.reminders_at, square.reminders_at);
+        let top = &texts(&square)[0];
+        assert!(!top.contains(l) && !top.contains(r), "{top:?}");
+        assert!(top.starts_with("  ←   →   ⊞ 1 "), "{top:?}");
     }
 
     #[test]
