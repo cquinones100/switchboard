@@ -78,7 +78,9 @@ pub struct Trail {
     #[serde(skip)]
     pub last: Option<Place>,
     /// When the current place came to the front; none when unknown (a
-    /// trail read back from a handover), which counts as long enough.
+    /// trail read back from a handover) or reached by a step back or
+    /// forward, either of which counts as long enough, so a place stepped
+    /// to and left at once stays on the trail.
     #[serde(skip)]
     pub since: Option<Instant>,
     /// The tabs left, the latest first, each once, whichever way it was
@@ -219,7 +221,7 @@ impl Trail {
         self.leave(&current);
         push(&mut self.forward, current.clone());
         self.last = Some(current);
-        self.came_to_front();
+        self.since = None;
         Some(to)
     }
 
@@ -229,7 +231,7 @@ impl Trail {
         self.leave(&current);
         push(&mut self.back, current.clone());
         self.last = Some(current);
-        self.came_to_front();
+        self.since = None;
         Some(to)
     }
 
@@ -500,12 +502,14 @@ mod tests {
             t.visited_at(p, start + quick * n as u32, false);
         }
         assert_eq!(t.back, vec![A, B, C]);
-        // A pass clears forward, as a visit does.
+        // A place reached by a step and left at once is still a step, and
+        // forward is cleared as for any visit.
         let mut t = Trail::default();
         t.visited_at(A, start, true);
         t.visited_at(B, start + SEEN_DELAY, true);
         assert_eq!(t.back(C, any), Some(B));
         t.visited_at(B, Instant::now(), true);
+        assert_eq!(t.back, vec![A, B]);
         assert_eq!(t.forward, vec![]);
     }
 

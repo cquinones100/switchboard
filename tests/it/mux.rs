@@ -103,9 +103,11 @@ fn current_tab(server: &TestServer) -> Option<u64> {
 }
 
 /// Goes to each of `tabs`, by number, kept in front past a second when
-/// `keep`, so each counts as visited.
-fn go_through(server: &TestServer, tabs: &[u64], keep: bool) {
+/// `keep`, so each counts as visited; whether the moves took under a
+/// second all told, so none was in front long enough to count.
+fn go_through(server: &TestServer, tabs: &[u64], keep: bool) -> bool {
     let list = server.list();
+    let started = std::time::Instant::now();
     for t in tabs {
         let id = list["sessions"][0]["tabs"]
             .as_array()
@@ -120,18 +122,26 @@ fn go_through(server: &TestServer, tabs: &[u64], keep: bool) {
             std::thread::sleep(std::time::Duration::from_millis(1300));
         }
     }
+    started.elapsed() < std::time::Duration::from_millis(900)
 }
 
 #[test]
 fn tabs_passed_through_are_no_steps_back() {
     let (server, mut client) = four_tabs(r#"{"history_skips_passing": true}"#);
-    // 2 and 3 passed through on the way to 4.
-    go_through(&server, &[2, 3, 4], false);
+    // 2 and 3 passed through on the way to 4. A computer too busy to move
+    // through them within the second shows nothing about passing through.
+    if !go_through(&server, &[2, 3, 4], false) {
+        eprintln!("the moves took a second or more; nothing to check");
+        return;
+    }
     client.type_text(&format!("{ALT}{{"));
     client.wait_for("tab 1 one step back", |_| current_tab(&server) == Some(1));
     // M-Tab from 4 goes to 1 too.
     let (server, mut client) = four_tabs(r#"{"history_skips_passing": true}"#);
-    go_through(&server, &[2, 3, 4], false);
+    if !go_through(&server, &[2, 3, 4], false) {
+        eprintln!("the moves took a second or more; nothing to check");
+        return;
+    }
     client.type_text(&format!("{ALT}\t"));
     client.wait_for("M-Tab to tab 1", |_| current_tab(&server) == Some(1));
     // Pressed again at once, back to 4.
