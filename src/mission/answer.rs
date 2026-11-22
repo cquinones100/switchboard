@@ -202,20 +202,21 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         .filter(|(o, under)| o.cut || !under.is_empty())
         .map(|(o, _)| o.n)
         .collect();
-    // A preview's box edge past an option's number: its top corner, or a
-    // side with more after it (a prompt drawn in a box of its own has one
-    // side alone at the row's end).
+    // A preview's box edge past an option's number: its top corner (square
+    // or rounded), or a side with more after it (a prompt drawn in a box of
+    // its own has one side alone at the row's end).
     let preview = options.iter().any(|o| {
         let row = raw[kept[o.line]];
         let past = row
             .find(|c: char| c.is_ascii_digit())
             .map_or("", |at| &row[at..]);
-        past.contains('┌') || past.matches('│').count() >= 2
+        past.contains(['┌', '╭']) || past.matches('│').count() >= 2
     });
     // Beside a preview, a row of its box (an edge, or a divider drawn in
     // it between the box's sides) is no rule.
     let rule = (first + 1..last).find(|&i| {
-        let in_box = preview && raw[kept[i]].contains(['│', '┌', '┐', '└', '┘']);
+        let in_box =
+            preview && raw[kept[i]].contains(['│', '┌', '┐', '└', '┘', '╭', '╮', '╰', '╯']);
         RULE.is_match(lines[i]) && !in_box
     });
     let submit = (first + 1..last).find(|&i| SUBMIT_ROW.is_match(lines[i]));
