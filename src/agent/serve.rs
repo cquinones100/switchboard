@@ -211,9 +211,13 @@ impl Server {
             // Permission prompts and questions are Claude waiting on you. The
             // PermissionRequest hook has usually said so already, since this
             // one only comes once a prompt has waited about six seconds. In
-            // auto mode it is this one that makes the request a wait.
-            let waits =
-                QUESTION_KINDS.contains(&hook.kind.as_str()) && self.agents.wait(pane, now, front);
+            // auto mode it is this one that makes the request a wait. Once
+            // the turn is over it is a late notice, unless a prompt still
+            // shows (a background agent's, asked as the turn ended).
+            let waits = QUESTION_KINDS.contains(&hook.kind.as_str()) && {
+                let shown = self.agents.turn_over(pane) && self.prompt_shown(pane);
+                self.agents.wait(pane, now, front, shown)
+            };
             self.banner(tab, &hook.message);
             waits
         } else {
@@ -538,13 +542,7 @@ impl Server {
                 .and_then(|r| r.session.as_ref())
                 .is_some_and(|s| s.idle_since.is_some());
             let turn_over = self.agents.turn_over(pane) || session_idle;
-            let prompt_shown = self.panes.get(&pane).is_some_and(|slot| {
-                let screen = slot.pane.text(0);
-                (crate::mission::answer::options_in(&screen).is_some()
-                    && cursor_on_a_choice(&screen))
-                    || crate::relay::tabs::dialog_in(&screen).is_some()
-            });
-            let prompted = !claude_in_front || !turn_over || prompt_shown;
+            let prompted = !claude_in_front || !turn_over || self.prompt_shown(pane);
             let Some(tab) = self.panes.get(&pane).map(|slot| slot.tab) else {
                 continue;
             };
@@ -553,6 +551,16 @@ impl Server {
                 self.redraw_tab(tab);
             }
         }
+    }
+
+    /// Whether a pane's screen shows a prompt Claude draws: a permission or
+    /// a question, its cursor on a choice, or a dialog.
+    pub(crate) fn prompt_shown(&self, pane: PaneId) -> bool {
+        self.panes.get(&pane).is_some_and(|slot| {
+            let screen = slot.pane.text(0);
+            (crate::mission::answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
+                || crate::relay::tabs::dialog_in(&screen).is_some()
+        })
     }
 
     /// A pane's record for `switchboard list`, or null.
@@ -1078,9 +1086,6 @@ impl Server {
     }
 }
 
-/// A process's group, one call to the kernel, so finding a parked Claude's
-/// pane reads no pane's whole process list; `None` when it can't be read,
-/// and the processes are read instead.
 /// Whether a screen shows Claude Code's cursor, `❯`, on a numbered choice or
 /// a question's Submit row: what a prompt waiting on you has and a
 /// numbered list in Claude's reply doesn't.
@@ -1095,6 +1100,9 @@ fn cursor_on_a_choice(screen: &str) -> bool {
     })
 }
 
+/// A process's group, one call to the kernel, so finding a parked Claude's
+/// pane reads no pane's whole process list; `None` when it can't be read,
+/// and the processes are read instead.
 fn process_group(pid: u32) -> Option<u32> {
     let pid = libc::pid_t::try_from(pid).ok().filter(|p| *p > 0)?;
     // SAFETY: getpgid only reads the kernel's process table; a pid that

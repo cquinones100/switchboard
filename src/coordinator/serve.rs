@@ -349,8 +349,10 @@ impl Server {
         // A prompt that reached you (in auto mode, only its Notification
         // says so) is a wait, as for a tab's Claude.
         let changed = if hook.event == "Notification" {
-            crate::agent::QUESTION_KINDS.contains(&hook.kind.as_str())
-                && self.agents.wait(pane, now, false)
+            crate::agent::QUESTION_KINDS.contains(&hook.kind.as_str()) && {
+                let shown = self.agents.turn_over(pane) && self.prompt_shown(pane);
+                self.agents.wait(pane, now, false, shown)
+            }
         } else {
             self.agents.apply(pane, &hook, now, false)
         };

@@ -892,10 +892,10 @@ impl Agents {
     }
 
     /// Marks a pane waiting on you (a Notification's question), unless its
-    /// turn is over: a late notice of a prompt already answered. Gives
-    /// whether its state changed.
-    pub fn wait(&mut self, pane: PaneId, now: i64, front: bool) -> bool {
-        if self.turn_over(pane) {
+    /// turn is over with no prompt `shown` on its screen: a late notice of
+    /// a prompt already answered. Gives whether its state changed.
+    pub fn wait(&mut self, pane: PaneId, now: i64, front: bool, shown: bool) -> bool {
+        if self.turn_over(pane) && !shown {
             return false;
         }
         let agent = self.panes.entry(pane).or_default();
@@ -1625,7 +1625,7 @@ mod tests {
     fn the_same_state_again_keeps_when_it_began() {
         let mut a = Agents::default();
         assert!(on(&mut a, "PermissionRequest", json!({}), 100));
-        assert!(!a.wait(P, 106, false));
+        assert!(!a.wait(P, 106, false, false));
         assert_eq!(a.get(P).unwrap().since, 100);
         assert!(on(&mut a, "PostToolUse", json!({}), 110));
         assert!(!on(&mut a, "PreToolUse", json!({}), 120));
@@ -1687,7 +1687,7 @@ mod tests {
         assert_eq!(a.get(P).unwrap().wait_by, None);
         // A wait only a Notification said may be anyone's: any call ends it.
         on(&mut a, "PostToolUse", json!({}), 151);
-        assert!(a.wait(P, 152, false));
+        assert!(a.wait(P, 152, false, false));
         assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 153));
         // A finished turn ends any wait.
         on(&mut a, "PermissionRequest", json!({"agent_id": "a1"}), 160);
@@ -1729,7 +1729,7 @@ mod tests {
         assert_eq!(pane.wait.as_deref(), Some("asks: Which?"));
         assert_eq!(pane.loop_name.as_deref(), Some("queue"));
         // A notification marks nothing new, and ends nothing.
-        assert!(!a.wait(P, 122, false));
+        assert!(!a.wait(P, 122, false, false));
         // The question's own call ending is the answer.
         assert!(runs(&mut a, "PostToolUse", ask("q1"), 130));
         let pane = a.get(P).unwrap();
@@ -1838,15 +1838,18 @@ mod tests {
         on(&mut a, "PostToolUse", test.clone(), 103);
         on(&mut a, "Stop", json!({}), 104);
         // Auto mode allowed the call; its notice comes six seconds on.
-        assert!(!a.wait(P, 108, false));
+        assert!(!a.wait(P, 108, false, false));
         assert_eq!(a.state(P), Some(State::Done));
         // A compaction Claude Code runs after the turn doesn't start one.
         on(&mut a, "PreCompact", json!({"trigger": "auto"}), 109);
-        assert!(!a.wait(P, 110, false));
+        assert!(!a.wait(P, 110, false, false));
         assert_eq!(a.state(P), Some(State::Done));
+        // A prompt still on the screen (a background agent's) waits.
+        assert!(a.wait(P, 111, false, true));
+        assert_eq!(a.state(P), Some(State::Waiting));
         // The next turn's prompts wait as before.
         on(&mut a, "UserPromptSubmit", json!({}), 120);
-        assert!(a.wait(P, 127, false));
+        assert!(a.wait(P, 127, false, false));
         assert_eq!(a.state(P), Some(State::Waiting));
     }
 
@@ -1854,7 +1857,7 @@ mod tests {
     fn a_wait_with_no_prompt_shown_ends_in_done_after_a_grace() {
         let mut a = Agents::default();
         on(&mut a, "UserPromptSubmit", json!({}), 100);
-        a.wait(P, 101, false);
+        a.wait(P, 101, false, false);
         // A prompt on the screen keeps it, however long.
         assert!(!a.unprompted(P, true, 0, 101, false));
         assert!(!a.unprompted(P, true, 60_000, 161, false));
@@ -1887,7 +1890,7 @@ mod tests {
         assert_eq!(agent.activity.as_deref(), Some("Run the tests"));
         assert_eq!(agent.wait, None);
         // The prompt reached you: its Notification makes it a wait.
-        assert!(a.wait(P, 107, false));
+        assert!(a.wait(P, 107, false, false));
         let agent = a.get(P).unwrap();
         assert_eq!(agent.wait.as_deref(), Some("permission: Bash cargo test"));
         assert_eq!(agent.wait_by, Some(Waiter::Conversation));
@@ -1910,7 +1913,7 @@ mod tests {
         assert!(a.get(P).unwrap().asked.is_some());
         on(&mut a, "PostToolUse", test.clone(), 143);
         // A Notification after that is a wait as before, with no words.
-        assert!(a.wait(P, 150, false));
+        assert!(a.wait(P, 150, false, false));
         assert_eq!(a.get(P).unwrap().wait, None);
 
         // One made while a question waits leaves the question's wait.
@@ -1923,7 +1926,7 @@ mod tests {
             161,
         );
         assert_eq!(a.get(P).unwrap().asked, None);
-        a.wait(P, 167, false);
+        a.wait(P, 167, false, false);
         assert_eq!(a.get(P).unwrap().wait.as_deref(), Some("asks: Which?"));
         assert_eq!(a.get(P).unwrap().wait_by, Some(Waiter::Conversation));
 
