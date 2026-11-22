@@ -728,6 +728,10 @@
     "PhoneKit.dc.html": {
       "title": "184. The phone app's kit: every control 44 pt (icon buttons 44 × 44, buttons and fields 44 high pills), chips 24, rows 56, header 48, boxes and cards radius 12, pictures 6, type 16 and 12; today's mismatched sizes beside it; a drawer and a channel drawn from the kit alone",
       "page": "design"
+    },
+    "SettingsThisComputer.dc.html": {
+      "title": "183. Settings' This computer: the settings that depend on the computer (whether a service is used here, what runs on one computer only, the hardware) listed first under a heading of their own and still in their own categories, every row of one carrying a this computer chip; a service off until it has worked here says so in its default",
+      "page": "design"
     }
   }
 }
