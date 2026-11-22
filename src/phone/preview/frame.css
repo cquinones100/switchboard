@@ -40,13 +40,21 @@ main { display: flex; justify-content: center; padding: 24px; }
   background: #000;
   flex: none;
 }
-.phone iframe { display: block; width: 100%; border: 0; background: #11121a; }
+.phone iframe { display: block; width: 100%; border: 0; background: #11121a; transition: height 250ms cubic-bezier(.2, .8, .2, 1); }
 .island, .indicator { position: absolute; left: 50%; transform: translateX(-50%); pointer-events: none; }
 .island { display: none; top: 11px; width: 124px; height: 36px; border-radius: 18px; background: #000; }
 .with-island .island { display: block; }
 .indicator { display: none; bottom: 8px; width: 134px; height: 5px; border-radius: 3px; background: #e8e8f0; }
 .with-indicator:not(.keyboard-open) .indicator { display: block; }
+/* The keyboard slides up from the phone's foot as a field takes the focus,
+   and back down as it lets go, the app's screen shortening with it. */
 .keys {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  transform: translateY(100%);
+  transition: transform 250ms cubic-bezier(.2, .8, .2, 1);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -56,4 +64,4 @@ main { display: flex; justify-content: center; padding: 24px; }
   text-transform: uppercase;
   font-size: 12px;
 }
-.keys[hidden] { display: none; }
+.keyboard-open .keys { transform: none; }
