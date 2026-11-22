@@ -741,6 +741,13 @@ impl Server {
         if !gone.is_empty() {
             self.close_pictures(id, |p| gone.contains(&p.tab));
         }
+        // The sidebar or the coordinator taken into has the keys, so a
+        // chosen picture gives them up.
+        let keys_elsewhere = self.coordinator_focused(id)
+            || self
+                .clients
+                .get(&id)
+                .is_some_and(|c| self.sidebar.focused(&c.session));
         let Some(c) = self.clients.get_mut(&id) else {
             return;
         };
@@ -748,6 +755,9 @@ impl Server {
             let Some(p) = layer.overlay.as_any_mut().downcast_mut::<Pictures>() else {
                 continue;
             };
+            if keys_elsewhere {
+                p.release();
+            }
             if let Some((_, spare)) = spares.iter().find(|(t, _)| *t == p.tab) {
                 (p.area, p.pane) = match spare {
                     Spare::At { room, pane } => (Some(*room), Some(*pane)),

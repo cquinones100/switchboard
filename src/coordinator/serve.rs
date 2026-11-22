@@ -465,7 +465,7 @@ impl Server {
     }
 
     /// Whether a client shows it with the keys.
-    fn coordinator_focused(&self, client: ClientId) -> bool {
+    pub(crate) fn coordinator_focused(&self, client: ClientId) -> bool {
         self.coordinator
             .shown
             .get(&client)

@@ -169,6 +169,12 @@ impl Pictures {
         true
     }
 
+    /// Gives the keys back to the tab, the pictures staying up (the sidebar
+    /// or the coordinator taking them).
+    pub fn release(&mut self) {
+        self.chosen = None;
+    }
+
     /// Chooses picture `i`, paging so it shows.
     fn choose(&mut self, i: usize) {
         self.chosen = Some(i);
@@ -511,7 +517,12 @@ impl Overlay for Pictures {
         self.chosen.is_none() || self.area.is_none()
     }
 
+    /// A paste is the tab's, but while a picture is chosen, when it goes
+    /// nowhere rather than into the greyed pane.
     fn paste(&mut self, _text: &str, _look: &Look) -> Step {
+        if self.chosen.is_some() && self.area.is_some() {
+            return Step::Same;
+        }
         Step::Through
     }
 
@@ -937,7 +948,13 @@ mod tests {
         let look = Look::default();
         let first = card_of(&p, 0);
         p.mouse(press(MouseButton::Left, first.x + 5, first.y + 3), &look);
+        assert_eq!(
+            p.paste("typed", &look),
+            Step::Same,
+            "not into the greyed pane"
+        );
         assert_eq!(p.key(plain(KeyCode::Esc), &look), Step::Redraw);
+        assert_eq!(p.paste("typed", &look), Step::Through);
         assert!(p.lets_through());
         assert_eq!(p.key(plain(KeyCode::Char('j')), &look), Step::Through);
         let frame = drawn(&mut p, area);
