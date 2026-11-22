@@ -1119,8 +1119,10 @@ struct Card {
     /// Whether the foot follows the lines with no row clear between.
     tight: bool,
     foot: Vec<Span<'static>>,
-    edge: Color,
+    /// Its edge's color, or none for the chosen card's accent bar.
+    edge: Option<Color>,
     w: usize,
+    theme: Theme,
 }
 
 impl Card {
@@ -1140,17 +1142,20 @@ impl Card {
         inside.truncate(inside_rows.saturating_sub(1));
         inside.resize(inside_rows.saturating_sub(1), Vec::new());
         inside.push(self.foot);
-        kit::card(self.w, rows, self.title, self.right, &inside, self.edge)
+        match self.edge {
+            Some(edge) => kit::card(self.w, rows, self.title, self.right, &inside, edge),
+            None => kit::chosen_card(self.w, rows, self.title, self.right, &inside, &self.theme),
+        }
     }
 }
 
-/// A tab's card (board 3), the kit's card: its mark, its
-/// number in its color and its name on the top edge, cut only where the
-/// edge has no room, its state and how long at the edge's right end, the
-/// edge in its group's tone (the accent when chosen, the tab's color under
-/// the mouse), what it is about inside by what it is doing (or, with `s`,
+/// A tab's card (board 3), the kit's card: its mark, its number in its
+/// color and its name on the top edge, cut only where the edge has no room,
+/// its state and how long at the edge's right end, the edge the plain rule
+/// (the tab's color under the mouse, and when chosen the kit's accent bar,
+/// board 143), what it is about inside by what it is doing (or, with `s`,
 /// its screen's last lines), and its branch and checks at its foot.
-fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission) -> Card {
+fn card_2(tab: &TabModel, look: &CardLook, frame: usize, m: &Mission) -> Card {
     let snap = &m.snap;
     let (r, theme) = (&snap.rules, &snap.theme);
     let inner = look.w.saturating_sub(4);
@@ -1160,11 +1165,11 @@ fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission
     let mark = Mark::of_badge(model::badge_state(tab, r));
     let color = tab.color.map(Color::from).unwrap_or(theme.bright);
     let edge = if look.chosen {
-        Tone::Accent.fg(theme)
+        None
     } else if look.hovered {
-        color
+        Some(color)
     } else {
-        tone.fg(theme)
+        Some(kit::border(theme))
     };
     let words = state_for(tab, r);
     let number = tab.index.to_string();
@@ -1238,6 +1243,7 @@ fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission
         foot,
         edge,
         w: look.w,
+        theme: *theme,
     }
 }
 
@@ -1497,7 +1503,7 @@ fn cards(
                             screen: snap.screens.get(&tab.id),
                             shows_screen,
                         };
-                        card_2(tab, tone, &look, snap.frame, m)
+                        card_2(tab, &look, snap.frame, m)
                     })
                     .collect();
                 // The row as tall as its tallest card holds.
@@ -1776,7 +1782,7 @@ pub fn cards_fit(body: usize) -> bool {
 /// in the state's tone with its count, each item a card (its number or ID
 /// in the accent on the top edge, its checks' mark or its priority at the
 /// edge's right end, its title on up to two lines, then a dim line about
-/// it); the chosen card's edge in the accent. The views' last group (the
+/// it); the chosen card the kit's accent bar. The views' last group (the
 /// PRs merged and the tickets canceled in the last week) is a row of the
 /// same cards, faint, under the columns, each saying when. The chosen
 /// item's description, through Markdown, sits beside them on a screen
@@ -6523,7 +6529,8 @@ mod tests {
         // you, in place of the counts' chips.
         assert!(text[0].ends_with("5 tabs · 1 needs you"), "{text:#?}");
         // Each group a label with its count at the right edge, no frame
-        // round it, over closed cards whose edges wear its tone.
+        // round it, over closed cards whose edges are the plain rule, the
+        // group's tone left to their marks and state words (board 143).
         let needs = row("NEEDS YOU");
         assert!(
             text[needs].ends_with('1') && width(&text[needs]) == 159,
@@ -6542,24 +6549,32 @@ mod tests {
                 .style
                 .fg
         };
-        assert_eq!(edge_of(needs + 1, '╭'), Some(Tone::Needs.fg(&Theme::DARK)));
+        assert_eq!(edge_of(needs + 1, '╭'), Some(kit::border(&Theme::DARK)));
         assert!(
             text[needs + 1].starts_with(" ╭ ● 1 relay images ─"),
             "{text:#?}"
         );
-        // The chosen card's edge alone in the accent, its rows unfilled.
+        // The chosen card's edge alone in the accent, its rows unfilled,
+        // its top edge an accent bar with its name dark on it.
         assert_eq!(
             edge_of(working + 1, '╭'),
             Some(Tone::Accent.fg(&Theme::DARK))
         );
+        let bar = &lines[working + 1].spans;
+        let name = bar
+            .iter()
+            .find(|s| s.content.contains("summaries"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        assert_eq!(name.style.bg, Some(Tone::Accent.fg(&Theme::DARK)));
+        assert_ne!(name.style.fg, Some(Tone::Accent.fg(&Theme::DARK)));
         assert_eq!(
             lines[working + 1]
                 .spans
                 .iter()
                 .rfind(|s| s.content.contains('╮'))
                 .and_then(|s| s.style.fg),
-            Some(Tone::Working.fg(&Theme::DARK)),
-            "the card beside it keeps its group's tone"
+            Some(kit::border(&Theme::DARK)),
+            "the card beside it the plain rule"
         );
         let chosen_shade = kit::Surface::Chosen.color(&Theme::DARK);
         assert!(
@@ -6771,14 +6786,14 @@ mod tests {
         // without.
         assert!(
             text.iter()
-                .any(|l| l.contains("1 a tab with quite a long name ─")),
+                .any(|l| l.contains("1 a tab with quite a long name  ")),
             "{text:#?}"
         );
         let narrow = texts(&screen(&m, 44, 40).0);
         assert!(
             narrow
                 .iter()
-                .any(|l| l.contains("1 a tab with quite a long …") && l.contains("working ─╮")),
+                .any(|l| l.contains("1 a tab with quite a long …") && l.contains("working  ╮")),
             "{narrow:#?}"
         );
     }
@@ -6905,7 +6920,7 @@ mod tests {
         // A finished tab is a card under Needs you: its last turn, done.
         let needs = row("NEEDS YOU");
         assert!(
-            text[needs + 1].starts_with(" ╭ ✓ 1 full titles ─")
+            text[needs + 1].starts_with(" ╭ ✓ 1 full titles  ")
                 && text[needs + 1].contains("done 1m"),
             "{text:#?}"
         );
@@ -8229,7 +8244,7 @@ mod tests {
         assert!(text[8].contains("│ w · queue 1"), "{}", text[8]);
         assert!(text[9].contains("╰──"), "no footer: {}", text[9]);
         assert!(
-            text[11].contains("╭ #2 ─") && text[11].contains(" ✕ ─╮"),
+            text[11].contains("╭ #2  ") && text[11].contains(" ✕  ╮"),
             "a row between cards: {}",
             text[11]
         );
@@ -8617,7 +8632,7 @@ mod tests {
                 pr,
                 crate::sources::prboard::COLUMNS,
                 "IN REVIEW 1",
-                "╭ #1 ─",
+                "╭ #1  ",
             ),
             (
                 ViewId::Tickets,
@@ -8625,7 +8640,7 @@ mod tests {
                 ticket,
                 crate::sources::tickets::COLUMNS,
                 "TODO 1",
-                "╭ AB-1 ─",
+                "╭ AB-1  ",
             ),
         ] {
             let mut m = mission(Vec::new(), vec![list_view(id, title, vec![item])]);
@@ -8737,7 +8752,7 @@ mod tests {
             text[0]
         );
         assert!(
-            text[2].contains("╭ AB-1 ─") && text[2].contains(" !!! ─╮"),
+            text[2].contains("╭ AB-1  ") && text[2].contains(" !!!  ╮"),
             "{}",
             text[2]
         );
@@ -9609,9 +9624,9 @@ mod tests {
                 .position(|l| l.contains(s))
                 .unwrap_or_else(|| panic!("{s} in {text:#?}"))
         };
-        let top = row_of("blocked ─");
+        let top = row_of("blocked  ");
         let under = col(heads, "BLOCKED 1");
-        assert!(col(&text[top], "blocked ─") >= under, "{}", text[top]);
+        assert!(col(&text[top], "blocked  ") >= under, "{}", text[top]);
         assert!(
             text[top + 1].contains("Builds on both"),
             "{}",

@@ -319,7 +319,7 @@ fn a_blocked_cards_enter_goes_to_the_tab_working_the_item_it_waits_on() {
     // the Blocked column, the leftmost with a card, naming that item.
     client.wait_text("BLOCKED");
     let on_its_card = |s: &[String]| {
-        s.iter().any(|l| l.contains("blocked ─"))
+        s.iter().any(|l| l.contains("○ blocked "))
             && s.iter().any(|l| l.contains("Blocked: opens once the item"))
     };
     let deadline = common::deadline(Duration::from_secs(40));
@@ -698,7 +698,7 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
         .unwrap();
     let landed = format!("landed {}", String::from_utf8_lossy(&head.stdout).trim());
     server.ok(&["kill-tab", "-t", &tab_id]);
-    let screen = client.wait_text("✓ closed ─");
+    let screen = client.wait_text("✓ closed ");
     assert!(
         screen.iter().any(|l| l.contains("First thing"))
             && screen.iter().any(|l| l.contains(&landed)),

@@ -951,33 +951,86 @@ pub fn card(
     inside: &[Vec<Span<'static>>],
     edge: Color,
 ) -> Vec<Vec<Span<'static>>> {
+    framed(cols, rows, title, right, inside, edge, None)
+}
+
+/// The chosen card (board 143): the kit's `card` with its edge in the
+/// accent and its top edge a solid accent bar, its title and `right` dark
+/// on it, the title bold; a chip in the title keeps its tint.
+pub fn chosen_card(
+    cols: usize,
+    rows: usize,
+    title: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    inside: &[Vec<Span<'static>>],
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let bar = accent(theme);
+    let dark = Style::new().fg(on_color(theme)).bg(bar);
+    let on_bar = |spans: Vec<Span<'static>>, words: Style| -> Vec<Span<'static>> {
+        spans
+            .into_iter()
+            .map(|s| {
+                let style = if s.style.bg.is_some() {
+                    s.style
+                } else if s.content == CAP_LEFT || s.content == CAP_RIGHT {
+                    s.style.bg(bar)
+                } else {
+                    words
+                };
+                Span::styled(s.content, style)
+            })
+            .collect()
+    };
+    let title = on_bar(title, dark.add_modifier(Modifier::BOLD));
+    let right = on_bar(right, dark);
+    framed(cols, rows, title, right, inside, bar, Some(dark))
+}
+
+/// A card whose top edge, inside its corners, is drawn on `bar`'s fill
+/// with no line where one is given.
+fn framed(
+    cols: usize,
+    rows: usize,
+    title: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    inside: &[Vec<Span<'static>>],
+    edge: Color,
+    bar: Option<Style>,
+) -> Vec<Vec<Span<'static>>> {
     let e = Style::new().fg(edge);
+    let (gap, line) = match bar {
+        Some(fill) => (Span::styled(" ", fill), fill),
+        None => (Span::raw(" "), e),
+    };
+    let dash = if bar.is_some() { " " } else { "─" };
     let inner = cols.saturating_sub(4);
     // `╭ title ─── right ─╮`: five columns and the right's two spaces
     // around the words, so a narrow card keeps its title (a PR's #12345 in
     // a card 14 wide).
-    let mut top = vec![Span::styled("╭", e), Span::raw(" ")];
+    let mut top = vec![Span::styled("╭", e), gap.clone()];
     let right_w = if right.is_empty() {
         0
     } else {
         spans_width(&right) + 2
     };
-    top.extend(fit(title, cols.saturating_sub(5 + right_w), Style::new()));
+    top.extend(fit(title, cols.saturating_sub(5 + right_w), gap.style));
     while top
         .last()
-        .is_some_and(|s| s.content.trim().is_empty() && s.style == Style::new())
+        .is_some_and(|s| s.content.trim().is_empty() && s.style == gap.style)
     {
         top.pop();
     }
-    top.push(Span::raw(" "));
+    top.push(gap.clone());
     let used = spans_width(&top) + right_w + 2;
-    top.push(Span::styled("─".repeat(cols.saturating_sub(used)), e));
+    top.push(Span::styled(dash.repeat(cols.saturating_sub(used)), line));
     if !right.is_empty() {
-        top.push(Span::raw(" "));
+        top.push(gap.clone());
         top.extend(right);
-        top.push(Span::raw(" "));
+        top.push(gap.clone());
     }
-    top.push(Span::styled("─╮", e));
+    top.push(Span::styled(dash, line));
+    top.push(Span::styled("╮", e));
     let mut out = vec![fit(top, cols, Style::new())];
     let body = rows.saturating_sub(2);
     for i in 0..body {
@@ -1051,17 +1104,10 @@ pub fn title_lines(title: &str, cols: usize) -> Vec<String> {
 
 /// A board's card, `cols` wide and as tall as what it holds
 /// (`BoardCard::height`): the kit's `card`, its edge in the border's color,
-/// the accent when chosen and dim under the mouse; its title bold when
-/// chosen.
+/// dim under the mouse, and when chosen the kit's `chosen_card`, its title
+/// bold.
 pub fn board_card(card: &BoardCard, cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
     let inner = cols.saturating_sub(4);
-    let edge = if card.chosen {
-        Tone::Accent.fg(theme)
-    } else if card.hovered {
-        theme.dim
-    } else {
-        border(theme)
-    };
     let mut top = Vec::new();
     if let Some(mark) = &card.mark {
         top.push(mark.clone());
@@ -1083,14 +1129,16 @@ pub fn board_card(card: &BoardCard, cols: usize, theme: &Theme) -> Vec<Vec<Span<
         let used = (frac.clamp(0.0, 1.0) * 100.0).round() as u8;
         inside.push(meter(used, inner, tone, theme));
     }
-    self::card(
-        cols,
-        card.height(cols),
-        top,
-        card.state.clone(),
-        &inside,
-        edge,
-    )
+    let (rows, state) = (card.height(cols), card.state.clone());
+    if card.chosen {
+        return chosen_card(cols, rows, top, state, &inside, theme);
+    }
+    let edge = if card.hovered {
+        theme.dim
+    } else {
+        border(theme)
+    };
+    self::card(cols, rows, top, state, &inside, edge)
 }
 
 /// A board's column: its name, the tone of where its cards stand, and
@@ -2198,6 +2246,20 @@ mod tests {
         assert_eq!(short[0][0].style.fg, Some(border(&T)));
         let chosen = board_card(&board_card_of("Fix it", true), 18, &T);
         assert_eq!(chosen[0][0].style.fg, Some(Tone::Accent.fg(&T)));
+        // Its top edge a solid accent bar between its corners, its name and
+        // state dark on it (board 143).
+        assert_eq!(text(&chosen[0]), "╭ #1          ✓  ╮");
+        let top = &chosen[0];
+        assert!(
+            top[1..top.len() - 1]
+                .iter()
+                .all(|s| s.style.bg == Some(Tone::Accent.fg(&T))),
+            "{top:?}"
+        );
+        let name = top.iter().find(|s| s.content == "#1").unwrap();
+        assert_eq!(name.style.fg, Some(on_color(&T)));
+        assert!(name.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(top.last().unwrap().style.fg, Some(Tone::Accent.fg(&T)));
         let title = chosen[1]
             .iter()
             .find(|s| s.content.contains("Fix"))
