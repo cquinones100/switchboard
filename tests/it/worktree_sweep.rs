@@ -202,11 +202,15 @@ fn a_tab_closed_in_a_merged_prs_review_checkout_takes_it_and_its_branch() {
     let (repo, tree) = review_checkout(&server);
     open_and_close(&server, &tree);
     let deadline = common::deadline(Duration::from_secs(20));
-    while tree.exists() {
-        assert!(Instant::now() < deadline, "the review checkout removed");
+    // The sweep deletes the branch after it removes the worktree.
+    let branch_left = || git(&repo, &["branch", "--list", "pr-review/*"]).contains("12345");
+    while tree.exists() || branch_left() {
+        assert!(
+            Instant::now() < deadline,
+            "the review checkout and its branch removed"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(!git(&repo, &["branch", "--list", "pr-review/*"]).contains("12345"));
     client.wait_text("Removed the review checkout of 1 finished PR");
 }
 
