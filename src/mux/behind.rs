@@ -28,6 +28,7 @@
 //! commit to count from, for the tests, whose own build's commit isn't in
 //! the repository they make.
 
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -121,6 +122,9 @@ pub fn fetch(clone: &Path) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // A group of its own, so ending it ends the transport it started
+        // (git remote-https, ssh), which is what holds a dead connection.
+        .process_group(0)
         .spawn()
     else {
         return;
@@ -128,6 +132,8 @@ pub fn fetch(clone: &Path) {
     let started = Instant::now();
     while matches!(child.try_wait(), Ok(None)) {
         if started.elapsed() >= FETCH_FOR {
+            // SAFETY: signals only the fetch's own process group.
+            unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
             let _ = child.kill();
             let _ = child.wait();
             return;
