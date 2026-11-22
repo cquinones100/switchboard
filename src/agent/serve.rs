@@ -554,11 +554,14 @@ impl Server {
     }
 
     /// Whether a pane's screen shows a prompt Claude draws: a permission or
-    /// a question, its cursor on a choice, or a dialog.
+    /// a question, its cursor on a choice, or a dialog. A screen scrolled
+    /// back counts as showing one, since what waits is out of sight below.
     pub(crate) fn prompt_shown(&self, pane: PaneId) -> bool {
+        use crate::mission::answer;
         self.panes.get(&pane).is_some_and(|slot| {
             let screen = slot.pane.text(0);
-            (crate::mission::answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
+            answer::scrolled_back(&screen)
+                || (answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
                 || crate::relay::tabs::dialog_in(&screen).is_some()
         })
     }
@@ -1086,16 +1089,19 @@ impl Server {
     }
 }
 
-/// Whether a screen shows Claude Code's cursor, `❯`, on a numbered choice or
-/// a question's Submit row: what a prompt waiting on you has and a
-/// numbered list in Claude's reply doesn't.
+/// Whether a screen shows Claude Code's cursor, `❯`, on a numbered choice
+/// (`❯ 1. Yes`) or a question's Submit row: what a prompt waiting on you has
+/// and a numbered list in Claude's reply, or a draft typed under it, doesn't.
 fn cursor_on_a_choice(screen: &str) -> bool {
     screen.lines().any(|line| {
         line.trim_start_matches([' ', '│', '┃'])
             .strip_prefix('❯')
             .map(str::trim_start)
             .is_some_and(|rest| {
-                rest.starts_with(|c: char| c.is_ascii_digit()) || rest.starts_with("Submit")
+                let after_number = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+                let numbered =
+                    after_number.len() < rest.len() && after_number.starts_with(['.', ')']);
+                numbered || rest.starts_with("Submit")
             })
     })
 }
@@ -1161,6 +1167,9 @@ mod tests {
         ));
         assert!(cursor_on_a_choice("│ ❯ 1. Yes │\n│   2. No  │"));
         assert!(cursor_on_a_choice("  1. [✔] A\n  2. [ ] B\n❯ Submit"));
+        assert!(!cursor_on_a_choice(
+            "⏺ Next:\n  1. Land it\n  2. Close the issue\n\n❯ 2 please\n"
+        ));
         assert!(!cursor_on_a_choice(
             "⏺ Next:\n  1. Land it\n  2. Close the issue\n\n❯ \n  ? for shortcuts"
         ));
