@@ -2411,7 +2411,16 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
         "workspace": { "current_dir": h.home.to_string_lossy() },
         "context_window": { "used_percentage": 12.5 },
         "cost": { "total_cost_usd": 1.25 },
-        "rate_limits": { "five_hour": { "used_percentage": 30, "resets_at": 1900000000 } }
+        "rate_limits": {
+            "five_hour": { "used_percentage": 30, "resets_at": 1900000000 },
+            "spend_limit": {
+                "used_percentage": 62.8,
+                "resets_at": 1900000000,
+                "used_usd": 314.12,
+                "limit_usd": 500,
+                "period": "monthly"
+            }
+        }
     });
     let line = statusline(&h, &payload, false);
     assert!(line.contains("Opus"), "{line}");
@@ -2438,7 +2447,7 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
     );
     assert_eq!(
         read(&state.join("usage/limits")),
-        r#"{"five_hour":{"used_percentage":30,"resets_at":1900000000}}"#
+        r#"{"five_hour":{"used_percentage":30,"resets_at":1900000000},"spend_limit":{"used_percentage":62.8,"resets_at":1900000000,"used_usd":314.12,"limit_usd":500,"period":"monthly"}}"#
     );
     let mode = fs::metadata(state.join("usage/spend-sess-1"))
         .unwrap()

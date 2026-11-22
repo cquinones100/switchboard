@@ -28,7 +28,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::sessions::{context_of, limit_keys, limit_name, shares_today, usage_dir, window_now};
+use super::sessions::{
+    context_of, limit_keys, limit_name, shares_today, spent_of_limit, usage_dir, window_now,
+};
 use crate::items::{Item, Target};
 use crate::mux::TabId;
 use crate::requests::Tally;
@@ -322,9 +324,7 @@ fn limits(state: &Path, now: i64) -> Vec<Limit> {
         let Some((used, resets_at)) = window_now(window, now) else {
             continue;
         };
-        let detail = window["used_usd"]
-            .as_f64()
-            .map(|usd| format!("${usd:.2} of ${}", util::js_string(&window["limit_usd"])));
+        let detail = spent_of_limit(window);
         out.push(Limit {
             name: limit_name(&key),
             used,
@@ -956,6 +956,58 @@ mod tests {
         );
         // Its pace is a week's, as the window it is named after.
         assert!((limits[2].pace.unwrap() - 61.0 * 7.0 / 3.0).abs() < 1e-6);
+        let _ = fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_spend_limit_says_what_is_spent_of_it_and_only_while_claude_code_reports_one() {
+        let state = temp("spend-limit");
+        let now = util::now_secs();
+        let write = |limits: Value| {
+            fs::write(usage_dir(&state).join("limits"), limits.to_string()).unwrap()
+        };
+        let spend = |limits: &[Limit]| {
+            limits
+                .iter()
+                .find(|l| l.key == "spend_limit")
+                .map(|l| (l.name.clone(), l.used, l.detail.clone(), l.pace))
+        };
+        write(serde_json::json!({
+            "seven_day": { "used_percentage": 30, "resets_at": now + 86400 },
+            "spend_limit": {
+                "used_percentage": 62.8,
+                "resets_at": now + 9 * 86400,
+                "used_usd": 314.12,
+                "limit_usd": 500,
+                "period": "monthly"
+            },
+        }));
+        assert_eq!(
+            spend(&limits(&state, now)),
+            Some((
+                "Spend".to_string(),
+                62.8,
+                Some("$314.12 of $500 a month".to_string()),
+                None
+            ))
+        );
+        // The dollars may be missing, or the limit alone.
+        write(serde_json::json!({
+            "spend_limit": { "used_percentage": 40, "resets_at": now + 86400, "used_usd": 12.5 },
+        }));
+        assert_eq!(
+            spend(&limits(&state, now)).and_then(|s| s.2),
+            Some("$12.50 spent".to_string())
+        );
+        write(serde_json::json!({
+            "spend_limit": { "used_percentage": 40, "resets_at": now + 86400 },
+        }));
+        assert_eq!(spend(&limits(&state, now)).map(|s| s.2), Some(None));
+        // With none reported, there is no spend limit.
+        write(serde_json::json!({
+            "seven_day": { "used_percentage": 30, "resets_at": now + 86400 },
+        }));
+        assert_eq!(spend(&limits(&state, now)), None);
         let _ = fs::remove_dir_all(&state);
     }
 

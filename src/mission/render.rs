@@ -10546,6 +10546,14 @@ mod tests {
                     pace: None,
                     detail: None,
                 },
+                Limit {
+                    key: "spend_limit".into(),
+                    name: "Spend".into(),
+                    used: 86.0,
+                    resets_at: now + 9 * 86400,
+                    pace: None,
+                    detail: Some("$430.00 of $500 a month".into()),
+                },
             ],
             limits_at: Some(now * 1000 - 12_000),
             requests: Some((day.clone(), {
@@ -10602,7 +10610,16 @@ mod tests {
             .count();
         assert_eq!(ticks, 1);
         let named = |prefix: &str| images.iter().filter(|i| i.name.starts_with(prefix)).count();
-        assert_eq!(named("usage/limit/"), 2);
+        assert_eq!(named("usage/limit/"), 3);
+        // A gateway's spend limit, its dollars of the month's and its reset.
+        let spend = texts(&lines)
+            .into_iter()
+            .find(|l| l.contains("Spend"))
+            .expect("the spend limit's row");
+        assert!(
+            spend.contains("86%") && spend.contains("$430.00 of $500 a month · resets "),
+            "{spend}"
+        );
         // Today's spend by model under the limits, a meter of its share each.
         let models_at = text.find("BY MODEL").expect("the models' block");
         assert!(models_at > text.find("LIMITS").unwrap(), "{text}");
