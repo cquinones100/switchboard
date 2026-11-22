@@ -196,6 +196,13 @@ fn a_hook_marks_its_pane_and_the_sidebar_shows_it() {
         side(s).iter().any(|l| l.contains("✓ 1 home"))
     });
 
+    // A prompt's notice after the turn ended is a late one, so a new turn.
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-1", "prompt": "go on"}),
+    );
     hook(
         &server,
         &pane,
@@ -217,6 +224,73 @@ fn a_hook_marks_its_pane_and_the_sidebar_shows_it() {
     assert_eq!(tabs(&list)[0]["agent"], Value::Null);
     client.wait_for("no badge", |s| {
         side(s).iter().any(|l| l.contains("○ 1 home"))
+    });
+}
+
+#[test]
+fn a_wait_no_prompt_keeps_up_ends_in_done_and_clears_once_seen() {
+    let server = start(json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    // Idle, as Claude Code says once a turn is over.
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "late", "cwd": "/work", "status": "idle", "statusUpdatedAt": now_ms}),
+    );
+    wait_list(&server, "the pane read as Claude's", |l| {
+        pane_of(l, &pane)["runs_claude"] == true
+    });
+    let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2 other");
+    let state = |server: &TestServer| pane_of(&server.list(), &pane)["agent"]["state"].clone();
+
+    // A prompt on the screen keeps the wait, however long.
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "clear; printf '\\342\\224\\200\\342\\224\\200\\nDo you want to proceed?\\n\\342\\235\\257 1. Yes\\n  2. No\\n'",
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    wait_list(&server, "the prompt shown", |_| {
+        server
+            .ok(&["capture-pane", "-t", &pane])
+            .lines()
+            .any(|l| l.trim() == "2. No")
+    });
+    hook(
+        &server,
+        &pane,
+        "Notification",
+        json!({"notification_type": "permission_prompt", "message": "Claude needs your permission"}),
+    );
+    assert_eq!(state(&server), "waiting");
+    std::thread::sleep(Duration::from_millis(8_000) * common::patience());
+    assert_eq!(state(&server), "waiting", "kept while the prompt shows");
+
+    // With none on the screen, it is done within a few seconds.
+    server.ok(&["send-keys", "-t", &pane, "-l", "clear"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    let deadline = common::deadline(Duration::from_secs(15));
+    while state(&server) != "done" {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for done: {}",
+            server.list()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["wait"], Value::Null);
+
+    // Seen, it leaves Needs you.
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the pane seen", |l| {
+        pane_of(l, &pane)["agent"]["state"].is_null()
     });
 }
 

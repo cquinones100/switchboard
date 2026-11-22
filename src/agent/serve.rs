@@ -211,9 +211,13 @@ impl Server {
             // Permission prompts and questions are Claude waiting on you. The
             // PermissionRequest hook has usually said so already, since this
             // one only comes once a prompt has waited about six seconds. In
-            // auto mode it is this one that makes the request a wait.
-            let waits =
-                QUESTION_KINDS.contains(&hook.kind.as_str()) && self.agents.wait(pane, now, front);
+            // auto mode it is this one that makes the request a wait. Once
+            // the turn is over it is a late notice, unless a prompt still
+            // shows (a background agent's, asked as the turn ended).
+            let waits = QUESTION_KINDS.contains(&hook.kind.as_str()) && {
+                let shown = self.agents.turn_over(pane) && self.prompt_shown(pane);
+                self.agents.wait(pane, now, front, shown)
+            };
             self.banner(tab, &hook.message);
             waits
         } else {
@@ -520,6 +524,56 @@ impl Server {
     /// `switchboard setup`'s report.
     pub fn statusline_skipped(&self) -> bool {
         self.agents.any_statusline_missing()
+    }
+
+    /// Each tick: a waiting pane whose turn is over (its Stop came, or
+    /// Claude Code says its session is idle) and whose screen shows no
+    /// prompt Claude draws (a permission, a question, a dialog), and isn't
+    /// scrolled back, for a few seconds is done (`Agents::unprompted`), so a wait nothing keeps up
+    /// leaves Needs you once seen. A pane whose program in front isn't
+    /// Claude is left as it is, since its screen isn't Claude's.
+    pub fn unprompted_tick(&mut self) {
+        let now_ms = util::now_ms();
+        let now = util::now_secs();
+        for pane in self.agents.waiting() {
+            let read = self.sidebar.panes.get(&pane);
+            let claude_in_front = read.is_some_and(|r| r.claude);
+            let session_idle = read
+                .and_then(|r| r.session.as_ref())
+                .is_some_and(|s| s.idle_since.is_some());
+            let turn_over = self.agents.turn_over(pane) || session_idle;
+            // A wait already marked stays while its screen is scrolled back.
+            let prompted = !claude_in_front
+                || !turn_over
+                || self.prompt_shown(pane)
+                || self.scrolled_back(pane);
+            let Some(tab) = self.panes.get(&pane).map(|slot| slot.tab) else {
+                continue;
+            };
+            let front = self.tab_in_front(tab);
+            if self.agents.unprompted(pane, prompted, now_ms, now, front) {
+                self.redraw_tab(tab);
+            }
+        }
+    }
+
+    /// Whether a pane's screen shows a prompt Claude draws: a permission or
+    /// a question, its cursor on a choice, or a dialog.
+    pub(crate) fn prompt_shown(&self, pane: PaneId) -> bool {
+        use crate::mission::answer;
+        self.panes.get(&pane).is_some_and(|slot| {
+            let screen = slot.pane.text(0);
+            (answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
+                || crate::relay::tabs::dialog_in(&screen).is_some()
+        })
+    }
+
+    /// Whether a pane's Claude is scrolled back in its fullscreen view, so
+    /// a prompt it waits on may be out of sight below.
+    fn scrolled_back(&self, pane: PaneId) -> bool {
+        self.panes
+            .get(&pane)
+            .is_some_and(|slot| crate::mission::answer::scrolled_back(&slot.pane.text(0)))
     }
 
     /// A pane's record for `switchboard list`, or null.
@@ -1045,6 +1099,23 @@ impl Server {
     }
 }
 
+/// Whether a screen shows Claude Code's cursor, `❯`, on a numbered choice
+/// (`❯ 1. Yes`) or a question's Submit row: what a prompt waiting on you has
+/// and a numbered list in Claude's reply, or a draft typed under it, doesn't.
+fn cursor_on_a_choice(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        line.trim_start_matches([' ', '│', '┃'])
+            .strip_prefix('❯')
+            .map(str::trim_start)
+            .is_some_and(|rest| {
+                let after_number = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+                let numbered =
+                    after_number.len() < rest.len() && after_number.starts_with(['.', ')']);
+                numbered || rest.starts_with("Submit")
+            })
+    })
+}
+
 /// A process's group, one call to the kernel, so finding a parked Claude's
 /// pane reads no pane's whole process list; `None` when it can't be read,
 /// and the processes are read instead.
@@ -1098,6 +1169,21 @@ pub fn land_question(leak_checked: bool) -> (String, Vec<String>) {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn a_prompt_has_the_cursor_on_a_choice_and_a_reply_s_list_has_none() {
+        assert!(cursor_on_a_choice(
+            "Do you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel"
+        ));
+        assert!(cursor_on_a_choice("│ ❯ 1. Yes │\n│   2. No  │"));
+        assert!(cursor_on_a_choice("  1. [✔] A\n  2. [ ] B\n❯ Submit"));
+        assert!(!cursor_on_a_choice(
+            "⏺ Next:\n  1. Land it\n  2. Close the issue\n\n❯ 2 please\n"
+        ));
+        assert!(!cursor_on_a_choice(
+            "⏺ Next:\n  1. Land it\n  2. Close the issue\n\n❯ \n  ? for shortcuts"
+        ));
+    }
 
     #[test]
     fn a_worktree_is_under_a_repositorys_claude_worktrees() {
