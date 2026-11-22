@@ -333,3 +333,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: a message from another tab on the phone
 
 - [182. A message from another tab in a tab's channel on the phone: what another tab's Claude sent this one, before Claude's reply to it, under the sending tab's number in its hue and its name, with an avatar color of its own; a tab since closed reads Another tab; two tabs' messages in a row each keep their header](https://cquinones100.github.io/switchboard/design/182.html)
+
+## Proposal: the phone app's kit
+
+- [184. The phone app's kit: every control 44 pt (icon buttons 44 × 44, buttons and fields 44 high pills), chips 24, rows 56, header 48, boxes and cards radius 12, pictures 6, type 16 and 12; today's mismatched sizes beside it; a drawer and a channel drawn from the kit alone](https://cquinones100.github.io/switchboard/design/184.html)
