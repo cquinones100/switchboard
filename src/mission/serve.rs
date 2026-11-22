@@ -4101,10 +4101,17 @@ impl Server {
     /// the front pane's repository read from git's files, never by git.
     fn view_facts(&self, client: ClientId) -> super::view_acts::Facts {
         let rules = Rules::now();
+        // Under the sidebar's repository filter, only the filtered
+        // repository's, as the Tabs view shows them under Merged.
+        let session = self
+            .clients
+            .get(&client)
+            .map(|c| c.session.clone())
+            .unwrap_or_default();
         let merged = self
-            .sidebar_all_tabs()
+            .sidebar_all_marked(&session)
             .iter()
-            .filter(|t| model::own_stage(t, &rules) == model::Stage::Merged)
+            .filter(|t| !t.elsewhere && model::own_stage(t, &rules) == model::Stage::Merged)
             .map(|t| t.id)
             .collect();
         let dir = self
