@@ -1672,7 +1672,7 @@ impl Server {
             | Action::ResetTips
             | Action::TogglePin
             | Action::CopyReply
-            // C-w's next key moves from the sidebar, and M-0's tab keeps
+            // C-w's next key moves from the sidebar, and Go to a tab by number keeps
             // the cursor in a sidebar, as M-1 to M-9 do (src/extras); the
             // sidebar's own width reset leaves its filter and selection.
             | Action::Extra(

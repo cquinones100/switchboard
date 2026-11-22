@@ -76,7 +76,7 @@
 //! - `extras`: the rest of tmux.conf's keys and M-p's commands: renaming the
 //!   tab, mission control on a view, the habits report, a reply sent to
 //!   another tab, setup checked, the loop tabs, a PR or ticket by number,
-//!   the AWS login, M-0 and `C-w` between panes.
+//!   the AWS login, a tab by number and `C-w` between panes.
 //! - `autopilot`: working a note's checklist continuously, a tab opened for
 //!   each item as the last lands.
 //! - `awake`: keeping the computer awake while tabs work or autopilot has

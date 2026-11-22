@@ -978,6 +978,27 @@
     "default": true
   },
   {
+    "key": "tab_digit_delay",
+    "category": "Tabs and header",
+    "label": "How long to wait for the next digit of a tab's number",
+    "description": "After M-1 to M-9, how long a digit typed next is taken for the tab's number rather than the pane, so M-1 then 6 goes to tab 16; each digit starts the wait again while an open tab's number could still grow from it, and the tab the digits name comes once it passes or another key is pressed. With no open tab past 9 whose number starts with the digit, nothing waits",
+    "choices": [
+      {
+        "value": "250",
+        "label": "250 ms"
+      },
+      {
+        "value": "500",
+        "label": "500 ms"
+      },
+      {
+        "value": "1000",
+        "label": "1 second"
+      }
+    ],
+    "default": "500"
+  },
+  {
     "key": "one_claude_per_tab",
     "category": "Tabs and header",
     "label": "One Claude to a tab",

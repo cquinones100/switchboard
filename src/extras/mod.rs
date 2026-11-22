@@ -6,7 +6,7 @@
 //! date (update-main.sh), Switchboard's setup checked or run a part at a time
 //! (repo-update.sh's `setup-check` and `setup-part`), the Calendar and Slack
 //! tabs (loop-tab.sh), a PR or ticket opened by number (pr-open.zsh,
-//! ticket-open.zsh), the AWS login (aws-login.sh), M-0 (tab-goto.sh),
+//! ticket-open.zsh), the AWS login (aws-login.sh), a tab by number in a box (tab-goto.sh),
 //! `C-w` then h, j, k or l between panes (tmux.conf's `window-nav` table),
 //! and M-/, mission control's Keys view (`sidebar.sh mission view:keys`).
 //!
@@ -40,7 +40,8 @@ use crate::mission::ViewId;
 pub enum Command {
     /// "Rename the tab": a name typed in, empty for its own name back.
     RenameTab,
-    /// M-0: a tab by its number, typed, for the tabs past 9.
+    /// A tab by its number, typed in a box (M-p alone; M-1 to M-9 take
+    /// the digits after them, src/mux/tab_digits.rs).
     GoToTab,
     /// C-w: the next key h, j, k or l moves to the pane on that side.
     PaneNav,
@@ -169,7 +170,7 @@ impl Command {
         let words = match self {
             Command::Mission(view) => return view.about(),
             Command::RenameTab => "Rename the tab",
-            Command::GoToTab => "Go to a tab by number, for tabs past 9",
+            Command::GoToTab => "Go to a tab by its number, typed in a box",
             Command::PaneNav => {
                 "Then h, j, k or l: move to the pane on that side, as C-w does in Vim"
             }
@@ -306,7 +307,6 @@ impl Command {
     /// The key tmux.conf bound it to, or `None` for one only in the palette.
     pub fn key(&self) -> Option<&'static str> {
         match self {
-            Command::GoToTab => Some("M-0"),
             Command::PaneNav => Some("C-w"),
             Command::Keys => Some("M-/"),
             Command::SidebarRepo => Some("M-R"),
@@ -435,7 +435,7 @@ pub fn ticket_typed(text: &str, branch_ticket: Option<&str>) -> Result<TicketTyp
     Err(format!("Not a ticket ID, number or Linear URL: {text}"))
 }
 
-/// The tab number typed for M-0 (tab-goto.sh took digits alone).
+/// The tab number typed in Go to a tab by number's box (tab-goto.sh took digits alone).
 pub fn tab_number(text: &str) -> Option<usize> {
     let text = text.trim();
     if text.is_empty() || !text.chars().all(|c| c.is_ascii_digit()) {
@@ -479,7 +479,7 @@ mod tests {
             "the Merge queues view's old name opens the Landing view"
         );
         let keyed: Vec<_> = Command::all().iter().filter_map(|c| c.key()).collect();
-        assert_eq!(keyed, ["M-0", "C-w", "M-O", "M-/", "M-R"]);
+        assert_eq!(keyed, ["C-w", "M-O", "M-/", "M-R"]);
         assert!(!Command::PaneNav.in_palette());
     }
 

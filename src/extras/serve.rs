@@ -348,9 +348,9 @@ impl Server {
         }
     }
 
-    // ── M-0 and C-w ─────────────────────────────────────────────────────────
+    // ── A tab by number and C-w ───────────────────────────────────────────────────────
 
-    /// M-0: a tab's number typed, and that tab (tab-goto.sh).
+    /// M-p's Go to a tab by number: its number typed, and that tab (tab-goto.sh).
     fn ask_tab_number(&mut self, client: ClientId) {
         let ask = Ask::new("Go to tab", "Its number, for the tabs past 9.");
         self.open(
