@@ -22,6 +22,8 @@ One line per pane, tab-separated: the tab's number (its own while the tab is ope
 - Starting work on a ticket, branch or PR: whether a tab already has it, so it isn't started twice.
 - What to do next, or what is waiting on me: what is in flight and where.
 
+While Settings' coordinator is on, the last line is the coordinator's, a Claude of its own outside every tab: `coordinator` in the first column and `-` for its place, its address in the last column as a tab's.
+
 Don't look on turns that can't depend on it. Reading another tab's screen or typing into it is a different thing: only when I ask.
 
 ## Talking to another tab

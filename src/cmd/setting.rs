@@ -113,6 +113,9 @@ fn takes(option: &settings::Setting) -> String {
                 Some(typed) if typed.kind == settings::TypedKind::Folder => {
                     format!("{listed}, or a folder, ~/... or absolute")
                 }
+                Some(typed) if typed.kind == settings::TypedKind::Text => {
+                    format!("{listed}, or any words on one line")
+                }
                 Some(typed) => format!("{listed}, or a number from {}", typed.least),
                 None => listed,
             }

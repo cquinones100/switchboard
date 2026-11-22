@@ -1284,6 +1284,7 @@ impl Server {
                 .clients
                 .get(&client)
                 .is_some_and(|c| crate::mux::graphics::round_ends(&c.term)),
+            coordinator: self.coordinator_row(),
         };
         let out = render::sidebar_lines(
             &tabs,
@@ -2934,6 +2935,7 @@ impl Server {
                 Some(Owner::ScrollDown) => self.sidebar_scroll_click(client, &session, true),
                 // The filter's chip clears it; Other repos folds or unfolds.
                 Some(Owner::BuildRow) => self.build_steps_open(client),
+                Some(Owner::Coordinator) => self.coordinator_toggle(client),
                 Some(Owner::RepoChip) => {
                     self.sidebar_set_repo(&session, None);
                     self.say(Some(client), "Sidebar: every repository");

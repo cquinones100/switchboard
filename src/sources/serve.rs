@@ -1009,6 +1009,8 @@ impl Server {
             }
         }
         if facts != self.facts {
+            // A tab's PR merged wakes the coordinator (src/coordinator).
+            self.coordinator_facts(&facts);
             self.facts = facts;
             self.redraw_everywhere();
         }

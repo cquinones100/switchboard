@@ -142,6 +142,8 @@ pub const NAMES: &[&str] = &[
     "autopilot-board",
     "autopilot-pause",
     "slot-report",
+    "coordinator-close",
+    "coordinator-open-tab",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -296,6 +298,14 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "slot-report",
         "slot-report wait|hold <kind> <pid> [index cap child] -- command | done <pid>: from the cargo, npm and pnpm stand-ins, a command in the calling pane waiting for, holding or letting go a slot in the queue for heavy work",
+    ),
+    (
+        "coordinator-close",
+        "coordinator-close <tab>: the coordinator closing a tab (its number, or @<id>) whose PR has merged, as GitHub last answered; refuses any other tab, and autopilot's",
+    ),
+    (
+        "coordinator-open-tab",
+        "coordinator-open-tab -c <dir> <owner/repo#number>: from switchboard coordinator-open once GitHub says the issue may be taken, the coordinator opening a tab in the background running wt --issue on that issue in dir, once the tab it opened last has made its worktree; prints the tab's number",
     ),
 ];
 
@@ -475,6 +485,8 @@ impl Server {
                 self.kill_pane(p);
                 Reply::ok("")
             }),
+            "coordinator-close" => self.cmd_coordinator_close(rest),
+            "coordinator-open-tab" => self.cmd_coordinator_open(rest),
             "kill-tab" => Args::parse(rest, "ts").and_then(|a| match a.value('s') {
                 Some(from) => {
                     let pane = self.pane_from(&a, caller)?;
@@ -663,14 +675,23 @@ impl Server {
     fn tab_from(&self, a: &Args, caller: Option<PaneId>) -> Result<TabId, String> {
         match a.value('t') {
             Some(t) => match self.parse_target(t)? {
-                Target::Pane(p) => Ok(self.panes[&p].tab),
+                Target::Pane(p) => self.tab_of_pane(p),
                 Target::Tab(tab) => Ok(tab),
             },
             None => self
                 .default_pane(caller)
-                .map(|p| self.panes[&p].tab)
-                .ok_or_else(|| "no tab to act on".to_string()),
+                .ok_or_else(|| "no tab to act on".to_string())
+                .and_then(|p| self.tab_of_pane(p)),
         }
+    }
+
+    /// The tab a pane is in; the coordinator's is in none
+    /// (src/coordinator), so a command it runs names its tab with `-t`.
+    fn tab_of_pane(&self, pane: PaneId) -> Result<TabId, String> {
+        if self.is_coordinator(pane) {
+            return Err("the coordinator is in no tab: name the tab with -t".into());
+        }
+        Ok(self.panes[&pane].tab)
     }
 
     fn target_pane(&self, rest: &[String], caller: Option<PaneId>) -> Result<PaneId, String> {
@@ -804,6 +825,8 @@ impl Server {
             "typed": self.typed,
             // Whether the computer is held awake, and what holds it (src/awake).
             "awake": self.awake_json(),
+            // The coordinator's pane, which no tab holds (src/coordinator).
+            "coordinator": self.coordinator_json(),
         })
     }
 
@@ -1292,17 +1315,13 @@ impl Server {
         // A pane named for a tab's option means its tab, as without `-t`.
         if let Some(t) = a.value('t') {
             return match self.parse_target(t)? {
-                Target::Pane(p) if tab_option => self
-                    .panes
-                    .get(&p)
-                    .map(|slot| Target::Tab(slot.tab))
-                    .ok_or_else(|| "the pane is gone".to_string()),
+                Target::Pane(p) if tab_option => self.tab_of_pane(p).map(Target::Tab),
                 target => Ok(target),
             };
         }
         let pane = self.default_pane(caller).ok_or("no pane to act on")?;
         Ok(if tab_option {
-            Target::Tab(self.panes[&pane].tab)
+            Target::Tab(self.tab_of_pane(pane)?)
         } else {
             Target::Pane(pane)
         })

@@ -416,6 +416,135 @@ const QUERY: &str = "query($q: String!, $first: Int!, $after: String) {
   }
 }";
 
+// One issue, as the coordinator asks before opening a tab on it
+// (`coordinator_may_open`): who asks, its state, author, assignees and who
+// added each label.
+const ONE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      state
+      author { login }
+      assignees(first: 20) { nodes { login } }
+      labels(first: 50) { nodes { name } }
+      timelineItems(itemTypes: [LABELED_EVENT], last: 100) {
+        nodes { ... on LabeledEvent { label { name } actor { login } } }
+      }
+    }
+  }
+}";
+
+/// Whether the coordinator (src/coordinator) may open a tab on an issue,
+/// by autopilot's rule for whose issues it takes: open, assigned to you,
+/// and opened by you or carrying the repository's `issueLabel` (`label`)
+/// added by you or someone with write access; why not when it may not.
+pub async fn coordinator_may_open(
+    repo: &Repo,
+    number: u64,
+    label: Option<&str>,
+) -> Result<(), String> {
+    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": number });
+    let data = github::graphql(ONE_QUERY, variables, "coordinator")
+        .await
+        .map_err(|e| format!("couldn't ask GitHub about {repo}#{number}: {e:#}"))?;
+    let Some(issue) = data.pointer("/repository/issue").filter(|i| !i.is_null()) else {
+        return Err(format!("{repo}#{number} isn't an issue GitHub knows"));
+    };
+    let viewer = data
+        .pointer("/viewer/login")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if issue.get("state").and_then(Value::as_str) != Some("OPEN") {
+        return Err(format!("{repo}#{number} isn't open"));
+    }
+    let assigned = issue
+        .pointer("/assignees/nodes")
+        .and_then(Value::as_array)
+        .is_some_and(|a| {
+            a.iter().any(|n| {
+                n.get("login")
+                    .and_then(Value::as_str)
+                    .is_some_and(|l| !viewer.is_empty() && l.eq_ignore_ascii_case(viewer))
+            })
+        });
+    if !assigned {
+        return Err(format!("{repo}#{number} isn't assigned to you"));
+    }
+    let author = issue
+        .pointer("/author/login")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    // A label taken off since counts for nothing, as autopilot searches by
+    // the labels an issue carries now.
+    let carries = |label: &str| {
+        issue
+            .pointer("/labels/nodes")
+            .and_then(Value::as_array)
+            .is_some_and(|ls| {
+                ls.iter().any(|l| {
+                    l.get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|n| n.eq_ignore_ascii_case(label))
+                })
+            })
+    };
+    let labeler = label.filter(|l| carries(l)).and_then(|label| {
+        issue
+            .pointer("/timelineItems/nodes")
+            .and_then(Value::as_array)?
+            .iter()
+            .rev()
+            .find(|e| {
+                e.pointer("/label/name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|l| l.eq_ignore_ascii_case(label))
+            })?
+            .pointer("/actor/login")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    let found = Found {
+        issue: Issue {
+            repo: repo.to_string(),
+            number,
+            title: String::new(),
+            body: String::new(),
+            url: String::new(),
+            claim: None,
+            priority: DEFAULT_PRIORITY,
+            blocked_by: Vec::new(),
+        },
+        author,
+        labeler,
+        named: Vec::new(),
+    };
+    let mut writers = HashSet::new();
+    for login in to_ask(std::slice::from_ref(&found), viewer) {
+        let path = format!("/repos/{repo}/collaborators/{login}/permission");
+        match github::rest("GET", &path, None, "coordinator").await {
+            Ok(answer)
+                if matches!(
+                    answer.get("permission").and_then(Value::as_str),
+                    Some("admin" | "maintain" | "write")
+                ) =>
+            {
+                writers.insert(login);
+            }
+            Ok(_) => {}
+            Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {}
+            Err(e) => return Err(format!("couldn't ask GitHub who labeled it: {e:#}")),
+        }
+    }
+    if takeable(&found, viewer, &writers) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{repo}#{number} wasn't opened by you, nor labeled for autopilot by you or someone with write access"
+        ))
+    }
+}
+
 // One issue's claim, asked of the issue itself.
 const CLAIM_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $last: Int!) {
   viewer { login }

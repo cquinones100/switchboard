@@ -6365,6 +6365,11 @@ impl Server {
                 "A folder, as ~/... or an absolute path.".to_string(),
                 typed.words(&option.value),
             ),
+            TypedKind::Text => (
+                option.label.clone(),
+                "Words on one line.".to_string(),
+                typed.words(&option.value),
+            ),
         };
         let ask = Ask::new(title, hint).text(now.unwrap_or_default());
         self.open(
@@ -6383,6 +6388,10 @@ impl Server {
                         .then(|| format!("Not saved: {given} isn't a number from {}", typed.least)),
                     TypedKind::Folder => (!typed.folder(&value).is_some_and(|d| d.is_dir()))
                         .then(|| format!("Not saved: {given} isn't a folder")),
+                    TypedKind::Text => typed
+                        .text(&value)
+                        .is_none()
+                        .then(|| "Not saved: it is empty".to_string()),
                 };
                 if let Some(refused) = refused {
                     server.mission_note(client, refused);

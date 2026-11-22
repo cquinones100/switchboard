@@ -17,6 +17,7 @@ pub mod claude_plugin_dirs;
 pub mod claude_reply;
 pub mod clone_build;
 pub mod codex_review;
+pub mod coordinator;
 pub mod demo;
 pub mod diff_story;
 pub mod headless;
@@ -137,6 +138,16 @@ pub const COMMANDS: &[Command] = &[
         name: "claude-context",
         run: claude_context::main,
         about: "Switchboard's instructions for Claude, as a session starts (run by Claude Code's hooks)",
+    },
+    Command {
+        name: "coordinator-open",
+        run: coordinator::open_main,
+        about: "The coordinator opening a tab running wt --issue on an issue autopilot's rule lets it take, once its last tab has its worktree",
+    },
+    Command {
+        name: "coordinator-post",
+        run: coordinator::post_main,
+        about: "The coordinator filing an issue or a comment on its clone's GitHub repository (one you can push to), its body from its posts folder, after a clean leak-check",
     },
     Command {
         name: "tabs",

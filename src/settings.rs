@@ -54,6 +54,8 @@ pub enum TypedKind {
     Number,
     /// A folder, written `~/...` or as an absolute path.
     Folder,
+    /// Any words on one line (a note's title, `coordinator_note`).
+    Text,
 }
 
 impl Typed {
@@ -81,9 +83,19 @@ impl Typed {
         }
     }
 
+    /// The words `value` holds, trimmed, when this takes words and they
+    /// are on one line and not empty.
+    pub fn text(&self, value: &Value) -> Option<String> {
+        if self.kind != TypedKind::Text {
+            return None;
+        }
+        let text = value.as_str()?.trim();
+        (!text.is_empty() && !text.contains(['\n', '\r'])).then(|| text.to_string())
+    }
+
     /// Whether `value` is one this takes typed in.
     pub fn takes(&self, value: &Value) -> bool {
-        self.number(value).is_some() || self.folder(value).is_some()
+        self.number(value).is_some() || self.folder(value).is_some() || self.text(value).is_some()
     }
 
     /// `value` as shown: the number and its unit, or the folder as written.
@@ -94,6 +106,7 @@ impl Typed {
                 self.folder(value)?;
                 value.as_str().map(|t| t.trim().to_string())
             }
+            TypedKind::Text => self.text(value),
         }
     }
 }

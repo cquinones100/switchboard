@@ -2171,6 +2171,72 @@
     "default": true
   },
   {
+    "key": "coordinator",
+    "category": "Coordinator",
+    "label": "Coordinator",
+    "description": "A Claude Code session of its own, outside every tab, that keeps your work moving: woken only by events (a tab's PR merged, a tab finished or waits on you, its note changed, a message from you or another tab), it closes tabs whose PR merged, opens the next ready issues from its note one at a time, keeps its note and files issues after a leak-check. M-C shows it beside the tab in front. It sends its note's contents and your tabs' names to Claude, so it is off by default; off, nothing of it runs",
+    "default": false
+  },
+  {
+    "key": "coordinator_model",
+    "category": "Coordinator",
+    "label": "Coordinator's model",
+    "description": "The model the coordinator's session runs on (claude --model), taken up the next time it starts",
+    "choices": [
+      {
+        "value": "haiku",
+        "label": "Haiku"
+      },
+      {
+        "value": "sonnet",
+        "label": "Sonnet"
+      },
+      {
+        "value": "opus",
+        "label": "Opus"
+      }
+    ],
+    "default": "sonnet"
+  },
+  {
+    "key": "coordinator_shape_model",
+    "category": "Coordinator",
+    "label": "Model that shapes work for the coordinator",
+    "description": "The model of the subagent the coordinator hands shaping to (/shape): it reads the code, finds the cause and drafts the issue, and the coordinator asks you its questions and files the draft after your yes",
+    "choices": [
+      {
+        "value": "haiku",
+        "label": "Haiku"
+      },
+      {
+        "value": "sonnet",
+        "label": "Sonnet"
+      },
+      {
+        "value": "opus",
+        "label": "Opus"
+      }
+    ],
+    "default": "opus"
+  },
+  {
+    "key": "coordinator_note",
+    "category": "Coordinator",
+    "label": "Coordination note",
+    "description": "The note the coordinator keeps, with In flight, Next and Deferred sections, by its title in your notes folder; it offers to make it when it isn't there. Besides Coordination, Note… takes any note's title typed in",
+    "choices": [
+      {
+        "value": "Coordination",
+        "label": "Coordination"
+      }
+    ],
+    "typed": {
+      "kind": "text",
+      "label": "Note…"
+    },
+    "default": "Coordination"
+  },
+  {
     "key": "review_before_push",
     "category": "Developing Switchboard",
     "label": "Review before pushing",

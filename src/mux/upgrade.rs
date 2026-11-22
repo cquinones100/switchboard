@@ -186,6 +186,14 @@ pub struct Handover {
     /// it is written (src/mux/persist.rs); none from an older build.
     #[serde(default)]
     pub written_panes: Option<usize>,
+    /// The coordinator's pane, which no tab holds (src/coordinator), so
+    /// it isn't given a tab of its own as a pane left without one is.
+    #[serde(default)]
+    pub coordinator: Option<PaneId>,
+    /// The events still waiting to be typed into it and the tab it opened
+    /// last.
+    #[serde(default)]
+    pub coordinator_state: crate::coordinator::Handed,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -1034,6 +1042,8 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         awake_by_hand: server.awake.by_hand,
         slots: server.slots.clone(),
         written_panes: super::persist::written_panes(server),
+        coordinator: server.coordinator.pane,
+        coordinator_state: server.coordinator.handed(),
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -1207,7 +1217,22 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     server.terminal.asked_cell = handover.asked_cell;
     let taken: std::collections::HashSet<PaneId> = server.panes.keys().copied().collect();
     server.sixel.take_up(handover.images, &taken);
+    // The coordinator's pane is held out of the layout, which would give a
+    // pane no tab holds a tab of its own, and put back as its (src/coordinator).
+    let coordinator = handover
+        .coordinator
+        .and_then(|p| Some((p, server.panes.remove(&p)?)));
     super::persist::adopt_layout(server, handover.layout);
+    match coordinator {
+        Some((pane, mut slot)) => {
+            slot.tab = crate::coordinator::TAB;
+            server.panes.insert(pane, slot);
+            server.coordinator_adopted(Some(pane), handover.coordinator_state.clone());
+        }
+        // Its pane down (between restarts) or lost: what waits still goes
+        // to the one started next.
+        None => server.coordinator_adopted(None, handover.coordinator_state.clone()),
+    }
     for (id, agent) in handover.agents {
         if server.panes.contains_key(&id) {
             server.agents.put(id, agent);
@@ -1525,6 +1550,8 @@ mod tests {
                 board
             },
             written_panes: Some(5),
+            coordinator: None,
+            coordinator_state: Default::default(),
         }
     }
 

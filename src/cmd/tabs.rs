@@ -20,6 +20,9 @@
 //! rows allow, so the ref can't be worked out from one session alone. The
 //! address, `uds:` and the session file's `messagingSocketPath`, is one
 //! `SendMessage` takes as its `to` whatever the other rows are.
+//! While the coordinator runs (src/coordinator), a last line is its pane,
+//! `coordinator` in the tab's column and `-` for its place, so a tab reaches
+//! it by its address as it reaches another tab.
 //! `--json` prints the same as an array of objects, for scripts.
 
 use std::process::ExitCode;
@@ -103,6 +106,29 @@ fn rows(list: &Value) -> Vec<[String; 10]> {
             }
         }
     }
+    // The coordinator, which no tab holds (src/coordinator): `coordinator`
+    // in the tab's column and `-` for its place, so another tab finds its
+    // address as it finds a tab's.
+    let pane = &list["coordinator"];
+    if pane.is_object() {
+        let claude = &pane["claude"]["peer"];
+        let row = [
+            "coordinator".to_string(),
+            "-".to_string(),
+            "Coordinator".to_string(),
+            text(&pane["agent"]["state"]),
+            text(&pane["command"]),
+            text(&pane["cwd"]),
+            text(&claude["session"]),
+            text(&claude["pid"]),
+            text(&claude["name"]),
+            claude["socket"]
+                .as_str()
+                .map(|s| format!("uds:{s}"))
+                .unwrap_or_default(),
+        ];
+        out.push(row.map(|f| f.replace(['\t', '\n'], " ")));
+    }
     out
 }
 
@@ -159,6 +185,19 @@ mod tests {
             "1\tmain:@1.%1\t#12 ABC-1: Fix it\twaiting\t2.1.0\t/w/abc-1\ts-1\t4321\tabc-1-81\tuds:/tmp/cc-socks/4321.sock\n\
              2\tmain:@2.%2\t#5 notes\t\tzsh\t/home/me\t\t\t\t\n"
         );
+    }
+
+    #[test]
+    fn the_coordinator_is_a_line_of_its_own_with_its_address() {
+        let mut list = list();
+        list["coordinator"] = json!({ "id": "%9", "command": "2.1.0", "cwd": "/s/coordinator",
+            "agent": { "state": "working" },
+            "claude": { "session": "c-1", "peer": { "session": "c-1", "pid": 77, "name": "coordinator", "socket": "/tmp/cc-socks/77.sock" } } });
+        assert!(lines(&list).ends_with(
+            "coordinator\t-\tCoordinator\tworking\t2.1.0\t/s/coordinator\tc-1\t77\tcoordinator\tuds:/tmp/cc-socks/77.sock\n"
+        ));
+        list["coordinator"] = Value::Null;
+        assert!(!lines(&list).contains("coordinator"));
     }
 
     #[test]

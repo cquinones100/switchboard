@@ -79,6 +79,9 @@
 //!   the AWS login, a tab by number and `C-w` between panes.
 //! - `autopilot`: working a note's checklist continuously, a tab opened for
 //!   each item as the last lands.
+//! - `coordinator`: a Claude session of its own, in a pane no tab holds,
+//!   woken by events to close merged tabs, open the next issues and keep
+//!   its note (M-C).
 //! - `awake`: keeping the computer awake while tabs work or autopilot has
 //!   tabs open, or until you say.
 //! - `routines`: a prompt of yours run on a schedule, each run in a Claude
@@ -103,6 +106,7 @@ pub mod autopilot;
 pub mod awake;
 pub mod cmd;
 pub mod connector;
+pub mod coordinator;
 pub mod day;
 pub mod demo;
 pub mod dev;
