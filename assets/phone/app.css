@@ -502,15 +502,3 @@ body.refused p { color: var(--dim); }
 .box.sheet .answers { display: flex; gap: 10px; margin-top: 14px; }
 .box.sheet .answers .option { text-align: center; }
 
-/* The hidden switch buzz() clicks for iOS's haptic tick: in the page, as iOS
-   needs, but never seen, touched or reached by Tab or a screen reader. */
-.haptic {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-}

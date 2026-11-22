@@ -2307,29 +2307,31 @@ fn the_phone_reads_whether_to_buzz_with_the_tabs() {
 }
 
 /// assets/phone/app.js's `buzz`, in Node over a stand-in for the page:
-/// `navigator.vibrate` where the browser has it, else a click on the hidden
-/// switch's label where inputs take `switch`, made once, and neither with
+/// `navigator.vibrate` where the browser has it, else a click on a hidden
+/// switch's label made for each buzz and removed after it, and neither with
 /// Settings' `phone_haptics` off. Skipped without Node.
 #[test]
 fn buzz_vibrates_or_clicks_the_hidden_switch_unless_turned_off() {
     let script = r#"
 const vm = require("vm");
 const fs = require("fs");
-class Node { constructor() { this.kids = []; } append(...k) { this.kids.push(...k); } }
+const added = [];
+class Node {
+  constructor() { this.kids = []; }
+  append(...k) { for (const kid of k) kid.parent = this; this.kids.push(...k); if (this === body) added.push(...k); }
+}
 class Element extends Node {
-  constructor(tag) { super(); this.tag = tag; this.attrs = {}; this.clicks = 0; }
+  constructor(tag) { super(); this.tag = tag; this.attrs = {}; this.style = {}; this.clicks = 0; this.clickedIn = false; }
   setAttribute(k, v) { this.attrs[k] = v; }
   addEventListener() {}
-  click() { this.clicks++; }
+  click() { this.clicks++; this.clickedIn = this.parent === body; }
+  remove() { const kids = this.parent.kids; kids.splice(kids.indexOf(this), 1); this.parent = null; }
 }
-class HTMLInputElement {}
-HTMLInputElement.prototype.switch = false;
 const body = new Element("body");
 const vibrated = [];
 const navigator = {};
 const ctx = vm.createContext({
   Node,
-  HTMLInputElement,
   navigator,
   document: {
     body,
@@ -2346,8 +2348,10 @@ const ctx = vm.createContext({
 });
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 const run = (code) => vm.runInContext(code, ctx);
-const label = () => body.kids[0];
-const seen = () => console.log(vibrated.join(",") + " " + body.kids.length + " " + (label() ? label().tag + ":" + label().clicks + ":" + label().kids[0].attrs.type + ":" + label().kids[0].attrs.tabindex : "-"));
+// What was vibrated, what stays in the page, and each label added: clicked
+// once while in the page, hidden, holding a switch Tab never reaches.
+const show = (l) => [l.tag, l.clicks, l.clickedIn, l.style.display, "style" in l.attrs, l.attrs["aria-hidden"], l.kids[0].attrs.type, "switch" in l.kids[0].attrs, l.kids[0].attrs.tabindex].join(":");
+const seen = () => console.log(vibrated.join(",") + " " + body.kids.length + " " + (added.length ? added.map(show).join(" ") : "-"));
 
 navigator.vibrate = (ms) => vibrated.push(ms);
 run("buzz()");
@@ -2377,8 +2381,8 @@ console.log("answered=" + vibrated.length);
         [
             "10 0 -",
             "10 0 -",
-            "10 1 label:2:checkbox:-1",
-            "10 1 label:2:checkbox:-1",
+            "10 0 label:1:true:none:false:true:checkbox:true:-1 label:1:true:none:false:true:checkbox:true:-1",
+            "10 0 label:1:true:none:false:true:checkbox:true:-1 label:1:true:none:false:true:checkbox:true:-1",
             "answered=1",
         ],
         "{out}"
