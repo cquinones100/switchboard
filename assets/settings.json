@@ -999,6 +999,13 @@
     "default": "500"
   },
   {
+    "key": "history_skips_passing",
+    "category": "Tabs and header",
+    "label": "Leave tabs you pass through out of the history",
+    "description": "A tab or mission control view in front under a second, passed through on the way somewhere (stepping through the tabs, the sidebar's cursor, M-a through several), isn't a step for M-{ and M-}, and M-Tab goes to the place before it; off, every tab and view left is a step",
+    "default": true
+  },
+  {
     "key": "one_claude_per_tab",
     "category": "Tabs and header",
     "label": "One Claude to a tab",

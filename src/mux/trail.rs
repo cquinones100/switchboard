@@ -2,14 +2,23 @@
 //! through as a browser's buttons do, and M-Tab to go to the one before
 //! (new, no tmux version had it). A place is a tab, or a mission control
 //! view (by its name, with the tab it sat over). Every move to another
-//! place puts the one left on `back` and clears `forward`, however it came;
-//! a step back or forward moves the current place to the other side
+//! place puts the one left on `back` and clears `forward`, however it came,
+//! unless it was in front under `agent::SEEN_DELAY` (passed through, as
+//! stepping through the tabs does), with Settings' `history_skips_passing`
+//! on; a step back or forward moves the current place to the other side
 //! instead. A tab that closes is taken out of both, a view whose setting is
 //! off is passed over, and each keeps at most `CAP`.
+
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use super::TabId;
+use crate::agent::SEEN_DELAY;
+use crate::settings;
+
+/// The setting that leaves a place passed through out of the trail.
+pub const SKIPS_PASSING: &str = "history_skips_passing";
 
 /// A place to go back or forward to. Untagged, so a tab is its number as
 /// it was when the trail held only tabs.
@@ -68,6 +77,10 @@ pub struct Trail {
     /// The place before the current one, however it was left, for M-Tab.
     #[serde(skip)]
     pub last: Option<Place>,
+    /// When the current place came to the front; none when unknown (a
+    /// trail read back from a handover), which counts as long enough.
+    #[serde(skip)]
+    pub since: Option<Instant>,
     /// The tabs left, the latest first, each once, whichever way it was
     /// left (a step back or forward included, which the two lists above
     /// can't say), for what orders by the tab in front most recently. It
@@ -171,6 +184,33 @@ impl Trail {
         self.last = Some(left);
     }
 
+    /// `visited` as the server moves, now, by Settings' `history_skips_passing`.
+    pub fn visited_now(&mut self, left: Place) {
+        self.visited_at(left, Instant::now(), settings::is_on(SKIPS_PASSING));
+    }
+
+    /// A move away from `left` at `now`: with `skips_passing`, a place in
+    /// front under `SEEN_DELAY` was passed through, so it is no step and
+    /// `last` keeps the place before it; `forward` is cleared either way.
+    pub fn visited_at(&mut self, left: Place, now: Instant, skips_passing: bool) {
+        let passed_through = skips_passing
+            && self
+                .since
+                .is_some_and(|s| now.duration_since(s) < SEEN_DELAY);
+        if passed_through {
+            self.leave(&left);
+            self.forward.clear();
+        } else {
+            self.visited(left);
+        }
+        self.since = Some(now);
+    }
+
+    /// Another place came to the front other than by a visit (a tab closed).
+    pub fn came_to_front(&mut self) {
+        self.since = Some(Instant::now());
+    }
+
     /// The place to go back to from `current`, which goes on `forward`,
     /// passing over the places `usable` refuses; none when there is
     /// nothing before.
@@ -179,6 +219,7 @@ impl Trail {
         self.leave(&current);
         push(&mut self.forward, current.clone());
         self.last = Some(current);
+        self.came_to_front();
         Some(to)
     }
 
@@ -188,6 +229,7 @@ impl Trail {
         self.leave(&current);
         push(&mut self.back, current.clone());
         self.last = Some(current);
+        self.came_to_front();
         Some(to)
     }
 
@@ -426,6 +468,45 @@ mod tests {
         }
         let older: Older = serde_json::from_str(&saved).unwrap();
         assert_eq!(older.back, vec![TabId(1)]);
+    }
+
+    #[test]
+    fn a_place_passed_through_is_no_step() {
+        use std::time::Duration;
+        const D: Place = Place::Tab(TabId(4));
+        let start = Instant::now();
+        let quick = Duration::from_millis(100);
+        // A kept, B and C passed through, then D.
+        let mut t = Trail::default();
+        t.visited_at(A, start, true);
+        t.visited_at(B, start + quick, true);
+        t.visited_at(C, start + quick * 2, true);
+        assert_eq!(t.back, vec![A]);
+        assert_eq!(t.last, Some(A), "M-Tab goes to the place before the pass");
+        assert_eq!(
+            t.fronted(TabId(4)),
+            [TabId(4), TabId(3), TabId(2), TabId(1)]
+        );
+        assert_eq!(t.back(D, any), Some(A));
+        // Each kept past the delay is a step.
+        let mut t = Trail::default();
+        for (n, p) in [A, B, C].into_iter().enumerate() {
+            t.visited_at(p, start + (SEEN_DELAY + quick) * n as u32, true);
+        }
+        assert_eq!(t.back, vec![A, B, C]);
+        // With the setting off, every place left is.
+        let mut t = Trail::default();
+        for (n, p) in [A, B, C].into_iter().enumerate() {
+            t.visited_at(p, start + quick * n as u32, false);
+        }
+        assert_eq!(t.back, vec![A, B, C]);
+        // A pass clears forward, as a visit does.
+        let mut t = Trail::default();
+        t.visited_at(A, start, true);
+        t.visited_at(B, start + SEEN_DELAY, true);
+        assert_eq!(t.back(C, any), Some(B));
+        t.visited_at(B, Instant::now(), true);
+        assert_eq!(t.forward, vec![]);
     }
 
     #[test]

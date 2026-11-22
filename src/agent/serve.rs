@@ -27,9 +27,10 @@ pub const READY_SOURCE: &str = "ready";
 /// The setting that turns it off.
 pub const READY_SETTING: &str = "diff_ready_needs_you";
 
-/// How long a tab must stay in front for its finished mark to count as seen
-/// (agent-state.sh's `AGENT_SEEN_DELAY`): passing over a tab, as moving the
-/// sidebar's cursor does, leaves it.
+/// How long a place must stay in front to count as visited: for a tab's
+/// finished mark to count as seen (agent-state.sh's `AGENT_SEEN_DELAY`), and
+/// for the place to join M-{ and M-}'s history (`mux::trail`). Passing over
+/// a tab, as moving the sidebar's cursor does, leaves it.
 pub const SEEN_DELAY: Duration = Duration::from_secs(1);
 
 /// How often every pane is checked for a Claude that ended without saying

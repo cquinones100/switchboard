@@ -73,6 +73,9 @@ pub const QUIET: &[(&str, bool)] = &[
     // A new tab opening its PR, ticket or note beside it, where a test
     // counts the panes a capped tab has.
     ("tab_opens_beside", false),
+    // A tab in front under a second left out of M-{ and M-}'s history,
+    // where a test moves through tabs faster than that.
+    ("history_skips_passing", false),
 ];
 
 /// Writes `home`'s `settings.json` whole: `QUIET` with `settings` (a JSON

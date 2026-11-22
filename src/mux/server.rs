@@ -1928,7 +1928,7 @@ impl Server {
         let left = (opened == Opened::Front).then_some(s.current);
         if opened == Opened::Front {
             s.last = Some(s.current);
-            s.trail.visited(s.trail.here(s.current));
+            s.trail.visited_now(s.trail.here(s.current));
             s.trail.view = None;
             s.current = tab;
             // As `select_tab_as`: a mission control still open puts its
@@ -2199,6 +2199,7 @@ impl Server {
             s.current = s.last.take().unwrap_or(s.tabs[at.min(s.tabs.len() - 1)]);
             // The tab it falls back to is a new place, as a visit is.
             s.trail.forward.clear();
+            s.trail.came_to_front();
             came_to = Some(s.current);
         }
         let name = s.name.clone();
@@ -2283,7 +2284,7 @@ impl Server {
         };
         let left = s.trail.here(s.current);
         if !stepping && !left.same(&place) {
-            s.trail.visited(left);
+            s.trail.visited_now(left);
         }
         match place {
             Place::Tab(tab) => {
@@ -2381,7 +2382,7 @@ impl Server {
             return;
         }
         let left = s.trail.here(s.current);
-        s.trail.visited(left);
+        s.trail.visited_now(left);
         s.trail.view = now;
         self.dirty_session(session);
     }
@@ -2398,7 +2399,7 @@ impl Server {
         if switched {
             s.last = Some(s.current);
             if !stepping {
-                s.trail.visited(s.trail.here(s.current));
+                s.trail.visited_now(s.trail.here(s.current));
             }
             s.trail.view = None;
             s.current = tab;
@@ -3466,16 +3467,24 @@ impl Server {
                 // The place before, tab or view, as a visit, so pressed
                 // again it comes back; the tab before when that view is
                 // off now, or the server restarted since, which keeps no
-                // place.
+                // place. Pressed again within a second, the place left was
+                // passed through and isn't the trail's `last`, so it is
+                // made so here for the press to come back.
+                let Some(here) = self.session(&session).map(|s| s.trail.here(s.current)) else {
+                    return;
+                };
                 let last = self.session(&session).and_then(|s| {
                     s.trail
                         .last
                         .clone()
-                        .filter(place_usable)
+                        .filter(|p| place_usable(p) && !p.same(&here))
                         .or(s.last.map(Place::Tab))
                 });
                 if let Some(place) = last {
                     self.go_to_place(id, &session, place, false);
+                    if let Some(s) = self.session_mut(&session) {
+                        s.trail.last = Some(here);
+                    }
                 }
             }
             Action::LastTab => {
