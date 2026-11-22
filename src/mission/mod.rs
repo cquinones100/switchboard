@@ -540,6 +540,9 @@ pub struct Mission {
     /// Whether Slack was shown as the view was last put together, alone or
     /// among several, so that it is seen once it no longer shows.
     pub slack_was_shown: bool,
+    /// The Slack board was opened by name, so its next drawing opens its
+    /// section at the newest row, even while it was already in front.
+    pub slack_fresh: bool,
     /// The Slack board's messages shown since it came to the front, by
     /// item ID: its sections show one at a time, so leaving marks only
     /// these seen while others were never shown; `None` while the board
@@ -652,6 +655,7 @@ impl Mission {
             cells: Vec::new(),
             cell_front: None,
             slack_was_shown: false,
+            slack_fresh: false,
             slack_viewed: Default::default(),
             slack_all: Default::default(),
             pane: None,
@@ -770,6 +774,16 @@ impl Mission {
             .is_some_and(|g| g.choice.views.iter().any(|v| v == key))
     }
 
+    /// The row a grid's cell for view `at` starts on before it was ever
+    /// left on one: the Slack board's first section at its newest row, as
+    /// it opens alone, else `kept`.
+    pub fn first_row(&self, at: usize, kept: isize) -> isize {
+        match at.checked_sub(1).and_then(|i| self.snap.views.get(i)) {
+            Some(v) if v.id == ViewId::Slack => slack_board::section_step(&v.data.items, kept, 0),
+            _ => kept,
+        }
+    }
+
     /// Gives the view in the grid's place `cell` the focus: the cursor of
     /// the one that had it kept for it, and its own taken up.
     pub fn focus_cell(&mut self, cell: usize) {
@@ -793,7 +807,10 @@ impl Mission {
             self.view = at;
             // The item or tab it was left on, where it is now, else the
             // same row.
-            self.cursor = id.and_then(|id| self.place_of_id(&id)).unwrap_or(kept);
+            self.cursor = match id {
+                Some(id) => self.place_of_id(&id).unwrap_or(kept),
+                None => self.first_row(at, kept),
+            };
             self.scope = None;
             self.filter = None;
             self.focus = None;
@@ -852,8 +869,13 @@ impl Mission {
             None => {
                 let (cell, at) = shown[0];
                 g.focus = cell;
+                let (kept, left_on) = (g.cursors[cell], g.chosen[cell].is_some());
                 self.view = at;
-                self.cursor = g.cursors[cell];
+                self.cursor = if left_on {
+                    kept
+                } else {
+                    self.first_row(at, kept)
+                };
             }
         }
     }

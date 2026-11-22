@@ -298,7 +298,10 @@ pub fn drawn(m: &mut Mission, cols: usize, rows: usize) -> Drawn {
         // The keys lay the view out in its cell, under its label.
         m.cells.push((cell, (w as u16, h as u16)));
         let focused = cell == focus;
-        let saved = m.grid.as_ref().map_or(0, |g| g.cursors[cell]);
+        let saved = m.grid.as_ref().map_or(0, |g| match g.chosen[cell] {
+            Some(_) => g.cursors[cell],
+            None => m.first_row(at, g.cursors[cell]),
+        });
         let (cell_lines, cell_hits, cell_meters) = draw_cell(m, at, focused, saved, w, h);
         let (dx, dy) = (x as u16, (top + y) as u16);
         if focused {

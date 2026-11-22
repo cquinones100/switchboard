@@ -1,12 +1,14 @@
 //! UX 2.0's Slack view, board 21 of the canvas ("Slack: what is new for
-//! you, by section as Slack's sidebar lists them, newest first in each"):
+//! you, by section as Slack's sidebar lists them", each section's rows now
+//! oldest to newest as a conversation reads, where the board drew them
+//! newest first):
 //! a column of sections as Slack's own sidebar lists them (Mentions,
 //! Threads, your reminders that are due while your own Slack sign-in
 //! lists them, each direct message by its people, each channel by its name),
 //! each with its count, bold in the accent while it holds something new;
 //! beside it the chosen section one row per thread (`in_order`), so a
 //! thread with several new replies is one row and nothing shows twice
-//! beside the thread pane, the rows by when each last moved, new and seen
+//! beside the thread pane, the rows by when each last moved, oldest to newest as a conversation reads, new and seen
 //! together: who started it, with their Large avatar (`kit::avatar`),
 //! "started <day>" when that was before the look, and when it last moved;
 //! its first message on one line; and for a thread its people as Small
@@ -117,7 +119,7 @@ pub struct Look<'a> {
     pub files_kept: &'a std::collections::HashSet<String>,
     /// The message under the mouse, lit.
     pub hover: Option<usize>,
-    /// The section under the mouse, by its first message, lit.
+    /// The section under the mouse, by its newest row, lit.
     pub hover_section: Option<usize>,
     /// The sections' column has the focus (`h`, `C-w h`).
     pub sections_focused: bool,
@@ -171,7 +173,7 @@ pub enum Kind {
 
 /// A section of the column: what it holds, its name, a direct message's
 /// person (for their avatar), its rows' places in the view's items,
-/// newest first, how many messages they stand for, and whether any of them
+/// oldest first, how many messages they stand for, and whether any of them
 /// is new.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
@@ -181,6 +183,13 @@ pub struct Section {
     pub items: Vec<usize>,
     pub messages: usize,
     pub new: bool,
+}
+
+impl Section {
+    /// Its newest row, at the bottom, where moving to it opens.
+    pub fn newest(&self) -> usize {
+        self.items.last().copied().unwrap_or(0)
+    }
 }
 
 /// The section a message is in: Mentions and Threads whole, a direct
@@ -209,8 +218,8 @@ fn when(item: &Item) -> f64 {
 
 /// The board's rows in the order it draws them: by section (Mentions,
 /// Threads, then the direct messages and the channels, each by its newest
-/// message), each section's threads by their newest message, new and seen
-/// together. A thread is one row however many of its messages the look
+/// message), each section's threads by their newest message, oldest to
+/// newest as a conversation reads, new and seen together. A thread is one row however many of its messages the look
 /// brought, so nothing shows twice beside the thread pane: its newest
 /// message, kept by its section and thread so the cursor stays on it as
 /// replies come and old ones go, with every message it stands for in
@@ -230,9 +239,29 @@ pub fn in_order(items: &mut Vec<Item>, by_thread: bool) {
             .then(ka.1.cmp(&kb.1))
             .then(when(b).total_cmp(&when(a)))
     });
-    if !by_thread {
-        return;
+    if by_thread {
+        by_threads(items);
     }
+    oldest_first(items);
+}
+
+/// Each section's rows, which the sort left newest first, oldest first,
+/// the sections keeping their order.
+fn oldest_first(items: &mut [Item]) {
+    let mut start = 0;
+    while start < items.len() {
+        let key = section_key(&items[start]);
+        let len = items[start..]
+            .iter()
+            .take_while(|i| section_key(i) == key)
+            .count();
+        items[start..start + len].reverse();
+        start += len;
+    }
+}
+
+/// Each thread's messages, newest first, made one row at its newest.
+fn by_threads(items: &mut Vec<Item>) {
     let mut rows: Vec<Vec<Item>> = Vec::new();
     let mut place: HashMap<((Kind, String), String), usize> = HashMap::new();
     for item in items.drain(..) {
@@ -361,15 +390,38 @@ fn section_at(sections: &[Section], cursor: isize) -> Option<usize> {
 }
 
 /// `j` and `k` in the sections' column, or `h` and `l` on the line
-/// they fold into: the first message of the section `by` from the
-/// chosen one's, staying at the ends.
+/// they fold into: the newest row of the section `by` from the chosen
+/// one's, staying at the ends, as Slack opens a conversation at its end.
 pub fn section_step(items: &[Item], cursor: isize, by: isize) -> isize {
     let all = sections(items);
     let Some(at) = section_at(&all, cursor).or((!all.is_empty()).then_some(0)) else {
         return cursor;
     };
     let to = at.saturating_add_signed(by).min(all.len() - 1);
-    all[to].items[0] as isize
+    all[to].newest() as isize
+}
+
+/// Whether row `cursor` is its section's newest, at the bottom, where a
+/// new message's row keeps the cursor following it.
+pub fn on_newest(items: &[Item], cursor: isize) -> bool {
+    cursor >= 0 && section_step(items, cursor, 0) == cursor
+}
+
+/// The section holding row `cursor`, by what it holds and its
+/// conversation.
+pub fn section_key_at(items: &[Item], cursor: isize) -> Option<(Kind, String)> {
+    usize::try_from(cursor)
+        .ok()
+        .and_then(|c| items.get(c))
+        .map(section_key)
+}
+
+/// The newest row of the section `key` names, while it is listed.
+pub fn newest_in(items: &[Item], key: &(Kind, String)) -> Option<isize> {
+    items
+        .iter()
+        .rposition(|i| section_key(i) == *key)
+        .map(|i| i as isize)
 }
 
 /// `j` and `k` in the messages: the message `by` from the chosen one
@@ -521,12 +573,12 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
     // the thread isn't in their place.
     if !in_column && !secs.is_empty() && !(look.threads_on && look.thread_open && !beside(cols)) {
         let (spans, at) = section_line(&secs, front, look, cols);
-        for (x0, x1, first) in at {
+        for (x0, x1, newest) in at {
             hits.push(HitBox {
                 y: top_row as u16,
                 x0: x0 as u16,
                 x1: x1.saturating_sub(1) as u16,
-                spot: Spot::Choose(first as isize),
+                spot: Spot::Choose(newest as isize),
             });
         }
         lines.push(Line {
@@ -905,8 +957,10 @@ fn put(
 }
 
 /// The chosen section's rows: its name and facts, then each row (a thread,
-/// or a message with no replies), newest first, a blank line after each; which item each line belongs
-/// to, and the first line shown so the chosen message is on the screen.
+/// or a message with no replies), oldest to newest as a conversation
+/// reads, a blank line after each; which item each line belongs to, and
+/// the first line shown so the chosen message is on the screen, at the
+/// bottom when the section is longer than the pane.
 fn list_lines(
     view: &View,
     section: Option<&Section>,
@@ -946,7 +1000,7 @@ fn list_lines(
     if fresh > 0 {
         facts.push(format!("{fresh} new"));
     }
-    facts.push("newest first".into());
+    facts.push("oldest first".into());
     let title = match section.kind {
         Kind::Channel => format!("#{}", section.title),
         _ => section.title.clone(),
@@ -962,7 +1016,17 @@ fn list_lines(
         out.push(runs);
         owners.push(None);
     }
-    let mut chosen_at = (0, 0);
+    // What is older than the rows, above them, as Slack keeps it there.
+    let before = match section.kind {
+        Kind::Reminders => " A reminder stays until it is complete in Slack.",
+        _ => " Older messages stay in Slack.",
+    };
+    out.push(texts(vec![Span::styled(before, Tone::Faint.style(theme))]));
+    owners.push(None);
+    out.push(Vec::new());
+    owners.push(None);
+    // With none of its rows chosen, the section shows at its newest.
+    let mut chosen_at = None;
     for &i in &section.items {
         let item = &view.data.items[i];
         let start = out.len();
@@ -971,20 +1035,15 @@ fn list_lines(
         owners.extend(std::iter::repeat_n(Some(i), lines.len()));
         out.extend(lines);
         if look.cursor == Some(i) {
-            chosen_at = (start, out.len());
+            chosen_at = Some((start, out.len()));
         }
         out.push(Vec::new());
         owners.push(None);
     }
-    let after = match section.kind {
-        Kind::Reminders => " A reminder stays until it is complete in Slack.",
-        _ => " Older messages stay in Slack.",
-    };
-    out.push(texts(vec![Span::styled(after, Tone::Faint.style(theme))]));
-    owners.push(None);
-    // The chosen message whole on the screen; a message taller than the
-    // screen shows from its top.
-    let (start, end) = chosen_at;
+    // The chosen message whole on the screen, at its bottom while the
+    // rows below it are out of sight; a message taller than the screen
+    // shows from its top.
+    let (start, end) = chosen_at.unwrap_or((out.len(), out.len()));
     let scroll = if end > rows {
         (end - rows).min(start)
     } else {
@@ -1009,7 +1068,7 @@ fn section_name(section: &Section) -> (&'static str, Tone, String) {
 /// its count at the right edge, bold in the accent while it holds
 /// something new; the chosen one on the chosen row (resting while the
 /// messages have the focus), the one under the mouse lit. Which section
-/// each line belongs to, by its first message, and the first line shown
+/// each line belongs to, by its newest row, and the first line shown
 /// so the chosen one is on the screen.
 fn section_lines(
     secs: &[Section],
@@ -1041,7 +1100,7 @@ fn section_lines(
         }
         last = Some(s.kind);
         let chosen = front == Some(n);
-        let first = s.items[0];
+        let newest = s.newest();
         let (mark, tone, name) = section_name(s);
         let strong = s.new || chosen;
         let name_style = if strong {
@@ -1115,7 +1174,7 @@ fn section_lines(
             pad_to(&mut runs, cx, &mut x);
             runs.push(Run::Text(Span::styled(count, count_style)));
         }
-        let lit = !chosen && look.hover_section == Some(first);
+        let lit = !chosen && look.hover_section == Some(newest);
         let runs = if chosen {
             let bg = if look.sections_focused {
                 kit::Surface::Chosen.color(theme)
@@ -1132,7 +1191,7 @@ fn section_lines(
             chosen_at = out.len();
         }
         out.push(runs);
-        owners.push(Some(first));
+        owners.push(Some(newest));
     }
     let scroll = (chosen_at + 1).saturating_sub(rows);
     (out, owners, scroll)
@@ -1189,7 +1248,7 @@ fn section_line(
         let bg = if chosen {
             Some(kit::Surface::Chosen.color(theme))
         } else {
-            (look.hover_section == Some(s.items[0])).then_some(theme.panel)
+            (look.hover_section == Some(s.newest())).then_some(theme.panel)
         };
         let on = |style: Style| match bg {
             Some(bg) => style.bg(bg),
@@ -1215,7 +1274,7 @@ fn section_line(
         piece_spans.push(Span::styled(format!(" {}", s.messages), on(count_style)));
         piece_spans.push(Span::styled(" ", on(Style::new())));
         x += piece_spans.iter().map(|s| width(&s.content)).sum::<usize>();
-        at.push((x0, x, s.items[0]));
+        at.push((x0, x, s.newest()));
         spans.extend(piece_spans);
         spans.push(Span::raw(" "));
         x += 1;
@@ -2214,7 +2273,8 @@ mod tests {
             cols,
             rows: 40,
             top_row: 1,
-            cursor: Some(0),
+            // As the board opens: the first section at its newest row.
+            cursor: Some(section_step(&view.data.items, -1, 0) as usize),
             theme: &Theme::DARK,
             caps: false,
             now_ms: NOW,
@@ -2509,8 +2569,13 @@ mod tests {
             "{}",
             lines.join("\n")
         );
-        let row = &view.data.items[0];
-        assert_eq!(get(row, "ts"), ts(60), "by its latest reply, first");
+        assert_eq!(
+            get(&view.data.items[0], "from"),
+            "Ana",
+            "older than the thread's latest reply, above it"
+        );
+        let row = &view.data.items[1];
+        assert_eq!(get(row, "ts"), ts(60), "by its latest reply, last");
         assert_eq!(
             row.id,
             format!("slack-thread:Channel:C1:C1:{root}"),
@@ -2521,7 +2586,7 @@ mod tests {
         let (lines, images) = draw_of(&view, 200, None, false, &[]);
         let all = lines.join("\n");
         assert!(
-            all.contains("1 thread with new replies · 4 new · newest first"),
+            all.contains("1 thread with new replies · 4 new · oldest first"),
             "{all}"
         );
         assert_eq!(
@@ -2740,7 +2805,10 @@ mod tests {
         };
         let (lines, _) = draw_of(&view, 200, Some(&thread), false, &[]);
         let all = lines.join("\n");
-        let head = lines.iter().find(|l| l.contains("Lee")).unwrap();
+        let head = lines
+            .iter()
+            .find(|l| l.split('│').nth(1).is_some_and(|r| r.contains("Lee")))
+            .unwrap();
         let list = head.split('│').nth(1).unwrap();
         assert!(list.contains("started Tue"), "{head}");
         assert!(all.contains("Retry banner copy?"), "{all}");
@@ -2780,7 +2848,7 @@ mod tests {
             "its count at the right: {mentions}"
         );
         assert!(
-            all.contains(" 1 new · newest first") && !all.contains("thread with new"),
+            all.contains(" 1 new · oldest first") && !all.contains("thread with new"),
             "{all}"
         );
         assert!(all.contains("Older messages stay in Slack."));
@@ -2887,9 +2955,16 @@ mod tests {
         let (lines, _) = draw(200, Some(&thread), false, &[tickets]);
         let all = lines.join("\n");
         assert!(all.contains("thread · 2 replies, 1 new"), "{all}");
-        let dee = lines.iter().find(|l| l.contains("Dee")).unwrap();
+        let pane = |who: &str| {
+            lines
+                .iter()
+                .filter_map(|l| l.split('│').nth(2))
+                .find(|p| p.contains(who))
+                .unwrap()
+        };
+        let dee = pane("Dee");
         assert!(!dee.contains("new"), "seen before: {dee}");
-        let ed = lines.iter().find(|l| l.contains("Ed ")).unwrap();
+        let ed = pane("Ed ");
         assert!(ed.contains("▎") && ed.contains("new"), "{ed}");
         assert!(all.contains("FROM YOUR WORK"));
         let web = lines.iter().find(|l| l.contains("● ABC-142")).unwrap();
@@ -3006,13 +3081,19 @@ mod tests {
     }
 
     #[test]
-    fn each_message_is_in_its_section_newest_first_with_counts_and_the_new_flag() {
+    fn each_message_is_in_its_section_oldest_first_with_counts_and_the_new_flag() {
         let items = mixed();
         let from: Vec<&str> = items.iter().map(|i| get(i, "from")).collect();
         assert_eq!(
             from,
-            ["Ed", "Ada", "Lin", "Bo", "Bo", "Fay", "Cy", "Dee"],
-            "Mentions, Threads, the DMs, then the channels by their newest"
+            ["Ada", "Ed", "Lin", "Bo", "Bo", "Cy", "Fay", "Dee"],
+            "Mentions, Threads, the DMs, then the channels by their newest, \
+             each oldest to newest"
+        );
+        assert_eq!(
+            items[3].data["message"]["ts"],
+            json!(ts(700)),
+            "Bo's older message above"
         );
         let secs = sections(&items);
         let shape: Vec<(Kind, &str, usize, bool)> = secs
@@ -3033,17 +3114,128 @@ mod tests {
     }
 
     #[test]
-    fn j_and_k_stay_in_the_section_and_the_sections_step_to_their_first() {
+    fn j_and_k_stay_in_the_section_and_the_sections_step_to_their_newest() {
         let items = mixed();
-        // Ed, Ada | Lin | Bo, Bo | Fay, Cy | Dee
-        assert_eq!(row_step(&items, 0, 1), 1);
-        assert_eq!(row_step(&items, 1, 1), 1, "the section's last stays");
-        assert_eq!(row_step(&items, 4, -1), 3);
+        // Ada, Ed | Lin | Bo, Bo | Cy, Fay | Dee, each oldest first
+        assert_eq!(row_step(&items, 0, 1), 1, "j to the newer");
+        assert_eq!(row_step(&items, 1, 1), 1, "the section's newest stays");
+        assert_eq!(row_step(&items, 4, -1), 3, "k to the older");
         assert_eq!(section_step(&items, 1, 1), 2);
-        assert_eq!(section_step(&items, 2, 1), 3);
-        assert_eq!(section_step(&items, 4, 1), 5);
+        assert_eq!(section_step(&items, 2, 1), 4, "at its newest, the bottom");
+        assert_eq!(section_step(&items, 4, 1), 6);
         assert_eq!(section_step(&items, 7, 1), 7, "the last section stays");
         assert_eq!(section_step(&items, 3, -1), 2);
+        assert_eq!(section_step(&items, 6, -1), 4);
+        assert_eq!(
+            section_step(&items, -1, 0),
+            1,
+            "none chosen: the first's newest"
+        );
+        assert!(on_newest(&items, 1) && on_newest(&items, 4));
+        assert!(!on_newest(&items, 0) && !on_newest(&items, 3));
+    }
+
+    #[test]
+    fn a_section_reads_oldest_to_newest_opening_at_its_newest() {
+        let mut items = vec![
+            in_place("channel", "Ann", "C1", "#dev", 300, false),
+            in_place("channel", "Ben", "C1", "#dev", 200, false),
+            in_place("channel", "Cy", "C1", "#dev", 100, false),
+        ];
+        in_order(&mut items, true);
+        let view = channel(items.clone());
+        let (lines, _) = draw_of(&view, 200, None, false, &[]);
+        let list: Vec<&str> = lines.iter().filter_map(|l| l.split('│').nth(1)).collect();
+        let at = |who: &str| list.iter().position(|l| l.contains(who)).unwrap();
+        assert!(at("Ann") < at("Ben") && at("Ben") < at("Cy"), "{list:#?}");
+        assert!(
+            list[at("Cy")].contains('▌'),
+            "opens on the newest: {list:#?}"
+        );
+        let older = list
+            .iter()
+            .position(|l| l.contains("Older messages stay in Slack."))
+            .unwrap();
+        assert!(older < at("Ann"), "what is older, above: {list:#?}");
+        // A section longer than the pane shows its newest rows.
+        let tz = TimeZone::UTC;
+        let pictures = HashMap::new();
+        let look = Look {
+            cols: 200,
+            rows: 8,
+            top_row: 1,
+            cursor: Some(2),
+            theme: &Theme::DARK,
+            caps: false,
+            now_ms: NOW,
+            tz: &tz,
+            thread: None,
+            threads_on: true,
+            pictures: &pictures,
+            graphics: false,
+            work: &[],
+            tabs: &[],
+            side_top: 0,
+            thread_open: false,
+            failed: None,
+            files_failed: &Default::default(),
+            files_kept: &Default::default(),
+            hover: None,
+            hover_section: None,
+            sections_focused: false,
+            emoji_on: true,
+            emoji: &Default::default(),
+        };
+        let short = texts(&board(&view, &look).0).join("\n");
+        assert!(short.contains("Cy") && !short.contains("Ann"), "{short}");
+
+        // A new message lands at the bottom: the cursor on the newest row
+        // follows it, one on an older row stays.
+        let mut more = items.clone();
+        more.push(in_place("channel", "Dee", "C1", "#dev", 10, false));
+        in_order(&mut more, true);
+        assert_eq!(get(&more[3], "from"), "Dee", "at the bottom");
+        let follow = |cursor: usize| {
+            let id = &items[cursor].id;
+            let at = more.iter().position(|i| &i.id == id).unwrap() as isize;
+            if on_newest(&items, cursor as isize) {
+                section_step(&more, at, 0)
+            } else {
+                at
+            }
+        };
+        assert_eq!(follow(2), 3, "from the last row, to the new one");
+        assert_eq!(follow(1), 1, "from an older row, staying");
+
+        // The newest row dismissed: its section's new newest, never the
+        // next section's first.
+        let mut both = items.clone();
+        both.push(in_place("channel", "Eve", "C2", "#ops", 900, false));
+        in_order(&mut both, true);
+        let key = section_key_at(&both, 2).unwrap();
+        assert_eq!(key, (Kind::Channel, "C1".to_string()));
+        both.remove(2);
+        assert_eq!(newest_in(&both, &key), Some(1));
+        assert_eq!(
+            get(&both[2], "from"),
+            "Eve",
+            "the old index, another section"
+        );
+    }
+
+    #[test]
+    fn the_sections_order_by_their_newest_message() {
+        let mut items = vec![
+            in_place("channel", "Ann", "C1", "#dev", 50, false),
+            in_place("channel", "Ben", "C2", "#ops", 100, false),
+            in_place("channel", "Cy", "C1", "#dev", 900, false),
+            in_place("channel", "Dee", "C2", "#ops", 200, false),
+        ];
+        in_order(&mut items, true);
+        let titles: Vec<String> = sections(&items).into_iter().map(|s| s.title).collect();
+        assert_eq!(titles, ["dev", "ops"], "#dev's newest is newer");
+        let from: Vec<&str> = items.iter().map(|i| get(i, "from")).collect();
+        assert_eq!(from, ["Cy", "Ann", "Dee", "Ben"]);
     }
 
     #[test]
