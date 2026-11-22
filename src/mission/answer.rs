@@ -202,12 +202,6 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         .filter(|(o, under)| o.cut || !under.is_empty())
         .map(|(o, _)| o.n)
         .collect();
-    let between = |is: &dyn Fn(&str) -> bool| (first + 1..last).find(|&i| is(lines[i]));
-    // A preview box's top or bottom edge is no rule: its corners give it away.
-    let rule = between(&|l| RULE.is_match(l) && !l.contains(['┌', '┐', '└', '┘']));
-    let submit = between(&|l| SUBMIT_ROW.is_match(l));
-    let free = rule.and_then(|r| options.iter().rfind(|o| o.line < r).map(|o| o.n));
-    let multi = options.iter().any(|o| o.checked.is_some());
     // A preview's box edge past an option's number: its top corner, or a
     // side with more after it (a prompt drawn in a box of its own has one
     // side alone at the row's end).
@@ -218,6 +212,15 @@ pub fn options_in(text: &str) -> Option<Prompt> {
             .map_or("", |at| &row[at..]);
         past.contains('┌') || past.matches('│').count() >= 2
     });
+    // Beside a preview, a row of its box (an edge, or a divider drawn in
+    // it between the box's sides) is no rule.
+    let rule = (first + 1..last).find(|&i| {
+        let in_box = preview && raw[kept[i]].contains(['│', '┌', '┐', '└', '┘']);
+        RULE.is_match(lines[i]) && !in_box
+    });
+    let submit = (first + 1..last).find(|&i| SUBMIT_ROW.is_match(lines[i]));
+    let free = rule.and_then(|r| options.iter().rfind(|o| o.line < r).map(|o| o.n));
+    let multi = options.iter().any(|o| o.checked.is_some());
     let cursor = match submit {
         Some(s) if lines[s].contains('❯') => Some(Cursor::Submit),
         _ => options
@@ -1103,6 +1106,7 @@ Which layout?
 ❯ 1. Sidebar          ┌──────────────────────┐
   2. Top bar          │ ┌──────┐             │
   3. Tabs             │ │ nav  │  content    │
+                      │ ──────────────────── │
                       │ └──────┘             │
                       └──────────────────────┘
   4. Type something
