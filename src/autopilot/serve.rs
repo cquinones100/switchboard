@@ -1886,7 +1886,7 @@ impl Server {
                 let panes = tab.layout.panes();
                 let state = self
                     .parked_state(&panes)
-                    .or(model.map(|m| m.state))
+                    .or(model.map(|m| holding_slot(m.state, m.background, m.monitors.len())))
                     .unwrap_or_default();
                 // Where it works: its Claude's directory, else its panes'
                 // (Notes, which M-e may have put beside it, runs in your home).
@@ -1978,19 +1978,26 @@ impl Server {
             .iter()
             .find_map(|p| self.panes.get(p)?.opts.get(PARKED_PANE)?.parse().ok())?;
         self.panes.get(&parked)?;
-        let work = self.sidebar.panes.get(&parked).map(|r| &r.work);
+        let work = self
+            .sidebar
+            .panes
+            .get(&parked)
+            .map(|r| r.work.clone())
+            .unwrap_or_default();
         let agent = self.agents.state(parked);
         Some(
-            if agent == Some(State::Waiting) || work.is_some_and(|w| w.api_error.is_some()) {
+            if agent == Some(State::Waiting) || work.api_error.is_some() {
                 TabState::Waiting
             } else if agent == Some(State::Working) {
                 TabState::Working
-            } else if work.is_some_and(|w| w.count > 0 || w.scheduled.is_some()) {
-                TabState::Background
-            } else if agent == Some(State::Done) {
-                TabState::Done
             } else {
-                TabState::Idle
+                let base = if agent == Some(State::Done) {
+                    TabState::Done
+                } else {
+                    TabState::Idle
+                };
+                let filed = crate::sidebar::filed_state(base, &work);
+                holding_slot(filed, work.count, work.monitors.len())
             },
         )
     }
@@ -3120,9 +3127,29 @@ fn next_item(
     Ok((id, item.text))
 }
 
+/// A finished turn with background work beyond watches still running holds
+/// its slot, as its Claude carries on when that work ends, though the
+/// sidebar files it under Needs you until it is seen.
+fn holding_slot(state: TabState, background: usize, watches: usize) -> TabState {
+    if state == TabState::Done && background > watches {
+        TabState::Background
+    } else {
+        state
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_turn_holds_its_slot_while_work_beyond_watches_runs() {
+        assert_eq!(holding_slot(TabState::Done, 1, 0), TabState::Background);
+        assert_eq!(holding_slot(TabState::Done, 2, 1), TabState::Background);
+        assert_eq!(holding_slot(TabState::Done, 1, 1), TabState::Done);
+        assert_eq!(holding_slot(TabState::Done, 0, 0), TabState::Done);
+        assert_eq!(holding_slot(TabState::Idle, 1, 0), TabState::Idle);
+    }
 
     #[test]
     fn an_item_put_next_is_refused_while_it_could_not_be_taken() {

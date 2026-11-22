@@ -3283,7 +3283,7 @@ impl Server {
 /// Waiting whatever runs behind it; then Background, or Monitoring for
 /// watches alone. A loop between its rounds, or waiting on its next tick,
 /// isn't waiting on you, so it stays Background.
-fn filed_state(base: TabState, work: &claude::Work) -> TabState {
+pub fn filed_state(base: TabState, work: &claude::Work) -> TabState {
     let between_rounds = work.loop_run.is_some() || work.scheduled.is_some();
     if base == TabState::Done && !between_rounds {
         base
