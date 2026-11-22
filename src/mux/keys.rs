@@ -96,6 +96,9 @@ pub enum Action {
     FocusSidebar,
     /// Turn the sidebar on or off (the sidebar setting).
     ToggleSidebar,
+    /// Show the coordinator's conversation beside the tab in front, or
+    /// hide it (M-C; src/coordinator).
+    Coordinator,
     /// A new tab running Claude, in a directory picked from the ones you
     /// work in (M-t, M-n; src/cmd/work.rs).
     NewClaudeTab,
@@ -295,6 +298,7 @@ impl Action {
             "test-phone-push" => Action::TestPhonePush,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
+            "coordinator" => Action::Coordinator,
             "new-claude-tab" => Action::NewClaudeTab,
             "work-on-tickets" => Action::WorkOnTickets,
             "work-on-branch" => Action::WorkOnBranch,
@@ -378,6 +382,7 @@ impl Action {
             Action::ToggleTheme => "toggle-theme".into(),
             Action::FocusSidebar => "focus-sidebar".into(),
             Action::ToggleSidebar => "toggle-sidebar".into(),
+            Action::Coordinator => "coordinator".into(),
             Action::NewClaudeTab => "new-claude-tab".into(),
             Action::WorkOnTickets => "work-on-tickets".into(),
             Action::WorkOnBranch => "work-on-branch".into(),
@@ -477,6 +482,7 @@ impl Action {
             Action::ToggleTheme => "Toggle light and dark theme".into(),
             Action::FocusSidebar => "Jump into the sidebar, or back out of it".into(),
             Action::ToggleSidebar => "Turn the sidebar on or off".into(),
+            Action::Coordinator => "Talk to the coordinator".into(),
             Action::NewClaudeTab => "New tab, running Claude, in a directory you pick".into(),
             Action::WorkOnTickets => "Start work on tickets in new tabs (wt)".into(),
             Action::WorkOnBranch => {
@@ -630,6 +636,9 @@ impl Action {
             Action::ToggleSidebar => {
                 "Flips Settings' sidebar setting, for every tab. A window narrower than 90 columns has none either way.".into()
             }
+            Action::Coordinator => {
+                "Its conversation beside the tab in front, in the side panel where there is room and over the tab's right half where there isn't, with the keys; Escape gives the keys back to the tab and pressed again it hides. Off in Settings (coordinator), it says so.".into()
+            }
             Action::NewClaudeTab => {
                 "The directories picked before come first, then the one you're in. Claude starts from your shell, which stays in the tab when it exits; then you may name the tab.".into()
             }
@@ -771,6 +780,7 @@ impl Action {
             Action::ToggleTheme => &["theme", "colors"],
             Action::FocusSidebar => &["sidebar", "tabs", "navigate"],
             Action::ToggleSidebar => &["sidebar"],
+            Action::Coordinator => &["tabs", "claude", "coordinator"],
             Action::NewClaudeTab => &["tabs", "claude", "new"],
             Action::WorkOnTickets => &["ticket", "issue", "notes", "worktree", "new"],
             Action::WorkOnBranch => &["git", "branch", "worktree", "new"],
@@ -1014,6 +1024,7 @@ impl Default for Bindings {
         bind("M-A", NextIdle);
         bind("S-F10", ContextMenu);
         bind("M-c", FocusClaude);
+        bind("M-C", Coordinator);
         bind("M-y", CopyReply);
         bind("M-h", History);
         bind("M-f", TogglePin);
@@ -1220,6 +1231,7 @@ mod tests {
             Action::ToggleTheme,
             Action::FocusSidebar,
             Action::ToggleSidebar,
+            Action::Coordinator,
             Action::MissionControl,
             Action::FindTab,
             Action::ReviveWorktree,

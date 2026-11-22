@@ -173,6 +173,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-a` | Go to the next tab that needs you, then the Build failing ones |
 | `M-A` | Go to the next idle tab, in the sidebar's Idle order |
 | `M-c` | Go to the pane running Claude in this tab |
+| `M-C` | Talk to the coordinator: its conversation beside the tab in front, or hidden again (see "The coordinator") |
 | `M-y` | Copy the latest reply of this tab's Claude |
 | `M-h` | This tab's history: its Claude session on a timeline under its screen as it was then (see "A tab's history") |
 | `M-f` | Pin or unpin the tab, keeping it at the top of Needs you |
@@ -1619,6 +1620,18 @@ Its menu's "Hands-free: decide for me", after a yes to a question saying what it
 
 An item can be put next in its queue from Notes' "Work on this item" box ("Next in autopilot's queue", while autopilot works the note; see [Starting work from the workspace](#starting-work-from-the-workspace)) or with `switchboard autopilot-next <note> <line>`: kept in `autopilot.json`'s `next` by the note's ID and the item's first line, it is taken before the note's other items, the last one put there first, until it lands, and its item in Notes carries a "next in the queue" chip. An item whose plan still needs a choice isn't put next.
 
+### The coordinator
+
+Settings' "Coordinator" (`coordinator`, off by default, since it sends its note's contents and your tabs' names to Claude) keeps one interactive Claude Code session running in a pane of its own that belongs to no tab: it shows in no tab bar, sidebar group or mission control card, and leaves autopilot's tabs alone, working whether autopilot is on or off. It runs on the model "Coordinator's model" names (`coordinator_model`: Haiku, Sonnet or Opus, Sonnet by default, through `claude --model`), starts in `~/.local/state/switchboard/coordinator`, and follows the `coordinate` skill, which its first session is given as its prompt. Its session is resumed by its ID after a restart of the server or the computer, and an upgrade hands its pane over running; a session that ends is started again a minute later, and one that can't be resumed starts fresh.
+
+`M-C` ("Talk to the coordinator", in `M-p` too) shows its conversation beside the tab in front, in the side panel where it has 50 columns, else over the tab's right half, with the keys, the tab greyed; `Escape` gives the keys back to the tab and a click in it takes them again, the wheel scrolls its history, and a second `M-C` hides it. While it runs, a row over the keys at the foot of the sidebar shows it working, waiting on you or asleep, and a click on it does what `M-C` does. `switchboard tabs` ends with its line, `coordinator` in the tab's column and `-` for its place, so another tab's Claude messages it by its address as it messages a tab.
+
+It is woken only by events, each typed into its session as one line starting `[switchboard]`: a tab's PR merged (as GitHub's lookups learn it), a tab's Claude finished or started waiting on you, and its note changed outside its own edits; a message from another tab, and what you type in it, reach it as they reach any Claude. Events that come while it works, while it waits on you or within a minute of your typing in it wait, and go in together once it sleeps. Nothing polls, so with no event it makes no model call.
+
+Its note is the coordination note, the one "Coordination note" names (`coordinator_note`, Coordination by default, or any title typed in), with In flight, Next and Deferred sections, each item an issue (`<owner>/<repo>#<number>: <title>`); it offers to make it on its first run. Without asking it closes a tab whose PR has merged and ticks its item with the PR's link (`switchboard coordinator-close`, which refuses any other tab and autopilot's), opens the next ready items of Next one at a time in the background (`switchboard coordinator-open`, a tab running `wt --issue`, only on an issue autopilot's rule would take: open, assigned to you, and opened by you or labeled for autopilot by you or someone with write access, as GitHub answers; and the next only once the last one's tab has made its worktree on its branch, or ten minutes after it opened), edits its note, and posts to GitHub (`switchboard coordinator-post`: an issue assigned to you, or a comment, only on the repository of a clone's origin and one you can push to, its body only from the coordinator's posts folder, and only when the leak-check it runs finds nothing but bare `#<number>`s, else it shows you the hits and asks). Everything else asks first: pushing, closing a tab whose PR hasn't merged, restarting Switchboard, changing a setting. Text it reads on GitHub can't take it past those checks, since the commands make them, not its instructions. It reads no note but its own and writes nowhere but its note and that posts folder without asking. Those permissions are its session's alone, a settings file passed with `--settings` as it starts, never in your `~/.claude/settings.json`.
+
+Asked to shape something (`/shape`), it hands the research and the draft to a subagent on the model "Model that shapes work for the coordinator" names (`coordinator_shape_model`, Opus by default), which reads the code and drafts the issue as the `shape` skill says and returns the draft with the questions it needs answered; the coordinator asks you those, passes your answers back until the draft is final, shows it, and files it after your yes and a clean leak-check.
+
 ### `wt`: a ticket, an issue or a note's item
 
 ```
@@ -2681,6 +2694,15 @@ What belongs to mission control as a whole, then a category for each view, its o
 | Phone app (`phone`) | off | switchboard phone (M-p's "Open the phone app in its own tab") serves a web app on your tailnet alone, for answering, messaging, reminding you of and closing your Claude tabs (closing asked first, and off with Close tabs from the phone) from the phones phone.json lists: their prompts, their recent turns, and a Web Push naming the tab when one starts waiting on you or its reminder comes due, which passes through your phone's push service. Needs Tailscale. Off, it refuses to start, and one running stops answering |
 | Close tabs from the phone (`phone_close_tabs`) | on | A long press on a tab in the phone app's drawer offers Close tab, which asks first and then closes the tab, its Claude and its other panes, written in the server's log. Off, the menu offers no Close tab and the server refuses a close from the phone |
 
+### Coordinator
+
+| Setting | Default | What it does |
+|---|---|---|
+| Coordinator (`coordinator`) | off | A Claude Code session of its own, outside every tab, that keeps your work moving: woken only by events (a tab's PR merged, a tab finished or waits on you, its note changed, a message from you or another tab), it closes tabs whose PR merged, opens the next ready issues from its note one at a time, keeps its note and files issues after a leak-check. M-C shows it beside the tab in front. It sends its note's contents and your tabs' names to Claude, so it is off by default; off, nothing of it runs |
+| Coordinator's model (`coordinator_model`) | Sonnet | The model the coordinator's session runs on (claude --model), taken up the next time it starts |
+| Model that shapes work for the coordinator (`coordinator_shape_model`) | Opus | The model of the subagent the coordinator hands shaping to (/shape): it reads the code, finds the cause and drafts the issue, and the coordinator asks you its questions and files the draft after your yes |
+| Coordination note (`coordinator_note`) | Coordination | The note the coordinator keeps, with In flight, Next and Deferred sections, by its title in your notes folder; it offers to make it when it isn't there. Besides Coordination, Note… takes any note's title typed in |
+
 ### Developing Switchboard
 
 What serves developing Switchboard itself, listed in Settings only on a build made from Switchboard's own clone (a clone of GitHub's `switchboard` with its sources), where alone it acts on something; a release build keeps their defaults, and `switchboard setting` still reads and changes them. On such a build `M-p` also lists "Restart Switchboard on the latest main" and the workspace says when main is ahead of the build, and in that clone alone `switchboard leak-check` runs before what reaches GitHub (the landing's push, `land-lock test`, `item-done`'s issue comment, autopilot's hands-free decisions on an issue, and the repository's own leak-check skill).
@@ -2733,6 +2755,20 @@ switchboard kill-pane [-t pane]          close a pane, without asking
 switchboard kill-tab [-t tab] [-s from]  close a tab, without asking; -s names
                                          who asked (phone), closing only a
                                          tab whose pane runs Claude, logged
+switchboard coordinator-close <tab>      the coordinator closing a tab (its
+                                         number, or @<id>) whose PR merged;
+                                         refuses any other, and autopilot's
+switchboard coordinator-open -c <dir> <owner/repo#number>
+                                         the coordinator opening a tab in the
+                                         background running wt --issue on an
+                                         issue autopilot's rule takes, once
+                                         the last it opened has its worktree
+switchboard coordinator-post issue -C <clone> --title <title> --body-file <file>
+switchboard coordinator-post comment -C <clone> <number> --body-file <file>
+                                         the coordinator filing an issue or a
+                                         comment on the clone's repository,
+                                         its body from its posts folder, after
+                                         a clean leak-check
 switchboard rename-tab [-t tab] name     name a tab; "" names it after its
                                          directory again
 switchboard set [-t target] [-u] @option [value]

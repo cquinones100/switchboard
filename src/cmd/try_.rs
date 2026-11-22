@@ -102,6 +102,7 @@ pub const TURNED_OFF: &[(&str, &str)] = &[
     ("auto_restore", "false"),
     ("sweep_landed_worktrees", "false"),
     ("sweep_pr_reviews", "false"),
+    ("coordinator", "false"),
 ];
 
 /// The variables neither the try's setup nor its server gets: your XDG

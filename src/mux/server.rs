@@ -573,6 +573,9 @@ pub struct Server {
     /// What GitHub and Linear say for the views, and the lookups behind
     /// `facts` (src/sources).
     pub sources: crate::sources::Sources,
+    /// The coordinator, a Claude session in a pane no tab holds
+    /// (src/coordinator).
+    pub coordinator: crate::coordinator::Coordinator,
     pub(super) next_tab: u32,
     pub(super) next_pane: u32,
     pub quit: bool,
@@ -1259,6 +1262,7 @@ impl Server {
             notices: BTreeMap::new(),
             tab_names: Default::default(),
             sources: Default::default(),
+            coordinator: Default::default(),
             opening_beside: false,
             plans_looked_for: Default::default(),
             next_tab: 1,
@@ -1443,6 +1447,7 @@ impl Server {
                 self.files_tick();
                 self.behind_tick();
                 self.autopilot_tick();
+                self.coordinator_tick();
                 self.routines_tick();
                 self.awake_check();
                 self.sweep_tick();
@@ -1485,6 +1490,9 @@ impl Server {
                 }
                 self.take_graphics(id, tab, graphics);
                 self.dirty_tab(tab);
+                if self.is_coordinator(id) {
+                    self.coordinator_output();
+                }
             }
             PaneEvent::Exited(id, generation, code) => {
                 self.mission_changed();
@@ -1979,6 +1987,10 @@ impl Server {
             .get(&target)
             .map(|s| s.tab)
             .ok_or_else(|| anyhow!("no pane {target}"))?;
+        // The coordinator's pane is in no tab to split (src/coordinator).
+        if !self.tabs.contains_key(&tab_id) {
+            return Err(anyhow!("pane {target} is in no tab to split"));
+        }
         // A directory asked for is kept; one taken from the pane is a fresh
         // start, which Settings' `new_tab_home` moves off home.
         let cwd = cwd.or_else(|| {
@@ -3315,8 +3327,15 @@ impl Server {
         self.mission_changed();
         match parsed.input {
             Input::Key(key) => self.key(id, key, &parsed.raw),
-            Input::Mouse(m) => self.mouse(id, m),
+            Input::Mouse(m) => {
+                if !self.coordinator_mouse(id, m) {
+                    self.mouse(id, m);
+                }
+            }
             Input::Paste(text) => {
+                if self.coordinator_paste(id, &text) {
+                    return;
+                }
                 if self.sidebar_paste(id, &text) {
                     return;
                 }
@@ -3402,6 +3421,7 @@ impl Server {
             if action != Action::Extra(crate::extras::Command::PaneNav) {
                 self.count_key(&key.notation());
             }
+            self.coordinator_action(id, &action);
             if let Action::SelectTab(n) = action {
                 self.select_tab_key(id, n);
                 return;
@@ -3412,6 +3432,10 @@ impl Server {
         // Easy mode's Cmd keys reach only a pane that takes them.
         if super::passthrough::is_cmd_key(&key) {
             self.cmd_key(id, raw);
+            return;
+        }
+        // The coordinator while it has the keys (src/coordinator).
+        if self.coordinator_key(id, key, raw) {
             return;
         }
         if self.sidebar_key(id, key, raw) {
@@ -3725,6 +3749,7 @@ impl Server {
             }
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
+            Action::Coordinator => self.coordinator_toggle(id),
         }
         self.sidebar_after_action(id, side_focused, &after);
     }
@@ -4507,6 +4532,7 @@ impl Server {
         self.history_before_draw(id);
         self.pictures_before_draw(id);
         self.looks_before_draw(id);
+        self.coordinator_before_draw(id);
         let Some(c) = self.clients.get(&id) else {
             return;
         };
@@ -4517,6 +4543,8 @@ impl Server {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
+        // The coordinator over the tab, under any box (src/coordinator).
+        self.coordinator_draw(&mut frame, id);
         // How pictures and pill ends reach this terminal
         // (src/mux/graphics.rs).
         use super::graphics;

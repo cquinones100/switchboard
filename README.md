@@ -110,6 +110,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-T` | Reopen the tab you closed last |
 | `M-s` | Into the sidebar and back out |
 | `M-c` | Into the pane running the tab's agent |
+| `M-C` | Talk to the coordinator, a Claude of its own outside the tabs (Settings' Coordinator) |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
 | `M-w` | Close the pane, asking first when something runs in it; from the tab's Claude pane, its one pane or its sidebar row, close the tab |

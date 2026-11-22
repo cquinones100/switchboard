@@ -67,6 +67,9 @@ pub enum Owner {
     Forward,
     /// ⊞, which opens mission control as M-Space does.
     Mission,
+    /// The coordinator's row in the footer, which a click shows or hides
+    /// as M-C does (src/coordinator).
+    Coordinator,
 }
 
 impl Owner {
@@ -197,6 +200,9 @@ pub struct View<'a> {
     /// client's terminal (src/mux/graphics.rs's `round_ends`), as the
     /// header's do; padded with a space of their fill otherwise.
     pub caps: bool,
+    /// The coordinator's row over the keys at the bottom, while it runs:
+    /// its mark and whether it works, waits on you or sleeps.
+    pub coordinator: Option<(Mark, &'static str)>,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -1039,6 +1045,22 @@ pub fn sidebar_lines(
         top_owners.push(None);
     }
 
+    // Over the keys, the coordinator's row while it runs: its mark and
+    // whether it works, waits on you or sleeps, lit under the mouse, a
+    // click showing it as M-C does.
+    if let Some((mark, said)) = view.coordinator {
+        let owner = Owner::Coordinator;
+        let fill = (view.hover == Some(&owner)).then_some(theme.panel);
+        spins |= mark == Mark::Working;
+        let mut row = Row::default();
+        row.put(" ", Style::new());
+        row.spans.push(kit::mark(mark, view.frame, theme));
+        row.put(" Coordinator ", fg(theme.text))
+            .put(said, fg(theme.dim));
+        notice_lines.push(row.fit(cols, fill));
+        notice_owners.push(Some(owner));
+    }
+
     // The last row: the keys that start, find and walk tabs, or with
     // the focus in the sidebar, start, find and open the chosen row's menu.
     let mut hint = Row::default();
@@ -1272,6 +1294,7 @@ mod tests {
             reminders: 0,
             build: None,
             selected: None,
+            coordinator: None,
         }
     }
 

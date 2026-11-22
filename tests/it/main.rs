@@ -16,6 +16,7 @@ mod by_hand;
 mod claude_here;
 mod claude_reply;
 mod codex_review;
+mod coordinator;
 mod demo;
 mod design_docs;
 mod diff;

@@ -104,6 +104,10 @@ impl Server {
         let Some(pane) = caller.or_else(|| self.parked_pane(&parked)) else {
             return Reply::ok("");
         };
+        // The coordinator's session is no tab's (src/coordinator).
+        if self.is_coordinator(pane) {
+            return self.coordinator_hook(pane, event, &payload);
+        }
         let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
             return Reply::ok("");
         };
@@ -242,6 +246,11 @@ impl Server {
         self.history_hook(pane, &hook, &payload);
         self.links_hook(pane, &hook, &payload);
         if changed {
+            // A tab finished or waiting on you wakes the coordinator, by
+            // the state the hook gave it.
+            if hook.agent.is_empty() {
+                self.coordinator_tab_state(tab, self.agents.state(pane));
+            }
             // A pane that has gone back to a shell keeps no state, so a
             // session that died without SessionEnd leaves no mark behind.
             let panes = self.tab_panes(tab);
