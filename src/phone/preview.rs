@@ -58,6 +58,7 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 const FILES: &[(&str, &str)] = &[
     ("index.html", "text/html; charset=utf-8"),
     ("app.js", "text/javascript; charset=utf-8"),
+    ("markdown-it.min.js", "text/javascript; charset=utf-8"),
     ("app.css", "text/css; charset=utf-8"),
     ("manifest.webmanifest", "application/manifest+json"),
     ("icon.svg", "image/svg+xml"),
@@ -852,6 +853,24 @@ mod tests {
             assert!(names.contains(&name), "{name}");
         }
         assert!(!names.contains(&"sw.js"));
+    }
+
+    #[test]
+    fn every_file_the_page_loads_is_served() {
+        let names: Vec<&str> = FILES.iter().map(|(n, _)| *n).collect();
+        let page = include_str!("../../assets/phone/index.html");
+        let loaded: Vec<&str> = page
+            .split(['"', '\''])
+            .filter_map(|part| part.strip_prefix('/'))
+            .filter(|path| !path.is_empty() && !path.contains(['/', ' ']))
+            .collect();
+        assert!(loaded.contains(&"markdown-it.min.js"), "{loaded:?}");
+        for path in loaded {
+            assert!(
+                names.contains(&path),
+                "{path} is loaded by index.html but not served"
+            );
+        }
     }
 
     #[test]
