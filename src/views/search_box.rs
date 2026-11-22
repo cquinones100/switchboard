@@ -24,11 +24,15 @@
 //! narrower than `SIDE_MIN`: its place, what it is, its line number when
 //! it has one, and the lines around the match its source gave
 //! (`search::Context`), the match's line lit and the words searched for in
-//! the accent. It follows the cursor from what the rows hold, reading
-//! nothing. With the results focused, J and K scroll it, as the wheel over
-//! it does; beside the results, the pane resize keys and a drag of the rule
+//! the accent. Each line is wrapped at the preview's width under its own
+//! indentation rather than cut, and the match's whole line is shown first,
+//! with as many rows before and after it as fit, so a long message is read
+//! whole (each source gives its lines unwrapped). It follows the cursor
+//! from what the rows hold, reading nothing. With the results focused, J
+//! and K scroll it a row at a time, as the wheel over it does; beside the results, the pane resize keys and a drag of the rule
 //! between the two move that rule.
 
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -37,6 +41,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use tokio::sync::mpsc::UnboundedSender;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::ViewsEvent;
 use super::search::{self, Found, Source};
@@ -788,20 +793,48 @@ impl SearchBox {
         }
     }
 
-    /// The chosen row's context lines shown in `room` lines: from where its
-    /// scroll left them, else with its match in the middle.
-    fn peek_top(&self, room: usize) -> usize {
+    /// The chosen row's context wrapped to `cols` columns.
+    fn wrapped(&self, cols: usize) -> Wrapped {
+        let Some(row) = self.rows.get(self.cursor) else {
+            return Wrapped::default();
+        };
+        Wrapped::of(&row.context, cols)
+    }
+
+    /// The first of the wrapped context's rows the preview shows in
+    /// `room` rows `cols` wide: where its scroll left them, else the
+    /// match's whole line with as many rows before and after it as fit,
+    /// its start in sight when it is taller than the preview.
+    fn peek_top(&self, room: usize, cols: usize) -> usize {
         let Some(row) = self.rows.get(self.cursor) else {
             return 0;
         };
-        let ctx = &row.context;
-        let most = ctx.lines.len().saturating_sub(room);
-        match &self.peek {
-            Some((id, link, top)) if self.peek_of() == Some((*id, link.as_str())) => {
-                (*top).min(most)
-            }
-            _ => ctx.at.saturating_sub(room / 2).min(most),
+        let wrapped = self.wrapped(cols);
+        let most = wrapped.rows.len().saturating_sub(room);
+        if let Some((id, link, top)) = &self.peek
+            && self.peek_of() == Some((*id, link.as_str()))
+        {
+            return (*top).min(most);
         }
+        let at = row.context.at;
+        let first = wrapped.rows.iter().position(|r| r.line == at).unwrap_or(0);
+        let tall = wrapped.rows.iter().filter(|r| r.line == at).count();
+        first
+            .saturating_sub(room.saturating_sub(tall) / 2)
+            .min(most)
+            .min(first)
+    }
+
+    /// The preview's context: how many columns wide and rows tall, as last
+    /// drawn.
+    fn peek_size(&self) -> Option<(usize, usize)> {
+        let inner = self.drawn.as_ref().map_or(0, |d| d.inner.width as usize);
+        let (cols, rows) = match self.previewed {
+            Preview::Off => return None,
+            Preview::Beside(w) => (inner.saturating_sub(w + 1), self.room),
+            Preview::Under(_, n) => (inner, n),
+        };
+        Some((cols, rows.saturating_sub(PREVIEW_HEAD).max(1)))
     }
 
     /// The chosen result as the preview's scroll is kept for it.
@@ -812,20 +845,13 @@ impl SearchBox {
         ))
     }
 
-    /// Scrolls the preview by `by` lines.
+    /// Scrolls the preview by `by` rows.
     fn scroll_peek(&mut self, by: isize) -> Step {
-        let room = match self.previewed {
-            Preview::Off => return Step::Same,
-            Preview::Beside(_) => self.room,
-            Preview::Under(_, n) => n,
-        }
-        .saturating_sub(PREVIEW_HEAD)
-        .max(1);
-        let top = self.peek_top(room);
-        let most = self
-            .rows
-            .get(self.cursor)
-            .map_or(0, |r| r.context.lines.len().saturating_sub(room));
+        let Some((cols, room)) = self.peek_size() else {
+            return Step::Same;
+        };
+        let top = self.peek_top(room, cols);
+        let most = self.wrapped(cols).rows.len().saturating_sub(room);
         let to = top.saturating_add_signed(by).min(most);
         if to == top {
             return Step::Same;
@@ -916,33 +942,43 @@ impl SearchBox {
             ));
             out.push(vec![kit::rule(cols, theme)]);
             let room = rows.saturating_sub(PREVIEW_HEAD);
-            let top = self.peek_top(room);
+            let top = self.peek_top(room, cols);
             let first = ctx.line.saturating_sub(ctx.at);
-            let digits = if ctx.line > 0 {
-                (first + ctx.lines.len()).to_string().len()
-            } else {
-                0
-            };
+            let wrapped = self.wrapped(cols);
+            let digits = wrapped.digits;
             let words = self.words();
-            for (i, text) in ctx.lines.iter().enumerate().skip(top).take(room) {
-                let lit = i == ctx.at;
+            // Each line's words lit once, whole, so a word a wrap splits
+            // stays lit on both rows.
+            let marked: Vec<Vec<Span<'static>>> = wrapped
+                .texts
+                .iter()
+                .enumerate()
+                .map(|(i, text)| {
+                    let tone = if i == ctx.at { Tone::Text } else { Tone::Dim };
+                    kit::found(text, &words, tone.style(theme), theme)
+                })
+                .collect();
+            for row in wrapped.rows.iter().skip(top).take(room) {
+                let lit = row.line == ctx.at;
                 let mut spans = Vec::new();
                 if digits > 0 {
                     let tone = if lit { Tone::Accent } else { Tone::Faint };
+                    let number = if row.part.start == 0 {
+                        (first + row.line).to_string()
+                    } else {
+                        String::new()
+                    };
                     spans.push(Span::styled(
-                        format!("{:>digits$}  ", first + i),
+                        format!("{number:>digits$}  "),
                         tone.style(theme),
                     ));
                 }
-                let rest = if lit { Tone::Text } else { Tone::Dim }.style(theme);
-                // Its indentation kept, so a nested item reads as one; tabs
-                // as four spaces and control characters left out.
-                let text: String = text
-                    .replace('\t', "    ")
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .collect();
-                spans.extend(kit::found(&text, &words, rest, theme));
+                // A wrapped row under its line's indentation, so a nested
+                // item reads as one.
+                if row.part.start > 0 {
+                    spans.push(Span::raw(" ".repeat(row.indent)));
+                }
+                spans.extend(slice_spans(&marked[row.line], row.part.clone()));
                 out.push(kit::row(spans, cols, lit, theme));
             }
         }
@@ -952,6 +988,135 @@ impl SearchBox {
         out.truncate(rows);
         out
     }
+}
+
+/// The chosen result's context lines wrapped to the preview's width.
+#[derive(Default)]
+struct Wrapped {
+    /// Each line as drawn: tabs as four spaces, control characters left
+    /// out.
+    texts: Vec<String>,
+    rows: Vec<PeekRow>,
+    /// The line numbers' width, 0 when the context has none.
+    digits: usize,
+}
+
+/// One of the wrapped context's rows: its line, the part of the line's
+/// text it holds, and the indentation it is drawn under when it continues
+/// the line.
+#[derive(Debug, PartialEq, Eq)]
+struct PeekRow {
+    line: usize,
+    part: Range<usize>,
+    indent: usize,
+}
+
+impl Wrapped {
+    fn of(ctx: &search::Context, cols: usize) -> Wrapped {
+        let first = ctx.line.saturating_sub(ctx.at);
+        let digits = if ctx.line > 0 {
+            (first + ctx.lines.len()).to_string().len()
+        } else {
+            0
+        };
+        // The chosen bar's column and the line numbers' with their gap.
+        let text_cols = cols
+            .saturating_sub(1 + if digits > 0 { digits + 2 } else { 0 })
+            .max(1);
+        let texts: Vec<String> = ctx
+            .lines
+            .iter()
+            .map(|t| {
+                t.replace('\t', "    ")
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect()
+            })
+            .collect();
+        let mut rows = Vec::new();
+        for (line, text) in texts.iter().enumerate() {
+            let lead = text.len() - text.trim_start_matches(' ').len();
+            // Never so deep that a wrapped row has less than half the room.
+            let indent = lead.min(text_cols / 2);
+            let first_row = wrap_at(text, 0, text_cols);
+            rows.push(PeekRow {
+                line,
+                part: first_row.clone(),
+                indent,
+            });
+            let mut from = first_row.end;
+            while from < text.len() {
+                let part = wrap_at(text, from, text_cols - indent);
+                if part.is_empty() {
+                    break;
+                }
+                from = part.end;
+                rows.push(PeekRow { line, part, indent });
+            }
+        }
+        Wrapped {
+            texts,
+            rows,
+            digits,
+        }
+    }
+}
+
+/// The next row of `text` from byte `from`, at most `cols` wide: up to
+/// the last space that fits, or inside a word where none does, the spaces
+/// at the break left out of both rows.
+fn wrap_at(text: &str, from: usize, cols: usize) -> Range<usize> {
+    let from = if from == 0 {
+        0
+    } else {
+        text.len() - text[from..].trim_start_matches(' ').len()
+    };
+    let rest = &text[from..];
+    if draw::width(rest) <= cols {
+        return from..text.len();
+    }
+    let mut used = 0;
+    let mut end = from;
+    let mut space = None;
+    let mut words = false;
+    for (i, g) in rest.grapheme_indices(true) {
+        // A space after a word, never within the indentation.
+        if g == " " && words {
+            space = Some(from + i);
+        }
+        words |= g != " ";
+        let w = draw::width(g);
+        if used + w > cols {
+            break;
+        }
+        used += w;
+        end = from + i + g.len();
+    }
+    let cut = match space {
+        Some(at) => at,
+        // A grapheme wider than the row goes on one of its own.
+        None if end == from => from + rest.graphemes(true).next().map_or(0, str::len),
+        None => end,
+    };
+    from..from + text[from..cut].trim_end_matches(' ').len()
+}
+
+/// The part of styled `spans` that falls in bytes `range` of their text.
+fn slice_spans(spans: &[Span<'static>], range: Range<usize>) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for span in spans {
+        let (start, end) = (at, at + span.content.len());
+        at = end;
+        let (from, to) = (range.start.max(start), range.end.min(end));
+        if from < to {
+            out.push(Span::styled(
+                span.content[from - start..to - start].to_string(),
+                span.style,
+            ));
+        }
+    }
+    out
 }
 
 impl Overlay for SearchBox {
@@ -1911,6 +2076,120 @@ mod tests {
         );
     }
 
+    /// The preview's first context row, at the size it was last drawn.
+    fn top(b: &SearchBox) -> usize {
+        let (cols, room) = b.peek_size().unwrap();
+        b.peek_top(room, cols)
+    }
+
+    /// A box with one result found, its context `lines`, the match at `at`.
+    fn previewing_lines(lines: &[&str], at: usize) -> SearchBox {
+        let (b, _rx) = open(&[], "zebra");
+        let mut b = b.with_preview(true, Vec::new());
+        b.key(key(KeyCode::Enter), &Look::default());
+        let id = b.asked.as_ref().unwrap().id;
+        // Unnumbered, as a message's lines are, so the text has every
+        // column but the chosen bar's.
+        let mut row = with_context("n1", lines, at, 0);
+        row.context.line = 0;
+        b.answered(id, Source::Notes, vec![row]);
+        b
+    }
+
+    /// A 299-character line of nine-letter words, `zebra` among them.
+    fn long_line(first: &str) -> String {
+        let mut words: Vec<&str> = vec!["abcdefghi"; 30];
+        words[0] = first;
+        words[25] = "zebrawalk";
+        words.join(" ")
+    }
+
+    /// The preview's rows as text.
+    fn text_of(rows: &[Vec<Span<'static>>]) -> Vec<String> {
+        rows.iter()
+            .map(|r| r.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_long_match_line_wraps_whole_with_its_match_lit() {
+        let long = long_line("beginning");
+        let b = previewing_lines(&["before it", &long, "after it"], 1);
+        let look = Look::default();
+        let rows = b.preview_lines(100, PREVIEW_HEAD + 20, &look);
+        let text = text_of(&rows);
+        let context = &text[PREVIEW_HEAD..];
+        assert!(!text.join("\n").contains('…'), "{text:#?}");
+        let of_long: Vec<&String> = context
+            .iter()
+            .filter(|r| r.contains("abcdefghi") || r.contains("beginning"))
+            .collect();
+        assert_eq!(of_long.len(), 3, "{text:#?}");
+        let joined: String = of_long
+            .iter()
+            .map(|r| r.trim_start_matches('▌').trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(joined, long, "every word kept, in order");
+        let at = context
+            .iter()
+            .position(|r| r.contains("zebrawalk"))
+            .unwrap();
+        let lit = rows[PREVIEW_HEAD + at]
+            .iter()
+            .find(|s| s.content.contains("zebra"))
+            .unwrap();
+        assert_eq!(lit.style.fg, Some(Tone::Accent.fg(&look.theme)));
+        assert!(context.iter().any(|r| r.contains("before it")));
+        assert!(context.iter().any(|r| r.contains("after it")));
+    }
+
+    #[test]
+    fn a_wrapped_row_keeps_its_line_s_indentation() {
+        let long = format!("    - {}", long_line("item"));
+        let b = previewing_lines(&[&long], 0);
+        let rows = text_of(&b.preview_lines(100, PREVIEW_HEAD + 10, &Look::default()));
+        let context: Vec<&String> = rows[PREVIEW_HEAD..]
+            .iter()
+            .filter(|r| r.trim() != "" && r.trim() != "▌")
+            .collect();
+        assert!(context.len() > 1, "{rows:#?}");
+        assert!(context[0].starts_with("▌    - item"), "{rows:#?}");
+        for r in &context[1..] {
+            assert!(r.starts_with("▌    abcdefghi"), "{rows:#?}");
+        }
+    }
+
+    #[test]
+    fn a_match_line_taller_than_the_preview_shows_its_start() {
+        let long = long_line("beginning");
+        let b = previewing_lines(&["one", "two", "three", &long, "after"], 3);
+        let rows = text_of(&b.preview_lines(40, PREVIEW_HEAD + 3, &Look::default()));
+        assert!(rows[PREVIEW_HEAD].contains("beginning"), "{rows:#?}");
+    }
+
+    #[test]
+    fn j_scrolls_the_wrapped_context_a_row_at_a_time() {
+        let long = long_line("beginning");
+        let mut b = previewing_lines(&[&long, "after"], 0);
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 140, 16));
+        b.draw(&mut buf, &look);
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!(b.focus, Part::Results);
+        assert_eq!(top(&b), 0);
+        assert_eq!(b.key(key(KeyCode::Char('J')), &look), Step::Redraw);
+        assert_eq!(top(&b), 1);
+        b.draw(&mut buf, &look);
+        let (cols, room) = b.peek_size().unwrap();
+        let rows = text_of(&b.preview_lines(cols, room + PREVIEW_HEAD, &look));
+        assert!(
+            !rows.iter().any(|r| r.contains("beginning")),
+            "its first row scrolled off: {rows:#?}"
+        );
+    }
+
     #[test]
     fn j_and_k_scroll_the_preview_with_the_results_focused() {
         let (mut b, _rx) = previewing();
@@ -1921,15 +2200,15 @@ mod tests {
         b.key(key(KeyCode::Down), &look);
         b.key(key(KeyCode::Down), &look);
         assert_eq!(b.focus, Part::Results);
-        let before = b.peek_top(1);
+        let before = top(&b);
         assert_eq!(b.key(key(KeyCode::Char('J')), &look), Step::Redraw);
-        assert_eq!(b.peek_top(1), before + 1);
+        assert_eq!(top(&b), before + 1);
         b.key(key(KeyCode::Char('K')), &look);
-        assert_eq!(b.peek_top(1), before);
+        assert_eq!(top(&b), before);
         assert_eq!(b.typed(), "zebra", "nothing typed");
         // Scrolled, then a new search: its first result starts at its match.
         b.key(key(KeyCode::Char('J')), &look);
-        assert_eq!(b.peek_top(1), before + 1);
+        assert_eq!(top(&b), before + 1);
         b.ask("zebra".to_string());
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
@@ -1942,6 +2221,6 @@ mod tests {
                 9,
             )],
         );
-        assert_eq!(b.peek_top(1), before);
+        assert_eq!(top(&b), before);
     }
 }
