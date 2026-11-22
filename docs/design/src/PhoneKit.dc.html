@@ -307,7 +307,8 @@ const field = (x, y, w, text, placeholder, clear) => {
   tx(x + 2.6, y, w - 4, PT(44), text || placeholder, text ? C.text : C.faint, 12);
   if (clear) icon(x + w - Wd(44), y, '×', 'ghost');
 };
-// 6. ROW: one tab in the drawer, 56 pt: its mark, its number in its hue, its name 16 pt, what it is doing 12 pt dim under it;
+// 6. ROW: one tab in the drawer, 56 pt in the app (its two lines and 6 pt above and below them); on this board, whose text
+//    sits on whole rows, it is drawn two rows apart, 44 pt: its mark, its number in its hue, its name 16 pt, what it is doing 12 pt dim under it;
 //    held or chosen, the chosen surface and an accent bar at its left.
 const rowK = (sx, y, st, num, name, sub, held) => {
   const ty = Math.round(y + 0.25), bg = held ? row(sx, ty, 36, 2, true) : '';
@@ -356,13 +357,13 @@ y = 2;
 atom(42, y, 'Header', ['48 high · icon buttons at the ends']);
 fill(42, y + 2, 36, 3, '0'); header(42, y + 2.2, '6 review PR 41', ['needs you', C.yellow, C.ybg]);
 y += 6;
-atom(42, y, 'Row', ['56 high · name 16 · doing 12 · held lit']);
+atom(42, y, 'Row', ['56 high (drawn 44 here) · held lit']);
 rowK(42, y + 2.2, 'needs', 6, 'review PR 41', 'asks: which fixture?', false);
-rowK(42, y + 4.8, 'passed', 4, 'full titles', 'finished 1m ago', true);
+rowK(42, y + 4.2, 'passed', 4, 'full titles', 'finished 1m ago', true);
 y += 8;
 atom(42, y, 'Box', ['radius 12 · head and options 44']);
 K(42, y + 2.2, 34, PT(44) + 2 * PT(44) + 0.4, 'border-radius:12px;background:' + C.raised + ';box-shadow:0 6px 18px #0008');
-tx(43.2, y + 2.2, 24, PT(44), 'Tab 4 · full titles', C.text, 12, true); icon(42 + 34 - Wd(44), y + 2.2, '×', 'ghost');
+tx(43.2, y + 2.2, 24, PT(44), 'Tab 4 · full titles', C.text, 12, true); icon(42 + 34 - Wd(44), y + 2.2, '×', 'fill');
 tx(44.5, y + 4.2, 28, PT(44), 'Mark seen', C.text, 12); tx(44.5, y + 6.2, 28, PT(44), 'Close tab', C.red, 12);
 y += 9;
 atom(42, y, 'Thumbnail · toast', ['64 · radius 6 · × 24 in a 44 target']);
@@ -382,14 +383,14 @@ atom(42, y, 'Today, in app.css', []);
   field(sx + 1.5, 5.4, 33, '', 'Search tabs');
   let yy = 8.2;
   label(sx + 1, Math.round(yy), 'Needs you', 'y', 2, sx + 34); yy += 1.1;
-  rowK(sx, yy, 'needs', 2, 'stable note IDs', 'Bash: git push origin main', false); yy += PT(56);
+  rowK(sx, yy, 'needs', 2, 'stable note IDs', 'Bash: git push origin main', false); yy += 2;
   rowK(sx, yy, 'needs', 6, 'review PR 41', 'asks: which fixture?', false); yy += PT(56) + 1.1;
   label(sx + 1, Math.round(yy), 'Working', 'b', 2, sx + 34); yy += 1.1;
-  rowK(sx, yy, 'working', 1, 'planning', 'Monitor: fork parity', false); yy += PT(56);
+  rowK(sx, yy, 'working', 1, 'planning', 'Monitor: fork parity', false); yy += 2;
   rowK(sx, yy, 'working', 3, 'M-d uncommitted', 'Edit diffview.lua', false); yy += PT(56) + 1.1;
   label(sx + 1, Math.round(yy), 'Idle', 'd', 2, sx + 34); yy += 1.1;
-  rowK(sx, yy, 'passed', 4, 'full titles', 'finished 1m ago', true); yy += PT(56);
-  rowK(sx, yy, 'idle', 8, 'handoff', 'idle 58m', false); yy += PT(56);
+  rowK(sx, yy, 'passed', 4, 'full titles', 'finished 1m ago', true); yy += 2;
+  rowK(sx, yy, 'idle', 8, 'handoff', 'idle 58m', false); yy += 2;
   K(sx + 1.5, 40.2, 33, PT(44), 'border-radius:12px;background:' + C.raised); tx(sx + 2.7, 40.2, 30, PT(44), '✓ Marked tab 4 seen', C.text, 11); }
 
 // ── A CHANNEL FROM THE KIT ──
