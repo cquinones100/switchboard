@@ -49,8 +49,10 @@ pub struct Found {
 
 /// How many lines each side of a match M-F's preview shows.
 pub const AROUND: usize = 5;
-/// The most characters of a line M-F's preview keeps.
-pub const AROUND_CHARS: usize = 200;
+/// The most characters of a line M-F's preview keeps: the preview wraps
+/// a line, so a long message or paragraph is read whole, while what a
+/// result holds stays bounded.
+pub const AROUND_CHARS: usize = 2000;
 
 /// The lines around `lines[at]`: up to `AROUND` each side, each cut to
 /// `AROUND_CHARS` characters, and where the match is among them.

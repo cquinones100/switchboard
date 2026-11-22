@@ -1403,7 +1403,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("Plans")).unwrap();
         let mut text = vec!["# Long note".to_string()];
         text.extend((2..=20).map(|n| format!("line {n}")));
-        text[11] = format!("## Steps\n{}", "x".repeat(300));
+        text[11] = format!("## Steps\n{}", "x".repeat(pane_search::AROUND_CHARS + 100));
         // Line 12 the heading, 13 the long line, 14 the match.
         let text = text.join("\n").replace("line 13", "the zebra is here");
         std::fs::write(dir.join("Plans/Long note.md"), &text).unwrap();
@@ -1420,7 +1420,7 @@ mod tests {
         assert_eq!(ctx.lines[10], "line 18");
         assert_eq!(
             ctx.lines[ctx.at - 1].chars().count(),
-            200,
+            pane_search::AROUND_CHARS,
             "a long line cut"
         );
         let short = rows.iter().find(|r| r.text == "Short").unwrap();
