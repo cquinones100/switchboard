@@ -74,6 +74,8 @@
 //!                                        a Claude pane's tab's reminder set
 //!                                        for when (as the reminder box reads
 //!                                        it) or cleared (src/phone)
+//! pin [-t pane] [-s from] [-u]           a Claude pane's tab pinned as M-f
+//!                                        pins it, or unpinned (src/phone)
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up

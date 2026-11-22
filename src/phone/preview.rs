@@ -783,6 +783,7 @@ async fn remind(
         let index = tab["index"].clone();
         if clear {
             tab["remind"] = Value::Null;
+            d.sort();
             return said(format!("Cleared the reminder for tab {index}"));
         }
         let now = crate::util::local_now();
@@ -794,6 +795,7 @@ async fn remind(
         };
         let due = at <= now.timestamp().as_second();
         tab["remind"] = json!({"at": at, "note": note.trim(), "due": due});
+        d.sort();
         said(format!("Reminder for tab {index} at {}", remind::said(at)))
     })
 }
