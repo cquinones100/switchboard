@@ -998,7 +998,8 @@ function composer() {
   });
   const send = el("button", { class: "send", "aria-label": "Send" }, "➤");
   // The photo library alone: images, several at once, no camera.
-  const picker = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp", multiple: true, hidden: true });
+  const kinds = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const picker = el("input", { type: "file", accept: kinds.join(","), multiple: true, hidden: true });
   picker.addEventListener("change", () => {
     for (const file of picker.files) state.chosen.push({ file, url: URL.createObjectURL(file) });
     picker.value = "";
@@ -1034,6 +1035,18 @@ function composer() {
     fit();
   };
   field.addEventListener("input", resize);
+  // Images pasted join the ones + chose; the clipboard's text, if any, still
+  // pastes as the browser would. A prompt's own answer takes no images.
+  field.addEventListener("paste", (e) => {
+    if (free()) return;
+    const files = [...(e.clipboardData?.items || [])]
+      .filter((item) => item.kind === "file" && kinds.includes(item.type))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (!files.length) return;
+    for (const file of files) state.chosen.push({ file, url: URL.createObjectURL(file) });
+    render();
+  });
   send.addEventListener("click", async () => {
     const text = field.value.trim();
     if (!ready()) return;

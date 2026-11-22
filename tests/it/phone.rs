@@ -564,6 +564,57 @@ console.log("chip=" + app.querySelector(".head .chip").textContent);
     );
 }
 
+/// Pasting into the composer (assets/phone/app.js's `composer`) adds the
+/// clipboard's PNG, JPEG, GIF and WebP images to the ones waiting over it,
+/// as + does, leaving its text to paste as the browser would, and adds none
+/// while a question takes an answer of your own; skipped without Node.
+#[test]
+fn pasting_an_image_adds_it_over_the_composer() {
+    let script = [CHANNEL_PAGE, r##"
+ctx.URL = { createObjectURL: (f) => "blob:" + f.name, revokeObjectURL: () => {} };
+const tab = (prompt) => ({ pane: "%5", index: 2, name: "phone", state: "idle", prompt, turn: { prompt: "go" } });
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac" };
+  listen();
+  state.open = "5";
+`, ctx);
+const update = (t) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [t] }) });
+update(tab(null));
+const file = (name, type) => ({ kind: "file", type, getAsFile: () => ({ name, type }) });
+const paste = () => {
+  const e = new Event("paste", { clipboardData: { items: [
+    file("shot.png", "image/png"),
+    file("doc.pdf", "application/pdf"),
+    { kind: "string", type: "text/plain", getAsFile: () => null },
+  ] } });
+  app.querySelector(".composer textarea").dispatchEvent(e);
+  return e;
+};
+const e = paste();
+console.log("text pasted=" + !e.defaultPrevented);
+console.log("shots=" + app.querySelectorAll(".tray .shot").length);
+console.log("src=" + app.querySelector(".tray .shot img").src);
+update(tab({ free: true, options: [] }));
+paste();
+console.log("answering=" + vm.runInContext("state.chosen.length", ctx));
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "text pasted=true",
+            "shots=1",
+            "src=blob:shot.png",
+            "answering=1"
+        ],
+        "{stdout}"
+    );
+}
+
 /// A turn's steps folded into one row (assets/phone/app.js's `turns`): a
 /// turn of 12 tool calls with text between them and a final reply shows what
 /// you said, `▸ 12 steps` and the reply; a tap opens the steps in order, kept
