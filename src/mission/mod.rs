@@ -1330,6 +1330,20 @@ impl Mission {
             .map_or_else(|| grid::TABS.to_string(), View::slug)
     }
 
+    /// Ends a walk of the list of views that has rested `NAV_SETTLE_MS`
+    /// (or Enter ended), whether there was one: the view on the screen is
+    /// then the place, and a later change of view is no walk.
+    pub fn take_settled_walk(&mut self) -> bool {
+        let rested = self
+            .nav_held
+            .as_ref()
+            .is_some_and(|(_, at)| crate::util::now_ms().saturating_sub(*at) >= NAV_SETTLE_MS);
+        if rested {
+            self.nav_held = None;
+        }
+        rested
+    }
+
     /// Whether the list of views' cursor was walked and hasn't rested
     /// (`nav_held`), the view on the screen not yet on the trail.
     pub fn walk_unsettled(&self) -> bool {

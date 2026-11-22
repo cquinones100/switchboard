@@ -1935,7 +1935,7 @@ impl Server {
         let left = (opened == Opened::Front).then_some(s.current);
         if opened == Opened::Front {
             s.last = Some(s.current);
-            s.trail.visited(s.trail.here(s.current));
+            s.trail.visited_now(s.trail.here(s.current));
             s.trail.view = None;
             s.current = tab;
             // As `select_tab_as`: a mission control still open puts its
@@ -2206,6 +2206,10 @@ impl Server {
             s.current = s.last.take().unwrap_or(s.tabs[at.min(s.tabs.len() - 1)]);
             // The tab it falls back to is a new place, as a visit is.
             s.trail.forward.clear();
+            // A view over it stays the place in front, its time with it.
+            if s.trail.view.is_none() {
+                s.trail.came_to_front();
+            }
             came_to = Some(s.current);
         }
         let name = s.name.clone();
@@ -2290,7 +2294,7 @@ impl Server {
         };
         let left = s.trail.here(s.current);
         if !stepping && !left.same(&place) {
-            s.trail.visited(left);
+            s.trail.visited_now(left);
         }
         match place {
             Place::Tab(tab) => {
@@ -2325,9 +2329,22 @@ impl Server {
     /// another or off one to the tab is a visit. Run before each draw, so
     /// every way of moving between views counts.
     pub fn trail_sync(&mut self, client: ClientId) {
+        self.trail_sync_as(client, false);
+    }
+
+    /// `trail_sync`, `walked` when the view it finds settles a walk of
+    /// mission control's list of views that `trail_settle` already ended.
+    fn trail_sync_as(&mut self, client: ClientId, walked: bool) {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
+        // A walk of the list of views that has rested (or Enter ended)
+        // settles now, once: the view on the screen joins the trail.
+        let settles = c
+            .overlays
+            .find_mut::<crate::mission::Mission>()
+            .is_some_and(crate::mission::Mission::take_settled_walk);
+        let walked = walked || settles;
         let mission = c.overlays.find::<crate::mission::Mission>();
         if let Some(asked) = c.view_held {
             let asking = !c.overlays.lets_through();
@@ -2343,7 +2360,7 @@ impl Server {
         }
         c.trail_view = now.clone();
         let session = c.session.clone();
-        self.trail_view_is(&session, now);
+        self.trail_view_is(&session, now, walked);
     }
 
     /// A client's mission control just closed for a question that leads to
@@ -2368,19 +2385,20 @@ impl Server {
     /// it rested there: run before a step along the trail, by key, click or
     /// menu, so the step goes from the view on the screen.
     pub fn trail_settle(&mut self, client: ClientId) {
-        if let Some(m) = self
+        let walked = self
             .clients
             .get_mut(&client)
             .and_then(|c| c.overlays.find_mut::<crate::mission::Mission>())
-        {
-            m.nav_held = None;
-        }
-        self.trail_sync(client);
+            .is_some_and(|m| m.nav_held.take().is_some());
+        self.trail_sync_as(client, walked);
     }
 
     /// The session is on `now`'s view (none: on its tab): a visit when that
-    /// is somewhere else.
-    pub fn trail_view_is(&mut self, session: &str, now: Option<String>) {
+    /// is somewhere else. `walked` when `now` is a view mission control's
+    /// list of views was walked to (`Mission::nav_held`), whose own rule
+    /// decides it is a place, so it counts as in front long enough when it
+    /// is left, however soon after the walk settles.
+    pub fn trail_view_is(&mut self, session: &str, now: Option<String>, walked: bool) {
         let Some(s) = self.session_mut(session) else {
             return;
         };
@@ -2388,8 +2406,11 @@ impl Server {
             return;
         }
         let left = s.trail.here(s.current);
-        s.trail.visited(left);
+        s.trail.visited_now(left);
         s.trail.view = now;
+        if walked {
+            s.trail.since = None;
+        }
         self.dirty_session(session);
     }
 
@@ -2405,7 +2426,7 @@ impl Server {
         if switched {
             s.last = Some(s.current);
             if !stepping {
-                s.trail.visited(s.trail.here(s.current));
+                s.trail.visited_now(s.trail.here(s.current));
             }
             s.trail.view = None;
             s.current = tab;
@@ -2834,7 +2855,7 @@ impl Server {
                     .is_some()
         });
         if !a_view_shows {
-            self.trail_view_is(session, None);
+            self.trail_view_is(session, None, false);
         }
     }
 
@@ -3473,16 +3494,33 @@ impl Server {
                 // The place before, tab or view, as a visit, so pressed
                 // again it comes back; the tab before when that view is
                 // off now, or the server restarted since, which keeps no
-                // place.
+                // place. Pressed again within a second, the place left was
+                // passed through and isn't the trail's `last`, so it is
+                // made so here for the press to come back. Back where a pass
+                // started, `last` is here, so it is the place a step back
+                // goes to.
+                let Some(here) = self.session(&session).map(|s| s.trail.here(s.current)) else {
+                    return;
+                };
                 let last = self.session(&session).and_then(|s| {
+                    let back_where_a_pass_started =
+                        s.trail.last.as_ref().is_some_and(|p| p.same(&here));
                     s.trail
                         .last
                         .clone()
-                        .filter(place_usable)
+                        .filter(|p| place_usable(p) && !back_where_a_pass_started)
+                        .or_else(|| {
+                            back_where_a_pass_started
+                                .then(|| s.trail.peek_back(&here, place_usable))
+                                .flatten()
+                        })
                         .or(s.last.map(Place::Tab))
                 });
                 if let Some(place) = last {
                     self.go_to_place(id, &session, place, false);
+                    if let Some(s) = self.session_mut(&session) {
+                        s.trail.last = Some(here);
+                    }
                 }
             }
             Action::LastTab => {

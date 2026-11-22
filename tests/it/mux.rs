@@ -81,6 +81,93 @@ fn alt_shift_bracket_in_the_kitty_form_goes_back_and_forward() {
     client.wait_for("the second tab current again", |_| current(1));
 }
 
+/// Tabs 1 to 4, tab 1 in front, its client, and which tab is current.
+fn four_tabs(settings: &str) -> (TestServer, common::TestClient) {
+    let server = TestServer::start_with_settings(settings);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    for _ in 0..3 {
+        server.ok(&["new-tab", "-d"]);
+    }
+    (server, client)
+}
+
+/// The number of the tab in front, as the header shows it.
+fn current_tab(server: &TestServer) -> Option<u64> {
+    server.list()["sessions"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["current"] == true)
+        .and_then(|t| t["index"].as_u64())
+}
+
+/// Goes to each of `tabs`, by number, kept in front past a second when
+/// `keep`, so each counts as visited; whether the moves took under a
+/// second all told, so none was in front long enough to count.
+fn go_through(server: &TestServer, tabs: &[u64], keep: bool) -> bool {
+    let list = server.list();
+    let started = std::time::Instant::now();
+    for t in tabs {
+        let id = list["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tab| tab["index"].as_u64() == Some(*t))
+            .and_then(|tab| tab["id"].as_str())
+            .expect("the tab is open")
+            .to_string();
+        server.ok(&["select-tab", "-t", &id]);
+        if keep {
+            std::thread::sleep(std::time::Duration::from_millis(1300));
+        }
+    }
+    started.elapsed() < std::time::Duration::from_millis(900)
+}
+
+#[test]
+fn tabs_passed_through_are_no_steps_back() {
+    let (server, mut client) = four_tabs(r#"{"history_skips_passing": true}"#);
+    // 2 and 3 passed through on the way to 4. A computer too busy to move
+    // through them within the second shows nothing about passing through.
+    if !go_through(&server, &[2, 3, 4], false) {
+        eprintln!("the moves took a second or more; nothing to check");
+        return;
+    }
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_for("tab 1 one step back", |_| current_tab(&server) == Some(1));
+    // M-Tab from 4 goes to 1 too.
+    let (server, mut client) = four_tabs(r#"{"history_skips_passing": true}"#);
+    if !go_through(&server, &[2, 3, 4], false) {
+        eprintln!("the moves took a second or more; nothing to check");
+        return;
+    }
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("M-Tab to tab 1", |_| current_tab(&server) == Some(1));
+    // Pressed again at once, back to 4.
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("M-Tab back to tab 4", |_| current_tab(&server) == Some(4));
+}
+
+#[test]
+fn tabs_kept_in_front_or_with_the_setting_off_are_steps_back() {
+    let check = |server: &TestServer, client: &mut common::TestClient| {
+        for want in [3, 2, 1] {
+            client.type_text(&format!("{ALT}{{"));
+            client.wait_for(&format!("tab {want} a step back"), |_| {
+                current_tab(server) == Some(want)
+            });
+        }
+    };
+    let (server, mut client) = four_tabs(r#"{"history_skips_passing": true}"#);
+    go_through(&server, &[2, 3], true);
+    go_through(&server, &[4], false);
+    check(&server, &mut client);
+    let (server, mut client) = four_tabs(r#"{"history_skips_passing": false}"#);
+    go_through(&server, &[2, 3, 4], false);
+    check(&server, &mut client);
+}
+
 #[test]
 fn new_tab_comes_to_the_front_and_with_d_stays_behind() {
     let server = TestServer::start();
