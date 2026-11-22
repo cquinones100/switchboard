@@ -75,10 +75,6 @@ pub const NO_CHECKS: i64 = 3 * 60 * 1000;
 /// Where the train's refs are fetched to in the main clone.
 const REFS: &str = "refs/switchboard/merge-queue";
 
-/// How a PR's tab is told the queue merged it, which the server also
-/// takes as main having moved (src/mux/behind.rs).
-pub const MERGED: &str = "merged by the merge queue";
-
 /// What the request audit calls the queue's requests.
 pub const SOURCE: &str = "merge queue";
 
@@ -850,7 +846,7 @@ async fn ride(
                     number,
                     path: gone.as_ref().map(|g| g.path.clone()).unwrap_or_default(),
                     pane: gone.and_then(|g| g.pane),
-                    words: format!("{MERGED} from {}", train.branch),
+                    words: format!("merged by the merge queue from {}", train.branch),
                 });
             }
             let promoted = match &queue.ahead {
