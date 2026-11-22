@@ -109,19 +109,30 @@ pub fn keep_copy(dir: &Path, file: &Path) -> Option<String> {
         id.iter().map(|b| format!("{b:02x}")).collect::<String>()
     );
     let kept = dir.join(&name);
-    if kept.is_file() {
+    // One of another length is a copy cut short, written again.
+    let whole = fs::metadata(&kept).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64);
+    if whole {
         let renewed = fs::File::options()
             .write(true)
             .open(&kept)
             .and_then(|f| f.set_modified(SystemTime::now()));
         return renewed.is_ok().then_some(name);
     }
-    match save(dir, &bytes, id) {
-        Ok(name) => Some(name),
-        // Kept by another look of the same picture at the same moment.
-        Err(_) if kept.is_file() => Some(name),
-        Err(_) => None,
+    // Written beside it under a name no request reaches, then renamed into
+    // place, so a write cut short never leaves a copy under the name.
+    make_dir(dir).ok()?;
+    let part = dir.join(format!(".{name}.part"));
+    let written = owner_only()
+        .create(true)
+        .truncate(true)
+        .open(&part)
+        .and_then(|mut f| f.write_all(&bytes))
+        .and_then(|()| fs::rename(&part, &kept));
+    if written.is_err() {
+        let _ = fs::remove_file(&part);
+        return None;
     }
+    Some(name)
 }
 
 #[cfg(unix)]
@@ -337,6 +348,10 @@ mod tests {
         assert_eq!(fs::read(dir.join(&name)).unwrap(), PNG);
         assert_eq!(keep_copy(&dir, &shot).as_deref(), Some(name.as_str()));
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        // A copy cut short is written again.
+        fs::write(dir.join(&name), &PNG[..4]).unwrap();
+        assert_eq!(keep_copy(&dir, &shot).as_deref(), Some(name.as_str()));
+        assert_eq!(fs::read(dir.join(&name)).unwrap(), PNG);
         let video = tmp.path().join("demo.mp4");
         fs::write(&video, b"\0\0\0\x18ftypmp42").unwrap();
         assert_eq!(keep_copy(&dir, &video), None);

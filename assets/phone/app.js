@@ -1249,7 +1249,9 @@ function listen() {
       const answered = state.tabs.find((t) => t.pane === state.sent.pane);
       if (!answered || !answered.prompt || promptKey(answered.prompt) !== state.sent.key) state.sent = null;
     }
-    const turned = before && after && JSON.stringify(before.turn) !== JSON.stringify(after.turn);
+    // A new turn, or pictures Claude showed with `look`, which come apart from its words.
+    const said = (t) => JSON.stringify([t.turn, t.looks || []]);
+    const turned = before && after && said(before) !== said(after);
     if (after && after.prompt) state.answered = null;
     state.close = data.close !== false;
     state.reminders = data.reminders !== false;

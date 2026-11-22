@@ -602,6 +602,7 @@ impl Server {
     /// last turn, and the prompt it shows while waiting.
     pub(crate) fn phone_snapshot(&self) -> Value {
         let r = Rules::now();
+        let looks_on = settings::is_on("phone_look_pictures");
         let mut tabs: Vec<_> = self
             .sidebar_all_tabs()
             .into_iter()
@@ -636,13 +637,15 @@ impl Server {
                     .get(&pane)
                     .and_then(|r| r.session.as_ref()?.socket.as_ref())
                     .map(|s| format!("uds:{s}"));
-                // The pictures its Claude showed in this conversation.
+                // The pictures its Claude showed in this conversation,
+                // none while Settings turns them off.
                 let shown: Vec<&looks::Look> = self
                     .phone
                     .looks
                     .get(&pane)
                     .into_iter()
                     .flatten()
+                    .filter(|_| looks_on)
                     .filter(|k| Some(&k.transcript) == file)
                     .map(|k| &k.look)
                     .collect();
