@@ -66,6 +66,16 @@ button {
    between the composer and the keyboard; iOS keeps the inset either way. */
 .keyboard .screen { padding-bottom: 0; }
 
+/* Swiping right in a channel (board 164's second phone): the drawer under
+   it, the channel over it following the finger, its left edge a line. */
+#app.swiping { position: relative; overflow: hidden; }
+#app.swiping > .screen { position: absolute; inset: 0; }
+#app.swiping > .screen:last-child {
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  will-change: transform;
+}
+
 /* ── Header ── */
 .head {
   display: flex;
