@@ -2536,13 +2536,26 @@ async function start() {
 // The keyboard open, marked on the page so the screen leaves out the
 // home-indicator inset the keyboard covers: iOS keeps safe-area-inset-bottom
 // the same either way, so it is told by the visual viewport, which the
-// keyboard shortens, against the window, which it leaves alone.
+// keyboard shortens, against the window, which it leaves alone. While it is
+// open, the page takes the visual viewport's top and height, so it ends at
+// the keyboard's top; iOS scrolls the visual viewport as a field takes the
+// focus, so its scroll moves the page too.
 function followKeyboard() {
-  const keyboardOpen = Math.round(window.visualViewport.height) < window.innerHeight;
-  document.documentElement.classList.toggle("keyboard", keyboardOpen);
+  const viewport = window.visualViewport;
+  const keyboardOpen = Math.round(viewport.height) < window.innerHeight;
+  const root = document.documentElement;
+  root.classList.toggle("keyboard", keyboardOpen);
+  if (keyboardOpen) {
+    root.style.setProperty("--viewport-top", viewport.offsetTop + "px");
+    root.style.setProperty("--viewport-height", viewport.height + "px");
+  } else {
+    root.style.removeProperty("--viewport-top");
+    root.style.removeProperty("--viewport-height");
+  }
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", followKeyboard);
+  window.visualViewport.addEventListener("scroll", followKeyboard);
   followKeyboard();
 }
 

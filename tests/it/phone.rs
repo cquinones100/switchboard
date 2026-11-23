@@ -1517,31 +1517,42 @@ fn the_composer_spaces_its_text_box_evenly() {
 
 /// The keyboard's class (assets/phone/app.js's `followKeyboard`), run in
 /// Node over a stand-in window: set while the visual viewport is shorter than
-/// the window, cleared as it grows back; skipped without Node.
+/// the window, with the page's top and height following the viewport as it
+/// scrolls, and cleared as it grows back; skipped without Node.
 #[test]
 fn the_keyboard_open_is_told_from_the_visual_viewport() {
     let script = r#"
 const vm = require("vm");
 const fs = require("fs");
 const classes = new Set();
-const viewport = { height: 800, listeners: [], addEventListener(k, f) { if (k === "resize") this.listeners.push(f); } };
+const viewport = { height: 800, offsetTop: 0, listeners: {}, addEventListener(k, f) { (this.listeners[k] ||= []).push(f); } };
+const vars = new Map();
 const ctx = vm.createContext({
   document: {
     getElementById: () => null,
     addEventListener: () => {},
-    documentElement: { classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) } },
+    documentElement: {
+      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+      style: { setProperty: (k, v) => vars.set(k, v), removeProperty: (k) => vars.delete(k) },
+    },
   },
   window: { addEventListener: () => {}, innerHeight: 800, visualViewport: viewport },
   fetch: () => new Promise(() => {}),
   console,
 });
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
-const resize = (height) => { viewport.height = height; for (const f of viewport.listeners) f(); };
-console.log("closed=" + classes.has("keyboard"));
+const fire = (kind) => { for (const f of viewport.listeners[kind] || []) f(); };
+const resize = (height) => { viewport.height = height; fire("resize"); };
+const app = () => [...vars].map(([k, v]) => k + ":" + v).join(" ");
+console.log("closed=" + classes.has("keyboard") + " " + app());
 resize(470.5);
-console.log("open=" + classes.has("keyboard"));
+console.log("open=" + classes.has("keyboard") + " " + app());
+viewport.offsetTop = 120;
+fire("scroll");
+console.log("scrolled " + app());
+viewport.offsetTop = 0;
 resize(800);
-console.log("closed again=" + classes.has("keyboard"));
+console.log("closed again=" + classes.has("keyboard") + " " + app());
 "#;
     let Some(stdout) = run_app_js(script) else {
         return;
@@ -1549,7 +1560,12 @@ console.log("closed again=" + classes.has("keyboard"));
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
         lines,
-        ["closed=false", "open=true", "closed again=false"],
+        [
+            "closed=false ",
+            "open=true --viewport-top:0px --viewport-height:470.5px",
+            "scrolled --viewport-top:120px --viewport-height:470.5px",
+            "closed again=false ",
+        ],
         "{stdout}"
     );
 }
