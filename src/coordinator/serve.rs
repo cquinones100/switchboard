@@ -47,9 +47,11 @@ impl Server {
             self.coordinator_ended();
         }
         // Another note chosen: started again on it, resumed, once it
-        // sleeps, so its permissions name the new one.
+        // sleeps, so its permissions name the new one; a session given
+        // another skill, fresh.
         if self.coordinator.pane.is_some()
-            && self.coordinator.note != Self::coordinator_note_title()
+            && (self.coordinator.note != Self::coordinator_note_title()
+                || self.coordinator.stale_skill)
             && !matches!(
                 self.coordinator.pane.and_then(|p| self.agents.state(p)),
                 Some(State::Working | State::Waiting)
@@ -95,7 +97,21 @@ impl Server {
         let model = settings::setting(super::MODEL)
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default();
-        let resume = self.coordinator.saved.session.clone();
+        // A session given another skill isn't resumed, since it would
+        // follow the skill it started with.
+        let skill = super::skill_hash();
+        let resume = self
+            .coordinator
+            .saved
+            .session
+            .clone()
+            .filter(|_| self.coordinator.saved.skill.as_deref() == Some(skill.as_str()));
+        if resume.is_none() {
+            self.coordinator.saved.session = None;
+            self.coordinator.saved.skill = Some(skill);
+            self.coordinator_save();
+        }
+        self.coordinator.stale_skill = false;
         let command = super::command(
             &crate::worktree::work_shell(),
             &super::model_of(&model, "sonnet"),
@@ -132,6 +148,8 @@ impl Server {
             ..Coordinator::default()
         };
         self.coordinator.load();
+        self.coordinator.stale_skill = pane.is_some()
+            && self.coordinator.saved.skill.as_deref() != Some(super::skill_hash().as_str());
         self.coordinator.note_seen = self.coordinator_note_modified();
     }
 

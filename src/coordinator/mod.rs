@@ -139,6 +139,10 @@ pub struct Coordinator {
     pub editing_note: bool,
     /// What is kept in `state.json`.
     pub saved: Saved,
+    /// Whether its running session, handed over by an upgrade, was given
+    /// another `coordinate` skill than the build has: started again fresh
+    /// once it sleeps, so it follows the skill as it is now.
+    pub stale_skill: bool,
     /// The note's title its running session was given its permissions for:
     /// another chosen in Settings starts it again, resumed, with the new.
     pub note: String,
@@ -170,6 +174,11 @@ impl Coordinator {
 pub struct Saved {
     #[serde(default)]
     pub session: Option<String>,
+    /// The hash of the `coordinate` skill that session was given
+    /// (`skill_hash`): a resumed session keeps the skill it started with,
+    /// so another one starts a fresh session.
+    #[serde(default)]
+    pub skill: Option<String>,
     /// The PRs whose merge it was told of, by their addresses, the latest
     /// last, at most `TOLD`.
     #[serde(default)]
@@ -226,6 +235,21 @@ impl Coordinator {
         }
         Some(std::mem::take(&mut self.pending).join("\n"))
     }
+}
+
+/// The hash of the `coordinate` skill as the build reads it (the clone's,
+/// else what the binary carries), to tell a session given another.
+pub fn skill_hash() -> String {
+    let text = crate::assets::skills()
+        .into_iter()
+        .find(|(path, _)| path == "coordinate/SKILL.md")
+        .map(|(_, bytes)| bytes)
+        .unwrap_or_default();
+    crate::tabs::color::sha256(&text)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()[..16]
+        .to_string()
 }
 
 /// Its folder, where it starts and keeps its settings and state.
