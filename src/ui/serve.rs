@@ -506,6 +506,14 @@ impl Server {
         }
     }
 
+    /// A pick acted on the workspace (made a tab, went to another): a box
+    /// opened after it, on any client, has nothing to go back to.
+    pub(crate) fn forget_coming_everywhere(&mut self) {
+        for c in self.clients.values_mut() {
+            c.overlays.coming = None;
+        }
+    }
+
     /// Input reached the workspace (a key, a press, a paste): the next box
     /// opened came from nothing before it.
     pub(crate) fn forget_coming(&mut self, client: ClientId) {

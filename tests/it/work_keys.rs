@@ -106,6 +106,35 @@ fn m_t_lists_the_directory_youre_in_first_and_opens_claude_in_the_one_picked() {
     });
 }
 
+/// A box after a pick from M-p that made a tab (its name) has no list to
+/// go back to: Esc leaves the new tab named after its directory.
+#[test]
+fn esc_in_the_new_tab_s_name_from_m_p_closes_to_the_tab() {
+    let (server, _repo, mut client) = world();
+    let before = tabs(&server).len();
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("new tab running claude in a directory");
+    client.wait_text("› New tab, running Claude");
+    client.type_text("\r");
+    client.wait_text("Open in >");
+    client.type_text("\r");
+    wait("the new tab", || tabs(&server).len() == before + 1);
+    client.wait_text("Name the tab");
+    client.type_text("\x1b");
+    client.wait_for("the name box closed", |s| {
+        !s.iter().any(|l| l.contains("Name the tab"))
+    });
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(
+        !screen
+            .iter()
+            .any(|l| l.contains("Open in >") || l.contains("╭─ Actions")),
+        "to the new tab: {screen:#?}"
+    );
+}
+
 #[test]
 fn m_shift_w_opens_a_tab_for_each_ticket_typed_running_wt_and_refuses_anything_else() {
     let (server, _repo, mut client) = world();
