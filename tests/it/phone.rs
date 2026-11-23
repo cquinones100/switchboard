@@ -1570,6 +1570,43 @@ console.log("closed again=" + classes.has("keyboard") + " " + app());
     );
 }
 
+/// A home-screen app's height (assets/phone/app.js's `followKeyboard`): the
+/// window there is the screen less the status bar, so the page is given the
+/// screen's upright side, run in Node over a stand-in window; skipped without
+/// Node.
+#[test]
+fn a_home_screen_app_takes_the_screens_full_height() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const classes = new Set();
+const vars = new Map();
+const viewport = { height: 873, offsetTop: 0, addEventListener() {} };
+const win = { addEventListener: () => {}, innerWidth: 430, innerHeight: 873, visualViewport: viewport };
+const ctx = vm.createContext({
+  document: {
+    getElementById: () => null,
+    addEventListener: () => {},
+    documentElement: {
+      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+      style: { setProperty: (k, v) => vars.set(k, v), removeProperty: (k) => vars.delete(k) },
+    },
+  },
+  navigator: { standalone: true },
+  screen: { width: 430, height: 932 },
+  window: win,
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+console.log([...classes].join(",") + " " + vars.get("--app-height"));
+"#;
+    let Some(stdout) = run_app_js(script) else {
+        return;
+    };
+    assert_eq!(stdout.trim(), "standalone 932px", "{stdout}");
+}
+
 /// What the phone's Close tab asks of the server: a Claude tab closed and
 /// logged, with no notification; another pane refused.
 #[test]
