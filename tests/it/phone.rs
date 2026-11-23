@@ -733,6 +733,72 @@ console.log("no tools=" + said());
     );
 }
 
+/// A turn that ends by running `switchboard respawn` (queue-and-clean's
+/// last step, assets/phone/app.js's `turns`) keeps the text before that call
+/// open after its folded steps; a turn a finished background task woke
+/// starts at a dim line, with no avatar. Skipped without Node.
+#[test]
+fn a_respawned_turns_last_line_stays_open_and_a_wake_up_is_a_dim_line() {
+    let script = [CHANNEL_PAGE, r##"
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac" };
+  listen();
+  state.open = "5";
+`, ctx);
+const update = (state) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [{ pane: "%5", index: 2, name: "phone", state, turn: { prompt: "go" } }] }) });
+const draw = (messages) => vm.runInContext("state.messages = " + JSON.stringify(messages) + "; render(true);", ctx);
+const said = () => app.querySelectorAll("div.msg").map((m) => {
+  const row = m.querySelector("button.steps");
+  if (row) return "[" + row.textContent + "]";
+  const tool = m.querySelector("div.tool");
+  if (tool) return "tool:" + tool.textContent;
+  const task = m.querySelector("div.task");
+  if (task) return "dim:" + task.textContent + (m.querySelector(".avatar") ? " avatar" : "");
+  return (m.querySelector(".avatar") ? "@" : "") + m.querySelector("div.body").textContent.trim();
+}).join(" | ");
+const landed = [
+  { who: "you", text: "/queue-and-clean", at: 1 },
+  { who: "tool", text: "Bash: switchboard landing", at: 2 },
+  { who: "claude", text: "Landing.", at: 3 },
+  { who: "tool", text: "Bash: gh pr merge", at: 4 },
+  { who: "claude", text: "queue-and-clean: success (merged)", at: 5 },
+  { who: "tool", text: "Bash: switchboard respawn -c '/repo' claude --resume abc", at: 6 },
+];
+for (const state of ["idle", "working"]) {
+  update(state);
+  draw(landed);
+  console.log(state + "=" + said());
+}
+app.querySelector("button.steps").click();
+console.log("opened=" + said());
+update("idle");
+draw([
+  { who: "you", text: "Watch CI", at: 10 },
+  { who: "tool", text: "Monitor: CI", at: 11 },
+  { who: "claude", text: "Watching.", at: 12 },
+  { who: "task", text: "a background task finished", at: 20 },
+  { who: "tool", text: "Bash: gh run view", at: 21 },
+  { who: "claude", text: "CI passed.", at: 22 },
+]);
+console.log("woken=" + said());
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "idle=@/queue-and-clean | [▸ 3 steps] | @queue-and-clean: success (merged)",
+            "working=@/queue-and-clean | [▸ 3 steps] | @queue-and-clean: success (merged)",
+            "opened=@/queue-and-clean | [▾ 3 steps] | tool:Bash: switchboard landing | @Landing. | tool:Bash: gh pr merge | tool:Bash: switchboard respawn -c '/repo' claude --resume abc | @queue-and-clean: success (merged)",
+            "woken=@Watch CI | [▸ 1 step] | @Watching. | dim:a background task finished | [▸ 1 step] | @CI passed.",
+        ],
+        "{stdout}"
+    );
+}
+
 /// Swiping right in a tab's channel (assets/phone/app.js's `swipeable`), run
 /// in Node over the page: a touch moving right past a third of the screen's
 /// width, or flicked, opens the drawer and clears the address's tab; a short

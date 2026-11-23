@@ -25,7 +25,9 @@ pub const MOST: usize = 80;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Message {
     /// `you`, `tab` (another tab's Claude), `claude`, `tool`, `look` for
-    /// the pictures Claude showed (`looks`), or `turn`, with no words,
+    /// the pictures Claude showed (`looks`), `task` where Claude Code's
+    /// wake-up for a finished background task started a turn, which the
+    /// app draws as a dim line, or `turn`, with no words,
     /// where a subagent's report back started a turn, which the app starts
     /// there without drawing it.
     pub who: &'static str,
@@ -122,6 +124,22 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
             continue;
         }
         match entry.get("type").and_then(Value::as_str) {
+            // Claude Code's own wake-up for a finished background task
+            // starts a turn, but nobody said it.
+            Some("user")
+                if entry.pointer("/origin/kind").and_then(Value::as_str)
+                    == Some("task-notification") =>
+            {
+                out.push(Message {
+                    who: "task",
+                    text: "a background task finished".to_string(),
+                    images: Vec::new(),
+                    titles: Vec::new(),
+                    at,
+                    from: String::new(),
+                    queued: false,
+                });
+            }
             Some("user") => {
                 if let Some(text) = prompt_text(&entry) {
                     let (text, images) = images::split(&text, images_dir);
@@ -291,5 +309,23 @@ mod tests {
             .map(|m| (m.text.as_str(), m.queued))
             .collect();
         assert_eq!(queued, [("idle", false), ("mid-turn", true)]);
+    }
+
+    #[test]
+    fn a_background_tasks_wake_up_reads_as_a_task_not_as_you() {
+        let text = [
+            r#"{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><status>completed</status></task-notification>"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"CI passed."}]}}"#,
+        ]
+        .join("\n");
+        let messages = parse(&text, MOST, Path::new("/i"));
+        let said: Vec<(&str, &str)> = messages.iter().map(|m| (m.who, m.text.as_str())).collect();
+        assert_eq!(
+            said,
+            [
+                ("task", "a background task finished"),
+                ("claude", "CI passed.")
+            ]
+        );
     }
 }
