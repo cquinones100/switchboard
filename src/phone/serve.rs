@@ -301,6 +301,13 @@ impl Server {
         if self.phone_prompt_of(pane).is_some() || self.phone_dialog(pane) {
             return Err("its Claude is asking something: answer it first".into());
         }
+        // Scrolled back, Esc would scroll the view down, or reach a prompt
+        // hidden below it, rather than stop the turn.
+        if self.phone_scrolled_back(pane) {
+            return Err(
+                "its Claude's view is scrolled back: scroll it down at the computer first".into(),
+            );
+        }
         let tab = self.panes[&pane].tab;
         self.press(
             pane,
