@@ -48,6 +48,13 @@
 //!   reading the whole screen through an emulator of its own.
 //! - `serve`: the server's side: opening them, input, timers, commands.
 //!
+//! A box a command chosen in M-p opens remembers where it came from
+//! (`Came`): Esc closing it opens the palette again with its search and
+//! chosen row, and a box opened by a pick in such a box goes back to that
+//! box the same way, one step at a time down to M-p. A click outside and
+//! the × still close it to the pane, and a box opened any other way has
+//! nowhere to go back to.
+//!
 //! The look follows the settings as they are when an overlay opens
 //! (`Look`): clicks with menu_mouse, the mouse lighting what a click would
 //! press with hover_highlight, easy mode's × with easy_keys and menu_mouse,
@@ -75,8 +82,8 @@ pub mod tip;
 pub mod when;
 
 pub use switchboard_ui::{
-    AsAny, Canvas, Confirm, Look, Menu, MenuOption, Message, Outcome, PickItem, Picked, Picker,
-    Step, Theme, confirm, dim_behind, draw, field, kit, menu, message, picker, pointer,
+    AsAny, Canvas, Confirm, Kept, Look, Menu, MenuOption, Message, Outcome, PickItem, Picked,
+    Picker, Step, Theme, confirm, dim_behind, draw, field, kit, menu, message, picker, pointer,
 };
 
 pub use serve::Handed;
@@ -97,6 +104,39 @@ pub(crate) struct Layer {
     /// planning"): such a box alone goes beside a narrow lone pane, as a
     /// pane (`Server::about_tab`).
     pub about: Option<String>,
+    /// The box Esc goes back to, and how this one opens again.
+    pub came: Came,
+}
+
+/// Opens a box again: its opener run once more.
+pub(crate) type Reopen = std::sync::Arc<dyn Fn(&mut Server, ClientId) + Send + Sync>;
+
+/// A box Esc goes back to: how to open it again, what it showed as it
+/// closed, and the box it goes back to in turn.
+pub(crate) struct Back {
+    pub reopen: Reopen,
+    pub kept: Option<Kept>,
+    pub before: Option<Box<Back>>,
+}
+
+/// Where a box came from: the box Esc in it goes back to, and how it opens
+/// again itself, for a box opened from it to go back to it. Neither for a
+/// box opened by a key, a sidebar menu or mission control.
+#[derive(Default)]
+pub(crate) struct Came {
+    pub back: Option<Back>,
+    pub reopen: Option<Reopen>,
+}
+
+/// What the next box opened on a client takes: where it came from, and
+/// the search and row it had when Esc is opening it again. Kept until a
+/// box takes it, input reaches the workspace (a key, a press, a paste) or
+/// `COMING_FOR` passes, so a box a lookup opens a moment after the pick
+/// takes it too.
+pub(crate) struct Coming {
+    pub came: Came,
+    pub kept: Option<Kept>,
+    pub at: Instant,
 }
 
 /// A client's overlays, the top one taking its input.
@@ -107,6 +147,8 @@ pub struct Stack {
     /// The tab the next box opened is about, while `Server::about_tab`
     /// opens it.
     pub(crate) about_next: Option<String>,
+    /// Where the next box opened comes from (`Coming`).
+    pub(crate) coming: Option<Coming>,
     /// Whether the client's terminal was asked for every mouse movement
     /// (1003), for hover.
     pub(crate) motion: bool,
@@ -338,6 +380,7 @@ mod tests {
                 overlay: Box::new(Message::new(text, 5)),
                 then: None,
                 about: None,
+                came: Came::default(),
             });
         }
         let mut f = frame_behind(60, 12);

@@ -1947,6 +1947,9 @@ impl Server {
         self.next_tab += 1;
         let work = command.as_deref().is_some_and(crate::worktree::opens_work);
         let pane = self.spawn_pane(tab, cwd, command, area.width, area.height)?;
+        // A pick that made a tab has done its work: a box after it (the
+        // tab's name) has no list to go back to (src/ui).
+        self.forget_coming_everywhere();
         let mut t = new_tab(tab, pane);
         t.name = name.unwrap_or_default();
         self.tabs.insert(tab, t);
@@ -2486,6 +2489,8 @@ impl Server {
             self.tab_focus(left, false);
             self.tab_focus(tab, true);
             self.tab_switched(session);
+            // A pick that went to another tab has done its work too.
+            self.forget_coming_everywhere();
         }
     }
 
@@ -3314,6 +3319,16 @@ impl Server {
                 self.mission_changed();
                 return;
             }
+        }
+        // What is typed or pressed is the workspace's now: a box opened
+        // after it came from no box before it (src/ui).
+        let pressed = match &parsed.input {
+            Input::Key(_) | Input::Paste(_) => true,
+            Input::Mouse(m) => m.kind == input::MouseKind::Press,
+            _ => false,
+        };
+        if pressed {
+            self.forget_coming(id);
         }
         // A tab's digits held after M-1 to M-9 take the next digit, and
         // any other key goes to their tab first (src/mux/tab_digits.rs).

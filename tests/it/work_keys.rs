@@ -106,6 +106,35 @@ fn m_t_lists_the_directory_youre_in_first_and_opens_claude_in_the_one_picked() {
     });
 }
 
+/// A box after a pick from M-p that made a tab (its name) has no list to
+/// go back to: Esc leaves the new tab named after its directory.
+#[test]
+fn esc_in_the_new_tab_s_name_from_m_p_closes_to_the_tab() {
+    let (server, _repo, mut client) = world();
+    let before = tabs(&server).len();
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("new tab running claude in a directory");
+    client.wait_text("› New tab, running Claude");
+    client.type_text("\r");
+    client.wait_text("Open in >");
+    client.type_text("\r");
+    wait("the new tab", || tabs(&server).len() == before + 1);
+    client.wait_text("Name the tab");
+    client.type_text("\x1b");
+    client.wait_for("the name box closed", |s| {
+        !s.iter().any(|l| l.contains("Name the tab"))
+    });
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(
+        !screen
+            .iter()
+            .any(|l| l.contains("Open in >") || l.contains("╭─ Actions")),
+        "to the new tab: {screen:#?}"
+    );
+}
+
 #[test]
 fn m_shift_w_opens_a_tab_for_each_ticket_typed_running_wt_and_refuses_anything_else() {
     let (server, _repo, mut client) = world();
@@ -827,6 +856,91 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
     wait("the typed issue's tab", || {
         tabs(&server).len() == before + 2
     });
+}
+
+/// Esc in a list opened from a list M-p opened goes back one step at a
+/// time: the issues to the repositories, the repository picked still
+/// chosen, then to M-p with its search and command.
+#[cfg(feature = "net")]
+#[test]
+fn esc_in_the_issue_list_goes_back_to_the_repositories_then_to_m_p() {
+    use common::http::{Fake, Reply};
+    use serde_json::json;
+
+    let github = Fake::github("test-token", |request| {
+        (request.path() == "/graphql" && request.text().contains("issues(states: OPEN")).then(
+            || {
+                Reply::json(
+                    200,
+                    json!({ "data": { "viewer": { "login": "me" }, "repository": { "issues": { "nodes": [
+                        { "number": 12, "title": "An issue", "assignees": { "nodes": [] } },
+                    ] } } } }),
+                )
+            },
+        )
+    });
+    let server = TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &github.url),
+    ]);
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let repo = repo.canonicalize().unwrap();
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    in_front_at(&server, &mut client, "▌○ 2 repo", &repo);
+
+    let palette_up = |s: &[String]| s.iter().any(|l| l.contains("╭─ Actions"));
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("GitHub issue in a new tab");
+    client.wait_text("› Start work on a GitHub issue");
+    client.type_text("\r");
+    client.wait_text("Open in >");
+    client.type_text("repo");
+    client.wait_text("› ~/repo");
+    client.type_text("\r");
+    client.wait_text("#12 An issue");
+
+    client.type_text("\x1b");
+    let screen = client.wait_for("the repositories back", |s| {
+        s.iter().any(|l| l.contains("Open in >")) && !s.iter().any(|l| l.contains("#12 An issue"))
+    });
+    assert!(
+        screen.iter().any(|l| l.contains("Open in > repo")),
+        "what was typed kept:\n{}",
+        screen.join("\n")
+    );
+    client.wait_text("› ~/repo");
+
+    client.type_text("\x1b");
+    let screen = client.wait_for("M-p back", |s| {
+        palette_up(s) && !s.iter().any(|l| l.contains("Open in >"))
+    });
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("› GitHub issue in a new tab")),
+        "what was typed kept:\n{}",
+        screen.join("\n")
+    );
+    client.wait_text("› Start work on a GitHub issue");
+    client.type_text("\x1b");
+    client.wait_for("M-p closed", |s| !palette_up(s));
 }
 
 /// The world's repository named `o/r` on GitHub by its origin, which git

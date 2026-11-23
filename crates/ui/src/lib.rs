@@ -59,6 +59,6 @@ pub use confirm::Confirm;
 pub use look::Look;
 pub use menu::{Menu, MenuOption};
 pub use message::Message;
-pub use overlay::{AsAny, Canvas, Outcome, Overlay, Step, dim_behind};
+pub use overlay::{AsAny, Canvas, Kept, Outcome, Overlay, Step, dim_behind};
 pub use picker::{PickItem, Picked, Picker};
 pub use theme::Theme;
