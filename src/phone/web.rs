@@ -690,13 +690,19 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>, uri: Ur
         .unwrap_or_default();
     // The pictures its Claude showed with `look`, among them by time.
     let shown: Vec<looks::Look> = serde_json::from_value(tab["looks"].clone()).unwrap_or_default();
-    let (messages, from, earlier) = tokio::task::spawn_blocking(move || {
-        let w = turns::window(&file, before);
+    let read = tokio::task::spawn_blocking(move || {
+        let w = turns::window(&file, before)?;
         let messages = looks::merge(w.messages, &shown, w.from, w.earlier, until);
-        (messages, w.from, w.earlier)
+        Ok::<_, std::io::Error>((messages, w.from, w.earlier))
     })
-    .await
-    .unwrap_or_default();
+    .await;
+    let Ok(Ok((messages, from, earlier))) = read else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the conversation couldn't be read",
+        )
+            .into_response();
+    };
     // Another tab's message names its sender by its tab, as the drawer
     // lists it now, not by the address the transcript keeps.
     let tabs = app.tabs.borrow()["tabs"].clone();

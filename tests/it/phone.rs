@@ -2554,8 +2554,6 @@ mod preview_server {
         assert!(!turns["messages"].as_array().unwrap().is_empty());
     }
 
-    /// The preview stamps app.js with its own build, as the phone server
-    /// stamps app.js and sw.js.
     /// A long made-up conversation's channel opens on its last 20 turns,
     /// and `?before=` answers the turns before, back to its start.
     #[test]
@@ -2596,6 +2594,8 @@ mod preview_server {
         assert!(asks(&earliest)[0].starts_with("Step 1:"), "{earliest}");
     }
 
+    /// The preview stamps app.js with its own build, as the phone server
+    /// stamps app.js and sw.js.
     #[test]
     fn the_preview_stamps_the_app_with_its_builds_commit() {
         let at = preview(&assets());

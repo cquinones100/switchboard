@@ -963,27 +963,27 @@ async function loadEarlier() {
   const shownAt = state.messages.find((m) => m.at && m.offset !== undefined);
   state.loadingEarlier = true;
   render();
+  // Taken only while the channel still starts where it was asked from, in
+  // the same conversation; a failure is asked again on the next scroll,
+  // never at once, so a computer out of reach isn't asked over and over.
+  let took = false;
   try {
     const r = await api("/api/tabs/" + n + "/turns?before=" + from + (shownAt ? "&until=" + shownAt.at : ""));
-    if (state.open !== n || state.from !== from || state.conversation !== conversation) return;
-    state.messages = (r.messages || []).concat(state.messages);
-    state.from = r.from || 0;
-    state.earlier = !!r.earlier;
-    if (shown) shown.grew = true;
-  } catch (_) {
-    // Asked again on the next scroll, never at once, so a computer out of
-    // reach isn't asked over and over.
-    if (state.open === n) {
-      state.loadingEarlier = false;
-      render();
+    if (state.open === n && state.from === from && state.conversation === conversation && r.conversation === conversation) {
+      state.messages = (r.messages || []).concat(state.messages);
+      state.from = r.from || 0;
+      state.earlier = !!r.earlier;
+      if (shown) shown.grew = true;
+      took = true;
     }
-    return;
+  } catch (_) {
+    // Left for the next scroll.
   } finally {
     if (state.open === n) state.loadingEarlier = false;
   }
   if (state.open !== n) return;
   render();
-  wantEarlier();
+  if (took) wantEarlier();
 }
 
 // How near the channel's top a scroll asks for the turns before.

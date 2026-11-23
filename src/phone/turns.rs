@@ -246,18 +246,12 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
 
 /// The `TURNS` turns of the transcript at `file` that end before the
 /// byte offset `before` (a turn's start a window answered as its `from`),
-/// or at its end, read off the server's task.
-pub fn window(file: &Path, before: Option<u64>) -> Window {
-    let read = || {
-        let mut f = fs::File::open(file)?;
-        let size = f.metadata()?.len();
-        read_window(&mut f, size, before, TURNS, CHUNK, BOUND, &images::dir())
-    };
-    read().unwrap_or(Window {
-        messages: Vec::new(),
-        from: 0,
-        earlier: false,
-    })
+/// or at its end, read off the server's task; an error where it can't be
+/// read, which the app asks again after rather than take as the start.
+pub fn window(file: &Path, before: Option<u64>) -> std::io::Result<Window> {
+    let mut f = fs::File::open(file)?;
+    let size = f.metadata()?.len();
+    read_window(&mut f, size, before, TURNS, CHUNK, BOUND, &images::dir())
 }
 
 /// `window` over any file, `turns` turns, read `chunk` bytes at a time
