@@ -319,6 +319,12 @@ fn routes(preview: Arc<Preview>) -> Router {
         .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/tabs/{pane}/pin", post(pin))
         .route("/api/tabs/{pane}/stop", post(stop))
+        .route("/api/tabs/{pane}/pr", get(|s, p| tab_view(s, p, "pr")))
+        .route(
+            "/api/tabs/{pane}/ticket",
+            get(|s, p| tab_view(s, p, "ticket")),
+        )
+        .route("/api/tabs/{pane}/note", get(|s, p| tab_view(s, p, "note")))
         .route("/api/views/{view}/item", post(view_item))
         .route("/api/views/{view}/act", post(view_act))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -784,6 +790,25 @@ async fn image_of(State(preview): State<Arc<Preview>>, UrlPath(name): UrlPath<St
     match made_up::image(&name) {
         Some(svg) => ([(header::CONTENT_TYPE, "image/svg+xml")], svg).into_response(),
         None => (StatusCode::NOT_FOUND, "Not here").into_response(),
+    }
+}
+
+/// A made-up tab's PR, ticket or note, as `phone-tab` answers it.
+async fn tab_view(
+    State(preview): State<Arc<Preview>>,
+    UrlPath(n): UrlPath<String>,
+    kind: &'static str,
+) -> Response {
+    let mut d = preview.data();
+    if !d.live {
+        return offline();
+    }
+    if d.tab(&n).is_none() {
+        return no_tab();
+    }
+    match made_up::tab_view(&n, kind) {
+        Some(v) => axum::Json(v).into_response(),
+        None => refused(StatusCode::CONFLICT, "This tab hasn't one."),
     }
 }
 

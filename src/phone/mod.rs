@@ -18,6 +18,7 @@ pub mod preview;
 #[cfg(feature = "net")]
 pub mod push;
 pub mod serve;
+pub mod tab_views;
 pub mod tailnet;
 pub mod turns;
 pub mod views;

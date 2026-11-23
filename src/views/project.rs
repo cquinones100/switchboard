@@ -166,7 +166,7 @@ pub async fn url(id: &str) -> Result<Option<String>, String> {
     Ok(Some(text(&fetch(id).await?, "/url")).filter(|u| !u.is_empty()))
 }
 
-fn cache_file(id: &str) -> std::path::PathBuf {
+pub(crate) fn cache_file(id: &str) -> std::path::PathBuf {
     let name: String = id
         .chars()
         .map(|c| {

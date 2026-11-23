@@ -344,6 +344,11 @@ The relay's DM, threads and Home tab.
 - [186. PRs and CI in the phone's right panel: the PR board's columns as groups, CI's runs with what fails first; a failing run's menu leads with Start a CI loop…, and an option ending in … asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
 - [187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is](https://cquinones100.github.io/switchboard/design/187.html)
 
+## Proposal: a tab's own views on the phone
+
+- [189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note (the note only while phone_tab_note is on, off by default), each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's](https://cquinones100.github.io/switchboard/design/189.html)
+- [190. The list of views with a tab's section: a tab with none of PR, ticket or note says so; from the drawer, with no tab in front, mission control's views alone; a tab's section lists only what it has](https://cquinones100.github.io/switchboard/design/190.html)
+
 ## Other boards
 
 - [183. Settings' This computer: the settings that depend on the computer (whether a service is used here, what runs on one computer only, the hardware) listed first under a heading of their own and still in their own categories, every row of one carrying a this computer chip; a service off until it has worked here says so in its default](https://cquinones100.github.io/switchboard/design/183.html)

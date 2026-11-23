@@ -554,29 +554,40 @@ impl Server {
     /// branch tab naming last read and the tab's options and names. For
     /// the drawing path, which reads no file.
     pub(crate) fn ticket_known(&self, tab: TabId) -> bool {
-        let Some(t) = self.tabs.get(&tab) else {
-            return false;
-        };
+        self.ticket_known_short(tab).is_some()
+    }
+
+    /// The ticket `ticket_known` finds, as a tab names it short (`#12`,
+    /// `ENG-42`), from what the server holds alone.
+    pub(crate) fn ticket_known_short(&self, tab: TabId) -> Option<String> {
+        let t = self.tabs.get(&tab)?;
         // One chosen of a service turned off stands aside, as it does for M-i.
         if let Some(chosen) = t.opts.get(TAB_TICKET).and_then(|v| Ticket::parse(v))
             && settings::is_on(chosen.service())
         {
-            return true;
+            return Some(chosen.short());
         }
         let branch = self
             .tab_path(tab)
             .and_then(|d| self.tab_names.names.branch(d));
-        if branch.and_then(ticket::issue_number_of_branch).is_some() && settings::is_on("github") {
-            return true;
+        if let Some(number) = branch.and_then(ticket::issue_number_of_branch)
+            && settings::is_on("github")
+        {
+            return Some(format!("#{number}"));
         }
-        settings::is_on("linear")
-            && (branch.and_then(ticket::linear_in_branch).is_some()
-                || t.opts
+        if !settings::is_on("linear") {
+            return None;
+        }
+        branch
+            .and_then(ticket::linear_in_branch)
+            .or_else(|| {
+                t.opts
                     .get("@tab_name")
                     .and_then(|n| ticket::in_name(n))
                     .or_else(|| ticket::in_name(&t.name))
                     .or_else(|| ticket::in_name(&self.tab_label_without_pr_title(tab)))
-                    .is_some())
+            })
+            .map(|found| found.short())
     }
 
     /// M-i: the tab's ticket in Claude's place, or closed; with none

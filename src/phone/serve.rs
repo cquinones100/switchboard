@@ -42,7 +42,10 @@ use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::Rules;
 use crate::{settings, util};
 
-use super::{cli, drawer, images, looks};
+use crate::tabs::prs::TabPr;
+use crate::views::ticket::Ticket;
+
+use super::{cli, drawer, images, looks, tab_views};
 
 /// How long after a change `watch` waits before it sends, so a burst of
 /// changes goes as one.
@@ -760,6 +763,7 @@ impl Server {
                     })),
                     "prompt": prompt,
                     "stoppable": self.phone_stoppable(pane).is_ok(),
+                    "tab_views": self.phone_tab_rows(t.id),
                 });
                 if let Some(tab) = tab.as_object_mut() {
                     tab.extend(drawer::fields(t, stage, &r));
@@ -778,6 +782,178 @@ impl Server {
             "reminders": r.reminders,
             "remind_times": remind_times(&util::local_now()),
         })
+    }
+
+    // ── A tab's own views (boards 189 and 190) ──────────────────────────────
+
+    /// Whether the phone shows a tab's views: within mission control's on
+    /// the phone, while both settings are on.
+    fn phone_tab_views_on() -> bool {
+        settings::is_on("phone_views") && settings::is_on("phone_tab_views")
+    }
+
+    /// What of its PR, its ticket and its note a tab has, as rows of the
+    /// panel's list in that order, from what the server holds; `null`
+    /// while the tab's views are off, so the app tells off from none. The
+    /// note only while `phone_tab_note` is on.
+    fn phone_tab_rows(&self, tab: TabId) -> Value {
+        if !Self::phone_tab_views_on() {
+            return Value::Null;
+        }
+        let mut rows = Vec::new();
+        if let Some(pr) = self
+            .tab_current_pr(tab)
+            .filter(|_| settings::is_on("github"))
+        {
+            rows.push(tab_views::pr_row(pr.number, self.phone_pr_facts(tab, &pr)));
+        }
+        if let Some(short) = self.ticket_known_short(tab) {
+            rows.push(tab_views::ticket_row(&short, self.ticket_held(&short)));
+        }
+        if let Some(note) = self.phone_tab_note(tab) {
+            rows.push(tab_views::note_row(&note));
+        }
+        Value::Array(rows)
+    }
+
+    /// What the lookups last said of the tab's PR.
+    fn phone_pr_facts(&self, tab: TabId, pr: &TabPr) -> Option<&crate::facts::PrFacts> {
+        self.tab_pr_facts(pr).or_else(|| {
+            self.facts
+                .get(&tab)
+                .and_then(|f| f.pr.as_ref())
+                .filter(|f| f.number == pr.number)
+        })
+    }
+
+    /// The tab's note as M-e finds it, while the phone may show it.
+    fn phone_tab_note(&self, tab: TabId) -> Option<String> {
+        settings::is_on("phone_tab_note")
+            .then(|| self.note_for(tab))
+            .flatten()
+    }
+
+    /// `phone-tab <pr|ticket|note> -t <pane>`: the tab's view of that kind
+    /// as JSON for the phone, from what the server holds and the copy its
+    /// view on the computer last read, the files read off this task;
+    /// refused for a pane not running Claude, a kind the tab hasn't, and
+    /// while the phone app, its tab's views or (for the note)
+    /// `phone_tab_note` are off.
+    pub(crate) fn phone_tab_asked(
+        &mut self,
+        kind: &str,
+        pane: PaneId,
+        reply: oneshot::Sender<Answer>,
+    ) {
+        let answer = |reply: oneshot::Sender<Answer>, r: Reply| {
+            let _ = reply.send(Answer::Reply(r));
+        };
+        match self.phone_tab_read(kind, pane) {
+            Err(why) => answer(reply, Reply::fail(why)),
+            Ok(read) => {
+                tokio::task::spawn_blocking(move || {
+                    let r = match read() {
+                        Ok(v) => Reply::ok(format!("{v}\n")),
+                        Err(why) => Reply::fail(why),
+                    };
+                    answer(reply, r);
+                });
+            }
+        }
+    }
+
+    /// What `phone_tab_asked` reads off the task, worked out on it.
+    #[allow(clippy::type_complexity)]
+    fn phone_tab_read(
+        &self,
+        kind: &str,
+        pane: PaneId,
+    ) -> Result<Box<dyn FnOnce() -> Result<Value, String> + Send>, String> {
+        if !settings::is_on("phone") {
+            return Err("The phone app is off.".into());
+        }
+        if !Self::phone_tab_views_on() {
+            return Err("A tab's views on the phone are off.".into());
+        }
+        let kind = tab_views::Kind::of(kind)
+            .ok_or_else(|| format!("phone-tab takes pr, ticket or note, not {kind}"))?;
+        self.phone_claude_pane(pane)?;
+        let tab = self
+            .panes
+            .get(&pane)
+            .map(|slot| slot.tab)
+            .ok_or_else(|| format!("no pane {pane}"))?;
+        let dir = self
+            .tab_path(tab)
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.pane_dir(pane));
+        match kind {
+            tab_views::Kind::Pr => {
+                let pr = self
+                    .tab_current_pr(tab)
+                    .filter(|_| settings::is_on("github"))
+                    .ok_or("This tab has no PR.")?;
+                let facts = self.phone_pr_facts(tab, &pr).cloned();
+                let url = facts.as_ref().map(|f| f.url.clone()).unwrap_or_default();
+                let body = self.pr_body_held(&url);
+                // The PR view's copy: by its number when it isn't the
+                // branch's, as M-v opens it, else the branch's.
+                let elsewhere = self.tab_current_pr_elsewhere(tab);
+                Ok(Box::new(move || {
+                    let file = match (&elsewhere, &dir) {
+                        (Some(pr), _) => pr.repo.as_ref().map(|repo| {
+                            crate::paths::cache_dir()
+                                .join("pr-view")
+                                .join(format!("{}%{}#{}.json", repo.owner, repo.name, pr.number))
+                        }),
+                        (None, Some(dir)) => crate::views::pr::cache_file(dir),
+                        (None, None) => None,
+                    };
+                    let copy = file.as_deref().and_then(util::read_json);
+                    Ok(tab_views::pr_json(
+                        pr.number,
+                        facts.as_ref(),
+                        copy.as_ref(),
+                        body.as_deref(),
+                    ))
+                }))
+            }
+            tab_views::Kind::Ticket => {
+                let ticket = dir
+                    .as_deref()
+                    .and_then(|d| self.tab_ticket_at(tab, d))
+                    .filter(|t| settings::is_on(t.service()))
+                    .ok_or("This tab has no ticket.")?;
+                let held = match &ticket {
+                    Ticket::Linear(id) => self.ticket_held(id).cloned(),
+                    _ => None,
+                };
+                Ok(Box::new(move || {
+                    let copy = held.or_else(|| match &ticket {
+                        Ticket::Issue { repo, number } => {
+                            util::read_json(crate::views::issue::cache_file(repo, *number))
+                        }
+                        Ticket::Linear(id) => util::read_json(crate::views::ticket::cache_file(id)),
+                        Ticket::Project(id) => {
+                            util::read_json(crate::views::project::cache_file(id))
+                        }
+                    });
+                    Ok(tab_views::ticket_json(&ticket, copy.as_ref()))
+                }))
+            }
+            tab_views::Kind::Note => {
+                if !settings::is_on("phone_tab_note") {
+                    return Err("A tab's note on the phone is off.".into());
+                }
+                let note = self.phone_tab_note(tab).ok_or("This tab has no note.")?;
+                Ok(Box::new(move || {
+                    let path = crate::notes::store::notes_dir().join(&note);
+                    let text = std::fs::read_to_string(path)
+                        .map_err(|_| "The tab's note couldn't be read.".to_string())?;
+                    Ok(tab_views::note_json(&note, &text))
+                }))
+            }
+        }
     }
 }
 

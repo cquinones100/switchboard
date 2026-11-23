@@ -680,6 +680,19 @@ body.refused p { color: var(--dim); }
   touch-action: pan-y;
 }
 .panel .head > .title:nth-child(2), .panel-view .head > .title:nth-child(2) { padding-left: 0; }
+/* On a tab's channel (boards 189 and 190) the panel takes the whole
+   screen, with no strip, its views in it. */
+.panel-layer.whole .panel { left: 0; border-left: 0; box-shadow: none; }
+.panel-layer.whole .panel-strip { display: none; }
+.panel-list.tab-view { flex: 1; overflow-y: auto; padding: var(--s3) 0 var(--s5); }
+.view-row.shown { background: var(--chosen); box-shadow: inset 3px 0 0 var(--accent); }
+.tv-title { font-weight: 700; padding: 0 var(--edge); overflow-wrap: anywhere; }
+.tv-title a { color: inherit; text-decoration: none; }
+.tv-chips { display: flex; flex-wrap: wrap; gap: var(--s2); padding: var(--s3) var(--edge) 0; }
+.tv-check { display: grid; grid-template-columns: 1.5ch 1fr; column-gap: var(--s2); padding: 2px var(--edge); }
+.tv-check .name { overflow-wrap: anywhere; }
+.tv-text .body { padding: 0 var(--edge); white-space: normal; }
+.chip.m { background: var(--magenta-bg, var(--raised)); color: var(--magenta); }
 .panel-list { padding-top: var(--s3); }
 .view-row, .item-row { grid-template-columns: 1.5ch 1fr auto; }
 .view-row .sub, .item-row .sub { grid-column: 2 / 4; }

@@ -1379,6 +1379,19 @@ impl Server {
                     self.phone_option_asked(&args, by_hand, reply);
                     return;
                 }
+                // Answered once the tab's view is read, off this task
+                // (src/phone).
+                if args.first().is_some_and(|a| a == "phone-tab")
+                    && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
+                {
+                    match self.phone_tab_args(&args[1..], pane.as_deref()) {
+                        Ok((kind, pane)) => self.phone_tab_asked(&kind, pane, reply),
+                        Err(why) => {
+                            let _ = reply.send(Answer::Reply(Reply::fail(why)));
+                        }
+                    }
+                    return;
+                }
                 // Answered once its file is read, off this task.
                 if args.first().is_some_and(|a| a == "restore-layout")
                     && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))

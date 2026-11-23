@@ -112,6 +112,22 @@ fn branch_markdown(copy: &Value) -> String {
     out
 }
 
+/// The PR's checks listed by name, each with its mark, what needs you
+/// first: the failures, then what is still running, as the board's panel
+/// lists them (the phone's PR view reads them too).
+pub fn checks_listed(pr: &Value) -> Vec<(Mark, String)> {
+    let mut marked: Vec<(Mark, String)> = nodes(pr, &format!("{ROLLUP}/nodes"))
+        .iter()
+        .map(|c| (check_mark(c), check_name(c).to_string()))
+        .collect();
+    marked.sort_by_key(|(m, _)| match m {
+        Mark::Failed => 0,
+        Mark::Pending => 1,
+        _ => 2,
+    });
+    marked
+}
+
 /// The PR's checks, the first hundred by name with every check counted.
 fn rollup(pr: &Value) -> &Value {
     pr.pointer(ROLLUP).unwrap_or(&Value::Null)

@@ -265,6 +265,12 @@ fn routes(app: Arc<App>) -> Router {
         .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/tabs/{pane}/pin", post(pin))
         .route("/api/tabs/{pane}/stop", post(stop))
+        .route("/api/tabs/{pane}/pr", get(|s, p| tab_view(s, p, "pr")))
+        .route(
+            "/api/tabs/{pane}/ticket",
+            get(|s, p| tab_view(s, p, "ticket")),
+        )
+        .route("/api/tabs/{pane}/note", get(|s, p| tab_view(s, p, "note")))
         .route("/api/views/{view}/item", post(view_item))
         .route("/api/views/{view}/act", post(view_act))
         .route("/api/push/key", get(push_key))
@@ -952,6 +958,50 @@ async fn stop(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response
     .await
 }
 
+/// A tab's PR, ticket or note as its view on the phone shows it (boards
+/// 189 and 190), read only, through `phone-tab`, which refuses a pane not
+/// running Claude and a view that is off.
+async fn tab_view(
+    State(app): State<Arc<App>>,
+    Path(pane): Path<String>,
+    kind: &'static str,
+) -> Response {
+    let Some(tab) = claude_tab(&app, &pane) else {
+        return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
+    };
+    let args = [
+        "phone-tab".to_string(),
+        "-t".into(),
+        pane_of(&tab),
+        kind.into(),
+    ];
+    let answer = tokio::task::spawn_blocking(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        socket::ask(&args)
+    })
+    .await;
+    match answer {
+        Ok(Ok((0, out, _))) => match serde_json::from_str::<Value>(out.trim()) {
+            Ok(v) => axum::Json(v).into_response(),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the view couldn't be read",
+            )
+                .into_response(),
+        },
+        Ok(Ok((_, _, err))) => (
+            StatusCode::CONFLICT,
+            axum::Json(json!({"error": err.trim()})),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "Switchboard isn't running"})),
+        )
+            .into_response(),
+    }
+}
+
 /// An option of mission control's menu for an item of a view, by the
 /// item's ID and the option's label: the server builds the menu again and
 /// runs it, refusing one the phone leaves out or no longer offered.
@@ -1298,6 +1348,7 @@ mod tests {
         assert!(!before_pairing("/api/tabs/1/remind", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/pin", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/stop", &Method::POST));
+        assert!(!before_pairing("/api/tabs/1/note", &Method::GET));
         assert!(!before_pairing("/", &Method::POST));
     }
 
