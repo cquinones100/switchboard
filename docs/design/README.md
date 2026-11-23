@@ -346,7 +346,7 @@ The relay's DM, threads and Home tab.
 
 ## Proposal: a tab's own views on the phone
 
-- [189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note, each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's](https://cquinones100.github.io/switchboard/design/189.html)
+- [189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note (the note only while phone_tab_note is on, off by default), each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's](https://cquinones100.github.io/switchboard/design/189.html)
 - [190. The list of views with a tab's section: a tab with none of PR, ticket or note says so; from the drawer, with no tab in front, mission control's views alone; a tab's section lists only what it has](https://cquinones100.github.io/switchboard/design/190.html)
 
 ## Other boards

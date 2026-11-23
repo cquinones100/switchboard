@@ -746,7 +746,7 @@
       "page": "design"
     },
     "PhoneTabViews.dc.html": {
-      "title": "189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note, each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's",
+      "title": "189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note (the note only while phone_tab_note is on, off by default), each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's",
       "page": "design"
     },
     "PhoneTabViewsList.dc.html": {
