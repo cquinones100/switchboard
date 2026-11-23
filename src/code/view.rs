@@ -89,6 +89,9 @@ pub struct Viewer {
     drag_from: Option<(usize, usize)>,
     /// Why the file can't be shown: said until any key closes the viewer.
     failed: Option<String>,
+    /// Why the text shown is the last read (the file gone, or unreadable),
+    /// said until it is read again.
+    stale: Option<String>,
 }
 
 /// The file's text, a binary one said rather than shown.
@@ -176,6 +179,7 @@ impl Viewer {
             looked: Instant::now(),
             drag_from: None,
             failed: None,
+            stale: None,
         }
     }
 
@@ -530,13 +534,16 @@ impl Viewer {
         self.looked = now;
         let modified = modified_of(&self.path);
         if modified == self.modified {
-            return false;
+            // Back as it was last read (moved away and back): the text
+            // shown is current again.
+            return self.stale.take().is_some();
         }
         // Taken as read only once it is, so a read that failed is tried
         // again; meanwhile the text shown says it is the last one read.
         match read_text(&self.path) {
             Ok(text) => {
                 self.modified = modified;
+                self.stale = None;
                 self.take_text(&text);
                 true
             }
@@ -545,8 +552,8 @@ impl Viewer {
                     None => "Gone from the disk: showing the text last read".to_string(),
                     Some(_) => format!("{e}: showing the text last read"),
                 };
-                let changed = self.message.as_deref() != Some(why.as_str());
-                self.message = Some(why);
+                let changed = self.stale.as_deref() != Some(why.as_str());
+                self.stale = Some(why);
                 changed
             }
         }
@@ -681,6 +688,7 @@ impl Viewer {
                 return Some(((text.chars().count() as u16).min(area.width - 1), bottom));
             }
             (None, Some(m), _) => m.clone(),
+            (None, None, _) if let Some(stale) = &self.stale => stale.clone(),
             (None, None, Mode::Visual { line: true, .. }) => "-- VISUAL LINE --".into(),
             (None, None, Mode::Visual { block: true, .. }) => "-- VISUAL BLOCK --".into(),
             (None, None, Mode::Visual { .. }) => "-- VISUAL --".into(),
@@ -1049,6 +1057,25 @@ mod tests {
         assert_eq!(v.editor.row(), v.top);
         v.key(Key::new(KeyCode::Char('b'), Mods::CTRL));
         assert_eq!(v.top, 0, "and back");
+    }
+
+    #[test]
+    fn a_file_gone_and_back_says_so_and_then_stops_saying_it() {
+        let dir = std::env::temp_dir().join(format!("sb-code-view-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.rs");
+        std::fs::write(&file, "one\n").unwrap();
+        let mut v = Viewer::new(file.clone(), "a.rs".into(), "one\n".into(), |_| Ok(()));
+        let later = |v: &Viewer| v.looked + LOOK_EVERY;
+        std::fs::remove_file(&file).unwrap();
+        assert!(v.look(later(&v)));
+        assert!(v.stale.as_deref().is_some_and(|s| s.starts_with("Gone")));
+        std::fs::write(&file, "two\n").unwrap();
+        v.modified = None;
+        assert!(v.look(later(&v)));
+        assert_eq!(v.stale, None, "read again, current");
+        assert_eq!(v.editor.doc.text.file_text(), "two\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
