@@ -463,14 +463,18 @@ function drawerList() {
     );
   }
   for (const { stage, name, tone, tabs } of all) {
-    // While the search has words, every group with a match shows open.
-    const folded = !words.length && folds.has(stage);
+    // While the search has words, every group with a match shows open, and
+    // its heading folds nothing, so no fold changes out of sight.
+    const searching = words.length > 0;
+    const folded = !searching && folds.has(stage);
     const g = el(
       "div",
       { class: "group" },
       el(
-        "button",
-        { class: "label fold " + tone, "aria-expanded": String(!folded), "data-stage": stage, onclick: () => foldGroup(stage) },
+        searching ? "div" : "button",
+        searching
+          ? { class: "label " + tone, "data-stage": stage }
+          : { class: "label fold " + tone, "aria-expanded": String(!folded), "data-stage": stage, onclick: () => foldGroup(stage) },
         el("span", {}, (folded ? "▸ " : "▾ ") + name),
         el("span", {}, tabs.length),
       ),

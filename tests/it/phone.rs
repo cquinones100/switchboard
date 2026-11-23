@@ -937,7 +937,7 @@ const load = (c) => {
   vm.runInContext("state.me = { paired: true, computer: 'studio' }; state.live = true; state.tabs = " + JSON.stringify(TABS) + "; render();", c);
 };
 load(ctx);
-const heads = () => app.all((x) => x.attrs["data-stage"]).map((x) => x.text + (x.attrs["aria-expanded"] === "true" ? "" : "*")).join(",");
+const heads = () => app.all((x) => x.attrs["data-stage"]).map((x) => x.text + (x.attrs["aria-expanded"] === "false" ? "*" : "") + (x.tag === "button" ? "" : "!")).join(",");
 const head = (stage) => app.all((x) => x.attrs["data-stage"] === stage)[0];
 const rows = () => app.all((x) => x.attrs["data-pane"]).map((x) => x.text).join(" | ");
 const out = [];
@@ -955,6 +955,8 @@ load(again);
 out.push("reloaded=" + heads());
 vm.runInContext("state.search = 'handoff'; drawer();", again);
 out.push("search=" + heads() + " rows=" + rows());
+// A tap on a heading during a search changes no fold.
+head("idle").fire("click");
 vm.runInContext("state.search = ''; drawer();", again);
 out.push("cleared=" + heads());
 // A tab starting to wait shows under Needs you, open.
@@ -975,7 +977,7 @@ console.log(out.join("\n"));
             "open=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▾ Idle1",
             r#"kept=["idle"]"#,
             "reloaded=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▸ Idle1*",
-            "search=▾ Idle1 rows=○5handoffidle for 2h",
+            "search=▾ Idle1! rows=○5handoffidle for 2h",
             "cleared=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▸ Idle1*",
             "waits=▾ Needs you2,▾ Working1,▾ Monitoring1,▾ In merge queue1,▸ Idle1* rows=6,1,2,3,4",
         ],
