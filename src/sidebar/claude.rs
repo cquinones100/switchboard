@@ -939,6 +939,9 @@ pub struct Work {
     pub loop_run: Option<LoopRun>,
     /// The Monitor watches running, by description.
     pub monitors: Vec<String>,
+    /// The background shell commands running that aren't watches: Claude
+    /// waits for each to finish, as it does for a watch.
+    pub shells: usize,
     /// A self-paced or timed loop waiting for its next tick.
     pub scheduled: Option<Scheduled>,
     /// The message of a turn an API error cut short, while nothing has been
@@ -955,6 +958,8 @@ struct Task {
     loop_kind: Option<&'static str>,
     monitor: Option<String>,
     until: Option<i64>,
+    /// A shell command, rather than an agent or a Monitor watch.
+    shell: bool,
     /// A landing's `land-lock test`, a watch only where the tests run in
     /// CI (`background_work`'s `tests_in_ci`).
     landing: bool,
@@ -1303,6 +1308,7 @@ impl Seen {
                         loop_kind: None,
                         monitor: None,
                         until: None,
+                        shell: true,
                         landing: false,
                         landing_dir: None,
                     },
@@ -1323,6 +1329,7 @@ impl Seen {
                                 loop_kind,
                                 monitor: monitor.cloned(),
                                 until: None,
+                                shell: m[0].starts_with("Command"),
                                 landing: LANDING_TEST.is_match(command),
                                 landing_dir: dir_of_landing_test(command),
                             },
@@ -1341,6 +1348,7 @@ impl Seen {
                         loop_kind: None,
                         monitor: Some(description),
                         until: Some(at + minutes * 60_000),
+                        shell: false,
                         landing: false,
                         landing_dir: None,
                     },
@@ -1361,11 +1369,17 @@ impl Seen {
             })
             .map(|(_, t)| t)
             .collect();
+        // A landing's tests count as a watch only where they run in CI;
+        // run here, they are a shell like any other.
+        let watches = |t: &&Task| {
+            t.monitor.is_some() && (!t.landing || tests_in_ci(t.landing_dir.as_deref()))
+        };
         let monitors = running
             .iter()
-            .filter(|t| !t.landing || t.monitor.is_none() || tests_in_ci(t.landing_dir.as_deref()))
+            .filter(|t| watches(t))
             .filter_map(|t| t.monitor.clone())
             .collect();
+        let shells = running.iter().filter(|t| t.shell && !watches(t)).count();
         let running_loop = LOOPS
             .iter()
             .find(|l| running.iter().any(|t| t.loop_kind == Some(l.kind)));
@@ -1406,6 +1420,7 @@ impl Seen {
             count: running.len(),
             loop_run,
             monitors,
+            shells,
             scheduled,
             api_error,
             interrupted_at,
@@ -1965,6 +1980,11 @@ mod tests {
                 .unwrap()
                 .count
         };
+        let shells = |r: &mut Reader| {
+            r.background_work(&t.file, since, now, |_| true)
+                .unwrap()
+                .shells
+        };
         t.add(&started("old1", now - 60_000));
         t.add(&started("done1", now - 5_000));
         t.add(&[ended("done1", now)]);
@@ -2024,6 +2044,7 @@ mod tests {
             json!({"type": "user", "timestamp": iso(now), "message": {"content": [{"type": "tool_result", "tool_use_id": "use-bg", "content": "Started. agentId: bg1"}]}}),
         ]);
         assert_eq!(count(&mut r), 1);
+        assert_eq!(shells(&mut r), 0, "an agent is no shell");
         t.add(&[ended("bg1", now)]);
         assert_eq!(count(&mut r), 0);
         // A command moved to the background runs on; one only quoting the
@@ -2033,6 +2054,11 @@ mod tests {
             json!({"type": "user", "timestamp": iso(now), "message": {"content": [{"type": "tool_result", "tool_use_id": "use-grep", "content": "log: Command did not complete within its 120s timeout and was moved to the background (ID: quoted1)"}]}}),
         ]);
         assert_eq!(count(&mut r), 1);
+        assert_eq!(
+            shells(&mut r),
+            1,
+            "a command moved to the background is a shell"
+        );
         t.add(&[ended("slow1", now)]);
         assert_eq!(count(&mut r), 0);
         // Claude Code puts the notice after what the command printed, and

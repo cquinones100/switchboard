@@ -1,19 +1,26 @@
 //! The phone app's made-up tabs, for `switchboard phone preview`
-//! (`phone::preview`): a dozen Claude tabs in every state the drawer
-//! groups, as the server's `watch` lists them (`phone::serve`'s
-//! `phone_snapshot`), and a few turns each, as `phone::turns` reads them
-//! from a transcript. One waits on a question with choices, one on a
-//! question that takes several, one finished with a long reply in
-//! Markdown, one finished on a failure, one with images you sent and a
-//! before and after its Claude showed with `look`; the rest
-//! work, wait in the background or sit idle. Every name is made up, in the
+//! (`phone::preview`): Claude tabs in every group the sidebar has, as the
+//! server's `watch` lists them (`phone::serve`'s `phone_snapshot`), each
+//! made a sidebar tab and placed, marked and worded by the same
+//! `phone::drawer` the server's go through, and a few turns each, as
+//! `phone::turns` reads them from a transcript. One waits on a question
+//! with choices, one on a question that takes several, one finished with a
+//! long reply in Markdown, one finished on a failure, one with images you
+//! sent and a before and after its Claude showed with `look`; the rest
+//! work, watch, loop, land or sit idle. Every name is made up, in the
 //! demo's style (`acme/` repositories, people by first name).
 
 use serde_json::{Value, json};
 
+use crate::facts::{Checks, Landing, Method, PrState};
+use crate::mux::TabId;
+use crate::sidebar::claude::{LoopRun, Scheduled, SessionRef};
+use crate::sidebar::model::{MergeState, Rules, TabLoop, TabModel, TabState};
+
 /// A made-up tab: its pane's number, name, repository, branch, state and
-/// what it is doing, and its turns, oldest first, each `(who, text,
-/// images, minutes ago)`.
+/// what it is doing, what puts it in its group beyond its state (`shape`,
+/// given now in ms), and its turns, oldest first, each `(who, text, images,
+/// minutes ago)`.
 struct Tab {
     pane: u32,
     name: &'static str,
@@ -23,6 +30,7 @@ struct Tab {
     wait: Option<&'static str>,
     minutes_ago: i64,
     prompt: Option<fn() -> Value>,
+    shape: fn(&mut TabModel, i64),
     turns: &'static [(&'static str, &'static str, &'static [&'static str], i64)],
 }
 
@@ -38,6 +46,7 @@ const TABS: &[Tab] = &[
         wait: Some("Bash: run the migration"),
         minutes_ago: 2,
         prompt: Some(migration_prompt),
+        shape: plain,
         turns: &[
             (
                 "you",
@@ -64,6 +73,7 @@ const TABS: &[Tab] = &[
         wait: Some("AskUserQuestion"),
         minutes_ago: 6,
         prompt: Some(checks_prompt),
+        shape: plain,
         turns: &[
             ("you", "Get the release branch ready to merge.", &[], 30),
             (
@@ -83,6 +93,7 @@ const TABS: &[Tab] = &[
         wait: None,
         minutes_ago: 4,
         prompt: None,
+        shape: plain,
         turns: &[
             (
                 "you",
@@ -104,6 +115,7 @@ const TABS: &[Tab] = &[
         wait: None,
         minutes_ago: 9,
         prompt: None,
+        shape: plain,
         turns: &[
             ("you", "Deploy the docs site to production.", &[], 20),
             ("tool", "Bash: npm run deploy", &[], 11),
@@ -130,6 +142,7 @@ const TABS: &[Tab] = &[
         wait: None,
         minutes_ago: 25,
         prompt: None,
+        shape: plain,
         turns: &[
             (
                 "you",
@@ -162,6 +175,7 @@ const TABS: &[Tab] = &[
         wait: Some("Bash: cargo test search"),
         minutes_ago: 1,
         prompt: None,
+        shape: plain,
         turns: &[
             (
                 "you",
@@ -178,9 +192,13 @@ const TABS: &[Tab] = &[
         repo: "web",
         branch: "abc-147-sdk",
         state: "background",
-        wait: Some("Waiting on CI"),
+        wait: None,
         minutes_ago: 3,
         prompt: None,
+        shape: |t, _| {
+            t.background = 1;
+            t.monitors = vec!["CI on the SDK bump".into()];
+        },
         turns: &[
             ("you", "Bump the SDK and wait for CI.", &[], 22),
             (
@@ -196,10 +214,11 @@ const TABS: &[Tab] = &[
         name: "Write the onboarding guide",
         repo: "docs",
         branch: "abc-162-onboarding",
-        state: "working",
+        state: "background",
         wait: None,
         minutes_ago: 0,
         prompt: None,
+        shape: |t, _| looping(t, "review", 2),
         turns: &[(
             "you",
             "Write a guide for a new teammate's first day, from Riley's notes.",
@@ -216,6 +235,14 @@ const TABS: &[Tab] = &[
         wait: None,
         minutes_ago: 95,
         prompt: None,
+        shape: |t, _| {
+            t.pr_state = Some(PrState::Open);
+            t.checks = Some(Checks {
+                pass: 11,
+                fail: 1,
+                pending: 0,
+            });
+        },
         turns: &[
             (
                 "you",
@@ -240,6 +267,11 @@ const TABS: &[Tab] = &[
         wait: None,
         minutes_ago: 240,
         prompt: None,
+        shape: |t, _| {
+            t.pr_state = Some(PrState::Open);
+            t.merge = Some(MergeState::Queued);
+            t.position = Some(2);
+        },
         turns: &[
             ("you", "Retry a failed webhook with backoff.", &[], 300),
             (
@@ -259,6 +291,7 @@ const TABS: &[Tab] = &[
         wait: None,
         minutes_ago: 1500,
         prompt: None,
+        shape: plain,
         turns: &[
             (
                 "you",
@@ -278,9 +311,148 @@ const TABS: &[Tab] = &[
         wait: Some("Waiting on your input"),
         minutes_ago: 12,
         prompt: None,
+        shape: plain,
         turns: &[],
     },
+    Tab {
+        pane: 23,
+        name: "Run the load test",
+        repo: "api",
+        branch: "abc-171-load-test",
+        state: "background",
+        wait: None,
+        minutes_ago: 7,
+        prompt: None,
+        shape: |t, _| {
+            t.background = 1;
+            t.shells = 1;
+        },
+        turns: &[
+            ("you", "Run the load test against staging.", &[], 9),
+            ("tool", "Bash: k6 run load/search.js", &[], 8),
+            (
+                "claude",
+                "The load test runs for ten minutes; I'll read its numbers when it ends.",
+                &[],
+                7,
+            ),
+        ],
+    },
+    Tab {
+        pane: 24,
+        name: "Fix the importer's lint",
+        repo: "api",
+        branch: "abc-173-importer-lint",
+        state: "background",
+        wait: None,
+        minutes_ago: 2,
+        prompt: None,
+        shape: |t, _| looping(t, "ci", 1),
+        turns: &[("you", "Get CI green on the importer.", &[], 15)],
+    },
+    Tab {
+        pane: 25,
+        name: "Cache headers",
+        repo: "web",
+        branch: "abc-168-cache-headers",
+        state: "background",
+        wait: None,
+        minutes_ago: 4,
+        prompt: None,
+        shape: |t, _| {
+            t.pr_state = Some(PrState::Open);
+            looping(t, "queue", 1);
+        },
+        turns: &[("you", "/queue-and-clean", &[], 6)],
+    },
+    Tab {
+        pane: 26,
+        name: "Morning digest",
+        repo: "docs",
+        branch: "main",
+        state: "background",
+        wait: None,
+        minutes_ago: 50,
+        prompt: None,
+        shape: |t, now_ms| {
+            t.tab_loop = Some(TabLoop::Scheduled(Scheduled {
+                prompt: "/digest".into(),
+                at: now_ms + 10 * 60_000,
+            }));
+        },
+        turns: &[("you", "/loop 1h /digest", &[], 120)],
+    },
+    Tab {
+        pane: 27,
+        name: "Retry budget for exports",
+        repo: "api",
+        branch: "abc-170-export-retries",
+        state: "idle",
+        wait: None,
+        minutes_ago: 1,
+        prompt: None,
+        shape: |t, _| {
+            t.landing = Some(Landing {
+                holding: true,
+                line: 1,
+                method: Method::Direct,
+            });
+        },
+        turns: &[("you", "Land it.", &[], 2)],
+    },
+    Tab {
+        pane: 28,
+        name: "Billing banner copy",
+        repo: "web",
+        branch: "abc-164-banner",
+        state: "background",
+        wait: None,
+        minutes_ago: 3,
+        prompt: None,
+        shape: |t, _| {
+            t.merge = Some(MergeState::Merged);
+            looping(t, "deploy", 1);
+        },
+        turns: &[("you", "Test the banner once it deploys.", &[], 20)],
+    },
+    Tab {
+        pane: 29,
+        name: "Dark mode for emails",
+        repo: "web",
+        branch: "abc-158-dark-emails",
+        state: "idle",
+        wait: None,
+        minutes_ago: 70,
+        prompt: None,
+        shape: |t, _| t.merge = Some(MergeState::Merged),
+        turns: &[("claude", "Merged.", &[], 70)],
+    },
+    Tab {
+        pane: 30,
+        name: "SSO follow-up",
+        repo: "api",
+        branch: "abc-175-sso",
+        state: "idle",
+        wait: None,
+        minutes_ago: 30,
+        prompt: None,
+        shape: |t, now_ms| {
+            t.remind_at = Some(now_ms / 1000 + 2 * 3600);
+            t.remind_note = Some("after standup".into());
+        },
+        turns: &[("you", "Ask Sam about the SSO ticket.", &[], 35)],
+    },
 ];
+
+/// A tab nothing but its state places.
+fn plain(_: &mut TabModel, _: i64) {}
+
+/// A tab between turns running a loop's work (`review`, `ci`, `queue`,
+/// `deploy`) on its round.
+fn looping(t: &mut TabModel, kind: &'static str, round: usize) {
+    t.background = 1;
+    t.tab_loop = Some(TabLoop::Run(LoopRun { kind, round }));
+}
 
 fn migration_prompt() -> Value {
     json!({
@@ -331,13 +503,13 @@ pub fn new_prompt(n: u64) -> Value {
 pub const REPLY: &str =
     "Done. I made the change, ran the tests (all passing) and left the branch ready for review.";
 
-/// The made-up tabs as `watch` lists them, `now_ms` being now.
+/// The made-up tabs as `watch` lists them, `now_ms` being now, in the
+/// sidebar's groups and order.
 pub fn tabs(now_ms: i64) -> Vec<Value> {
     let mut tabs: Vec<Value> = TABS
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let at = now_ms - t.minutes_ago * 60_000;
             let last_you = t.turns.iter().rev().find(|(who, ..)| *who == "you");
             let last_claude = t.turns.iter().rev().find(|(who, ..)| *who == "claude");
             json!({
@@ -347,9 +519,8 @@ pub fn tabs(now_ms: i64) -> Vec<Value> {
                 "repo": t.repo,
                 "branch": t.branch,
                 "state": t.state,
-                "needs": t.state == "waiting" || t.state == "done",
                 "pinned": false,
-                "since": at / 1000,
+                "since": (now_ms - t.minutes_ago * 60_000) / 1000,
                 "pane": format!("%{}", t.pane),
                 "wait": t.wait,
                 "transcript": null,
@@ -362,9 +533,67 @@ pub fn tabs(now_ms: i64) -> Vec<Value> {
             })
         })
         .collect();
-    // Needs you first, as the server sorts them.
-    tabs.sort_by_key(|t| !t["needs"].as_bool().unwrap_or(false));
+    restage(&mut tabs, now_ms);
     tabs
+}
+
+/// The made-up tabs, as the preview has changed them, placed, marked and
+/// worded again as the sidebar would, and put in its order: each made a
+/// sidebar tab from its state, since, wait, pin and reminder, and, while
+/// its state is the one it started in, what put it in its group then.
+pub fn restage(tabs: &mut Vec<Value>, now_ms: i64) {
+    let r = Rules {
+        now_ms,
+        reminders: true,
+        build_failing: true,
+        panel: false,
+        scroll_bars: false,
+    };
+    let models: Vec<TabModel> = tabs.iter().map(|t| model_of(t, now_ms)).collect();
+    let placed: Vec<Value> = crate::phone::drawer::staged(&models, &r)
+        .into_iter()
+        .filter_map(|(stage, m)| {
+            let at = models.iter().position(|x| std::ptr::eq(x, m))?;
+            let mut tab = tabs[at].clone();
+            tab.as_object_mut()?
+                .extend(crate::phone::drawer::fields(m, stage, &r));
+            Some(tab)
+        })
+        .collect();
+    *tabs = placed;
+}
+
+/// A made-up tab as the sidebar models it.
+fn model_of(tab: &Value, now_ms: i64) -> TabModel {
+    let pane = tab["pane"].as_str().unwrap_or("").trim_start_matches('%');
+    let made = TABS.iter().find(|t| t.pane.to_string() == pane);
+    let index = tab["index"].as_u64().unwrap_or(0) as usize;
+    let state = tab["state"].as_str().unwrap_or("");
+    let mut m = TabModel::new(
+        TabId(pane.parse().unwrap_or(0)),
+        index,
+        tab["name"].as_str().unwrap_or(""),
+    );
+    m.state = match state {
+        "waiting" => TabState::Waiting,
+        "done" => TabState::Done,
+        "working" => TabState::Working,
+        "background" => TabState::Background,
+        _ => TabState::Idle,
+    };
+    m.claude = Some(SessionRef::default());
+    m.since = tab["since"].as_i64();
+    m.wait = tab["wait"].as_str().map(str::to_string);
+    if let Some(made) = made.filter(|t| t.state == state) {
+        (made.shape)(&mut m, now_ms);
+    }
+    m.pinned = tab["pinned"] == true;
+    // A reminder the preview set or cleared over the one it started with.
+    if let Some(remind) = tab.get("remind") {
+        m.remind_at = remind["at"].as_i64();
+        m.remind_note = remind["note"].as_str().map(str::to_string);
+    }
+    m
 }
 
 /// Each made-up tab's turns as `phone::turns` reads them, by its pane
@@ -412,14 +641,22 @@ pub fn image(name: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Every state the drawer groups, and each case the issue names.
+    /// Every group the sidebar has, and each case the issue names.
     #[test]
     fn the_tabs_cover_every_state_and_case() {
         let tabs = tabs(1_000_000_000);
-        assert_eq!(tabs.len(), 12);
         for state in ["waiting", "done", "working", "background", "idle"] {
             assert!(tabs.iter().any(|t| t["state"] == state), "{state}");
         }
+        for stage in &crate::sidebar::model::SETTABLE[..14] {
+            assert!(
+                tabs.iter().any(|t| t["stage"] == stage.key()),
+                "{}",
+                stage.key()
+            );
+        }
+        assert!(tabs.iter().any(|t| t["words"] == "waiting on 1 shell"));
+        assert!(tabs.iter().any(|t| t["words"] == "in merge queue at 2"));
         assert!(tabs.iter().any(|t| t["prompt"]["multi"] == false));
         assert!(tabs.iter().any(|t| t["prompt"]["multi"] == true));
         assert!(

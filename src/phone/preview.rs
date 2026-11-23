@@ -160,15 +160,10 @@ impl Data {
         self.sort();
     }
 
-    /// Needs you first, the pinned and the reminders come due leading it,
-    /// as the server sorts them.
+    /// In the sidebar's groups and order, each placed, marked and worded
+    /// again, as the server sends them.
     fn sort(&mut self) {
-        let first = |t: &Value| t["pinned"] == true || t["remind"]["due"] == true;
-        for tab in &mut self.tabs {
-            let state = tab["state"].as_str().unwrap_or("");
-            tab["needs"] = json!(first(tab) || state == "waiting" || state == "done");
-        }
-        self.tabs.sort_by_key(|t| (t["needs"] != true, !first(t)));
+        made_up::restage(&mut self.tabs, crate::util::now_ms());
     }
 
     /// What the stream sends.

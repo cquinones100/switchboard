@@ -37,10 +37,10 @@ use crate::mission::remind;
 use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
-use crate::sidebar::model::{Rules, needs_tab, pinned_first, reminder_due};
+use crate::sidebar::model::Rules;
 use crate::{settings, util};
 
-use super::{cli, images, looks};
+use super::{cli, drawer, images, looks};
 
 /// How long after a change `watch` waits before it sends, so a burst of
 /// changes goes as one.
@@ -626,26 +626,21 @@ impl Server {
         }
     }
 
-    /// Every Claude tab, those that need you first, the pinned leading
-    /// them as in the sidebar: its repository and
-    /// branch (for the drawer's search), its state, what it waits on, its
-    /// last turn, and the prompt it shows while waiting.
+    /// Every Claude tab in the sidebar's groups and order: its group, badge
+    /// and words as the sidebar has them (`drawer::fields`), its repository
+    /// and branch (for the drawer's search), what it waits on, its last
+    /// turn, and the prompt it shows while waiting.
     pub(crate) fn phone_snapshot(&self) -> Value {
         let r = Rules::now();
         let looks_on = settings::is_on("phone_look_pictures");
-        let mut tabs: Vec<_> = self
+        let tabs: Vec<_> = self
             .sidebar_all_tabs()
             .into_iter()
             .filter(|t| t.claude_pane.is_some())
             .collect();
-        tabs.sort_by(|a, b| {
-            needs_tab(b, &r)
-                .cmp(&needs_tab(a, &r))
-                .then_with(|| pinned_first(a, b, &r))
-        });
-        let tabs: Vec<Value> = tabs
-            .iter()
-            .filter_map(|t| {
+        let tabs: Vec<Value> = drawer::staged(&tabs, &r)
+            .into_iter()
+            .filter_map(|(stage, t)| {
                 let pane = t.claude_pane?;
                 let waiting =
                     t.state == crate::sidebar::TabState::Waiting || self.phone_asking(pane);
@@ -684,16 +679,12 @@ impl Server {
                     .shown
                     .get(&t.id)
                     .and_then(|shown| shown.branch.clone());
-                Some(json!({
+                let mut tab = json!({
                     "tab": t.id.to_string(),
                     "index": t.index,
                     "name": t.name,
                     "repo": t.repo_dir.as_ref().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()),
                     "branch": branch,
-                    "state": t.state.name(),
-                    "needs": needs_tab(t, &r),
-                    "pinned": t.pinned,
-                    "since": t.since,
                     "pane": pane.to_string(),
                     "wait": t.wait,
                     "transcript": transcript,
@@ -705,14 +696,11 @@ impl Server {
                         "at": turn.at,
                     })),
                     "prompt": prompt,
-                    // Its reminder, while Settings' "Reminders" is on: when
-                    // (seconds), what for, and whether it has come due.
-                    "remind": t.remind_at.filter(|_| r.reminders).map(|at| json!({
-                        "at": at,
-                        "note": t.remind_note.clone().unwrap_or_default(),
-                        "due": reminder_due(t, &r),
-                    })),
-                }))
+                });
+                if let Some(tab) = tab.as_object_mut() {
+                    tab.extend(drawer::fields(t, stage, &r));
+                }
+                Some(tab)
             })
             .collect();
         // Whether Close tab and Remind me are offered and the app buzzes, sent again as

@@ -263,11 +263,19 @@ fn watch_streams_the_claude_tabs_as_they_change() {
     assert_eq!(tabs.len(), 1, "the Claude tab alone: {first}");
     assert_eq!(tabs[0]["pane"], pane);
     assert_eq!(tabs[0]["needs"], false);
+    // Its group, badge and words as the sidebar's model gives them.
+    assert_eq!(tabs[0]["stage"], "idle", "{first}");
+    assert_eq!(tabs[0]["group"], "Idle");
+    assert_eq!(tabs[0]["mark"], "○");
+    assert_eq!(tabs[0]["spins"], false);
+    assert!(tabs[0]["words"].is_string());
 
     show_prompt(&server, &pane);
     server.ok(&["set", "-t", &pane, "@agent_state", "waiting"]);
     let waiting = next_line(&mut stream, |v| v["tabs"][0]["state"] == "waiting");
     assert_eq!(waiting["tabs"][0]["needs"], true);
+    assert_eq!(waiting["tabs"][0]["stage"], "needs");
+    assert_eq!(waiting["tabs"][0]["mark"], "●");
     assert_eq!(waiting["tabs"][0]["prompt"]["options"][0]["label"], "Yes");
 }
 
@@ -862,13 +870,22 @@ const ctx = vm.createContext({
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 const run = (q) => vm.runInContext(`
   state.tabs = [
-    { index: 2, name: "stable note IDs", repo: "switchboard", branch: "stable-note-ids", state: "waiting", needs: true, wait: "Bash: git push" },
-    { index: 3, name: "M-d uncommitted", repo: "switchboard", branch: "diff-uncommitted", state: "working", wait: "Edit diff.rs" },
-    { index: 8, name: "handoff", repo: "notes-sync", branch: "main", state: "idle" },
+    { index: 2, name: "stable note IDs", repo: "switchboard", branch: "stable-note-ids", state: "waiting", needs: true, wait: "Bash: git push", stage: "needs", group: "Needs you", words: "waiting on you · Bash: git push" },
+    { index: 3, name: "M-d uncommitted", repo: "switchboard", branch: "diff-uncommitted", state: "working", wait: "Edit diff.rs", stage: "working", group: "Working", words: "working · Edit diff.rs" },
+    { index: 8, name: "handoff", repo: "notes-sync", branch: "main", state: "idle", stage: "idle", group: "Idle", words: "idle for 2h" },
   ];
-  JSON.stringify(groups(wordsOf(${JSON.stringify(q)})).map(([name, , tabs]) => [name, tabs.map((t) => t.index)]));
+  JSON.stringify(groups(wordsOf(${JSON.stringify(q)})).map((g) => [g.name, g.tabs.map((t) => t.index)]));
 `, ctx);
 for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"]) console.log(q + "=" + run(q));
+// A server older than the page sends no groups: its tabs by their state.
+console.log("old=" + vm.runInContext(`
+  state.tabs = [
+    { index: 2, name: "a", state: "waiting", needs: true },
+    { index: 8, name: "b", state: "idle" },
+    { index: 3, name: "c", state: "background", wait: "Edit diff.rs" },
+  ];
+  JSON.stringify(groups([]).map((g) => [g.name, g.tabs.map((t) => t.index)])) + " " + markOf(state.tabs[2])[1] + " " + sayingOf(state.tabs[2]);
+`, ctx));
 "#;
     let Some(stdout) = run_app_js(script) else {
         return;
@@ -887,6 +904,82 @@ for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"])
             // Every word typed: "note" alone would keep tab 2 too.
             r#"note sync=[["Idle",[8]]]"#,
             "deploy=[]",
+            r#"old=[["Needs you",[2]],["Working",[3]],["Idle",[8]]] working spin Edit diff.rs"#,
+        ],
+        "{stdout}"
+    );
+}
+
+/// The drawer's groups (assets/phone/app.js's `groups` and `foldGroup`), run in
+/// Node over a page made of plain objects: each tab under the group the
+/// server sent with it, in the sidebar's order, a tab waiting on a shell
+/// under Monitoring and a queued one under In merge queue with its place; a
+/// heading folding and unfolding its group, the fold kept across a reload,
+/// and a search opening a folded group while it has words; skipped without
+/// Node.
+#[test]
+fn the_drawers_groups_fold_and_a_search_opens_them() {
+    let script = PRELUDE.to_string()
+        + r#"
+const store = { data: {}, getItem(k) { return k in this.data ? this.data[k] : null; }, setItem(k, v) { this.data[k] = String(v); } };
+ctx.localStorage = store;
+const base = Object.assign({}, ctx);
+const TABS = [
+  { index: 1, pane: "%1", name: "asks", state: "waiting", needs: true, stage: "needs", group: "Needs you", group_tone: "needs", mark: "●", tone: "needs", words: "waiting on you" },
+  { index: 2, pane: "%2", name: "paging", state: "working", stage: "working", group: "Working", group_tone: "working", mark: "⠋", spins: true, tone: "working", words: "working 2m" },
+  { index: 3, pane: "%3", name: "load test", state: "background", stage: "monitoring", group: "Monitoring", group_tone: "working", mark: "⠋", spins: true, tone: "working", words: "waiting on 1 shell", turn: { prompt: "(a background task finished)" } },
+  { index: 4, pane: "%4", name: "webhooks", state: "idle", stage: "queued", group: "In merge queue", group_tone: "landing", mark: "▲", tone: "landing", words: "in merge queue at 2" },
+  { index: 5, pane: "%5", name: "handoff", state: "idle", stage: "idle", group: "Idle", group_tone: "idle", mark: "○", tone: "idle", words: "idle for 2h" },
+];
+const load = (c) => {
+  app.replaceChildren();
+  vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), c);
+  vm.runInContext("state.me = { paired: true, computer: 'studio' }; state.live = true; state.tabs = " + JSON.stringify(TABS) + "; render();", c);
+};
+load(ctx);
+const heads = () => app.all((x) => x.attrs["data-stage"]).map((x) => x.text + (x.attrs["aria-expanded"] === "false" ? "*" : "") + (x.tag === "button" ? "" : "!")).join(",");
+const head = (stage) => app.all((x) => x.attrs["data-stage"] === stage)[0];
+const rows = () => app.all((x) => x.attrs["data-pane"]).map((x) => x.text).join(" | ");
+const out = [];
+out.push("heads=" + heads());
+out.push("rows=" + rows());
+head("working").fire("click");
+out.push("folded=" + heads() + " rows=" + app.all((x) => x.attrs["data-pane"]).map((x) => x.attrs["data-pane"]).join());
+head("working").fire("click");
+out.push("open=" + heads());
+head("idle").fire("click");
+out.push("kept=" + store.data["drawer-folds"]);
+// Reloaded: the page's script run again over the same storage.
+const again = vm.createContext(Object.assign({}, base));
+load(again);
+out.push("reloaded=" + heads());
+vm.runInContext("state.search = 'handoff'; drawer();", again);
+out.push("search=" + heads() + " rows=" + rows());
+// A tap on a heading during a search changes no fold.
+head("idle").fire("click");
+vm.runInContext("state.search = ''; drawer();", again);
+out.push("cleared=" + heads());
+// A tab starting to wait shows under Needs you, open.
+vm.runInContext("state.tabs.unshift({ index: 6, pane: '%6', name: 'new', state: 'waiting', needs: true, stage: 'needs', group: 'Needs you', mark: '●', tone: 'needs', words: 'waiting on you' }); drawer();", again);
+out.push("waits=" + heads() + " rows=" + app.all((x) => x.attrs["data-pane"]).map((x) => x.attrs["data-pane"]).join());
+console.log(out.join("\n"));
+"#;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "heads=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▾ Idle1",
+            "rows=●1askswaiting on you | ⠹2pagingworking 2m | ⠹3load testwaiting on 1 shell | ▲4webhooksin merge queue at 2 | ○5handoffidle for 2h",
+            "folded=▾ Needs you1,▸ Working1*,▾ Monitoring1,▾ In merge queue1,▾ Idle1 rows=1,3,4,5",
+            "open=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▾ Idle1",
+            r#"kept=["idle"]"#,
+            "reloaded=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▸ Idle1*",
+            "search=▾ Idle1! rows=○5handoffidle for 2h",
+            "cleared=▾ Needs you1,▾ Working1,▾ Monitoring1,▾ In merge queue1,▸ Idle1*",
+            "waits=▾ Needs you2,▾ Working1,▾ Monitoring1,▾ In merge queue1,▸ Idle1* rows=6,1,2,3,4",
         ],
         "{stdout}"
     );
@@ -1514,8 +1607,8 @@ fn a_long_press_opens_a_tabs_menu_and_close_tab_asks_first() {
 vm.runInContext(`
   state.me = { paired: true, computer: "studio" };
   state.tabs = [
-    { index: 4, pane: "%4", name: "full titles", state: "done", needs: true },
-    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working" },
+    { index: 4, pane: "%4", name: "full titles", state: "done", needs: true, stage: "needs", group: "Needs you", group_tone: "needs", mark: "✓", tone: "passed", words: "finished" },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working", stage: "working", group: "Working", group_tone: "working", spins: true, tone: "working", words: "working" },
   ];
   render();
 `, ctx);
@@ -1552,7 +1645,7 @@ const out = [];
   row("3").fire("click");
   out.push("tap=" + vm.runInContext("state.open", ctx));
   // A redraw while a finger is down: lifting it still lets the hold go.
-  vm.runInContext("state.open = null; state.tabs.push({ index: 5, pane: \"%5\", name: \"five\", state: \"idle\" }); render();", ctx);
+  vm.runInContext("state.open = null; state.tabs.push({ index: 5, pane: \"%5\", name: \"five\", state: \"idle\", stage: \"idle\", group: \"Idle\", mark: \"○\", tone: \"idle\" }); render();", ctx);
   row("5").fire("pointerdown");
   vm.runInContext("render()", ctx);
   row("5").fire("pointerup");
@@ -1643,8 +1736,8 @@ vm.runInContext(`
     { label: "Tomorrow at 9:00", clock: "Sun 9:00" }, { label: "Next Monday at 9:00", clock: "Mon 9:00" },
   ];
   state.tabs = [
-    { index: 4, pane: "%4", name: "full titles", state: "done", needs: true },
-    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working", wait: "Edit diffview.lua", remind: { at: Math.floor(Date.now() / 1000) + 80 * 60, note: "check the deploy", due: false } },
+    { index: 4, pane: "%4", name: "full titles", state: "done", needs: true, stage: "needs", group: "Needs you", mark: "✓", tone: "passed", words: "finished" },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working", wait: "Edit diffview.lua", stage: "working", group: "Working", spins: true, tone: "working", words: "working · Edit diffview.lua", remind: { at: Math.floor(Date.now() / 1000) + 80 * 60, note: "check the deploy", due: false } },
   ];
   render();
 `, ctx);
@@ -1706,7 +1799,7 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "row=⠹3M-d uncommittedEdit diffview.lua⏰ in 1h 20m · check the deploy",
+            "row=⠹3M-d uncommittedworking · Edit diffview.lua⏰ in 1h 20m · check the deploy",
             "none=Mark seen,Pin it,Remind me,Close tab",
             "sheet=Remind me about tab 4 full titles",
             "times=In 20 minutes10:01,In 1 hour10:41,In 3 hours12:41,Tomorrow at 9:00Sun 9:00,Next Monday at 9:00Mon 9:00",
@@ -1743,10 +1836,10 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 vm.runInContext(`
   state.me = { paired: true, computer: "studio" };
   state.tabs = [
-    { index: 4, pane: "%4", name: "full titles", state: "waiting", needs: true, pinned: false },
-    { index: 3, pane: "%3", name: "M-d uncommitted", state: "idle", needs: true, pinned: true },
-    { index: 6, pane: "%6", name: "deploy", state: "waiting", needs: true, pinned: false, remind: { at: 1, note: "", due: true } },
-    { index: 5, pane: "%5", name: "five", state: "working", needs: false, pinned: false },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "idle", needs: true, pinned: true, stage: "needs", group: "Needs you", mark: "⚑", tone: "needs", words: "idle for 2h" },
+    { index: 6, pane: "%6", name: "deploy", state: "waiting", needs: true, pinned: false, remind: { at: 1, note: "", due: true }, stage: "needs", group: "Needs you", mark: "◷", tone: "needs", words: "waiting on you" },
+    { index: 4, pane: "%4", name: "full titles", state: "waiting", needs: true, pinned: false, stage: "needs", group: "Needs you", mark: "●", tone: "needs", words: "waiting on you" },
+    { index: 5, pane: "%5", name: "five", state: "working", needs: false, pinned: false, stage: "working", group: "Working", spins: true, tone: "working", words: "working" },
   ];
   render();
 `, ctx);
@@ -1756,7 +1849,7 @@ const button = (label) => body.all((x) => x.tag === "button" && x.text === label
 const tick = () => new Promise((r) => setImmediate(r));
 const out = [];
 (async () => {
-  out.push("groups=" + JSON.stringify(vm.runInContext("groups([]).map(([name, , tabs]) => [name, tabs.map((t) => t.index)])", ctx)));
+  out.push("groups=" + JSON.stringify(vm.runInContext("groups([]).map((g) => [g.name, g.tabs.map((t) => t.index)])", ctx)));
   out.push("rows=" + row("3").text + " | " + row("4").text);
   row("3").fire("contextmenu");
   out.push("pinned=" + options().join(","));
@@ -1794,7 +1887,7 @@ const out = [];
         lines,
         [
             r#"groups=[["Needs you",[3,6,4]],["Working",[5]]]"#,
-            "rows=⚑3M-d uncommittedidle  | ●4full titleswaiting on you",
+            "rows=⚑3M-d uncommittedidle for 2h | ●4full titleswaiting on you",
             "pinned=Unpin it,Remind me,Close tab",
             r#"unpin=/api/tabs/3/pin {"pin":false} menu=null"#,
             "not=Pin it,Remind me,Close tab",
@@ -2160,7 +2253,7 @@ mod preview_server {
         assert_eq!(json_of(at, "/api/me")["paired"], true);
         let tabs = json_of(at, "/api/tabs");
         assert_eq!(tabs["live"], true);
-        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 12);
+        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 20);
         let turns = json_of(at, "/api/tabs/13/turns");
         assert!(!turns["messages"].as_array().unwrap().is_empty());
     }

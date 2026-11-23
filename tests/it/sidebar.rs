@@ -328,7 +328,7 @@ fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitori
 }
 
 #[test]
-fn a_turn_that_ends_over_a_background_shell_is_under_needs_you_until_seen_then_working() {
+fn a_turn_that_ends_over_a_background_shell_is_under_needs_you_until_seen_then_monitoring() {
     let server = start(json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
@@ -362,12 +362,18 @@ fn a_turn_that_ends_over_a_background_shell_is_under_needs_you_until_seen_then_w
         "{}",
         screen.join("\n")
     );
-    // Seen: under Working, in the background, while the shell runs.
+    // Seen: under Monitoring, waiting on the shell, while it runs.
     server.ok(&["select-tab", "-t", &first]);
-    client.wait_for("Working once seen", |s| {
-        s.iter().any(|l| left(l, 34).contains("WORKING"))
+    let screen = client.wait_for("Monitoring once seen", |s| {
+        s.iter().any(|l| left(l, 34).contains("MONITORING"))
             && !s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
     });
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("WORKING")),
+        "{}",
+        screen.join("\n")
+    );
+    client.wait_text("waiting on 1 shell");
 }
 
 // With "Enter opens the row's menu" off, Enter in the sidebar goes into
