@@ -1336,6 +1336,7 @@ impl Pager {
                 let to = crate::ui::kit::scroll_drag(total, body, body, mouse.row as usize, grab);
                 let act = self.scroll_to(to);
                 self.keep_cursor_in_sight();
+                self.vim_follow_layout();
                 act
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -1362,6 +1363,7 @@ impl Pager {
                     let to = crate::ui::kit::scroll_press(total, self.top, body, body, row);
                     let act = self.scroll_to(to.unwrap_or(self.top));
                     self.keep_cursor_in_sight();
+                    self.vim_follow_layout();
                     return act;
                 }
                 let line = self.top + row;

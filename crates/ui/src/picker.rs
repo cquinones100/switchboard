@@ -522,7 +522,7 @@ impl Picker {
                 words.iter().all(|w| hay.contains(w.as_str()))
             };
             // Stable, so each half stays in the list's order.
-            matched.sort_by_key(|i| !written(i));
+            matched.sort_by_cached_key(|i| !written(i));
         }
         let order: Vec<usize> = match &self.order {
             Some(order) => order(&self.query, &matched),
@@ -533,14 +533,13 @@ impl Picker {
                 by_score.into_iter().map(|(i, _)| i).collect()
             }
         };
+        // By the item, so a long list (a repository's files) is shown in
+        // one pass rather than searched for each row.
+        let mut by_item: std::collections::HashMap<usize, Vec<u32>> =
+            found.into_iter().map(|(i, _, idx)| (i, idx)).collect();
         self.shown = order
             .into_iter()
-            .filter_map(|i| {
-                found
-                    .iter()
-                    .find(|(j, _, _)| *j == i)
-                    .map(|(_, _, idx)| (i, idx.clone()))
-            })
+            .filter_map(|i| by_item.remove(&i).map(|idx| (i, idx)))
             .collect();
         self.cursor = self.on_row(0, true).unwrap_or(0);
         self.top = 0;

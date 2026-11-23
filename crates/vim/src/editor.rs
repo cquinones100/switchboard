@@ -903,6 +903,8 @@ impl<N: Note> Editor<N> {
             return false;
         }
         match &self.group {
+            // Read-only, nothing can be undone, so no history is kept.
+            None if self.read_only => {}
             None => self.undo.push(before),
             Some(group)
                 if outside
