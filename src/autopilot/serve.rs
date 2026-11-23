@@ -1385,6 +1385,16 @@ impl Server {
         self.autopilot_tick();
     }
 
+    /// Whether `tab`'s landing pushed or merged, which a tab merely back in
+    /// its main clone may not have.
+    pub fn autopilot_landed_something(&self, tab: TabId) -> bool {
+        self.tabs.get(&tab).is_some_and(|t| {
+            [AUTOLAND, PUSHED, MERGED]
+                .iter()
+                .any(|k| t.opts.get(*k).is_some_and(|v| !v.trim().is_empty()))
+        })
+    }
+
     /// What an option of its menu changes in the mode, done and said.
     fn autopilot_change(&mut self, client: ClientId, act: Act) {
         let mut said = None;

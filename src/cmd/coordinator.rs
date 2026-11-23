@@ -66,7 +66,11 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let set = util::block_on(async {
+    // Every issue looked up before any label is written, so a wrong one
+    // changes nothing; then those that left Next first, so a failure after
+    // leaves none of them first; and the server told of what was written
+    // even when a later one failed.
+    let looked = util::block_on(async {
         let mut checked: Vec<String> = Vec::new();
         for (repo, _) in next.iter().chain(&left) {
             if !checked.contains(&repo.to_string()) {
@@ -74,9 +78,8 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
                 checked.push(repo.to_string());
             }
         }
-        let mut first = Vec::new();
-        for (repo, number) in &next {
-            set_priority(repo, *number, HIGHEST).await?;
+        let mut texts = Vec::new();
+        for (repo, number) in next.iter().chain(&left) {
             let issue = github::rest(
                 "GET",
                 &format!("/repos/{repo}/issues/{number}"),
@@ -90,42 +93,57 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
                 .get("title")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            first.push(format!(
+            texts.push(format!(
                 "{repo}#{number}: {}",
                 crate::worktree::one_line(title)
             ));
         }
+        texts.truncate(next.len());
+        anyhow::Ok(texts)
+    });
+    let texts = match looked {
+        Ok(texts) => texts,
+        Err(e) => return fail(NAME, &format!("{e:#}; no label changed")),
+    };
+    let mut taken_out = Vec::new();
+    let mut first = Vec::new();
+    let written = util::block_on(async {
         for (repo, number) in &left {
             set_priority(repo, *number, LOWEST).await?;
+            taken_out.push(format!("{repo}#{number}"));
         }
-        anyhow::Ok(first)
+        for ((repo, number), text) in next.iter().zip(&texts) {
+            set_priority(repo, *number, HIGHEST).await?;
+            first.push(text.clone());
+        }
+        anyhow::Ok(())
     });
-    let first = match set {
-        Ok(first) => first,
-        Err(e) => return fail(NAME, &format!("{e:#}")),
-    };
+    if first.is_empty() && taken_out.is_empty() {
+        return match written {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(NAME, &format!("{e:#}; no label changed")),
+        };
+    }
     // Told at once, so autopilot never opens from half of the new order.
+    let (put, out) = (first.len(), taken_out.len());
     let mut asked = vec!["coordinator-ordered".to_string()];
     asked.extend(first);
-    if !left.is_empty() {
+    if !taken_out.is_empty() {
         asked.push("--left".into());
-        asked.extend(left.iter().map(|(repo, number)| format!("{repo}#{number}")));
+        asked.extend(taken_out);
     }
     let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
-    match socket::ask(&asked) {
-        Ok((0, _, _)) => {
-            println!(
-                "{} issue(s) first in autopilot's queue, in order; {} taken out",
-                next.len(),
-                left.len()
-            );
-            ExitCode::SUCCESS
-        }
-        Ok((_, _, err)) => fail(
-            NAME,
-            &format!("labeled, but autopilot wasn't told: {}", err.trim()),
-        ),
-        Err(e) => fail(NAME, &format!("labeled, but autopilot wasn't told: {e:#}")),
+    let told = socket::ask(&asked);
+    println!("{put} issue(s) first in autopilot's queue, in order; {out} taken out");
+    let told = match told {
+        Ok((0, _, _)) => Ok(()),
+        Ok((_, _, err)) => Err(err.trim().to_string()),
+        Err(e) => Err(format!("{e:#}")),
+    };
+    match (written, told) {
+        (Ok(()), Ok(())) => ExitCode::SUCCESS,
+        (Err(e), _) => fail(NAME, &format!("{e:#}; only the issues above were done")),
+        (_, Err(e)) => fail(NAME, &format!("labeled, but autopilot wasn't told: {e}")),
     }
 }
 

@@ -360,8 +360,9 @@ impl Server {
     /// An autopilot tab just landed: its PR's merge wakes it, when the tab
     /// has a merged one it wasn't told of, since autopilot may close the tab
     /// before GitHub is next asked about it again; with no PR, the landing
-    /// itself; with one not merged (back in the main clone having landed
-    /// nothing), nothing, its merge told when GitHub answers it.
+    /// itself, once it pushed or merged; with one not merged, or none and
+    /// nothing pushed (back in the main clone having landed nothing),
+    /// nothing, a merge told when GitHub answers it.
     pub fn coordinator_landed(&mut self, tab: TabId) {
         if !Self::coordinator_on() {
             return;
@@ -386,7 +387,10 @@ impl Server {
                     url: pr.url,
                 });
             }
-            None => self.coordinator_wake(Wake::Landed { tab: number, name }),
+            None if self.autopilot_landed_something(tab) => {
+                self.coordinator_wake(Wake::Landed { tab: number, name });
+            }
+            None => {}
         }
     }
 
