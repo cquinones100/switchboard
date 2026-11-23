@@ -294,21 +294,13 @@ impl Server {
         if self.agents.state(pane) != Some(crate::agent::State::Working) {
             return Err("its Claude isn't working".into());
         }
-        // A prompt on screen (a permission auto mode asks while still
-        // working) or a dialog, which Esc would refuse or close rather than
-        // stop the turn; a request auto mode allowed, still marked asked
-        // while its command runs, shows none and is stopped. Only the
-        // visible screen counts, and only options with a prompt's cursor on
-        // one, since a numbered list in Claude's own words reads as options.
-        let prompt_shown = self.panes.get(&pane).is_some_and(|slot| {
-            let screen = slot.pane.text(0);
-            let cursor_on_an_option = screen.lines().any(|l| {
-                l.trim_start()
-                    .strip_prefix('❯')
-                    .is_some_and(|rest| rest.trim_start().starts_with(|c: char| c.is_ascii_digit()))
-            });
-            cursor_on_an_option && answer::options_in(&screen).is_some()
-        });
+        // A permission auto mode asks while still working, or a dialog,
+        // which Esc would refuse or close rather than stop the turn. A
+        // prompt counts as `watch` sends the phone one, while the pane is
+        // marked asked, so Stop is refused exactly while the phone shows its
+        // card in place of ■, and a numbered list in Claude's own words,
+        // with nothing asked, leaves it allowed.
+        let prompt_shown = self.phone_asking(pane) && self.phone_prompt_of(pane).is_some();
         if prompt_shown || self.phone_dialog(pane) {
             return Err("its Claude is asking something: answer it first".into());
         }
@@ -441,7 +433,7 @@ impl Server {
         let ask = crate::mission::ask::Ask::new(
             "Pair a phone?",
             format!(
-                "{device}, signed in to Tailscale as you, wants to answer, message, set reminders on, pin and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
+                "{device}, signed in to Tailscale as you, wants to answer, message, set reminders on, pin, stop and close your Claude tabs from the phone app. Type the code it shows (Esc refuses):"
             ),
         );
         self.open(

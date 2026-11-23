@@ -1958,9 +1958,38 @@ fn the_phone_stops_a_working_claude_with_esc() {
         screen(&server, &pane).contains("back-42")
     });
     show_prompt(&server, &pane);
-    let (code, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
-    assert_eq!(code, 1, "a Claude asking");
+    // Options on screen with nothing asked are Claude's own words: allowed.
+    let said = server.ok(&["stop", "-t", &pane, "-s", "phone"]);
+    assert!(said.starts_with("Stopped tab 1 "), "{said}");
+    // Asked by auto mode, which leaves the pane working: refused.
+    hook(
+        &server,
+        &pane,
+        json!({"hook_event_name": "PermissionRequest", "permission_mode": "auto", "session_id": "s-phone", "tool_name": "Bash", "tool_input": {"command": "ls"}}),
+    );
+    wait_until(&server, "the pane marked asked", || {
+        let (code, _, _) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
+        code == 1
+    });
+    let (_, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
     assert!(err.contains("asking something"), "{err}");
+}
+
+/// Claude Code's hook for `pane`'s Claude, its event named in `input`,
+/// sent over the socket from the test's process as `switchboard hook`
+/// sends it.
+fn hook(server: &TestServer, pane: &str, input: Value) {
+    let event = input["hook_event_name"].as_str().unwrap().to_string();
+    let msg = ClientMsg::Command {
+        args: vec!["hook".into(), event],
+        cwd: server.dir.path().to_path_buf(),
+        pane: Some(pane.to_string()),
+        stdin: Some(input.to_string().into_bytes()),
+        by_hand: false,
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = switchboard::mux::socket::run_command_at(&server.socket(), &msg, &mut out, &mut err);
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
 }
 
 /// `pin`, which the phone's route asks: it pins a Claude tab as M-f does,
