@@ -32,7 +32,7 @@
   /* Sizes (board 184). */
   --tap: 44px; /* anything pressed, every way */
   --chip: 24px;
-  --head: 52px; /* a 44 control with 4 above and below */
+  --head: calc(var(--tap) + 2 * var(--s1) + 1px); /* a 44 control, 4 above and below, and its line */
   --row: 56px;
   --thumb: 64px;
   --thumb-x: 24px;
