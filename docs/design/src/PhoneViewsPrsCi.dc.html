@@ -377,8 +377,9 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'comment', '#87 theme the picker', 'asks your review', '1d', 'd'); y += 3;
   label(sx + 1, y, 'Approved', 'g', 1, sx + 34); y++;
   vItem(sx, y, 'passed', '#92 drop the old hook', 'tab 8 · checks passed', '20m', 'g'); y += 3;
-  label(sx + 1, y, 'In merge queue', 'm', 1, sx + 34); y++;
-  vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · 1st', '', ''); }
+  label(sx + 1, y, 'In merge queue', 'm', 2, sx + 34); y++;
+  vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · 1st', '', ''); y += 2;
+  vItem(sx, y, 'queued', '#94 full titles', 'tab 4 · 2nd', '', ''); }
 
 // 2. CI: the runs as the CI view files them, what failed first.
 { const sx = phone(46, 'CI, chosen', '1');
