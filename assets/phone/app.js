@@ -897,6 +897,10 @@ function drop(i) {
 
 async function openTab(n) {
   if (state.menu) closeMenu();
+  // A view open over it (a push tapped meanwhile) closes first, its step in
+  // the page's history taken back, so the tab is named on the page's own.
+  const overAView = history.state && history.state.view;
+  if (overAView) return closePanel(() => openTab(n));
   state.open = n;
   state.messages = [];
   state.turnsLoaded = false;

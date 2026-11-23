@@ -2990,6 +2990,12 @@ body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
 body.all((x) => x.attrs["data-item"] === "q93")[0].fire("click");
 button("Go to tab 2").fire("click");
 out.push("go=" + backs + " " + ctx.history.state + " " + vm.runInContext("state.open + ' ' + state.panel", ctx));
+// A tab opened under an open view, as a tapped push opens one, closes it first.
+app.all((x) => x.attrs["aria-label"] === "Tab 2's menu")[0].fire("click");
+button("Mission control›").fire("click");
+body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
+vm.runInContext("openTab('12')", ctx);
+out.push("pushed=" + backs + " " + ctx.history.state + " " + vm.runInContext("state.panel", ctx));
 console.log(out.join("\n"));
 "##;
     let Some(stdout) = run_app_js(&script) else {
@@ -3004,6 +3010,7 @@ console.log(out.join("\n"));
             "back=1 view=null screens=0 layers=1",
             "list=landing",
             "go=2 null 12 null",
+            "pushed=3 null null",
         ],
         "{stdout}"
     );
