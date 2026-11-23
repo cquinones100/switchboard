@@ -5,7 +5,9 @@
 //! - `coordinator-order <owner/repo#number> <1-4>`: gives the issue that
 //!   `priority:` label (`issues::set_priority`, as the Autopilot board's
 //!   Move up and Move down do), the order autopilot takes it in, on a
-//!   repository you can push to, changing nothing else of it.
+//!   repository you can push to, changing nothing else of it; then tells
+//!   the server (`coordinator-ordered`), which puts it in autopilot's queue
+//!   as those do: at 1 first of all, the last given 1 first, else out of it.
 //! - `coordinator-post issue -C <clone> --title <title> --body-file <file>`
 //!   and `coordinator-post comment -C <clone> <number> --body-file <file>`:
 //!   files an issue (assigned to you) or comments on one, only on the
@@ -24,6 +26,7 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 
 use crate::integrations::github::{self, Repo};
+use crate::mux::socket;
 use crate::util;
 
 const SOURCE: &str = "coordinator";
@@ -51,17 +54,45 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
     };
     let set = util::block_on(async {
         pushable(&repo).await?;
-        crate::autopilot::issues::set_priority(&repo, number, priority).await
+        crate::autopilot::issues::set_priority(&repo, number, priority).await?;
+        github::rest(
+            "GET",
+            &format!("/repos/{repo}/issues/{number}"),
+            None,
+            SOURCE,
+        )
+        .await
     });
-    match set {
-        Ok(()) => {
+    let issue = match set {
+        Ok(issue) => issue,
+        Err(e) => return fail(NAME, &format!("{e:#}")),
+    };
+    // The queue's item for it, as autopilot words an issue (`Issue::text`).
+    let title = issue
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let reference = format!("{repo}#{number}");
+    let text = format!("{reference}: {}", crate::worktree::one_line(title));
+    let told = socket::ask(&[
+        "coordinator-ordered",
+        &reference,
+        &priority.to_string(),
+        &text,
+    ]);
+    match told {
+        Ok((0, _, _)) => {
             println!(
-                "{repo}#{number}: {}",
+                "{reference}: {}",
                 crate::autopilot::issues::priority_label(priority)
             );
             ExitCode::SUCCESS
         }
-        Err(e) => fail(NAME, &format!("{e:#}")),
+        Ok((_, _, err)) => fail(
+            NAME,
+            &format!("labeled, but autopilot wasn't told: {}", err.trim()),
+        ),
+        Err(e) => fail(NAME, &format!("labeled, but autopilot wasn't told: {e:#}")),
     }
 }
 

@@ -1335,27 +1335,37 @@ impl Server {
             move || super::issues::wait_for(super::issues::set_priority(&repo, number, to)),
             move |server, client, done| match done {
                 Ok(()) => {
-                    let named = format!("{reference}: ").to_lowercase();
-                    let written = Mode::update(&paths::state_dir(), |mode| {
-                        mode.next
-                            .retain(|x| !x.text.to_lowercase().starts_with(&named));
-                        if to == super::issues::HIGHEST {
-                            let note = mode.note_id.clone();
-                            mode.next.insert(0, mode::Skipped { note, text });
-                        }
-                    });
-                    match written {
-                        Ok(mode) => server.autopilot.mode = mode,
-                        Err(e) => eprintln!("autopilot: couldn't write its queue: {e}"),
-                    }
-                    super::issues::forget(&paths::state_dir());
-                    server.autopilot.pilot.reset();
-                    server.autopilot_tick();
+                    server.autopilot_priority_set(&reference, text, to);
                     server.mission_note(client, format!("{reference} is priority {to}"));
                 }
                 Err(e) => server.mission_note(client, format!("Couldn't label {reference}: {e}")),
             },
         );
+    }
+
+    /// Issue `reference` (`<owner>/<repo>#<number>`) given priority `to`
+    /// on GitHub, taken into the queue: at the highest, its item (`text`,
+    /// its first line) put first among the issues, the mode's `next`
+    /// holding it, and at any other taken out of it; the issues read again.
+    /// The board's Move up and Move down, and the coordinator's
+    /// `coordinator-order` (`coordinator-ordered`), end here.
+    pub fn autopilot_priority_set(&mut self, reference: &str, text: String, to: u8) {
+        let named = format!("{reference}: ").to_lowercase();
+        let written = Mode::update(&paths::state_dir(), |mode| {
+            mode.next
+                .retain(|x| !x.text.to_lowercase().starts_with(&named));
+            if to == super::issues::HIGHEST {
+                let note = mode.note_id.clone();
+                mode.next.insert(0, mode::Skipped { note, text });
+            }
+        });
+        match written {
+            Ok(mode) => self.autopilot.mode = mode,
+            Err(e) => eprintln!("autopilot: couldn't write its queue: {e}"),
+        }
+        super::issues::forget(&paths::state_dir());
+        self.autopilot.pilot.reset();
+        self.autopilot_tick();
     }
 
     /// What an option of its menu changes in the mode, done and said.

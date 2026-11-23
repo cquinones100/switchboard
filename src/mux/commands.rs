@@ -144,6 +144,7 @@ pub const NAMES: &[&str] = &[
     "autopilot-start",
     "autopilot-board",
     "autopilot-pause",
+    "coordinator-ordered",
     "slot-report",
 ];
 
@@ -299,6 +300,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "autopilot-pause",
         "autopilot-pause on|off: autopilot paused or resumed, as its menu's Pause and Resume do",
+    ),
+    (
+        "coordinator-ordered",
+        "coordinator-ordered <owner/repo#number> <1-4> <first line>: from switchboard coordinator-order once GitHub has the issue's priority label, autopilot's queue told of it as the Autopilot board's Move up and Move down tell it: at 1 put first, else taken out of what is put first, the issues read again",
     ),
     (
         "slot-report",
@@ -609,6 +614,28 @@ impl Server {
                 _ => Err("autopilot-pause takes on or off".to_string()),
             }
             .map(|said| Reply::ok(format!("{said}\n"))),
+            "coordinator-ordered" => {
+                let (Some((repo, number)), Some(to), Some(text)) = (
+                    rest.first()
+                        .and_then(|r| crate::autopilot::issues::parse_reference(r)),
+                    rest.get(1)
+                        .and_then(|p| p.parse::<u8>().ok())
+                        .filter(|p| (1..=4).contains(p)),
+                    rest.get(2),
+                ) else {
+                    return Reply::fail(
+                        "usage: switchboard coordinator-ordered <owner/repo#number> <1-4> <first line>",
+                    );
+                };
+                let reference = format!("{repo}#{number}");
+                if crate::autopilot::issues::reference_in(text)
+                    .is_none_or(|(r, n)| format!("{r}#{n}") != reference)
+                {
+                    return Reply::fail("coordinator-ordered: the first line must name the issue");
+                }
+                self.autopilot_priority_set(&reference, text.clone(), to);
+                Ok(Reply::ok(""))
+            }
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
