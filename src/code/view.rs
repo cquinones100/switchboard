@@ -266,6 +266,14 @@ impl Viewer {
                 return;
             }
             KeyCode::Char('o') if idle && ctrl => return self.jump(true),
+            // The screen's keys go by the rows drawn, where a wrapped line
+            // takes several, as Vim's do with `wrap`; Vim's own count lines.
+            KeyCode::Char(c @ ('f' | 'b' | 'd' | 'u')) if idle && ctrl => {
+                return self.page(c);
+            }
+            KeyCode::PageDown if idle => return self.page('f'),
+            KeyCode::PageUp if idle => return self.page('b'),
+            KeyCode::Char(c @ ('H' | 'M' | 'L')) if idle && !ctrl => return self.screen_line(c),
             KeyCode::Char('i') | KeyCode::Tab if idle && (ctrl || key.code == KeyCode::Tab) => {
                 return self.jump(false);
             }
@@ -418,6 +426,85 @@ impl Viewer {
         }
     }
 
+    /// The last line shown whole from `top`.
+    fn bottom_from(&self, top: usize) -> usize {
+        let last = self.editor.doc.text.len() - 1;
+        let (mut bottom, mut used) = (top, self.rows_of(top));
+        while bottom < last && used + self.rows_of(bottom + 1) <= self.body_rows() {
+            bottom += 1;
+            used += self.rows_of(bottom);
+        }
+        bottom
+    }
+
+    /// The first line of the screen that ends `rows` rows above `top`.
+    fn top_above(&self, top: usize, rows: usize) -> usize {
+        let (mut at, mut used) = (top, 0);
+        while at > 0 && used + self.rows_of(at - 1) <= rows {
+            at -= 1;
+            used += self.rows_of(at);
+        }
+        at
+    }
+
+    /// Ctrl-F, Ctrl-B, Ctrl-D and Ctrl-U by the rows drawn: a screen less
+    /// two rows, or half of one, the cursor on a line the new screen shows.
+    fn page(&mut self, key: char) {
+        let last = self.editor.doc.text.len() - 1;
+        let rows = self.body_rows();
+        let row = self.editor.row();
+        let first = |line: &str| line.len() - line.trim_start().len();
+        match key {
+            'f' => {
+                let bottom = self.bottom_from(self.top);
+                self.top = bottom.saturating_sub(1).max(self.top + 1).min(last);
+                let to = row.max(self.top);
+                self.editor.go_to(to, first(&self.editor.doc.line(to)));
+            }
+            'b' => {
+                self.top = self.top_above(self.top, rows.saturating_sub(2).max(1));
+                let to = row.min(self.bottom_from(self.top));
+                self.editor.go_to(to, first(&self.editor.doc.line(to)));
+            }
+            _ => {
+                let half = (rows / 2).max(1);
+                let moved = if key == 'd' {
+                    let mut to = self.top;
+                    let mut used = 0;
+                    while to < last && used + self.rows_of(to) <= half {
+                        used += self.rows_of(to);
+                        to += 1;
+                    }
+                    to.max(self.top + 1).min(last) - self.top
+                } else {
+                    self.top - self.top_above(self.top, half)
+                };
+                let (top, to) = if key == 'd' {
+                    ((self.top + moved).min(last), (row + moved).min(last))
+                } else {
+                    (self.top - moved, row.saturating_sub(moved.max(1)))
+                };
+                self.top = top;
+                self.editor.go_to(to, first(&self.editor.doc.line(to)));
+            }
+        }
+        self.editor.top = self.top;
+        self.scroll_to_cursor();
+    }
+
+    /// `H`, `M` and `L`: the first, middle and last line on the screen.
+    fn screen_line(&mut self, key: char) {
+        let bottom = self.bottom_from(self.top);
+        let to = match key {
+            'H' => self.top,
+            'L' => bottom,
+            _ => self.top + (bottom - self.top) / 2,
+        };
+        let line = self.editor.doc.line(to);
+        self.editor.go_to(to, line.len() - line.trim_start().len());
+        self.scroll_to_cursor();
+    }
+
     /// The text scrolled `by` lines, the cursor kept on a line shown.
     fn scroll(&mut self, by: isize) {
         let last = self.editor.doc.text.len() - 1;
@@ -426,12 +513,7 @@ impl Viewer {
         if row < self.top {
             self.editor.go_to(self.top, 0);
         } else {
-            let mut bottom = self.top;
-            let mut used = self.rows_of(bottom);
-            while bottom < last && used + self.rows_of(bottom + 1) <= self.body_rows() {
-                bottom += 1;
-                used += self.rows_of(bottom);
-            }
+            let bottom = self.bottom_from(self.top);
             if row > bottom {
                 self.editor.go_to(bottom, 0);
             }
@@ -927,6 +1009,33 @@ mod tests {
         assert_eq!(v.editor.row(), 39_999, "back where it jumped from");
         assert!(v.top + 10 > 39_999 && v.top <= 39_999);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_screen_keys_go_by_the_rows_a_wrapped_line_takes() {
+        // Every other line wraps onto two rows of a 20-column text.
+        let lines: String = (1..=60)
+            .map(|n| match n % 2 {
+                0 => format!("{n} {}\n", "x".repeat(30)),
+                _ => format!("{n}\n"),
+            })
+            .collect();
+        let mut v = Viewer::new(
+            PathBuf::from("/nowhere/a.txt"),
+            "a.txt".into(),
+            lines,
+            |_| Ok(()),
+        );
+        v.resize(23, 14);
+        let bottom = v.bottom_from(0);
+        press(&mut v, "L");
+        assert_eq!(v.editor.row(), bottom, "L to the last line shown");
+        v.key(Key::new(KeyCode::Char('f'), Mods::CTRL));
+        assert_eq!(v.top, bottom - 1, "a screen on, nothing skipped");
+        press(&mut v, "H");
+        assert_eq!(v.editor.row(), v.top);
+        v.key(Key::new(KeyCode::Char('b'), Mods::CTRL));
+        assert_eq!(v.top, 0, "and back");
     }
 
     #[test]

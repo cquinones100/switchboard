@@ -1578,6 +1578,15 @@ impl Pager {
             };
             return format!("{kind}{typed}");
         }
+        if let Some(note) = &self.note {
+            // Printed as it is, so without control characters, which a
+            // crafted link's error could carry to the terminal, and cut to
+            // the pane, short of its last column, so it never wraps and
+            // scrolls the page.
+            let note: String = note.chars().filter(|c| !c.is_control()).collect();
+            let note = crate::ui::draw::cut(&note, self.cols.saturating_sub(1));
+            return format!("\x1b[7m{note}\x1b[0m");
+        }
         if self.has_cursor()
             && let Mode::Visual { line, block, .. } = self.vim.mode
         {
@@ -1587,15 +1596,6 @@ impl Pager {
                 _ => "-- VISUAL --",
             };
             return format!("\x1b[1m{which}\x1b[0m");
-        }
-        if let Some(note) = &self.note {
-            // Printed as it is, so without control characters, which a
-            // crafted link's error could carry to the terminal, and cut to
-            // the pane, short of its last column, so it never wraps and
-            // scrolls the page.
-            let note: String = note.chars().filter(|c| !c.is_control()).collect();
-            let note = crate::ui::draw::cut(&note, self.cols.saturating_sub(1));
-            return format!("\x1b[7m{note}\x1b[0m");
         }
         let full = self.has_cursor() && self.full_at(self.cursor).is_some();
         if let Content::Board(b) = &self.content {

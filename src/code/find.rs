@@ -155,9 +155,16 @@ pub fn repo_files(dir: &Path, most: usize, within: Duration) -> Option<RepoFiles
     let stdout = git.stdout.take()?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
-            if tx.send(line).is_err() {
+        // By bytes, a name that isn't UTF-8 (git prints names raw with
+        // quotePath off) read as near as it can be rather than ending the list.
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+            let name = String::from_utf8_lossy(&line)
+                .trim_end_matches('\n')
+                .to_string();
+            line.clear();
+            if tx.send(name).is_err() {
                 break;
             }
         }
