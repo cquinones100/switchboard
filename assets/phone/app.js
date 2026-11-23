@@ -1799,7 +1799,9 @@ function render(stick) {
 // opened from a channel's ⋯: mission control's Landing, Autopilot, PRs, CI
 // Notifications and Usage views as the computer sends them (src/phone/mission.rs),
 // each a 56 row with what needs you counted; a tap on one slides its items
-// in under mission control's groups, and a tap on an item opens its menu,
+// in full screen, over the panel, under mission control's groups, with ‹
+// (a swipe right from its left edge, or the phone's back) back to the
+// panel's list; a tap on an item opens its menu,
 // the options the phone can do: going to a tab opens its channel, opening
 // or copying a link happens here, and the rest runs on the computer, asked
 // first where the option says so. A swipe right, or a tap on the dimmed
@@ -1809,7 +1811,7 @@ function render(stick) {
 const EDGE = 24; // px from the right edge a swipe starts the panel from
 const REFRESH_MS = 60000; // the least time between asking PRs or CI again
 const HINT = "mc-hint-shown"; // the toast was shown, kept on this phone
-let panelLayer = null; // { layer, panel, list, strip }: the panel while it shows
+let panelLayer = null; // { layer, panel, strip, screen }: the panel while it shows, screen the view open over it
 let edge = null; // { x, y, dx, at, speed, decided, opening }: an edge swipe under way
 
 // Whether the toast was shown, kept on this phone alone; a page without
@@ -1863,8 +1865,8 @@ function panelLayerNode() {
   const strip = el("div", { class: "panel-strip", onclick: () => closePanel() });
   const panel = el("div", { class: "panel", role: "dialog", "aria-label": "Mission control" });
   const layer = el("div", { class: "panel-layer" }, strip, panel);
-  panelSwipe(panel);
-  return { layer, panel, strip };
+  panelSwipe(panel, 0, () => closePanel(), () => slidePanel(panelLayer.layer, panel, true));
+  return { layer, panel, strip, screen: null };
 }
 
 // Opened from ⋯ or a swipe that went far enough: slid in from where it is.
@@ -1888,29 +1890,81 @@ function openPanel(from) {
   slidePanel(panelLayer.layer, panelLayer.panel, true);
 }
 
+// The panel on its list of views, and the view open over it, if any, each
+// keeping where it was scrolled to as the stream redraws them.
 function drawPanel() {
   if (!panelLayer || !state.panel) return;
   const view = state.panel.view && viewOf(state.panel.view);
-  if (state.panel.view && !view) state.panel.view = null;
-  const old = panelLayer.panel.querySelector(".panel-list");
-  const kept = old && old.viewKey === (state.panel.view || "") ? old.scrollTop : 0;
-  const head = view ? viewHead(view) : el(
+  if (state.panel.view && !view) closeView();
+  const head = el(
     "div",
     { class: "head" },
     el("button", { class: "icon", "aria-label": "Close mission control", onclick: () => closePanel() }, "›"),
     el("span", { class: "title" }, "Mission control"),
   );
-  const list = view ? viewItems(view) : viewList();
-  list.viewKey = state.panel.view || "";
-  panelLayer.panel.replaceChildren(head, list);
+  fill(panelLayer.panel, head, viewList(), "");
+  if (!view) return;
+  if (!panelLayer.screen) {
+    const screen = el("div", { class: "panel-view", role: "dialog", "aria-label": view.title });
+    panelSwipe(screen, EDGE, () => back(), () => slideView(screen, true));
+    panelLayer.screen = screen;
+    panelLayer.layer.append(screen);
+    fill(screen, viewHead(view), viewItems(view), view.key);
+    slideView(screen, true, true);
+    return;
+  }
+  fill(panelLayer.screen, viewHead(view), viewItems(view), view.key);
+}
+
+function fill(node, head, list, key) {
+  const old = node.querySelector(".panel-list");
+  const kept = old && old.viewKey === key ? old.scrollTop : 0;
+  list.viewKey = key;
+  node.replaceChildren(head, list);
   list.scrollTop = kept;
+}
+
+// A view slides in from the right over the panel as it opens and out as
+// it closes, over --slide as the panel does, at once with Reduce Motion.
+function slideView(screen, opens, from) {
+  if (still()) {
+    screen.style.transform = opens ? "" : "translateX(100%)";
+    return;
+  }
+  if (from) {
+    screen.style.transform = "translateX(100%)";
+    // Laid out at its start before it slides.
+    void screen.offsetWidth;
+  }
+  const lasts = ms("--slide");
+  screen.style.transition = "transform " + lasts + "ms " + EASE;
+  screen.style.transform = opens ? "" : "translateX(100%)";
+  setTimeout(() => (screen.style.transition = ""), lasts);
+}
+
+// Back from a view: the phone's own back when opening it added a step to
+// the page's history, which comes back here through popstate, else at once.
+function back() {
+  if (history.state && history.state.view && typeof history.back === "function") history.back();
+  else closeView();
+}
+
+// The view put away, the panel showing on its list under it.
+function closeView() {
+  if (state.panel) state.panel.view = null;
+  if (!panelLayer || !panelLayer.screen) return;
+  const screen = panelLayer.screen;
+  panelLayer.screen = null;
+  slideView(screen, false);
+  if (still()) screen.remove();
+  else setTimeout(() => screen.remove(), ms("--slide"));
 }
 
 function viewHead(view) {
   return el(
     "div",
     { class: "head" },
-    el("button", { class: "icon", "aria-label": "Back to the views", onclick: () => { state.panel.view = null; drawPanel(); } }, "‹"),
+    el("button", { class: "icon", "aria-label": "Back to the views", onclick: () => back() }, "‹"),
     el("span", { class: "title" }, view.title),
     view.acts && view.acts.length
       ? el("button", { class: "icon tab-menu", "aria-label": view.title + "'s menu", "aria-haspopup": "menu", onclick: () => viewMenu(view.key) }, "⋯")
@@ -1941,6 +1995,8 @@ function viewList() {
 
 function openView(key) {
   state.panel.view = key;
+  // A step in the page's history, so the phone's back gesture closes it.
+  if (typeof history.pushState === "function") history.pushState({ view: key }, "");
   drawPanel();
   // PRs and CI read again as they open, at most once a minute, so they are
   // current while the computer's lookups pause with you away.
@@ -2175,14 +2231,17 @@ function staleMenu() {
   }
 }
 
-// A swipe right on the panel follows the finger and, let go past a third of
-// its width or flicked, puts it away; a swipe left from the right edge, on a
-// channel or the drawer, brings it in under the finger.
-function panelSwipe(panel) {
+// A swipe right on the panel, or from an open view's left edge (starting
+// within `within` px of it; 0 for anywhere), follows the finger and, let go
+// past a third of its width or flicked, puts it `away`, else lets it `stay`;
+// a swipe left from the right edge, on a channel or the drawer, brings the
+// panel in under the finger.
+function panelSwipe(panel, within, away, stay) {
   let s = null;
   panel.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1) return (s = null);
     const t = e.touches[0];
+    if (within && t.clientX > within) return (s = null);
     s = { x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, decided: false };
   }, { passive: true });
   panel.addEventListener("touchmove", (e) => {
@@ -2206,9 +2265,9 @@ function panelSwipe(panel) {
     const done = s;
     s = null;
     if (!done || !done.decided || !panelLayer) return;
-    const away = e.type === "touchend" && (done.dx > panel.offsetWidth / 3 || (done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
-    if (away) closePanel();
-    else slidePanel(panelLayer.layer, panel, true);
+    const gone = e.type === "touchend" && (done.dx > panel.offsetWidth / 3 || (done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
+    if (gone) away();
+    else stay();
   };
   panel.addEventListener("touchend", end);
   panel.addEventListener("touchcancel", end);
@@ -2267,6 +2326,10 @@ function edgeSwipe() {
   };
   document.addEventListener("touchend", end);
   document.addEventListener("touchcancel", end);
+  // The phone's back with a view open goes back to the panel's list.
+  window.addEventListener("popstate", () => {
+    if (state.panel && state.panel.view) closeView();
+  });
 }
 
 // The first time the app opens with the panel never opened, once.
