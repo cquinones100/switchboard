@@ -56,7 +56,8 @@
 //! picture or diagram shows it full size over the view (`Act::Full`,
 //! `switchboard picture`), as Enter on a note's picture does; Enter
 //! anywhere else is Vim's. A line too wide is still cut at the pane's edge,
-//! the view scrolling across to keep the cursor in sight. Off, or for a log
+//! Left and Right scrolling across half a screen as less's did, and the view
+//! scrolling across to keep the cursor in sight as it moves. Off, or for a log
 //! or a file, the keys scroll as less's do.
 
 use std::io::{self, Write};
@@ -379,7 +380,7 @@ impl Pager {
         if first || self.vim.row() != self.cursor || col != self.vim.col() {
             // A new view opens on its line's text, past its margin.
             let col = match col {
-                0 => lines
+                0 if first => lines
                     .get(self.cursor)
                     .map_or(0, |l| l.len() - l.trim_start().len()),
                 col => col,
@@ -1152,6 +1153,9 @@ impl Pager {
                     });
                 }
                 KeyCode::Char('r') if !ctrl && self.follows => return Some(self.read_again()),
+                // Across a line cut at the pane's edge, half a screen at a
+                // time, as less did: a wide table or drawing is read so.
+                KeyCode::Left | KeyCode::Right if !ctrl => return None,
                 KeyCode::Char(' ') => {
                     let page = self.body() as isize;
                     let act = self.page_by(page);
@@ -1279,7 +1283,11 @@ impl Pager {
         }
         self.show_cursor();
         self.vim.top = self.top;
-        self.show_cursor_across();
+        // Scrolled across only as the cursor moves, so Left and Right's
+        // scroll stays until it does.
+        if (self.vim.row(), self.vim.col()) != from {
+            self.show_cursor_across();
+        }
         Act::Redraw
     }
 
@@ -2362,6 +2370,17 @@ mod tests {
     }
 
     #[test]
+    fn a_new_layout_leaves_a_cursor_at_its_line_s_start_there() {
+        let text = format!("{}\n\n```\n    indented\n```", "word ".repeat(30));
+        let mut pager = Pager::new(markdown(&text), 100, 20).with_cursor(true);
+        press(&mut pager, "/indented");
+        pager.key(key(KeyCode::Enter));
+        press(&mut pager, "0");
+        pager.resize(40, 20);
+        assert_eq!(pager.vim.col(), 0);
+    }
+
+    #[test]
     fn a_column_inside_a_wide_character_is_measured_from_its_start() {
         assert_eq!(width_to("a\u{E0B6}b", 2), 1);
         assert_eq!(width_to("a\u{E0B6}b", 4), 2);
@@ -2527,7 +2546,7 @@ mod tests {
     fn scrolled_across_the_cursor_has_a_column_of_its_own() {
         let wide = format!("```\n{}\n```", "abcdefghij".repeat(20));
         let mut pager = Pager::new(markdown(&wide), 40, 10).with_cursor(true);
-        press(&mut pager, "$");
+        pager.key(key(KeyCode::Right));
         assert!(pager.left > 0);
         let frame = pager.frame();
         let row = frame
