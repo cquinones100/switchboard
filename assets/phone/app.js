@@ -1192,8 +1192,9 @@ function full() {
   box.addEventListener("wheel", (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    measure();
+    // Without the double tap's easing first, so the image is measured where it ends.
     settle(false);
+    measure();
     zoom(s * Math.exp(-e.deltaY / 100), e.clientX, e.clientY);
   }, { passive: false });
 
