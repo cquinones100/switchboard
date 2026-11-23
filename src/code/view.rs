@@ -97,7 +97,8 @@ fn read_text(path: &Path) -> Result<String, String> {
     if bytes.iter().take(8000).any(|b| *b == 0) {
         return Err("A binary file, not shown".into());
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    // A Windows line ending is a line's end, not a character on it.
+    Ok(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"))
 }
 
 fn modified_of(path: &Path) -> Option<SystemTime> {

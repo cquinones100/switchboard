@@ -21,9 +21,6 @@ use crate::{paths, settings};
 /// The option marking the viewer's pane.
 pub const CODE_VIEW: &str = "@code_view";
 
-/// The most of the repository's files typing searches.
-const MOST_FILES: usize = 50_000;
-
 impl Server {
     /// M-p's "Open a file from this pane in the side panel": the files the
     /// pane names, newest first, then the repository's, found by typing.
@@ -50,8 +47,7 @@ impl Server {
                     .filter_map(|f| Some((find::resolve(&f.path, &dir, &home)?, f)))
                     .map(|(file, f)| (f, file))
                     .collect();
-                let (top, mut repo) = find::repo_files(&dir).unwrap_or((dir, Vec::new()));
-                repo.truncate(MOST_FILES);
+                let (top, repo) = find::repo_files(&dir).unwrap_or((dir, Vec::new()));
                 (files, repo, top)
             },
             move |server, client, (files, repo, top)| {
