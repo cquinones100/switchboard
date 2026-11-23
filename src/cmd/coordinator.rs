@@ -85,6 +85,10 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
                 Err(e) if e.downcast_ref::<NotPushable>().is_some() => {
                     refused.push((name, format!("{e:#}")));
                 }
+                Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {
+                    let why = format!("GitHub has no repository {name} you can see");
+                    refused.push((name, why));
+                }
                 Err(e) => return Err(e),
             }
         }
