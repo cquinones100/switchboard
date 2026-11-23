@@ -448,6 +448,15 @@ mod tests {
     }
 
     #[test]
+    fn no_note_preview_is_listed() {
+        let all = entries(&Bindings::default(), true, true, &[]);
+        assert!(
+            !all.iter().any(|e| e.words.contains("Preview a note")),
+            "M-p lists no note preview"
+        );
+    }
+
+    #[test]
     fn shift_is_spelled_out() {
         assert_eq!(shown_key("M-L"), "M-S-L");
         assert_eq!(shown_key("M-b d"), "M-b d");

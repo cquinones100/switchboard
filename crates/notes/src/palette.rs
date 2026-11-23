@@ -41,9 +41,6 @@ pub enum Act {
     NoteTab,
     /// Which tab the note is attached to, asked whatever tab it has.
     AttachNote,
-    /// The note read-only in the app's place, drawn as GitHub draws
-    /// Markdown, by the workspace's views (`press preview-note <note>`).
-    Preview,
     /// Start work on the checklist item under the cursor in a new tab.
     WorkOnItem,
     /// UX 2.0: the item's plan note (Enter).
@@ -75,12 +72,7 @@ impl Act {
     pub fn needs_workspace(self) -> bool {
         matches!(
             self,
-            Act::Press(_)
-                | Act::NoteTab
-                | Act::AttachNote
-                | Act::Preview
-                | Act::WorkOnItem
-                | Act::ItemTab
+            Act::Press(_) | Act::NoteTab | Act::AttachNote | Act::WorkOnItem | Act::ItemTab
         )
     }
 
@@ -162,7 +154,6 @@ pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
         command("Squash the marked notes into one", "S", "note", Act::Squash),
         command("Open the note's tab", "t", "tabs", Act::NoteTab),
         command("Attach this note to a tab", "", "tabs", Act::AttachNote),
-        command("Preview this note", "", "view", Act::Preview),
         command(
             "Move Notes beside your work, or back to its own tab",
             "M-e",
