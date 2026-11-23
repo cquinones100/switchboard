@@ -108,6 +108,15 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The page is sized to the screen, not to html's 100%, which a home-screen
+   app gets as the screen less the status bar's height. With the keyboard up,
+   it follows the visual viewport (app.js's `followKeyboard`), so it ends at
+   the keyboard's top. It is body that is fixed, not #app: a fixed element
+   stacks what it holds apart, and the held row in #app has to show over the
+   menu's veil, which is body's. */
+body { position: fixed; inset: 0; height: auto; }
+.keyboard body { top: var(--viewport-top); bottom: auto; height: var(--viewport-height); }
+
 #app { height: 100%; position: relative; overflow: hidden; }
 
 .screen {
