@@ -877,6 +877,15 @@ const run = (q) => vm.runInContext(`
   JSON.stringify(groups(wordsOf(${JSON.stringify(q)})).map((g) => [g.name, g.tabs.map((t) => t.index)]));
 `, ctx);
 for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"]) console.log(q + "=" + run(q));
+// A server older than the page sends no groups: its tabs by their state.
+console.log("old=" + vm.runInContext(`
+  state.tabs = [
+    { index: 2, name: "a", state: "waiting", needs: true },
+    { index: 8, name: "b", state: "idle" },
+    { index: 3, name: "c", state: "background", wait: "Edit diff.rs" },
+  ];
+  JSON.stringify(groups([]).map((g) => [g.name, g.tabs.map((t) => t.index)])) + " " + markOf(state.tabs[2])[1] + " " + sayingOf(state.tabs[2]);
+`, ctx));
 "#;
     let Some(stdout) = run_app_js(script) else {
         return;
@@ -895,6 +904,7 @@ for (const q of ["", "HANDOFF", "3", "diff-UNCOMMITTED", "note sync", "deploy"])
             // Every word typed: "note" alone would keep tab 2 too.
             r#"note sync=[["Idle",[8]]]"#,
             "deploy=[]",
+            r#"old=[["Needs you",[2]],["Working",[3]],["Idle",[8]]] working spin Edit diff.rs"#,
         ],
         "{stdout}"
     );

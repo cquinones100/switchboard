@@ -123,7 +123,15 @@ if (moves) {
 
 // A tab's mark as the sidebar draws it, in its tone, turning where the
 // sidebar's does (`kit::spins`): the server sends its badge's.
+// A server older than the page sends no badge: then the mark its state gives.
 function markOf(tab) {
+  if (tab.mark === undefined) {
+    if (tab.pinned) return ["⚑", "pinned"];
+    if (tab.state === "waiting") return ["●", "needs"];
+    if (tab.state === "done") return ["✓", "passed"];
+    if (tab.state === "working" || tab.state === "background") return [spinFrame(), "working spin"];
+    return ["○", "idle"];
+  }
   if (tab.spins) return [spinFrame(), tab.tone + " spin"];
   return [tab.mark, tab.tone];
 }
@@ -149,7 +157,7 @@ function reminded(tab) {
 // the sidebar's words for it.
 function sayingOf(tab) {
   if (tab.state === "waiting" && tab.prompt) return "asks: " + tab.prompt.question;
-  return tab.words || "";
+  return tab.words === undefined ? doing(tab) : tab.words;
 }
 
 function doing(tab) {
@@ -327,15 +335,26 @@ const holds = (text, words) => words.every((w) => String(text || "").toLowerCase
 const matches = (tab, typed) => holds([tab.index, tab.name, tab.repo, tab.branch, sayingOf(tab), reminded(tab) || ""].join(" "), typed);
 
 // The sidebar's groups holding a tab that matches, in its order: the server
-// sends the tabs in it, each with its group.
+// sends the tabs in it, each with its group. A server older than the page
+// sends none, so its tabs go under Needs you, Working and Idle by their state.
+const OLD_GROUPS = { needs: "Needs you", working: "Working", idle: "Idle" };
+function groupOf(t) {
+  if (t.stage !== undefined) return [t.stage, t.group, t.group_tone];
+  const stage = t.needs ? "needs" : t.state === "working" || t.state === "background" ? "working" : "idle";
+  return [stage, OLD_GROUPS[stage], stage];
+}
+
 function groups(typed) {
   const all = [];
   for (const t of state.tabs) {
     if (!matches(t, typed || [])) continue;
-    const last = all[all.length - 1];
-    if (last && last.stage === t.stage) last.tabs.push(t);
-    else all.push({ stage: t.stage, name: t.group, tone: t.group_tone, tabs: [t] });
+    const [stage, name, tone] = groupOf(t);
+    const group = all.find((g) => g.stage === stage);
+    if (group) group.tabs.push(t);
+    else all.push({ stage, name, tone, tabs: [t] });
   }
+  const old = Object.keys(OLD_GROUPS);
+  if (state.tabs.some((t) => t.stage === undefined)) all.sort((a, b) => old.indexOf(a.stage) - old.indexOf(b.stage));
   return all;
 }
 
