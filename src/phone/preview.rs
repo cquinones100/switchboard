@@ -30,7 +30,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -571,17 +571,56 @@ async fn events(State(preview): State<Arc<Preview>>) -> Response {
         .into_response()
 }
 
-async fn turns_of(State(preview): State<Arc<Preview>>, UrlPath(n): UrlPath<String>) -> Response {
+/// A channel's turns as the real route reads them from a transcript
+/// (`turns::window`), with each message's place in its made-up list as its
+/// offset.
+async fn turns_of(
+    State(preview): State<Arc<Preview>>,
+    UrlPath(n): UrlPath<String>,
+    uri: Uri,
+) -> Response {
     let mut data = preview.data();
     if data.tab(&n).is_none() {
         return no_tab();
     }
-    let messages = data
+    let all = data
         .turns
         .get(&format!("%{n}"))
         .cloned()
         .unwrap_or_default();
-    axum::Json(json!({"messages": messages})).into_response()
+    let (messages, from) = window(&all, super::web::query_number(&uri, "before"));
+    axum::Json(json!({
+        "messages": messages,
+        "from": from,
+        "earlier": from > 0,
+        "conversation": "",
+    }))
+    .into_response()
+}
+
+/// The last `turns::TURNS` turns of `all` before the place `before`, each
+/// message given its place as its offset, and the place they start at.
+fn window(all: &[Value], before: Option<u64>) -> (Vec<Value>, u64) {
+    let end = before.map_or(all.len(), |b| (b as usize).min(all.len()));
+    let starts: Vec<usize> = (0..end)
+        .filter(|&i| {
+            let m = &all[i];
+            matches!(m["who"].as_str(), Some("you" | "task"))
+                || (m["who"] == "tab" && m["queued"] != true)
+        })
+        .collect();
+    let from = starts
+        .len()
+        .checked_sub(super::turns::TURNS)
+        .map_or(0, |i| starts[i]);
+    let messages = (from..end)
+        .map(|i| {
+            let mut m = all[i].clone();
+            m["offset"] = json!(i);
+            m
+        })
+        .collect();
+    (messages, from as u64)
 }
 
 fn text_of(body: &Value, key: &str) -> String {

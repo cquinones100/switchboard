@@ -25,6 +25,10 @@ const state = {
   answered: null, // what was answered last, for the folded card
   search: "", // what is typed in the drawer's search, kept while a tab is open
   turnsLoaded: false, // the open tab's turns were read, so a message drawn since arrived while it was open
+  from: 0, // the transcript's byte offset the open tab's earliest turns loaded start at, which the next earlier ones end at
+  earlier: false, // whether the open tab's conversation has turns before those loaded
+  conversation: "", // which conversation the open tab's turns are of, a new one in its pane having none of the last's
+  loadingEarlier: false, // the turns before the earliest shown are being read
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   chosen: [], // { file, url }: the images chosen from the photo library, waiting over the composer
   full: null, // the name of the image shown whole, or null
@@ -904,6 +908,10 @@ async function openTab(n) {
   state.open = n;
   state.messages = [];
   state.turnsLoaded = false;
+  state.from = 0;
+  state.earlier = false;
+  state.conversation = "";
+  state.loadingEarlier = false;
   state.answered = null;
   state.error = "";
   state.unfolded = new Set();
@@ -924,12 +932,71 @@ async function loadTurns() {
   try {
     const r = await api("/api/tabs/" + n + "/turns");
     if (state.open !== n) return;
-    state.messages = r.messages || [];
+    const messages = r.messages || [];
+    // The turns loaded by scrolling up stay, the ones since read again
+    // from where this read starts; a new conversation in the pane starts
+    // the channel again.
+    // Only while what is held reaches where this read starts: after more
+    // turns than a read holds (the phone asleep a while), the channel starts again.
+    const reaches = state.messages.some((m) => m.offset !== undefined && m.offset >= r.from);
+    const keeps = state.turnsLoaded && r.conversation === state.conversation && r.from > state.from && reaches;
+    if (keeps) state.messages = state.messages.filter((m) => m.offset !== undefined && m.offset < r.from).concat(messages);
+    else {
+      state.messages = messages;
+      state.from = r.from || 0;
+      state.earlier = !!r.earlier;
+      state.conversation = r.conversation;
+    }
     state.turnsLoaded = true;
   } catch (_) {
     return;
   }
   render(true);
+  wantEarlier();
+}
+
+// The turns before the earliest shown (issue 356), asked for as the channel
+// is scrolled to its top, inserted above with what is on screen kept in
+// place (`shown.grew`).
+async function loadEarlier() {
+  const n = state.open;
+  if (!n || !state.turnsLoaded || !state.earlier || state.loadingEarlier) return;
+  const { from, conversation } = state;
+  // The looks shown from the earliest time shown on are already shown.
+  const shownAt = state.messages.find((m) => m.at && m.offset !== undefined);
+  state.loadingEarlier = true;
+  render();
+  // Taken only while the channel still starts where it was asked from, in
+  // the same conversation; a failure is asked again on the next scroll,
+  // never at once, so a computer out of reach isn't asked over and over.
+  let took = false;
+  try {
+    const r = await api("/api/tabs/" + n + "/turns?before=" + from + (shownAt ? "&until=" + shownAt.at : ""));
+    if (state.open === n && state.from === from && state.conversation === conversation && r.conversation === conversation) {
+      state.messages = (r.messages || []).concat(state.messages);
+      state.from = r.from || 0;
+      state.earlier = !!r.earlier;
+      if (shown) shown.grew = true;
+      took = true;
+    }
+  } catch (_) {
+    // Left for the next scroll.
+  } finally {
+    if (state.open === n) state.loadingEarlier = false;
+  }
+  if (state.open !== n) return;
+  render();
+  if (took) wantEarlier();
+}
+
+// How near the channel's top a scroll asks for the turns before.
+const EARLIER_PX = 200;
+
+// Asks for the turns before when the channel is at its top: scrolled
+// there, or not yet filling the screen.
+function wantEarlier() {
+  if (!shown || shown.open !== state.open || !state.earlier) return;
+  if (shown.list.scrollTop <= EARLIER_PX) loadEarlier();
 }
 
 const messageKey = (m) => m.who + ":" + m.at + ":" + m.text.length;
@@ -1028,7 +1095,8 @@ function turns(messages, working) {
     groups[groups.length - 1].push(m);
   }
   // Each turn's key is what you said, which stays put as Claude adds steps.
-  // The first group's message may have left the 80 the computer sends: it
+  // The first group may start mid-turn, where the computer stopped reading
+  // back before finding what started it: it
   // keeps the key its turn had when last drawn, the newest of those keys no
   // turn drawn now has (older turns have left the window whole), since its
   // first step moves as the window does. A message you just sent (`sent`)
@@ -1606,7 +1674,7 @@ function channelHead(tab) {
 // shown (so one zoomed stays zoomed), the messages only when
 // the turns changed, and leaves the composer where it is, since taking a
 // focused field out of the page closes the keyboard.
-let shown = null; // { open, screen, head, list, messages, drawn, count, working, arrived, now, cardKey, composer, full, fullName }
+let shown = null; // { open, screen, head, list, above, grew, messages, drawn, count, working, arrived, now, cardKey, composer, full, fullName }
 
 function channel(stick) {
   const tab = current();
@@ -1617,14 +1685,17 @@ function channel(stick) {
   const kept = shown && shown.open === state.open && shown.screen.parentNode === app && !shown.screen.classList.contains("going") ? shown : null;
   const atEnd = !kept || kept.list.scrollTop + kept.list.clientHeight >= kept.list.scrollHeight - 40;
   const top = kept ? kept.list.scrollTop : 0;
+  const tall = kept ? kept.list.scrollHeight : 0;
   if (!kept) {
     const messages = el("div", { class: "messages" });
     const now = el("div", { class: "now" });
-    const list = el("div", { class: "channel" }, messages, now);
+    const above = el("div", { class: "above" });
+    const list = el("div", { class: "channel" }, above, messages, now);
+    list.addEventListener("scroll", wantEarlier, { passive: true });
     const head = el("div", { class: "head" });
     const box = composer();
     const whole = el("div");
-    shown = { open: state.open, screen: el("div", { class: "screen channel-screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole, fullName: null };
+    shown = { open: state.open, screen: el("div", { class: "screen channel-screen" }, head, list, box, whole), head, list, above, grew: false, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole, fullName: null };
     swipeable(shown.screen);
     app.replaceChildren(shown.screen);
   }
@@ -1634,6 +1705,9 @@ function channel(stick) {
   const working = tab.state === "working" || tab.state === "background";
   // A tab in the background (a Monitor, a /loop between runs) has ended its turn.
   const answering = tab.state === "working";
+  // Over the turns, while the ones before are read, or at the conversation's start, saying so.
+  const aboveWords = state.loadingEarlier ? "Loading earlier…" : state.turnsLoaded && !state.earlier && state.messages.length ? "Start of the conversation" : "";
+  if (shown.above.textContent !== aboveWords) shown.above.textContent = aboveWords;
   if (shown.drawn !== state.messages || shown.count !== state.messages.length || shown.working !== answering) {
     // A message or row not drawn before arrived while the channel was open,
     // and rises in; the first load, a redraw of the same turns and steps
@@ -1644,7 +1718,7 @@ function channel(stick) {
       const node = message(m, i, all);
       const k = arrivalKey(m);
       const left = before && before.get(k);
-      if (moves && before && !left) node.classList.add("coming");
+      if (moves && before && !left && !shown.grew) node.classList.add("coming");
       if (left) before.set(k, left - 1);
       return node;
     });
@@ -1684,7 +1758,10 @@ function channel(stick) {
     shown.full = whole;
     shown.fullName = state.full;
   }
-  shown.list.scrollTop = stick || atEnd ? shown.list.scrollHeight : top;
+  // Turns inserted above keep what was on screen where it was.
+  const grew = kept && shown.grew;
+  shown.grew = false;
+  shown.list.scrollTop = grew ? top + shown.list.scrollHeight - tall : stick || atEnd ? shown.list.scrollHeight : top;
 }
 
 // What tells a message from the others for its arrival: who sent it and its

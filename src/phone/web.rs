@@ -39,7 +39,7 @@ use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use aws_lc_rs::signature::EcdsaKeyPair;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -666,21 +666,43 @@ fn pane_of(tab: &Value) -> String {
     tab["pane"].as_str().unwrap_or("").to_string()
 }
 
-async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response {
+/// A channel's last turns, or with `?before=<offset>` the turns before
+/// the earliest it shows (`turns::window`), `&until=<ms>` the time of the
+/// earliest message it shows, which the looks merged in come before: its messages, the offset the
+/// next earlier read ends at (`from`), whether there is anything before
+/// it (`earlier`), and which conversation they are of, a new one in the
+/// pane (`/clear`) having nothing of the last.
+async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>, uri: Uri) -> Response {
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
     let Some(file) = tab["transcript"].as_str().map(PathBuf::from) else {
-        return axum::Json(json!({"messages": []})).into_response();
+        return axum::Json(
+            json!({"messages": [], "from": 0, "earlier": false, "conversation": ""}),
+        )
+        .into_response();
     };
+    let before = query_number(&uri, "before");
+    let until = query_number(&uri, "until");
+    let conversation = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     // The pictures its Claude showed with `look`, among them by time.
     let shown: Vec<looks::Look> = serde_json::from_value(tab["looks"].clone()).unwrap_or_default();
-    let messages = tokio::task::spawn_blocking(move || {
-        let (messages, cut) = turns::recent(&file);
-        looks::merge(messages, &shown, turns::MOST, cut)
+    let read = tokio::task::spawn_blocking(move || {
+        let w = turns::window(&file, before)?;
+        let messages = looks::merge(w.messages, &shown, w.from, w.earlier, until);
+        Ok::<_, std::io::Error>((messages, w.from, w.earlier))
     })
-    .await
-    .unwrap_or_default();
+    .await;
+    let Ok(Ok((messages, from, earlier))) = read else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the conversation couldn't be read",
+        )
+            .into_response();
+    };
     // Another tab's message names its sender by its tab, as the drawer
     // lists it now, not by the address the transcript keeps.
     let tabs = app.tabs.borrow()["tabs"].clone();
@@ -697,7 +719,23 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Resp
             m
         })
         .collect();
-    axum::Json(json!({"messages": messages})).into_response()
+    axum::Json(json!({
+        "messages": messages,
+        "from": from,
+        "earlier": earlier,
+        "conversation": conversation,
+    }))
+    .into_response()
+}
+
+/// A number in a request's query, as a turns request's `before` (the
+/// byte offset its turns end at) and `until`; none where it isn't given.
+pub fn query_number<T: std::str::FromStr>(uri: &Uri, key: &str) -> Option<T> {
+    uri.query()?
+        .split('&')
+        .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))?
+        .parse()
+        .ok()
 }
 
 /// Who sent a message from another tab: the number and name of the tab

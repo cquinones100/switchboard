@@ -6,7 +6,8 @@
 //! `phone::turns` reads them from a transcript. One waits on a question
 //! with choices, one on a question that takes several, one finished with a
 //! long reply in Markdown, one finished on a failure, one with images you
-//! sent and a before and after its Claude showed with `look`; the rest
+//! sent and a before and after its Claude showed with `look`, one with a
+//! long conversation its channel loads as it is scrolled up; the rest
 //! work, watch, loop, land or sit idle. Every name is made up, in the
 //! demo's style (`acme/` repositories, people by first name).
 
@@ -451,7 +452,59 @@ const TABS: &[Tab] = &[
         },
         turns: &[("you", "Ask Sam about the SSO ticket.", &[], 35)],
     },
+    Tab {
+        pane: LONG,
+        name: "Port the billing exports",
+        repo: "api",
+        branch: "abc-181-billing-exports",
+        state: "idle",
+        wait: None,
+        minutes_ago: 5,
+        prompt: None,
+        shape: plain,
+        // Its turns are `long_conversation`'s.
+        turns: &[],
+    },
 ];
+
+/// The pane of the tab with a long conversation, which its channel loads a
+/// screen of turns at a time as it is scrolled up (`phone::turns`'s
+/// `window`).
+const LONG: u32 = 31;
+
+/// How many turns the long conversation has.
+const LONG_TURNS: usize = 64;
+
+/// A long made-up conversation, oldest first: `LONG_TURNS` turns, each
+/// your ask, a few tool calls and Claude's reply, ending five minutes ago.
+fn long_conversation(now_ms: i64) -> Vec<Value> {
+    const FILES: &[&str] = &[
+        "exports/csv.rs",
+        "exports/schedule.rs",
+        "billing/invoice.rs",
+        "billing/tax.rs",
+    ];
+    let mut out = Vec::new();
+    for turn in 0..LONG_TURNS {
+        let ago = ((LONG_TURNS - turn) * 4 + 1) as i64;
+        let at = |m: i64| now_ms - m * 60_000;
+        let file = FILES[turn % FILES.len()];
+        let n = turn + 1;
+        out.push(json!({"who": "you", "text": format!("Step {n}: port the next piece of the billing export, starting from {file}."), "images": [], "at": at(ago)}));
+        for (i, tool) in [
+            format!("Read {file}"),
+            format!("Edit {file}"),
+            "Bash: cargo test exports".to_string(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            out.push(json!({"who": "tool", "text": tool, "images": [], "at": at(ago) + 20_000 * (i as i64 + 1)}));
+        }
+        out.push(json!({"who": "claude", "text": format!("Step {n} is done: {file} now writes the export's rows in the new format, and the tests for it pass."), "images": [], "at": at(ago - 2)}));
+    }
+    out
+}
 
 /// A tab nothing but its state places.
 fn plain(_: &mut TabModel, _: i64) {}
@@ -610,6 +663,9 @@ fn model_of(tab: &Value, now_ms: i64) -> TabModel {
 pub fn turns(now_ms: i64) -> Vec<(String, Vec<Value>)> {
     TABS.iter()
         .map(|t| {
+            if t.pane == LONG {
+                return (format!("%{}", t.pane), long_conversation(now_ms));
+            }
             let messages = t
                 .turns
                 .iter()

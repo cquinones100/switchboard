@@ -324,6 +324,8 @@ body { position: fixed; inset: 0; height: auto; }
 
 /* ── A tab's channel ── */
 .channel { flex: 1; overflow-y: auto; padding: var(--s3) 0 var(--s2); }
+/* One line tall, said or not, so its words coming and going move nothing. */
+.above { color: var(--dim); font-size: var(--fact); text-align: center; height: calc(1.5em + var(--s2)); line-height: 1.5em; padding: 0 var(--edge) var(--s2); }
 .msg { display: grid; grid-template-columns: var(--avatar) minmax(0, 1fr); column-gap: 10px; padding: 6px var(--edge); }
 .avatar {
   width: var(--avatar);

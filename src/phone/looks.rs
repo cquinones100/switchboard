@@ -18,9 +18,8 @@ use serde::{Deserialize, Serialize};
 use super::images;
 use super::turns::Message;
 
-/// How many looks a pane keeps, the newest: as many as the channel's
-/// window holds messages.
-pub const MOST: usize = super::turns::MOST;
+/// How many looks a pane keeps, the newest.
+pub const MOST: usize = 80;
 
 /// One `look`: when it ran (ms), the copies' names in the images folder,
 /// in the order shown, and whether they are a before and after.
@@ -78,30 +77,44 @@ pub fn message(look: &Look) -> Message {
         at: look.at,
         from: String::new(),
         queued: false,
+        offset: 0,
     }
 }
 
-/// `messages` with `looks` among them by time, each after the messages
-/// written before it ran, the last `most` kept. A look from before the
-/// first message of a window that leaves the transcript's start out (`cut`,
-/// read from past its start, or `most` messages filling it) is left out
-/// with what came before it.
-pub fn merge(mut messages: Vec<Message>, looks: &[Look], most: usize, cut: bool) -> Vec<Message> {
-    let first = (cut || messages.len() >= most)
+/// A window's `messages` (`turns::Window`) with `looks` among them by
+/// time, each after the messages written before it ran, with that
+/// message's offset (the window's `from` before them all). A look from
+/// before the first message of a window with turns before it (`earlier`)
+/// belongs to those turns, and one from the first time the turns after it
+/// show on (`until`, which the app sends) to those, so each is left out;
+/// a window with turns before it and no message that says when takes
+/// none, the next window back taking them.
+pub fn merge(
+    mut messages: Vec<Message>,
+    looks: &[Look],
+    from: u64,
+    earlier: bool,
+    until: Option<i64>,
+) -> Vec<Message> {
+    let first = earlier
         .then(|| messages.iter().map(|m| m.at).find(|at| *at != 0))
         .flatten();
+    if earlier && first.is_none() {
+        return messages;
+    }
     for look in looks {
-        if first.is_some_and(|first| look.at < first) {
+        if first.is_some_and(|first| look.at < first) || until.is_some_and(|u| look.at >= u) {
             continue;
         }
         let at = messages
             .iter()
             .position(|m| m.at != 0 && m.at > look.at)
             .unwrap_or(messages.len());
-        messages.insert(at, message(look));
+        let mut shown = message(look);
+        shown.offset = at.checked_sub(1).map_or(from, |i| messages[i].offset);
+        messages.insert(at, shown);
     }
-    let skip = messages.len().saturating_sub(most);
-    messages.split_off(skip)
+    messages
 }
 
 #[cfg(test)]
@@ -117,6 +130,7 @@ mod tests {
             at,
             from: String::new(),
             queued: false,
+            offset: at as u64,
         }
     }
 
@@ -145,7 +159,7 @@ mod tests {
             said("tool", "Bash: switchboard look a.png", 20),
             said("claude", "Here they are", 40),
         ];
-        let merged = merge(messages, &[look(30, 2, false)], 80, false);
+        let merged = merge(messages, &[look(30, 2, false)], 0, false, None);
         let order: Vec<&str> = merged.iter().map(|m| m.text.as_str()).collect();
         assert_eq!(
             order,
@@ -160,20 +174,26 @@ mod tests {
     }
 
     #[test]
-    fn a_look_before_a_full_window_is_left_out() {
+    fn a_look_outside_the_window_is_left_to_the_turns_it_came_in() {
         let messages = vec![said("you", "a", 10), said("claude", "b", 20)];
-        let merged = merge(messages.clone(), &[look(5, 1, false)], 2, false);
+        // Turns before the window: one from before its first message is theirs.
+        let merged = merge(messages.clone(), &[look(5, 1, false)], 10, true, None);
         assert_eq!(merged, messages);
-        // A window read from past the transcript's start, however short.
-        let merged = merge(messages.clone(), &[look(5, 1, false)], 80, true);
+        let merged = merge(messages.clone(), &[look(5, 1, false)], 10, false, None);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].offset, 10);
+        // Turns after it: one from when they started on is theirs.
+        let merged = merge(messages.clone(), &[look(30, 1, false)], 10, false, Some(30));
         assert_eq!(merged, messages);
+        let merged = merge(messages, &[look(25, 1, false)], 10, false, Some(30));
+        assert_eq!(merged.len(), 3);
+        assert_eq!((merged[2].who, merged[2].offset), ("look", 20));
+        // Turns before it and no time to tell them by: the next window back takes it.
+        let untimed = vec![said("tool", "Bash: ls", 0)];
         assert_eq!(
-            merge(messages.clone(), &[look(5, 1, false)], 80, false).len(),
-            3
+            merge(untimed.clone(), &[look(5, 1, false)], 10, true, Some(30)),
+            untimed
         );
-        let merged = merge(messages, &[look(25, 1, false)], 2, false);
-        assert_eq!(merged.len(), 2);
-        assert_eq!(merged[1].who, "look");
     }
 
     #[test]
