@@ -448,7 +448,7 @@ body { position: fixed; inset: 0; height: auto; }
 .composer textarea:placeholder-shown { field-sizing: fixed; }
 .composer textarea::placeholder { color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer .send { transition: background-color var(--quick) var(--ease), color var(--quick) var(--ease), transform var(--quick) var(--ease); }
-.composer .send:not(.lit) { color: var(--faint); }
+.composer .send:not(.lit):not(.stop) { color: var(--faint); }
 
 /* ── Images (board 174) ── */
 .tray { display: flex; gap: var(--s3); overflow-x: auto; padding: var(--s3) var(--edge) 2px; }

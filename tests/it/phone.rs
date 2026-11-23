@@ -573,6 +573,81 @@ console.log("chip=" + app.querySelector(".head .chip").textContent);
     );
 }
 
+/// A working tab's composer (assets/phone/app.js's `composer`), run in
+/// Node over a page of its own: empty, its button is Stop (■), which asks
+/// first and stops the turn only on Stop; with words typed it is Send
+/// again, which sends them as a message; on an idle tab it is Send;
+/// skipped without Node.
+#[test]
+fn a_working_tabs_empty_composer_stops_it_after_asking() {
+    let script = [CHANNEL_PAGE, r##"
+document.body = new Node("body");
+document.removeEventListener = () => {};
+const posted = [];
+ctx.fetch = (path, opts) => {
+  if (opts && opts.method === "POST") posted.push(path + " " + opts.body);
+  return Promise.resolve({ ok: true, status: 200, json: async () => ({ said: "Stopped tab 2 phone" }) });
+};
+const tab = (state, stoppable = state === "working") => ({ pane: "%5", index: 2, name: "phone", state, stoppable, wait: "", turn: { prompt: "go" } });
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac" };
+  listen();
+  state.open = "5";
+`, ctx);
+const update = (t) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [t] }) });
+const send = () => app.querySelector(".composer button.send");
+const look = () => send().textContent + " " + send()["aria-label"];
+const button = (label) => document.body.all().find((x) => x.tagName === "button" && x.textContent === label);
+const tick = () => new Promise((r) => setImmediate(r));
+const out = [];
+(async () => {
+  update(tab("working"));
+  out.push("empty=" + look());
+  send().click();
+  out.push("asks=" + document.body.querySelector(".question").textContent);
+  button("No").click();
+  await tick();
+  out.push("no=" + posted.length);
+  send().click();
+  button("Stop").click();
+  await tick();
+  out.push("stop=" + posted.join(" | "));
+  const field = app.querySelector(".composer textarea");
+  field.value = "after that, run the tests";
+  field.dispatchEvent(new Event("input"));
+  out.push("typed=" + look());
+  send().click();
+  await tick();
+  out.push("sent=" + posted[posted.length - 1]);
+  update(tab("idle"));
+  out.push("idle=" + look());
+  // Working where Esc wouldn't stop it (scrolled back, say): Send.
+  update(tab("working", false));
+  out.push("unstoppable=" + look());
+  console.log(out.join("\n"));
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "empty=■ Stop",
+            "asks=Stop tab 2's Claude? [Y/n]",
+            "no=0",
+            "stop=/api/tabs/5/stop {}",
+            "typed=➤ Send",
+            r#"sent=/api/tabs/5/message {"text":"after that, run the tests","images":[]}"#,
+            "idle=➤ Send",
+            "unstoppable=➤ Send",
+        ],
+        "{stdout}"
+    );
+}
+
 /// A channel scrolled to its top (assets/phone/app.js's `loadEarlier`)
 /// asks for the turns before the earliest shown, says "Loading earlier…"
 /// meanwhile, inserts them above with what was on screen kept in place,
@@ -1832,6 +1907,97 @@ fn the_phone_sets_and_clears_a_claude_tabs_reminder() {
     next_line(&mut stream, |v| v["reminders"] == false);
 }
 
+/// `stop`, which the phone's route asks: Esc pressed in a working Claude
+/// pane, as Esc at the computer stops its turn, and logged; refused for an
+/// idle Claude and for a pane not running Claude.
+#[test]
+fn the_phone_stops_a_working_claude_with_esc() {
+    let server = TestServer::start();
+    let mut client = server.attach(120, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let plain = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, _, err) = server.run(&["stop", "-t", &plain, "-s", "phone"]);
+    assert_eq!(code, 1, "a pane not running Claude");
+    assert!(err.contains("isn't running Claude"), "{err}");
+
+    let pane = claude_pane(&server);
+    // A numbered list in Claude's own words, which isn't a prompt to answer.
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "clear; printf '1. Plan it\\n2. Build it\\n'; cat -v",
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    let (code, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
+    assert_eq!(code, 1, "an idle Claude");
+    assert!(err.contains("its Claude isn't working"), "{err}");
+
+    server.ok(&["set", "-t", &pane, "@agent_state", "working"]);
+    let mut stream = watch(&server);
+    next_line(&mut stream, |v| {
+        v["tabs"][0]["state"] == "working" && v["tabs"][0]["stoppable"] == true
+    });
+    let said = server.ok(&["stop", "-t", &pane, "-s", "phone"]);
+    assert!(said.starts_with("Stopped tab 1 "), "{said}");
+    wait_until(&server, "Esc pressed in the pane", || {
+        screen(&server, &pane).contains("^[")
+    });
+    let log = server.log();
+    assert!(log.contains("from your phone: tab 1 "), "logged: {log}");
+    assert!(log.contains("): Stopped"), "logged: {log}");
+
+    // Still working with a permission prompt on screen, as auto mode asks
+    // one, Esc would refuse it rather than stop the turn: refused.
+    // Ctrl-C can flush what is typed right after it, so the shell is asked
+    // until it answers before the prompt is shown.
+    server.ok(&["send-keys", "-t", &pane, "C-c"]);
+    wait_until(&server, "the shell back after Ctrl-C", || {
+        server.ok(&["send-keys", "-t", &pane, "-l", "echo back-$((40+2))"]);
+        server.ok(&["send-keys", "-t", &pane, "Enter"]);
+        std::thread::sleep(Duration::from_millis(200));
+        screen(&server, &pane).contains("back-42")
+    });
+    show_prompt(&server, &pane);
+    // Options on screen with nothing asked are Claude's own words: allowed.
+    let said = server.ok(&["stop", "-t", &pane, "-s", "phone"]);
+    assert!(said.starts_with("Stopped tab 1 "), "{said}");
+    // Asked by auto mode, which leaves the pane working: refused.
+    hook(
+        &server,
+        &pane,
+        json!({"hook_event_name": "PermissionRequest", "permission_mode": "auto", "session_id": "s-phone", "tool_name": "Bash", "tool_input": {"command": "ls"}}),
+    );
+    wait_until(&server, "the pane marked asked", || {
+        let (code, _, _) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
+        code == 1
+    });
+    let (_, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
+    assert!(err.contains("asking something"), "{err}");
+}
+
+/// Claude Code's hook for `pane`'s Claude, its event named in `input`,
+/// sent over the socket from the test's process as `switchboard hook`
+/// sends it.
+fn hook(server: &TestServer, pane: &str, input: Value) {
+    let event = input["hook_event_name"].as_str().unwrap().to_string();
+    let msg = ClientMsg::Command {
+        args: vec!["hook".into(), event],
+        cwd: server.dir.path().to_path_buf(),
+        pane: Some(pane.to_string()),
+        stdin: Some(input.to_string().into_bytes()),
+        by_hand: false,
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = switchboard::mux::socket::run_command_at(&server.socket(), &msg, &mut out, &mut err);
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+}
+
 /// `pin`, which the phone's route asks: it pins a Claude tab as M-f does,
 /// which the sidebar shows at the top of Needs you and the phone's tabs
 /// say, `-u` unpins it, and a tab pinned with M-f reads as pinned too; a
@@ -2657,6 +2823,29 @@ mod preview_server {
             stamp.ends_with(me["build"].as_str().unwrap().split('+').next().unwrap()),
             "{me}"
         );
+    }
+
+    /// Stop on the made-up working tab leaves it idle, and is refused on a
+    /// tab that isn't working, as the server refuses it.
+    #[test]
+    fn stop_idles_the_made_up_working_tab_and_refuses_an_idle_one() {
+        let at = preview(&assets());
+        let state = || {
+            json_of(at, "/api/tabs")["tabs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["pane"] == "%16")
+                .unwrap()["state"]
+                .clone()
+        };
+        assert_eq!(state(), "working");
+        let (status, body) = http(at, "POST", "/api/tabs/16/stop", Some(json!({})));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(state(), "idle");
+        let (status, body) = http(at, "POST", "/api/tabs/16/stop", Some(json!({})));
+        assert_eq!(status, 409, "{body}");
+        assert!(body.contains("isn't working"), "{body}");
     }
 
     #[test]
