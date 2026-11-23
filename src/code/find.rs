@@ -53,6 +53,11 @@ static PATH: LazyLock<Regex> = LazyLock::new(|| {
     .expect("a regex")
 });
 
+/// A path and its line followed by more after a colon, as a search prints
+/// a match (`src/main.rs:12:use`), a column's digits left out of it.
+static LINE_THEN_TEXT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+?:\d+)(?::\d+)?:[^\d].*$").expect("a regex"));
+
 /// A file name with an extension: a dot inside it, a letter after it.
 static NAMED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\w.@+-]*[\w@+-]\.[A-Za-z]\w*$").expect("a regex"));
@@ -71,6 +76,12 @@ pub fn paths_in(text: &str) -> Vec<Found> {
         for word in words.into_iter().rev() {
             // A sentence's full stop or colon after a path isn't its own.
             let word = word.trim_end_matches(['.', ':']);
+            // A search's `path:line:text` (grep -n, rg): the path and line
+            // before the text that follows them.
+            let word = LINE_THEN_TEXT
+                .captures(word)
+                .and_then(|m| m.get(1))
+                .map_or(word, |m| m.as_str());
             if word.contains("://") || word.starts_with("//") {
                 continue;
             }
@@ -147,7 +158,13 @@ pub fn repo_files(dir: &Path, most: usize, within: Duration) -> Option<RepoFiles
         .arg("-C")
         .arg(&top)
         .args(["-c", "core.quotePath=false"])
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -159,9 +176,10 @@ pub fn repo_files(dir: &Path, most: usize, within: Duration) -> Option<RepoFiles
         // quotePath off) read as near as it can be rather than ending the list.
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+        // Each name ended by a NUL, so git quotes none of them.
+        while reader.read_until(0, &mut line).is_ok_and(|n| n > 0) {
             let name = String::from_utf8_lossy(&line)
-                .trim_end_matches('\n')
+                .trim_end_matches('\0')
                 .to_string();
             line.clear();
             if tx.send(name).is_err() {
@@ -219,11 +237,11 @@ mod tests {
 
     #[test]
     fn each_path_is_listed_once_at_its_newest_mention() {
-        let text = "src/a.rs:1\nsrc/b.rs\nsrc/a.rs:40-52";
+        let text = "src/a.rs:1\nsrc/b.rs\nsrc/a.rs:40-52\nsrc/c.rs:7:use std::io;";
         assert_eq!(
             paths(text),
-            ["src/a.rs:40", "src/b.rs"],
-            "a range from its first line"
+            ["src/c.rs:7", "src/a.rs:40", "src/b.rs"],
+            "a range from its first line, a search's match by its path"
         );
     }
 

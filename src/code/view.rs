@@ -532,11 +532,24 @@ impl Viewer {
         if modified == self.modified {
             return false;
         }
-        self.modified = modified;
-        let Ok(text) = read_text(&self.path) else {
-            return false;
-        };
-        self.take_text(&text)
+        // Taken as read only once it is, so a read that failed is tried
+        // again; meanwhile the text shown says it is the last one read.
+        match read_text(&self.path) {
+            Ok(text) => {
+                self.modified = modified;
+                self.take_text(&text);
+                true
+            }
+            Err(e) => {
+                let why = match modified {
+                    None => "Gone from the disk: showing the text last read".to_string(),
+                    Some(_) => format!("{e}: showing the text last read"),
+                };
+                let changed = self.message.as_deref() != Some(why.as_str());
+                self.message = Some(why);
+                changed
+            }
+        }
     }
 
     /// New text for the file, the cursor kept on its line; whether it
