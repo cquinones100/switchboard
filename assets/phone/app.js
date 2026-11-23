@@ -121,13 +121,11 @@ if (moves) {
   }, SPINNER_MS);
 }
 
+// A tab's mark as the sidebar draws it, in its tone, turning where the
+// sidebar's does (`kit::spins`): the server sends its badge's.
 function markOf(tab) {
-  // A pinned tab wears the flag in place of its state's mark (board 75).
-  if (tab.pinned) return ["⚑", "pinned"];
-  if (tab.state === "waiting") return ["●", "needs"];
-  if (tab.state === "done") return ["✓", "passed"];
-  if (tab.state === "working" || tab.state === "background") return [spinFrame(), "working spin"];
-  return ["○", "idle"];
+  if (tab.spins) return [spinFrame(), tab.tone + " spin"];
+  return [tab.mark, tab.tone];
 }
 
 // How long until a reminder, as the sidebar says it: in 45m, in 1h 20m, in 3d.
@@ -145,6 +143,13 @@ function reminded(tab) {
   if (!r) return null;
   if (r.due) return r.note ? "reminder: " + r.note : "reminder";
   return until(r.at) + (r.note ? " · " + r.note : "");
+}
+
+// What the drawer says a tab is doing: the question a waiting tab asks, else
+// the sidebar's words for it.
+function sayingOf(tab) {
+  if (tab.state === "waiting" && tab.prompt) return "asks: " + tab.prompt.question;
+  return tab.words || "";
 }
 
 function doing(tab) {
@@ -319,24 +324,39 @@ const wordsOf = (q) => q.toLowerCase().split(/\s+/).filter(Boolean);
 const holds = (text, words) => words.every((w) => String(text || "").toLowerCase().includes(w));
 // Whether a tab's number, name, repository, branch or what it is doing hold
 // every word typed, as the sidebar's / matches.
-const matches = (tab, words) => holds([tab.index, tab.name, tab.repo, tab.branch, doing(tab), reminded(tab) || ""].join(" "), words);
+const matches = (tab, typed) => holds([tab.index, tab.name, tab.repo, tab.branch, sayingOf(tab), reminded(tab) || ""].join(" "), typed);
 
-function groups(words) {
-  const needs = [], working = [], idle = [];
+// The sidebar's groups holding a tab that matches, in its order: the server
+// sends the tabs in it, each with its group.
+function groups(typed) {
+  const all = [];
   for (const t of state.tabs) {
-    if (!matches(t, words || [])) continue;
-    if (t.needs) needs.push(t);
-    else if (t.state === "working" || t.state === "background") working.push(t);
-    else idle.push(t);
+    if (!matches(t, typed || [])) continue;
+    const last = all[all.length - 1];
+    if (last && last.stage === t.stage) last.tabs.push(t);
+    else all.push({ stage: t.stage, name: t.group, tone: t.group_tone, tabs: [t] });
   }
-  // The pinned and the reminders come due lead Needs you, as in the sidebar.
-  const first = (t) => t.pinned === true || !!(t.remind && t.remind.due);
-  needs.sort((a, b) => first(b) - first(a));
-  return [
-    ["Needs you", "y", needs],
-    ["Working", "b", working],
-    ["Idle", "d", idle],
-  ].filter(([, , tabs]) => tabs.length);
+  return all;
+}
+
+// The groups folded on this phone, by stage, kept across reloads; nothing
+// of them reaches the computer.
+const FOLDS = "drawer-folds";
+const folds = (() => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(FOLDS) || "[]"));
+  } catch (_) {
+    return new Set();
+  }
+})();
+
+function foldGroup(stage) {
+  if (folds.has(stage)) folds.delete(stage);
+  else folds.add(stage);
+  try {
+    localStorage.setItem(FOLDS, JSON.stringify([...folds]));
+  } catch (_) {}
+  drawer();
 }
 
 const reconnecting = () => !state.live && Date.now() < state.reconnectingUntil;
@@ -378,7 +398,7 @@ function lit(text, words) {
 // A tab matched by its repository or branch alone says which, under what
 // it is doing.
 function where(tab, words) {
-  if (!words.length || holds([tab.index, tab.name, doing(tab), reminded(tab) || ""].join(" "), words)) return null;
+  if (!words.length || holds([tab.index, tab.name, sayingOf(tab), reminded(tab) || ""].join(" "), words)) return null;
   const by = [["repository ", tab.repo], ["branch ", tab.branch]].filter(([, v]) => v && words.some((w) => v.toLowerCase().includes(w)));
   return el("span", { class: "sub where-line" }, by.flatMap(([what, v], i) => [i ? " · " : "", el("span", { class: "faint" }, what), ...lit(v, words)]));
 }
@@ -423,9 +443,20 @@ function drawerList() {
       el("button", { class: "big again", onclick: () => clearSearch() }, "Clear the search"),
     );
   }
-  for (const [name, tone, tabs] of all) {
-    const g = el("div", { class: "group" }, el("div", { class: "label " + tone }, el("span", {}, name), el("span", {}, tabs.length)));
-    for (const t of tabs) {
+  for (const { stage, name, tone, tabs } of all) {
+    // While the search has words, every group with a match shows open.
+    const folded = !words.length && folds.has(stage);
+    const g = el(
+      "div",
+      { class: "group" },
+      el(
+        "button",
+        { class: "label fold " + tone, "aria-expanded": String(!folded), "data-stage": stage, onclick: () => foldGroup(stage) },
+        el("span", {}, (folded ? "▸ " : "▾ ") + name),
+        el("span", {}, tabs.length),
+      ),
+    );
+    for (const t of folded ? [] : tabs) {
       const [m, kind] = markOf(t);
       g.append(
         held(
@@ -434,7 +465,7 @@ function drawerList() {
             { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "menu", "data-pane": number(t) },
             follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
-            el("span", { class: "sub" }, lit(doing(t), words)),
+            el("span", { class: "sub" }, lit(sayingOf(t), words)),
             reminded(t) ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words)) : null,
             where(t, words),
           ),

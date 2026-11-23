@@ -256,6 +256,8 @@ button {
 .mark.pinned { color: var(--yellow); }
 .mark.passed { color: var(--green); }
 .mark.working { color: var(--blue); }
+.mark.landing { color: var(--magenta); }
+.mark.failed { color: var(--red); }
 .mark.idle { color: var(--dim); }
 
 .n1 { color: #8bd5ca; } .n2 { color: #f5bde6; } .n3 { color: #b7bdf8; } .n4 { color: #a6da95; }
@@ -275,9 +277,21 @@ button {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.label.y { color: var(--yellow); }
-.label.b { color: var(--blue); }
-.label.d { color: var(--dim); }
+.label.needs { color: var(--yellow); }
+.label.working { color: var(--blue); }
+.label.landing { color: var(--magenta); }
+.label.passed { color: var(--green); }
+.label.failed { color: var(--red); }
+.label.d, .label.idle { color: var(--dim); }
+/* A group's heading folds and unfolds it (▾ open, ▸ folded), pressed as
+   any control is, 44 tall. */
+.label.fold {
+  width: 100%;
+  min-height: var(--tap);
+  align-items: flex-end;
+  text-align: left;
+}
+.label.fold:focus-visible { background: var(--chosen); outline: none; }
 .row {
   display: grid;
   grid-template-columns: 1.5ch 1fr;

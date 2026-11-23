@@ -901,6 +901,7 @@ impl Server {
             .cloned();
         t.background = work.count;
         t.monitors = work.monitors.clone();
+        t.shells = work.shells;
         t.round = round;
         // The review loop's round and cap as codex-review counts them (the
         // hands-free cap across the branch's loops), over the count of its

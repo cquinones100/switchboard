@@ -21,8 +21,8 @@ use crate::tabs::Rgb;
 
 /// What a tab's Claude is doing, as the sidebar tells it: the agent state's
 /// waiting, done and working, and two of its own. A Claude tab whose turn
-/// ended with background tasks still running (a review loop, a CI watch) is
-/// `Background`: Claude carries on when they end, so it is working, not
+/// ended with background tasks still running (a review loop, a CI watch, a
+/// shell) is `Background`: Claude carries on when they end, so it isn't
 /// waiting for you. One whose turn an API error cut short is waiting, on the
 /// error, until the conversation goes on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -249,6 +249,8 @@ pub struct TabModel {
     pub background: usize,
     /// The Monitor watches running, by description.
     pub monitors: Vec<String>,
+    /// The background shells running that aren't watches.
+    pub shells: usize,
     pub tab_loop: Option<TabLoop>,
     /// The tool call in a few words, as its hooks recorded it.
     pub activity: Option<String>,
@@ -350,6 +352,7 @@ impl TabModel {
             notes_open: None,
             background: 0,
             monitors: Vec::new(),
+            shells: 0,
             tab_loop: None,
             activity: None,
             wait: None,
@@ -476,14 +479,26 @@ pub fn testing_deploy(tab: &TabModel) -> bool {
             || (tab.state.busy() && matches!(tab.loop_skill.as_deref(), Some("deploy" | "queue"))))
 }
 
-/// A tab whose only background work is watches (Monitor's, or a shell
-/// command that only waits, `claude::WAITS`) is watching, not
-/// working: Claude has nothing to do until one reports.
+/// A tab between turns whose only background work is watches (Monitor's,
+/// or a shell command that only waits, `claude::WAITS`) and shells is
+/// watching, not working: Claude has nothing to do until one reports or
+/// ends. A background agent is work of Claude's, so it keeps the tab working.
 pub fn monitoring_only(tab: &TabModel) -> bool {
+    let watched = tab.monitors.len() + tab.shells;
     tab.state == TabState::Background
-        && !tab.monitors.is_empty()
-        && tab.monitors.len() == tab.background
+        && watched > 0
+        && watched == tab.background
         && tab.tab_loop.is_none()
+}
+
+/// What a monitoring tab waits on: `monitoring · CI`, `waiting on 1 shell`,
+/// or both.
+fn monitoring_words(tab: &TabModel) -> String {
+    let watches = (!tab.monitors.is_empty())
+        .then(|| joined(std::iter::once("monitoring".to_string()).chain(tab.monitors.clone())));
+    let n = tab.shells;
+    let shells = (n > 0).then(|| format!("waiting on {n} shell{}", if n == 1 { "" } else { "s" }));
+    joined(watches.into_iter().chain(shells))
 }
 
 /// A self-paced or timed /loop between its ticks has nothing to do until its
@@ -1056,6 +1071,15 @@ pub fn state_words(tab: &TabModel, r: &Rules) -> String {
         parts.push("pinned".to_string());
     }
     parts.extend(reminder_words(tab, r));
+    parts.push(doing_words(tab, r));
+    joined(parts)
+}
+
+/// What a tab is doing in words, as `state_words` says it without its pin
+/// and reminder, for a view that shows those its own way (the phone's
+/// drawer).
+pub fn doing_words(tab: &TabModel, r: &Rules) -> String {
+    let mut parts = Vec::new();
     parts.extend(tab.ready.as_ref().map(|what| format!("{what} ready")));
     // Under a status you set, what Switchboard still reads, which takes the
     // tab back once it changes.
@@ -1191,9 +1215,7 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
                 });
             }
             if monitoring_only(tab) {
-                let mut words = vec!["monitoring".to_string()];
-                words.extend(tab.monitors.iter().cloned());
-                return and(words.join(" · "));
+                return and(monitoring_words(tab));
             }
             let n = tab.background;
             and(format!(
@@ -2389,5 +2411,36 @@ pub(crate) mod tests {
         t.pinned = false;
         t.remind_at = Some(r.now_secs() + 3600);
         assert_eq!(stage_of(&t, &r), Stage::Later);
+    }
+
+    #[test]
+    fn a_tab_waiting_on_a_shell_is_monitoring_and_one_mid_turn_working() {
+        let r = rules();
+        let mut shell = tab(3, "tests", TabState::Background);
+        shell.background = 1;
+        shell.shells = 1;
+        assert_eq!(stage_of(&shell, &r), Stage::Monitoring);
+        assert_eq!(badge_state(&shell, &r), Badge::Monitor);
+        assert_eq!(state_words(&shell, &r), "waiting on 1 shell");
+        // A watch and two shells: both named.
+        let mut both = shell.clone();
+        both.background = 3;
+        both.shells = 2;
+        both.monitors = vec!["CI".into()];
+        assert_eq!(stage_of(&both, &r), Stage::Monitoring);
+        assert_eq!(
+            state_words(&both, &r),
+            "monitoring · CI · waiting on 2 shells"
+        );
+        // A background agent beside the shell is work of Claude's.
+        let mut agent = shell.clone();
+        agent.background = 2;
+        assert_eq!(stage_of(&agent, &r), Stage::Working);
+        assert_eq!(badge_state(&agent, &r), Badge::Background);
+        // A turn under way over the same shell is working.
+        let mut mid_turn = shell.clone();
+        mid_turn.state = TabState::Working;
+        assert_eq!(stage_of(&mid_turn, &r), Stage::Working);
+        assert_eq!(badge_state(&mid_turn, &r), Badge::Working);
     }
 }

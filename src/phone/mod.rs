@@ -4,6 +4,7 @@
 //! over the socket.
 pub mod cli;
 pub mod config;
+pub mod drawer;
 pub mod guard;
 pub mod images;
 pub mod log;
