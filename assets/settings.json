@@ -3,15 +3,19 @@
     "key": "github",
     "category": "Integrations",
     "label": "GitHub",
-    "description": "PR commands in M-p, the PRs view, PR numbers and merge states in tabs and Reopen's worktrees; off, the workspace asks GitHub nothing by itself (programs you run, such as codex-review and wtpr, still do)",
-    "default": true
+    "description": "PR commands in M-p, the PRs view, PR numbers and merge states in tabs and Reopen's worktrees; off, the workspace asks GitHub nothing by itself (programs you run, such as codex-review and wtpr, still do). This computer's own: off until gh is signed in here, which turns it on, and asked nothing before then",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "linear",
     "category": "Integrations",
     "label": "Linear",
-    "description": "Ticket commands in M-p, ticket titles in tab names and tickets in M-j's picker; off, the workspace asks Linear nothing by itself (programs you run, such as wt and worktree-done, still do)",
-    "default": true
+    "description": "Ticket commands in M-p, ticket titles in tab names and tickets in M-j's picker; off, the workspace asks Linear nothing by itself (programs you run, such as wt and worktree-done, still do). This computer's own: off until a Linear key is stored here, which turns it on, and asked nothing before then",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "ticket_picker",
@@ -147,7 +151,8 @@
     "category": "Sessions",
     "label": "Land PRs through Switchboard's merge queue",
     "description": "In a repository that lands through PRs with no merge queue of GitHub's, and whose CI runs on a push to ci/train-* branches, queue-and-clean adds a PR whose checks passed to Switchboard's own queue, which tests up to four together on a ci/train branch and squash-merges them in order once its CI passes, so no PR has to be brought up to date with the default branch first; off, queue-and-clean turns on GitHub's auto-merge for each PR, and what is queued waits",
-    "default": false
+    "default": false,
+    "scope": "computer"
   },
   {
     "key": "sweep_landed_worktrees",
@@ -182,7 +187,8 @@
     "category": "Sessions",
     "label": "Keep the computer awake while tabs work",
     "description": "While a tab's Claude works (background work and watches too, not a /loop between its runs) or autopilot, on and not paused, has tabs open, the computer doesn't sleep when idle (caffeinate on macOS, a logind inhibitor on Linux), shown by a ☕ at the top of the sidebar; it lets go two minutes after everything is idle, the display still sleeps, and a laptop closed with no display on it sleeps anyway. M-p's 'Keep the computer awake until I say' holds it whatever runs. Off, the computer sleeps on its own schedule unless held from M-p",
-    "default": true
+    "default": true,
+    "scope": "computer"
   },
   {
     "key": "sidebar_notifications",
@@ -244,8 +250,10 @@
     "key": "chrome_profiles",
     "category": "Integrations",
     "label": "Chrome profiles",
-    "description": "Links Switchboard opens (mission control, the link view, M-r, M-l, switchboard open-url) open in the Chrome profile browser.json gives their site, else its default profile; off, every link opens in the default browser",
-    "default": true
+    "description": "Links Switchboard opens (mission control, the link view, M-r, M-l, switchboard open-url) open in the Chrome profile browser.json gives their site, else its default profile; off, every link opens in the default browser. This computer's own: off until Chrome has a profile here, which turns it on, and asked nothing before then",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "standup_note",
@@ -301,8 +309,10 @@
     "key": "meeting_notes",
     "category": "Integrations",
     "label": "Meeting notes",
-    "description": "Whether the Meeting notes starter routine is made running when this version first sets up the routines (once Fathom has worked); after that, pause or resume it in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
-    "default": true
+    "description": "Whether the Meeting notes starter routine is made running when this version first sets up the routines (once Fathom has worked); after that, pause or resume it in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list. This computer's own: off until a meeting's notes from Fathom have been written here, which turns it on, and asked nothing before then",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "search_everything",
@@ -441,8 +451,10 @@
     "key": "view_calendar",
     "category": "Mission control: Calendar",
     "label": "Calendar",
-    "description": "Mission control's Calendar view: today from the day /today last saved",
-    "default": true
+    "description": "Mission control's Calendar view: today from the day /today last saved. This computer's own: off until your calendar has been read here (its address stored, or its feed read), which turns it on, and asked nothing before then",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "calendar_rsvp",
@@ -469,8 +481,10 @@
     "key": "view_slack",
     "category": "Mission control: Slack",
     "label": "Slack",
-    "description": "Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them",
-    "default": true
+    "description": "Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them. This computer's own: off until Slack has answered here (its connector, or your own Slack sign-in stored with switchboard setup slack-user), which turns it on, and asked nothing before then",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "slack_emoji",
@@ -606,8 +620,10 @@
     "key": "autopilot",
     "category": "Mission control: Autopilot",
     "label": "Autopilot",
-    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wt as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
-    "default": true
+    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wt as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go. This computer's own, off until you turn it on here",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "autopilot_close",
@@ -1415,7 +1431,8 @@
     "category": "Sessions",
     "label": "Queue heavy work",
     "description": "cargo, npm and pnpm run in a pane put builds, test runs and package installs through a queue, so only as many of each kind go at once as the caps below say, and the cores are shared out between them (CARGO_BUILD_JOBS, RUST_TEST_THREADS); a command waiting says \"Waiting for a build slot (2nd in line)\", and a slot is let go as its command ends or is killed. Off, every command runs at once, as the real program would",
-    "default": true
+    "default": true,
+    "scope": "computer"
   },
   {
     "key": "slots_build",
@@ -1457,7 +1474,8 @@
       "label": "Number…",
       "unit": "at once"
     },
-    "default": "auto"
+    "default": "auto",
+    "scope": "computer"
   },
   {
     "key": "slots_tests",
@@ -1495,7 +1513,8 @@
       "label": "Number…",
       "unit": "at once"
     },
-    "default": "2"
+    "default": "2",
+    "scope": "computer"
   },
   {
     "key": "slots_js",
@@ -1533,7 +1552,8 @@
       "label": "Number…",
       "unit": "at once"
     },
-    "default": "2"
+    "default": "2",
+    "scope": "computer"
   },
   {
     "key": "review_rules",
@@ -1707,15 +1727,18 @@
     "key": "files_from_repo",
     "category": "Updates",
     "label": "Your files from a git repository",
-    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer, as this setting does. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
-    "default": false
+    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer, as this setting and the rest of This computer's settings do. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
+    "default": false,
+    "scope": "computer"
   },
   {
     "key": "view_relay",
     "category": "Slack relay",
     "label": "Slack relay",
-    "description": "Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets. Off, the view is gone and the relay's settings stay in Settings",
-    "default": true
+    "description": "Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets. Off, the view is gone and the relay's settings stay in Settings. This computer's own, off until you turn it on here",
+    "default": true,
+    "computer_default": false,
+    "scope": "computer"
   },
   {
     "key": "haiku_summaries",
@@ -2168,7 +2191,8 @@
     "category": "Phone app",
     "label": "Phone app",
     "description": "switchboard phone (M-p's \"Open the phone app in its own tab\") serves a web app on your tailnet alone, for answering, messaging, reminding you of, pinning and closing your Claude tabs (closing asked first, and off with Close tabs from the phone) from the phones phone.json lists: their prompts, their recent turns, and a Web Push naming the tab when one starts waiting on you or its reminder comes due, which passes through your phone's push service. Needs Tailscale. Off, it refuses to start, and one running stops answering",
-    "default": false
+    "default": false,
+    "scope": "computer"
   },
   {
     "key": "phone_close_tabs",
@@ -2290,6 +2314,7 @@
     "category": "Developing Switchboard",
     "label": "Start a worktree's build from the main clone's",
     "description": "A worktree wt, wtb or wtpr makes starts with its target/ as a copy-on-write clone of the main clone's (APFS on macOS, Btrfs or XFS on Linux), made in the background, so cargo reuses the dependencies the main clone compiled (a dependency with a build script, such as one compiling C, and those built on it build again, since build scripts and their output aren't cloned) and the copy takes no disk space until a build changes it; a worktree holding someone else's code, one on another volume and a filesystem that can't clone get none. Off (the default until it has been tried on real worktrees), a new worktree starts with no build output and compiles everything itself",
-    "default": false
+    "default": false,
+    "scope": "computer"
   }
 ]

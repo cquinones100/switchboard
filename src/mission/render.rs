@@ -3058,6 +3058,15 @@ fn list(
                 .put("  ", Style::new())
                 .put(text::pad(value, value_width), value_style)
                 .put(" ", Style::new());
+            if item.data["computer"] == true {
+                row.spans.extend(kit::chip(
+                    super::settings_board::COMPUTER_CHIP,
+                    Tone::Dim,
+                    snap.caps,
+                    theme,
+                ));
+                row.put(" ", Style::new());
+            }
             if item.data["changed"] == true {
                 row.spans
                     .extend(kit::chip("changed", Tone::Needs, snap.caps, theme));
@@ -8085,9 +8094,11 @@ mod tests {
         m.view = 1;
         let (lines, _) = screen(&m, 100, 20);
         let text = texts(&lines);
-        assert!(text[3].starts_with(" INTEGRATIONS"), "{text:#?}");
+        assert!(text[3].starts_with(" THIS COMPUTER"), "{text:#?}");
         assert!(
-            text[4].contains("GitHub") && (text[4].contains(" on ") || text[4].contains(" off ")),
+            text[4].contains("GitHub")
+                && text[4].contains("this computer")
+                && (text[4].contains(" on ") || text[4].contains(" off ")),
             "{}",
             text[4]
         );

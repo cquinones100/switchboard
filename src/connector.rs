@@ -189,6 +189,10 @@ fn read_status() -> Map<String, Value> {
 
 fn record(service: &str, ok: bool, message: Option<&str>) {
     let mut status = read_status();
+    if ok {
+        // Each time, so a write that failed is made on the next answer.
+        crate::settings::connector_worked(service);
+    }
     if ok
         && status
             .get(service)

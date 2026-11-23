@@ -148,14 +148,21 @@ impl Env {
         ] {
             unset(var);
         }
-        settings::reload_settings();
         github::forget_token();
         linear::forget_key();
-        Env { _lock: lock, home }
+        let env = Env { _lock: lock, home };
+        env.settings(json!({}));
+        env
     }
 
+    /// Writes the settings file: `value` over GitHub and Linear on, as a
+    /// computer that uses them has them (both start off on a new one).
     fn settings(&self, value: Value) {
-        std::fs::write(self.home.join("settings.json"), value.to_string()).unwrap();
+        let mut all = json!({ "github": true, "linear": true });
+        for (key, v) in value.as_object().unwrap() {
+            all[key] = v.clone();
+        }
+        std::fs::write(self.home.join("settings.json"), all.to_string()).unwrap();
         settings::reload_settings();
     }
 

@@ -716,13 +716,53 @@ pub fn loaded(data: &ViewData) -> bool {
 /// category, each heading
 /// counting its options and how many of them differ from their defaults,
 /// each option with its value and default in words and whether it
-/// changed; then your own files' rows under a heading for each.
+/// changed, the settings of this computer's own first under "This
+/// computer" and again in their categories; then your own files' rows
+/// under a heading for each.
 pub fn settings_items(own: &[Item]) -> Vec<Item> {
     settings_items_of(&settings::shown_settings(), own)
 }
 
 pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item]) -> Vec<Item> {
     let mut items = Vec::new();
+    // An option's row, under `category`'s heading, its id led by `id`.
+    let option = |o: &settings::Setting, category: &str, id: &str| {
+        let words = o.value_words();
+        let off = o.value == Value::Bool(false) || o.value == "off";
+        Item::new(format!("{id}:{}", o.key), &o.label)
+            .detail(&o.description)
+            .state(if off { State::Idle } else { State::Active })
+            .data(json!({
+                "setting": o.key,
+                "value": words,
+                "default": settings::default_here(&o.key)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| o.default_words()),
+                "changed": o.changed(),
+                "choice": o.choices.is_some(),
+                "computer": o.scope == settings::Scope::Computer,
+                "next": settings::Setting { value: o.next_value(), ..o.clone() }.value_words(),
+                "search": format!("{category} {} {words}", o.key),
+            }))
+    };
+    // The settings of this computer's own first, under a heading of their
+    // own, and again in their categories.
+    let computer: Vec<&settings::Setting> = all
+        .iter()
+        .filter(|o| o.scope == settings::Scope::Computer)
+        .collect();
+    if !computer.is_empty() {
+        let mut heading = header(
+            settings::THIS_COMPUTER,
+            settings::THIS_COMPUTER,
+            computer.len(),
+        );
+        heading.data["changed"] = json!(computer.iter().filter(|o| o.changed()).count());
+        items.push(heading);
+        for o in computer {
+            items.push(option(o, settings::THIS_COMPUTER, "computer"));
+        }
+    }
     for category in settings::categories(all) {
         let members: Vec<&settings::Setting> =
             all.iter().filter(|o| o.category == category).collect();
@@ -730,22 +770,7 @@ pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item]) -> Vec<
         heading.data["changed"] = json!(members.iter().filter(|o| o.changed()).count());
         items.push(heading);
         for o in members {
-            let words = o.value_words();
-            let off = o.value == Value::Bool(false) || o.value == "off";
-            items.push(
-                Item::new(format!("setting:{}", o.key), &o.label)
-                    .detail(&o.description)
-                    .state(if off { State::Idle } else { State::Active })
-                    .data(json!({
-                        "setting": o.key,
-                        "value": words,
-                        "default": o.default_words(),
-                        "changed": o.changed(),
-                        "choice": o.choices.is_some(),
-                        "next": settings::Setting { value: o.next_value(), ..(*o).clone() }.value_words(),
-                        "search": format!("{category} {} {words}", o.key),
-                    })),
-            );
+            items.push(option(o, category, "setting"));
         }
     }
     let mut group: Option<&str> = None;
@@ -1930,8 +1955,9 @@ mod tests {
     fn settings_are_listed_by_category_and_a_filter_keeps_only_categories_with_a_match() {
         let items = settings_items(&[]);
         assert!(is_header(&items[0]));
-        assert_eq!(items[0].title, "Integrations");
+        assert_eq!(items[0].title, settings::THIS_COMPUTER);
         assert_eq!(items[1].title, "GitHub");
+        assert_eq!(items[1].id, "computer:github");
         assert!(["on", "off"].contains(&items[1].data["value"].as_str().unwrap()));
         let view = View {
             id: ViewId::Settings,
@@ -2054,13 +2080,34 @@ mod tests {
     fn a_changed_option_is_marked_with_its_default_and_counted_under_its_heading() {
         let mut all = settings::schema();
         let github = all.iter_mut().find(|o| o.key == "github").unwrap();
-        github.value = serde_json::Value::Bool(false);
+        github.value = serde_json::Value::Bool(true);
+        let queue = all.iter_mut().find(|o| o.key == "pr_merge_queue").unwrap();
+        queue.value = serde_json::Value::Bool(true);
         let items = settings_items_of(&all, &[]);
-        assert_eq!(items[0].data["changed"], 1);
+        assert_eq!(items[0].title, settings::THIS_COMPUTER);
+        assert_eq!(items[0].data["changed"], 2);
+        assert_eq!(items[1].id, "computer:github");
         assert_eq!(items[1].data["changed"], true);
-        assert_eq!(items[1].data["default"], "on");
-        assert_eq!(items[1].data["value"], "off");
-        assert_eq!(items[2].data["changed"], false);
+        assert_eq!(items[1].data["computer"], true);
+        assert_eq!(items[1].data["default"], "off until gh signs in here");
+        assert_eq!(items[1].data["value"], "on");
+        let queued = items
+            .iter()
+            .find(|i| i.id == "computer:pr_merge_queue")
+            .unwrap();
+        assert_eq!(queued.data["changed"], true);
+        assert_eq!(queued.data["default"], "off");
+        let sessions = items.iter().position(|i| i.title == "Sessions").unwrap();
+        assert_eq!(
+            items[sessions].data["changed"], 1,
+            "counted in its own category too"
+        );
+        let integrations = items
+            .iter()
+            .position(|i| i.title == "Integrations")
+            .unwrap();
+        assert_eq!(items[integrations].data["changed"], 1);
+        assert_eq!(items[integrations + 1].id, "setting:github");
     }
 
     #[test]

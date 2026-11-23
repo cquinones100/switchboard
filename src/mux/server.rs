@@ -757,6 +757,12 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
     if let Err(e) = crate::settings::migrate() {
         eprintln!("switchboard server: settings: {e:#}");
     }
+    // What this computer had of the settings that are its own carried into
+    // its own file once, then the services a sign-in here shows are used.
+    if let Err(e) = crate::settings::carry_over() {
+        eprintln!("switchboard server: this computer's settings: {e:#}");
+    }
+    crate::settings::turn_on_found();
     crate::settings::reload_settings();
     let mut server = Server::new(tx, pane_tx);
     let (bindings, problems) = Bindings::load();

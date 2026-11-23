@@ -78,8 +78,24 @@ pub const QUIET: &[(&str, bool)] = &[
     ("history_skips_passing", false),
 ];
 
-/// Writes `home`'s `settings.json` whole: `QUIET` with `settings` (a JSON
-/// object) over it, so a test's settings never turn the day's notes back on.
+/// The settings of this computer's own that start off on a new computer
+/// (`settings::COMPUTER`), on, as a computer that ran Switchboard before
+/// keeps them, so a test server uses the services' stand-ins, autopilot
+/// and the relay as before. A test of a new computer sets them itself.
+pub const USED_HERE: &[(&str, bool)] = &[
+    ("github", true),
+    ("linear", true),
+    ("view_slack", true),
+    ("view_calendar", true),
+    ("meeting_notes", true),
+    ("chrome_profiles", true),
+    ("autopilot", true),
+    ("view_relay", true),
+];
+
+/// Writes `home`'s `settings.json` whole: `USED_HERE` and `QUIET` with
+/// `settings` (a JSON object) over them, so a test's settings never turn the
+/// day's notes back on.
 pub fn write_settings(home: &Path, settings: serde_json::Value) {
     write_settings_to(&home.join(".config/switchboard/settings.json"), settings);
 }
@@ -87,8 +103,9 @@ pub fn write_settings(home: &Path, settings: serde_json::Value) {
 /// As `write_settings`, to `file`: one a server is given in
 /// `SWITCHBOARD_SETTINGS` in place of its home's.
 pub fn write_settings_to(file: &Path, settings: serde_json::Value) {
-    let mut all: serde_json::Map<String, serde_json::Value> = QUIET
+    let mut all: serde_json::Map<String, serde_json::Value> = USED_HERE
         .iter()
+        .chain(QUIET)
         .map(|(k, v)| (k.to_string(), serde_json::Value::Bool(*v)))
         .collect();
     all.extend(

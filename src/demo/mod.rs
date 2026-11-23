@@ -71,6 +71,15 @@ use crate::util;
 /// The settings the demo starts with: every view on, and what would reach
 /// a service or a model it hasn't got off.
 pub const SETTINGS: &[(&str, &str)] = &[
+    // This computer's own, which start off where a service hasn't worked:
+    // the demo's services and views stand in on it.
+    ("github", "true"),
+    ("linear", "true"),
+    ("view_slack", "true"),
+    ("view_calendar", "true"),
+    ("meeting_notes", "true"),
+    ("autopilot", "true"),
+    ("view_relay", "true"),
     ("update_check", "\"off\""),
     ("upgrade_after_update", "false"),
     ("auto_restore", "false"),

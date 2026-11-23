@@ -239,8 +239,20 @@ fn settings_file_of(item: Option<&Item>) -> (PathBuf, String) {
         return (crate::usage::own::dir_of(&file), file);
     }
     // A relative SWITCHBOARD_SETTINGS is the server's, not the editor's,
-    // which starts in the file's folder.
-    let path = settings::settings_file();
+    // which starts in the file's folder. A setting of this computer's own
+    // is in this computer's file, never the synced one.
+    let computer = item.is_some_and(|i| {
+        i.id == format!("header:{}", settings::THIS_COMPUTER)
+            || i.data
+                .get("setting")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(settings::is_computer)
+    });
+    let path = if computer {
+        settings::local_settings_file()
+    } else {
+        settings::settings_file()
+    };
     let path = std::path::absolute(&path).unwrap_or(path);
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let file = path

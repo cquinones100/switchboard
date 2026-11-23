@@ -13,6 +13,18 @@
 //! daemon's `migrateSettings` did; an on/off setting that became a choice
 //! (`REVALUED`) has its saved on or off read as the choice that means the
 //! same, and written over as that choice then.
+//!
+//! The settings that depend on the computer (`"scope": "computer"`,
+//! `COMPUTER`: whether a service is used here, what runs on one computer
+//! only, the hardware) are kept only in this computer's own file, the one
+//! in `~/.config/switchboard` even while your files come from a repository
+//! (src/files), and a value for one in the synced file is ignored. They are
+//! always written, even at their default, since a service's setting left
+//! unset is one not yet seen working here: off until it has
+//! (`turn_on_where_it_works`), when it turns on, so a new computer asks
+//! nothing of a service that isn't set up on it. The build that made them
+//! the computer's own carries each computer's values over once
+//! (`carry_over`).
 
 use std::fs;
 use std::path::PathBuf;
@@ -127,9 +139,37 @@ pub struct Setting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typed: Option<Typed>,
     pub default: Value,
+    /// Whether it follows you to every computer or is this computer's own.
+    #[serde(default, skip_serializing_if = "Scope::is_synced")]
+    pub scope: Scope,
+    /// A computer setting's default on a computer where it isn't set, which
+    /// `schema` makes its `default`; `default` itself stays what a build
+    /// from before computer settings reads, from a clone's schema too, so a
+    /// workspace still running one keeps what it used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer_default: Option<Value>,
     /// The option's value now; the default until read.
     #[serde(default)]
     pub value: Value,
+}
+
+/// Where an option's value is kept: in `settings.json`, which follows you
+/// to every computer while your files come from a repository, or in this
+/// computer's own file alone (`"scope": "computer"`), for what depends on
+/// the computer: a service used here, what runs on one computer only, the
+/// hardware.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    #[default]
+    Synced,
+    Computer,
+}
+
+impl Scope {
+    pub fn is_synced(&self) -> bool {
+        *self == Scope::Synced
+    }
 }
 
 impl Setting {
@@ -269,11 +309,98 @@ pub fn settings_file() -> PathBuf {
     }
 }
 
-/// The options that are this computer's own, read from and written to
-/// `~/.config/switchboard/settings.json` even while your files are kept in
-/// a git repository (src/files): whether they are is one, since it says
-/// where the rest are read from.
-pub const LOCAL: &[&str] = &[crate::files::SETTING];
+/// The options that are this computer's own (`"scope": "computer"`), read
+/// from and written to `~/.config/switchboard/settings.json` even while
+/// your files are kept in a git repository (src/files), never from the
+/// synced `settings.json`: whether a service is used here, what runs on one
+/// computer only, the hardware, and whether your files come from a
+/// repository, since that says where the rest are read from. A test keeps
+/// this the same as the schema's.
+pub const COMPUTER: &[&str] = &[
+    "github",
+    "linear",
+    "view_slack",
+    "view_calendar",
+    "meeting_notes",
+    "chrome_profiles",
+    "pr_merge_queue",
+    "autopilot",
+    "view_relay",
+    "phone",
+    "slot_queue",
+    "slots_build",
+    "slots_tests",
+    "slots_js",
+    "keep_awake",
+    "worktree_clone_build",
+    crate::files::SETTING,
+];
+
+/// Whether an option is this computer's own.
+pub fn is_computer(key: &str) -> bool {
+    COMPUTER.contains(&key)
+}
+
+/// The settings that say whether a service is used here, off on a computer
+/// until the service has worked there, with the connector whose answer
+/// tells it has (`connectors.json`'s service), where Switchboard calls one:
+/// Slack's from a search. The rest are told by what is found on the
+/// computer (`found_here`: gh's sign-in, a Linear key, Chrome's profiles,
+/// a meeting's notes, your own Slack sign-in) or read there (the
+/// calendar's feed).
+pub const SERVICES: &[(&str, Option<&str>)] = &[
+    ("github", None),
+    ("linear", None),
+    ("view_slack", Some("Slack")),
+    ("view_calendar", Some("Google Calendar")),
+    ("meeting_notes", Some("Fathom")),
+    ("chrome_profiles", None),
+];
+
+/// A service setting's default in words, on a computer where it isn't set:
+/// off until what turns it on, as board 183 draws it.
+pub fn default_here(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "github" => "off until gh signs in here",
+        "linear" => "off until a Linear key is stored here",
+        "view_slack" => "off until Slack answers here",
+        "view_calendar" => "off until your calendar is read here",
+        "meeting_notes" => "off until Fathom's notes are written here",
+        "chrome_profiles" => "off until Chrome has a profile here",
+        _ => return None,
+    })
+}
+
+/// The setting that says whether a connector's service is used here.
+pub fn setting_of_connector(service: &str) -> Option<&'static str> {
+    SERVICES
+        .iter()
+        .find(|(_, s)| *s == Some(service))
+        .map(|(key, _)| *key)
+}
+
+/// Whether a connector's service may be asked about on this computer: one
+/// a setting says is used here only while that setting is on, so a
+/// computer where it has never worked asks nothing of it, not even whether
+/// it is connected.
+pub fn connector_used_here(service: &str) -> bool {
+    setting_of_connector(service).is_none_or(is_on)
+}
+
+/// What the computer settings that changed their default with them being
+/// the computer's own (off until a service works, or turned on where you
+/// want it) were before: what a computer that already ran Switchboard
+/// keeps, as `carry_over` writes it.
+const DEFAULT_BEFORE: &[(&str, bool)] = &[
+    ("github", true),
+    ("linear", true),
+    ("view_slack", true),
+    ("view_calendar", true),
+    ("meeting_notes", true),
+    ("chrome_profiles", true),
+    ("autopilot", true),
+    ("view_relay", true),
+];
 
 /// This computer's own settings file: `settings_file` unless your files
 /// come from a repository, then the one in `~/.config/switchboard`.
@@ -299,11 +426,12 @@ fn bak_file() -> PathBuf {
 
 /// The file an option is kept in.
 fn file_of(key: &str) -> PathBuf {
-    if LOCAL.contains(&key) {
-        local_settings_file()
-    } else {
-        settings_file()
-    }
+    file_among(key, settings_file(), local_settings_file())
+}
+
+/// The file an option is kept in, of the synced file and this computer's.
+fn file_among(key: &str, synced: PathBuf, own: PathBuf) -> PathBuf {
+    if is_computer(key) { own } else { synced }
 }
 
 /// The options as listed, each with its default as its value.
@@ -313,25 +441,61 @@ pub fn schema() -> Vec<Setting> {
             .or_else(|_| serde_json::from_str(SCHEMA))
             .expect("assets/settings.json is a list of options");
     for option in &mut options {
+        if let Some(default) = option.computer_default.take() {
+            option.default = default;
+        }
         option.value = option.default.clone();
     }
     options
 }
 
+/// Gives a setting its default back: a computer setting unset in this
+/// computer's file, so a service's turns on again once it works here, any
+/// other written as its default.
+pub fn reset_setting(key: &str) -> Result<()> {
+    if !is_computer(key) {
+        let Some(option) = schema().into_iter().find(|o| o.key == key) else {
+            bail!("no setting named {key}");
+        };
+        return write_setting(key, option.default);
+    }
+    let file = file_of(key);
+    let mut mine = read_to_change(&file)?;
+    if mine.shift_remove(key).is_some() {
+        write_whole(&file, mine)?;
+    }
+    Ok(())
+}
+
 /// What you have changed, or nothing when the file is missing or isn't an object.
 fn saved() -> Map<String, Value> {
-    let mut mine = util::read_json_object(settings_file());
-    let local = local_settings_file();
-    if local != settings_file() {
-        let own = util::read_json_object(local);
-        for key in LOCAL {
-            match own.get(*key) {
-                Some(value) => mine.insert(key.to_string(), value.clone()),
-                None => mine.shift_remove(*key),
-            };
-        }
+    // The library's own unit tests read as a computer that ran Switchboard
+    // before, its services in use, as the integration tests' servers do.
+    if cfg!(test) {
+        return DEFAULT_BEFORE
+            .iter()
+            .map(|(k, v)| (k.to_string(), Value::Bool(*v)))
+            .collect();
     }
-    mine
+    let synced = util::read_json_object(settings_file());
+    let local = local_settings_file();
+    if local == settings_file() {
+        return synced;
+    }
+    with_computer_s(synced, &util::read_json_object(local))
+}
+
+/// The synced settings with the computer's own over them: each computer
+/// setting as this computer's file has it, and unset where that file
+/// doesn't set it, whatever the synced file says.
+fn with_computer_s(mut synced: Map<String, Value>, own: &Map<String, Value>) -> Map<String, Value> {
+    for key in COMPUTER {
+        match own.get(*key) {
+            Some(value) => synced.insert(key.to_string(), value.clone()),
+            None => synced.shift_remove(*key),
+        };
+    }
+    synced
 }
 
 /// Settings that were on/off and became choices: each old value's choice.
@@ -367,7 +531,8 @@ pub fn read_settings() -> Vec<Setting> {
 
 /// Whether your file sets an option, rather than leaving it to its default:
 /// a choice made, though one that matches the default is kept only when
-/// written by hand, since `write_setting` keeps the file to what differs.
+/// written by hand, since `write_setting` keeps the file to what differs
+/// (a computer setting kept whatever its value).
 pub fn is_set(key: &str) -> bool {
     saved().contains_key(key)
 }
@@ -390,6 +555,10 @@ pub fn current_settings() -> Vec<Setting> {
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.get_or_insert_with(read_settings).clone()
 }
+
+/// The heading the settings of this computer's own are listed under first
+/// in Settings, besides their own categories.
+pub const THIS_COMPUTER: &str = "This computer";
 
 /// The category of the settings that serve developing Switchboard, shown
 /// only on a build made from its clone (`dev::build_is_from_clone`).
@@ -468,7 +637,9 @@ pub fn share_with_ui() {
     });
 }
 
-/// Sets one option. Keeps the file to what differs from the defaults, written
+/// Sets one option, a computer setting in this computer's own file and any
+/// other in `settings.json`. Keeps the file to what differs from the
+/// defaults (a computer setting kept whatever its value), written
 /// to a temporary file and renamed into place, so a reader never sees half of
 /// it. A file that is there but can't be read as a JSON object is never
 /// written over, since starting from nothing would lose every other setting in
@@ -481,31 +652,210 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
         bail!("not a value for {key}: {}", util::json_compact(&value));
     }
     let file = file_of(key);
-    let mut mine = Map::new();
-    if file.exists() {
-        match fs::read_to_string(&file)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        {
-            Some(Value::Object(map)) => mine = map,
-            _ => bail!(
-                "{} can't be read as JSON; fix it by hand, then change the setting again",
-                paths::tilde(&file)
-            ),
-        }
-        // The copy stays on this computer, whatever file it is of.
-        fs::copy(&file, bak_file())?;
-    }
-    if value == option.default {
+    let mut mine = read_to_change(&file)?;
+    // A computer setting is kept even at its default, since one left unset
+    // is a service not yet seen working here (`turn_on_where_it_works`).
+    if value == option.default && !is_computer(key) {
         mine.shift_remove(key);
     } else {
         mine.insert(key.to_string(), value);
     }
+    write_whole(&file, mine)
+}
+
+/// A settings file as an object to change, after keeping the version
+/// before as `settings.json.bak`: nothing when it is missing, an error
+/// when it is there and can't be read as one, since starting from nothing
+/// would lose every other setting in it.
+fn read_to_change(file: &std::path::Path) -> Result<Map<String, Value>> {
+    if !file.exists() {
+        return Ok(Map::new());
+    }
+    match fs::read_to_string(file)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    {
+        Some(Value::Object(map)) => {
+            // The copy stays on this computer, whatever file it is of.
+            fs::copy(file, bak_file())?;
+            Ok(map)
+        }
+        _ => bail!(
+            "{} can't be read as JSON; fix it by hand, then change the setting again",
+            paths::tilde(file)
+        ),
+    }
+}
+
+fn write_whole(file: &std::path::Path, mine: Map<String, Value>) -> Result<()> {
     util::write_atomic(
-        &file,
+        file,
         format!("{}\n", util::json_pretty(&Value::Object(mine))),
     )?;
     Ok(())
+}
+
+/// Turns on a service's setting on this computer once the service has
+/// worked here, unless this computer's file already says whether it is
+/// used, which is then left as you set it.
+pub fn turn_on_where_it_works(key: &str) {
+    // Not before the carry-over, which may yet bring this computer's own
+    // value for it from the synced file.
+    if cfg!(test) || !SERVICES.iter().any(|(k, _)| *k == key) || !carried_marker().exists() {
+        return;
+    }
+    let file = local_settings_file();
+    if util::read_json_object(&file).contains_key(key) {
+        return;
+    }
+    if let Err(e) = write_setting(key, Value::Bool(true)) {
+        eprintln!("switchboard: could not turn {key} on: {e:#}");
+    }
+}
+
+/// A connector that answered: its service's setting turned on here.
+pub fn connector_worked(service: &str) {
+    if let Some(key) = setting_of_connector(service) {
+        turn_on_where_it_works(key);
+    }
+}
+
+/// The services a sign-in on this computer shows are used here, read from
+/// small files and the environment alone, so the server can look once a
+/// minute: gh signed in, a Linear key in the environment or linear.json,
+/// a Chrome with profiles. A Linear key in the Keychain is found as it is
+/// stored (`switchboard platform secret-set`) or first read.
+pub fn found_here() -> Vec<&'static str> {
+    let env = |name: &str| std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
+    // Where gh keeps its sign-in, as gh looks for it.
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+    };
+    let gh_dir = var("GH_CONFIG_DIR")
+        .or_else(|| var("XDG_CONFIG_HOME").map(|d| d.join("gh")))
+        .unwrap_or_else(|| paths::home_join(".config/gh"));
+    let gh = env("GH_TOKEN")
+        || env("GITHUB_TOKEN")
+        || fs::read_to_string(gh_dir.join("hosts.yml")).is_ok_and(|t| t.contains("user:"));
+    let linear = env("LINEAR_API_KEY")
+        || util::read_json_object(crate::files::file("linear.json"))
+            .get("linearApiKey")
+            .and_then(Value::as_str)
+            .is_some_and(|k| !k.trim().is_empty());
+    let chrome = crate::platform::chrome_local_state().is_some_and(|f| f.is_file());
+    // The built-in meeting notes' record, written once Fathom has given a
+    // meeting here.
+    let fathom = paths::state_dir().join("meetings.json").is_file();
+    // Your own Slack sign-in, which the Slack view reads with.
+    let slack = crate::day::slack_user::signed_in(&paths::state_dir()).is_some();
+    [
+        ("github", gh),
+        ("linear", linear),
+        ("chrome_profiles", chrome),
+        ("meeting_notes", fathom),
+        ("view_slack", slack),
+    ]
+    .into_iter()
+    .filter(|(_, found)| *found)
+    .map(|(key, _)| key)
+    .collect()
+}
+
+/// Turns on each service `found_here` finds, where this computer's file
+/// doesn't say otherwise.
+pub fn turn_on_found() {
+    for key in found_here() {
+        turn_on_where_it_works(key);
+    }
+}
+
+/// The record that this computer's settings were carried over, in the
+/// state directory.
+fn carried_marker() -> PathBuf {
+    paths::state_dir().join("computer-settings-carried")
+}
+
+/// Carries what this computer had over into its own file, once, as the
+/// build that made settings the computer's own first starts: on a computer
+/// that already ran Switchboard (a saved layout), each computer setting its
+/// own file doesn't set takes the synced file's value, else the default it
+/// read before (`DEFAULT_BEFORE`), so nothing it used turns off; a new
+/// computer takes nothing from another's. A value the computer's file sets
+/// is kept, and the synced file is
+/// left as it is, for a computer that hasn't run this build yet; run again
+/// (its record in a new state directory), it only fills what is missing.
+pub fn carry_over() -> Result<()> {
+    let marker = carried_marker();
+    if cfg!(test) || marker.exists() {
+        return Ok(());
+    }
+    let state = paths::state_dir();
+    let ran_before = ["layout.json", "layout.json.1"]
+        .iter()
+        .any(|f| state.join(f).exists());
+    let file = local_settings_file();
+    // A synced file there but unreadable is carried from once it is fixed,
+    // not taken for one that sets nothing.
+    let synced_file = settings_file();
+    let synced = match fs::read_to_string(&synced_file) {
+        Err(_) => Map::new(),
+        Ok(text) if text.trim().is_empty() => Map::new(),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(map)) => map,
+            _ => bail!(
+                "{} can't be read as JSON; fix it by hand, and this computer's settings are carried from it then",
+                paths::tilde(&synced_file)
+            ),
+        },
+    };
+    // Read without the backup first, which only a write takes.
+    let mut wanted = util::read_json_object(&file);
+    if carry_into(&mut wanted, &synced, ran_before) {
+        let mut mine = read_to_change(&file)?;
+        for key in COMPUTER {
+            if let (false, Some(value)) = (mine.contains_key(*key), wanted.get(*key)) {
+                mine.insert(key.to_string(), value.clone());
+            }
+        }
+        if let Some(dir) = file.parent() {
+            util::make_dirs(dir)?;
+        }
+        write_whole(&file, mine)?;
+    }
+    util::make_dirs(&state)?;
+    util::write_atomic(&marker, format!("{}\n", util::now_ms()))?;
+    Ok(())
+}
+
+/// This computer's file (`own`) with each computer setting it doesn't set
+/// taken from the synced file, or the default read before, as `carry_over`
+/// says; whether it changed.
+fn carry_into(own: &mut Map<String, Value>, synced: &Map<String, Value>, ran_before: bool) -> bool {
+    let schema = schema();
+    let mut changed = false;
+    for key in COMPUTER {
+        if own.contains_key(*key) {
+            continue;
+        }
+        let valid = |v: &&Value| schema.iter().any(|o| o.key == *key && o.valid(v));
+        let before = DEFAULT_BEFORE
+            .iter()
+            .find(|(k, _)| k == key)
+            .filter(|_| ran_before)
+            .map(|(_, v)| Value::Bool(*v));
+        let theirs = synced
+            .get(*key)
+            .filter(valid)
+            .filter(|_| ran_before)
+            .cloned();
+        if let Some(value) = theirs.or(before) {
+            own.insert(key.to_string(), value);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Settings renamed since they were saved, old key first: the Merge queues
@@ -664,6 +1014,8 @@ mod tests {
             choices,
             typed: None,
             default: value.clone(),
+            scope: Scope::Synced,
+            computer_default: None,
             value,
         }
     }
@@ -697,6 +1049,94 @@ mod tests {
             options.iter().all(|o| o.valid(&o.default)),
             "every default is a value its option takes"
         );
+    }
+
+    #[test]
+    fn each_service_says_what_turns_it_on() {
+        for (key, _) in SERVICES {
+            assert!(default_here(key).is_some(), "{key}");
+        }
+    }
+
+    #[test]
+    fn every_computer_setting_is_one_of_the_list() {
+        let marked: Vec<String> = schema()
+            .into_iter()
+            .filter(|o| o.scope == Scope::Computer)
+            .map(|o| o.key)
+            .collect();
+        let mut listed: Vec<&str> = COMPUTER.to_vec();
+        listed.sort();
+        let mut sorted: Vec<&str> = marked.iter().map(String::as_str).collect();
+        sorted.sort();
+        assert_eq!(sorted, listed);
+        for (key, _) in SERVICES
+            .iter()
+            .chain(&[("autopilot", None), ("view_relay", None)])
+        {
+            let o = schema().into_iter().find(|o| o.key == *key).unwrap();
+            assert_eq!(
+                o.default,
+                json!(false),
+                "{key} starts off on a new computer"
+            );
+            let before = DEFAULT_BEFORE.iter().find(|(k, _)| k == key).unwrap().1;
+            let raw: Vec<Setting> = serde_json::from_str(SCHEMA).unwrap();
+            let listed = raw.iter().find(|o| o.key == *key).unwrap();
+            assert_eq!(
+                listed.default,
+                json!(before),
+                "{key}: an older build's default"
+            );
+        }
+    }
+
+    #[test]
+    fn a_computer_setting_is_read_from_the_computer_s_file_alone() {
+        let map = |v: Value| v.as_object().unwrap().clone();
+        let synced = map(json!({ "pr_merge_queue": true, "view_slack": true, "tips": false }));
+        let own = map(json!({ "view_slack": false }));
+        let read = with_computer_s(synced, &own);
+        assert_eq!(
+            read.get("pr_merge_queue"),
+            None,
+            "the synced value is ignored"
+        );
+        assert_eq!(read["view_slack"], json!(false), "the computer's own wins");
+        assert_eq!(read["tips"], json!(false), "the rest stay synced");
+    }
+
+    #[test]
+    fn a_computer_setting_is_written_to_the_computer_s_file() {
+        let (synced, own) = (PathBuf::from("synced.json"), PathBuf::from("own.json"));
+        assert_eq!(file_among("tips", synced.clone(), own.clone()), synced);
+        for key in COMPUTER {
+            assert_eq!(file_among(key, synced.clone(), own.clone()), own, "{key}");
+        }
+    }
+
+    #[test]
+    fn the_carry_over_copies_what_the_computer_lacks_and_never_overwrites() {
+        let map = |v: Value| v.as_object().unwrap().clone();
+        let synced = map(json!({ "slots_build": "2", "pr_merge_queue": true, "tips": false }));
+        // A new computer: nothing of another computer's.
+        let mut own = map(json!({ "files_from_repo": true }));
+        assert!(!carry_into(&mut own, &synced, false));
+        assert_eq!(own, map(json!({ "files_from_repo": true })));
+        // One that ran before: its own values kept, the defaults it read
+        // then written.
+        let mut own = map(json!({ "pr_merge_queue": false }));
+        assert!(carry_into(&mut own, &synced, true));
+        assert_eq!(own["pr_merge_queue"], json!(false), "its own is kept");
+        assert_eq!(own["slots_build"], json!("2"));
+        assert_eq!(own["view_slack"], json!(true), "on before, by default");
+        assert_eq!(own["autopilot"], json!(true));
+        assert_eq!(own.get("tips"), None, "only the computer's settings");
+        assert_eq!(own.get("phone"), None, "a default that didn't change");
+        // Run again, it changes nothing.
+        let again = own.clone();
+        assert!(!carry_into(&mut own, &synced, true));
+        assert_eq!(own, again);
     }
 
     #[test]

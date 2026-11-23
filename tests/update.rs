@@ -638,8 +638,10 @@ fn the_server_offers_a_release_hourly_until_answered_and_again_for_a_newer_one()
 }
 
 /// A gh in `home`'s stand-ins signed in as `gho_stand_in`, writing a line
-/// to the file it gives each time it is asked for its token.
+/// to the file it gives each time it is asked for its token, on a computer
+/// that uses GitHub (`github` on, as it is once gh has signed in there).
 fn gh_signed_in(home: &Path) -> PathBuf {
+    common::write_settings(home, json!({}));
     let runs = home.join("gh-runs");
     stand_in::Gh::new()
         .answer(&format!(

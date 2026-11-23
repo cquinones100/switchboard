@@ -65,7 +65,16 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             match platform::set_secret(service, account(rest).unwrap_or(&user), value.trim()) {
-                Ok(where_) => eprintln!("Stored in {where_}."),
+                Ok(where_) => {
+                    eprintln!("Stored in {where_}.");
+                    match service.as_str() {
+                        "linear-api-key" => crate::settings::turn_on_where_it_works("linear"),
+                        crate::day::calendar::SECRET => {
+                            crate::settings::turn_on_where_it_works("view_calendar")
+                        }
+                        _ => {}
+                    }
+                }
                 Err(e) => {
                     eprintln!("Couldn't store it: {e}");
                     return ExitCode::FAILURE;

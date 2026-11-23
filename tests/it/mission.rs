@@ -482,7 +482,7 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
     loop {
         let saved: Value =
             serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap_or_default();
-        if saved.get("github").is_none() && saved["linear"] == false {
+        if saved["github"] == true && saved["linear"] == false {
             break;
         }
         assert!(Instant::now() < deadline, "not written: {saved}");
@@ -3346,14 +3346,16 @@ fn c_w_j_and_k_move_between_the_sections_a_view_stacks() {
     // While C-w waits, the footer names j and k for a view of sections.
     client.type_text("\x17");
     client.wait_text("next, last section");
-    // C-w j: the next section's first option, its menu naming it.
-    client.type_text("j\r");
+    // C-w j: the next section's first option, past This computer and
+    // Integrations, its menu naming it.
+    client.type_text("j");
+    client.type_text("\x17j\r");
     client.wait_text("─ Push notifications ─");
     client.type_text("\x1b");
     client.wait_for("the menu closed", |s| {
         !s.iter().any(|l| l.contains("─ Push notifications ─"))
     });
-    // C-w k: back to the first section's first option.
+    // C-w k: back to the section before's first option.
     client.type_text("\x17k\r");
     client.wait_text("─ GitHub ─");
 }
