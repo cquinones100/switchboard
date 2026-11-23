@@ -2968,7 +2968,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "switchboard"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard-plugin-api"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3094,7 +3094,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard-ui"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "crossterm",
  "libc",

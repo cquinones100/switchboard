@@ -3,7 +3,7 @@
 # that sets a version, which is the one the release workflow reads. The
 # diff (crates/diff) has a version and releases of its own.
 [workspace.package]
-version = "0.11.0"
+version = "0.11.1"
 license = "MIT"
 
 [package]
