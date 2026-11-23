@@ -1024,7 +1024,7 @@ const fs = require("fs");
 const source = fs.readFileSync(process.argv[1], "utf8").replace('const BUILD = "dev";', 'const BUILD = "1a2b3c4d5e6f";');
 const ctx = vm.createContext({
   Node: class Node {},
-  document: { getElementById: () => null, addEventListener: () => {}, createElement: (tag) => ({ tag, children: [], className: "", setAttribute() {}, append(...k) { this.children.push(...k); } }), createTextNode: (text) => ({ text }) },
+  document: { getElementById: () => ({ querySelector: () => null }), addEventListener: () => {}, createElement: (tag) => ({ tag, children: [], className: "", setAttribute() {}, append(...k) { this.children.push(...k); } }), createTextNode: (text) => ({ text }) },
   window: { addEventListener: () => {} },
   fetch: () => new Promise(() => {}),
   console,
@@ -1037,6 +1037,9 @@ const line = ([worker, server]) => vm.runInContext(`
 `, ctx);
 // [the worker's build, the server's]; a server older than the page names none.
 for (const c of [[null, "1a2b3c4d5e6f"], ["none", "1a2b3c4d5e6f"], ["1a2b3c4d5e6f", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "1a2b3c4d5e6f"], ["unknown", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "9f8e7d6c5b4a"], ["1a2b3c4d5e6f", "9f8e7d6c5b4a"], ["9f8e7d6c5b4a", undefined]]) console.log(line(c));
+// A page left open across a restart reads the server's build again.
+ctx.fetch = async () => ({ status: 200, ok: true, json: async () => ({ paired: true, build: "9f8e7d6c5b4a" }) });
+vm.runInContext("readServerBuild()", ctx).then(() => console.log("server=" + vm.runInContext("state.me.build", ctx)));
 "#;
     let Some(out) = run_app_js(script) else {
         return;
@@ -1052,6 +1055,7 @@ for (const c of [[null, "1a2b3c4d5e6f"], ["none", "1a2b3c4d5e6f"], ["1a2b3c4d5e6
             "build-line behind=app behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
             "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
             "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "server=9f8e7d6c5b4a",
         ],
         "{out}"
     );

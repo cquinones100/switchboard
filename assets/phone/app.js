@@ -91,6 +91,19 @@ async function askWorkerBuild() {
   const worker = navigator.serviceWorker && navigator.serviceWorker.controller;
   const answer = worker ? await askWorker(worker, { build: true }).catch(() => ({})) : {};
   workerBuild = worker ? String(answer.build || "unknown") : "none";
+  redrawBuildLine();
+}
+
+// The server's build read again, for a page left open while Switchboard
+// restarted on a new one: as it comes back and as a new worker takes over.
+async function readServerBuild() {
+  const me = await api("/api/me").catch(() => null);
+  if (!me || !me.build || !state.me) return;
+  state.me.build = me.build;
+  redrawBuildLine();
+}
+
+function redrawBuildLine() {
   const line = app.querySelector(".build-line");
   if (line) line.replaceWith(buildLine());
 }
@@ -2241,6 +2254,7 @@ async function reconnect(posted) {
   render();
   setTimeout(render, RECONNECTING_MS + 100);
   listen();
+  readServerBuild();
   try {
     const r = await api("/api/tabs");
     state.tabs = r.tabs || [];
@@ -2338,7 +2352,10 @@ window.addEventListener("online", cameBack);
 async function offerPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
   const registration = await navigator.serviceWorker.register("/sw.js");
-  navigator.serviceWorker.addEventListener("controllerchange", () => askWorkerBuild());
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    askWorkerBuild();
+    readServerBuild();
+  });
   navigator.serviceWorker.addEventListener("message", (event) => {
     // Read the tabs again first, since a page that slept holds old ones; the
     // tab is taken from what the worker keeps, so it opens once.
