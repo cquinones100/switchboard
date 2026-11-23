@@ -2955,6 +2955,88 @@ const out = [];
     );
 }
 
+/// A view tapped in mission control's panel (assets/phone/app.js) opens
+/// full screen over it, with no strip beside it and ‹ at its header's left,
+/// as a step in the page's history; ‹ goes back through the phone's own
+/// back, and the panel shows again on its list, still open; skipped without
+/// Node.
+#[test]
+fn a_view_opens_full_screen_and_back_returns_to_the_panels_list() {
+    let script = PRELUDE.to_string()
+        + r##"const pushed = [];
+let popstate = null;
+let backs = 0;
+ctx.history = {
+  state: null,
+  replaceState() {},
+  pushState(s) { pushed.push(s); ctx.history.state = s; },
+  back() { backs++; ctx.history.state = null; popstate(); },
+};
+ctx.window.addEventListener = (name, f) => { if (name === "popstate") popstate = f; };
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = [
+    { index: 2, pane: "%12", name: "stable note IDs", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle" },
+  ];
+  state.views = [
+    { key: "landing", title: "Landing", line: "1 in the queue", needs: 0, groups: [
+      { title: "In the queue", items: [
+        { id: "q93", title: "#93 stable note IDs", detail: "tab 2 · next train", mark: "▲", tone: "landing",
+          options: [{ label: "Go to tab 2", shown: "Go to tab 2", go: "%12" }] },
+      ] },
+    ], acts: [] },
+  ];
+  state.open = "12";
+  render();
+  edgeSwipe();
+`, ctx);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const of = (cls) => body.all((x) => x.className.split(" ").includes(cls));
+const out = [];
+app.all((x) => x.attrs["aria-label"] === "Tab 2's menu")[0].fire("click");
+button("Mission control›").fire("click");
+timers.splice(0).forEach((f) => f && f());
+body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
+const screen = of("panel-view")[0];
+const head = screen.kids[0];
+out.push("screen=" + screen.parent.className + " strip=" + screen.all((x) => x.className === "panel-strip").length + " head=" + head.kids.map((k) => k.text).join("|"));
+out.push("items=" + screen.all((x) => x.attrs["data-item"]).length + " panel=" + of("panel")[0].all((x) => x.attrs["data-item"]).length + " pushed=" + JSON.stringify(pushed));
+head.all((x) => x.attrs["aria-label"] === "Back to the views")[0].fire("click");
+timers.splice(0).forEach((f) => f && f());
+out.push("back=" + backs + " view=" + vm.runInContext("state.panel.view", ctx) + " screens=" + of("panel-view").length + " layers=" + of("panel-layer").length);
+out.push("list=" + body.all((x) => x.attrs["data-view"]).map((r) => r.attrs["data-view"]).join("|"));
+// Going to a tab from an open view takes its history step back first.
+body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
+body.all((x) => x.attrs["data-item"] === "q93")[0].fire("click");
+button("Go to tab 2").fire("click");
+out.push("go=" + backs + " " + ctx.history.state + " " + vm.runInContext("state.open + ' ' + state.panel", ctx));
+// A tab opened under an open view, as a tapped push opens one, closes it first.
+app.all((x) => x.attrs["aria-label"] === "Tab 2's menu")[0].fire("click");
+button("Mission control›").fire("click");
+body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
+vm.runInContext("openTab('12')", ctx);
+out.push("pushed=" + backs + " " + ctx.history.state + " " + vm.runInContext("state.panel", ctx));
+console.log(out.join("\n"));
+"##;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "screen=panel-layer strip=0 head=‹|Landing",
+            r#"items=1 panel=0 pushed=[{"view":"landing"}]"#,
+            "back=1 view=null screens=0 layers=1",
+            "list=landing",
+            "go=2 null 12 null",
+            "pushed=3 null null",
+        ],
+        "{stdout}"
+    );
+}
+
 /// The notification a tab's `ready` makes, as the phone's stream carries
 /// it in its Notifications view, with the stream it came in.
 fn ready_notice(server: &TestServer) -> (UnixStream, Value) {
