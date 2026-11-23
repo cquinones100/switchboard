@@ -573,6 +573,72 @@ console.log("chip=" + app.querySelector(".head .chip").textContent);
     );
 }
 
+/// A channel scrolled to its top (assets/phone/app.js's `loadEarlier`)
+/// asks for the turns before the earliest shown, says "Loading earlier…"
+/// meanwhile, inserts them above with what was on screen kept in place,
+/// says "Start of the conversation" once it has the first, and keeps them
+/// as the newest turns are read again; skipped without Node.
+#[test]
+fn scrolling_to_a_channels_top_loads_the_turns_before() {
+    let script = [CHANNEL_PAGE, r##"
+const turn = (n) => [
+  { who: "you", text: "ask " + n, at: n * 10, offset: n * 10 },
+  { who: "claude", text: "reply " + n, at: n * 10 + 1, offset: n * 10 + 5 },
+];
+const turns = (a, b) => Array.from({ length: b - a }, (_, i) => turn(a + i)).flat();
+let latest = { messages: turns(20, 40), from: 200, earlier: true, conversation: "c" };
+const asked = [];
+ctx.fetch = (path) => {
+  asked.push(path);
+  const body = path.endsWith("before=200") ? { messages: turns(0, 20), from: 0, earlier: false, conversation: "c" } : latest;
+  return Promise.resolve({ status: 200, ok: true, json: async () => body });
+};
+const tick = () => new Promise((r) => setTimeout(r, 0));
+(async () => {
+  vm.runInContext(`
+    state.me = { paired: true, computer: "mac" };
+    listen();
+    state.open = "5";
+  `, ctx);
+  source.onmessage({ data: JSON.stringify({ live: true, tabs: [{ pane: "%5", index: 2, name: "phone", state: "idle", turn: { prompt: "go" } }] }) });
+  const list = app.querySelector(".channel");
+  Object.defineProperty(list, "scrollHeight", { get: () => app.querySelectorAll(".msg").length * 50 });
+  await vm.runInContext("loadTurns()", ctx);
+  const first = () => app.querySelector(".msg .body").textContent;
+  console.log("opened=" + app.querySelectorAll(".msg").length + " " + first() + " at " + list.scrollTop);
+  console.log("above=" + JSON.stringify(app.querySelector(".above").textContent));
+  list.scrollTop = 0;
+  list.dispatchEvent(new Event("scroll"));
+  console.log("above=" + app.querySelector(".above").textContent);
+  for (let i = 0; i < 5; i++) await tick();
+  console.log("asked=" + asked.join(" "));
+  console.log("loaded=" + app.querySelectorAll(".msg").length + " " + first() + " at " + list.scrollTop);
+  console.log("above=" + app.querySelector(".above").textContent);
+  latest = { messages: turns(21, 41), from: 210, earlier: true, conversation: "c" };
+  await vm.runInContext("loadTurns()", ctx);
+  console.log("kept=" + app.querySelectorAll(".msg").length + " " + first());
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "opened=40 ask 20 at 2000",
+            "above=\"\"",
+            "above=Loading earlier…",
+            "asked=/api/tabs/5/turns /api/tabs/5/turns?before=200",
+            "loaded=80 ask 0 at 2000",
+            "above=Start of the conversation",
+            "kept=82 ask 0",
+        ],
+        "{stdout}"
+    );
+}
+
 /// Pasting into the composer (assets/phone/app.js's `composer`) adds the
 /// clipboard's PNG, JPEG, GIF and WebP images to the ones waiting over it,
 /// as + does, leaving its text to paste as the browser would, and adds none
@@ -2483,13 +2549,53 @@ mod preview_server {
         assert_eq!(json_of(at, "/api/me")["paired"], true);
         let tabs = json_of(at, "/api/tabs");
         assert_eq!(tabs["live"], true);
-        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 20);
+        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 21);
         let turns = json_of(at, "/api/tabs/13/turns");
         assert!(!turns["messages"].as_array().unwrap().is_empty());
     }
 
     /// The preview stamps app.js with its own build, as the phone server
     /// stamps app.js and sw.js.
+    /// A long made-up conversation's channel opens on its last 20 turns,
+    /// and `?before=` answers the turns before, back to its start.
+    #[test]
+    fn the_preview_answers_a_long_channels_turns_before() {
+        let at = preview(&assets());
+        let asks = |turns: &Value| -> Vec<String> {
+            turns["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["who"] == "you")
+                .map(|m| m["text"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let last = json_of(at, "/api/tabs/31/turns");
+        assert_eq!(asks(&last).len(), 20, "{last}");
+        assert!(asks(&last)[19].starts_with("Step 64:"), "{last}");
+        assert_eq!(last["earlier"], true);
+        let from = last["from"].as_u64().unwrap();
+        let before = json_of(at, &format!("/api/tabs/31/turns?before={from}"));
+        assert_eq!(asks(&before).len(), 20);
+        assert!(asks(&before)[0].starts_with("Step 25:"), "{before}");
+        assert!(asks(&before)[19].starts_with("Step 44:"), "{before}");
+        assert!(
+            before["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|m| m["offset"].as_u64().unwrap() < from)
+        );
+        let mut from = before["from"].as_u64().unwrap();
+        let mut earliest = before;
+        while earliest["earlier"] == true {
+            earliest = json_of(at, &format!("/api/tabs/31/turns?before={from}"));
+            from = earliest["from"].as_u64().unwrap();
+        }
+        assert_eq!(from, 0);
+        assert!(asks(&earliest)[0].starts_with("Step 1:"), "{earliest}");
+    }
+
     #[test]
     fn the_preview_stamps_the_app_with_its_builds_commit() {
         let at = preview(&assets());

@@ -39,7 +39,7 @@ use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use aws_lc_rs::signature::EcdsaKeyPair;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -666,18 +666,32 @@ fn pane_of(tab: &Value) -> String {
     tab["pane"].as_str().unwrap_or("").to_string()
 }
 
-async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response {
+/// A channel's last turns, or with `?before=<offset>` the turns before
+/// the earliest it shows (`turns::window`): its messages, the offset the
+/// next earlier read ends at (`from`), whether there is anything before
+/// it (`earlier`), and which conversation they are of, a new one in the
+/// pane (`/clear`) having nothing of the last.
+async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>, uri: Uri) -> Response {
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
     let Some(file) = tab["transcript"].as_str().map(PathBuf::from) else {
-        return axum::Json(json!({"messages": []})).into_response();
+        return axum::Json(
+            json!({"messages": [], "from": 0, "earlier": false, "conversation": ""}),
+        )
+        .into_response();
     };
+    let before = before_of(&uri);
+    let conversation = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     // The pictures its Claude showed with `look`, among them by time.
     let shown: Vec<looks::Look> = serde_json::from_value(tab["looks"].clone()).unwrap_or_default();
-    let messages = tokio::task::spawn_blocking(move || {
-        let (messages, cut) = turns::recent(&file);
-        looks::merge(messages, &shown, turns::MOST, cut)
+    let (messages, from, earlier) = tokio::task::spawn_blocking(move || {
+        let w = turns::window(&file, before);
+        let messages = looks::merge(w.messages, &shown, w.from, w.earlier, w.until);
+        (messages, w.from, w.earlier)
     })
     .await
     .unwrap_or_default();
@@ -697,7 +711,23 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Resp
             m
         })
         .collect();
-    axum::Json(json!({"messages": messages})).into_response()
+    axum::Json(json!({
+        "messages": messages,
+        "from": from,
+        "earlier": earlier,
+        "conversation": conversation,
+    }))
+    .into_response()
+}
+
+/// A turns request's `before`, the byte offset its turns end at; none
+/// for the last turns.
+pub fn before_of(uri: &Uri) -> Option<u64> {
+    uri.query()?
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("before="))?
+        .parse()
+        .ok()
 }
 
 /// Who sent a message from another tab: the number and name of the tab

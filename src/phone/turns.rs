@@ -1,4 +1,4 @@
-//! A tab's recent turns as a channel's messages (board 165): what you
+//! A tab's turns as a channel's messages (board 165): what you
 //! typed, what another tab's Claude sent it (board 182), what Claude
 //! said, and each tool it ran (which the app folds into a turn's steps,
 //! `turns` in assets/phone/app.js), read from the end of its transcript,
@@ -6,6 +6,16 @@
 //! and reports and Claude Code's own are left out. A line of what you typed that is the path of an image the
 //! phone sent (`images`) is the image, not words (board 174). Read by
 //! `switchboard phone`'s own process, never the server.
+//!
+//! A channel opens on its last `TURNS` turns and loads the turns before
+//! as it is scrolled up (issue 356): `window` reads back from a byte
+//! offset (the transcript's end, or the start of the earliest turn shown)
+//! in `CHUNK`s until it has found that many turn starts or reached the
+//! file's start, however long the tool outputs between them, so a 40 MB
+//! transcript still opens on what you said. One read stops at `BOUND`,
+//! sending what it found with where it stopped, which the next scroll
+//! continues from. Each message carries its line's byte offset, which the
+//! app keeps the turns it loaded by as new ones arrive.
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,10 +27,12 @@ use serde_json::Value;
 use super::images;
 use crate::sidebar::claude::{prompt_text, timestamp_ms, tool_text};
 
-/// How much of a transcript's end is read.
-const TAIL: u64 = 512 * 1024;
-/// How many messages are kept.
-pub const MOST: usize = 80;
+/// How many turns a channel opens on, and each scroll up loads.
+pub const TURNS: usize = 20;
+/// How much of a transcript is read at a time, back from the end.
+const CHUNK: u64 = 512 * 1024;
+/// The most of a transcript one request reads.
+const BOUND: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Message {
@@ -48,19 +60,50 @@ pub struct Message {
     /// A `tab` message that came in while Claude worked, which Claude Code
     /// queues into the running turn rather than starting one.
     pub queued: bool,
+    /// Where its line starts in the transcript, in bytes; a look has the
+    /// offset of the message before it.
+    pub offset: u64,
 }
 
-/// The last `most` messages in a transcript's text (or its end), the
-/// phone's images found in `images_dir`.
-pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
+impl Message {
+    /// Whether it starts a turn the window counts: what you said, another
+    /// tab's message that didn't come mid-turn, or a background task's
+    /// wake-up.
+    fn starts_turn(&self) -> bool {
+        matches!(self.who, "you" | "task") || (self.who == "tab" && !self.queued)
+    }
+}
+
+/// A channel's turns as one request reads them: the messages from `from`,
+/// the byte offset the next earlier read ends at, and whether anything of
+/// the conversation lies before it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Window {
+    pub messages: Vec<Message>,
+    pub from: u64,
+    pub earlier: bool,
+    /// When the message the window ends before was said, where it ends
+    /// before one that says.
+    pub until: Option<i64>,
+}
+
+/// The messages in a stretch of a transcript that starts at a line, `base`
+/// bytes into the file, the phone's images found in `images_dir`.
+pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
     let flag = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
     let mut out: Vec<Message> = Vec::new();
     // Whether the last reply so far waits on a tool, so its turn runs on
     // until something other than the tool's result is said, as the relay
     // reads it (`relay::tabs`).
     let mut running = false;
-    for line in text.split('\n').filter(|l| l.starts_with('{')) {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+    let mut offset = base;
+    for line in bytes.split(|b| *b == b'\n') {
+        let at_line = offset;
+        offset += line.len() as u64 + 1;
+        if !line.starts_with(b"{") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
         if flag(&entry, "isSidechain") {
@@ -106,6 +149,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                         .unwrap_or("")
                         .to_string(),
                     queued: running,
+                    offset: at_line,
                 });
             } else {
                 out.push(Message {
@@ -116,6 +160,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                     at,
                     from: String::new(),
                     queued: false,
+                    offset: at_line,
                 });
             }
             continue;
@@ -138,6 +183,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                     at,
                     from: String::new(),
                     queued: false,
+                    offset: at_line,
                 });
             }
             Some("user") => {
@@ -151,6 +197,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                         at,
                         from: String::new(),
                         queued: false,
+                        offset: at_line,
                     });
                 }
             }
@@ -176,6 +223,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                                     at,
                                     from: String::new(),
                                     queued: false,
+                                    offset: at_line,
                                 });
                             }
                         }
@@ -187,6 +235,7 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
                             at,
                             from: String::new(),
                             queued: false,
+                            offset: at_line,
                         }),
                         _ => {}
                     }
@@ -195,27 +244,106 @@ pub fn parse(text: &str, most: usize, images_dir: &Path) -> Vec<Message> {
             _ => {}
         }
     }
-    let skip = out.len().saturating_sub(most);
-    out.split_off(skip)
+    out
 }
 
-/// The last messages of the transcript at `file`, read from its end, and
-/// whether the read began past its start, so older messages were left out.
-pub fn recent(file: &Path) -> (Vec<Message>, bool) {
-    let Ok(mut f) = fs::File::open(file) else {
-        return (Vec::new(), false);
+/// The `TURNS` turns of the transcript at `file` that end before the
+/// byte offset `before` (a turn's start a window answered as its `from`),
+/// or at its end, read off the server's task.
+pub fn window(file: &Path, before: Option<u64>) -> Window {
+    let read = || {
+        let mut f = fs::File::open(file)?;
+        let size = f.metadata()?.len();
+        read_window(&mut f, size, before, TURNS, CHUNK, BOUND, &images::dir())
     };
-    let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-    let take = TAIL.min(size);
-    if f.seek(SeekFrom::Start(size - take)).is_err() {
-        return (Vec::new(), false);
+    read().unwrap_or(Window {
+        messages: Vec::new(),
+        from: 0,
+        earlier: false,
+        until: None,
+    })
+}
+
+/// `window` over any file, `turns` turns, read `chunk` bytes at a time
+/// back from the end and no more than `bound` bytes in all.
+fn read_window<F: Read + Seek>(
+    f: &mut F,
+    size: u64,
+    before: Option<u64>,
+    turns: usize,
+    chunk: u64,
+    bound: u64,
+    images_dir: &Path,
+) -> std::io::Result<Window> {
+    let end = before.unwrap_or(size).min(size);
+    // The bytes from `start` to `end`, and the turn starts found in those
+    // from `counted` (a line's start) on, oldest first.
+    let mut start = end;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut counted = end;
+    let mut starts: Vec<u64> = Vec::new();
+    while starts.len() < turns && start > 0 && end - start < bound {
+        let take = chunk.min(start).min(bound - (end - start));
+        start -= take;
+        let mut piece = vec![0; take as usize];
+        f.seek(SeekFrom::Start(start))?;
+        f.read_exact(&mut piece)?;
+        piece.extend_from_slice(&buf);
+        buf = piece;
+        let new = &buf[..(counted - start) as usize];
+        // The first whole line, the one cut by the chunk's start left for
+        // the next chunk back.
+        let line = match start {
+            0 => Some(0),
+            _ => new.iter().position(|b| *b == b'\n').map(|i| i + 1),
+        };
+        let Some(line) = line else { continue };
+        let found = parse(&new[line..], start + line as u64, images_dir);
+        let mut more: Vec<u64> = found
+            .iter()
+            .filter(|m| m.starts_turn())
+            .map(|m| m.offset)
+            .collect();
+        more.append(&mut starts);
+        starts = more;
+        counted = start + line as u64;
     }
-    let mut buf = Vec::with_capacity(take as usize);
-    if f.take(take).read_to_end(&mut buf).is_err() {
-        return (Vec::new(), false);
+    let from = match starts.len().checked_sub(turns) {
+        Some(i) => starts[i],
+        // No line began in all that was read: the next read ends where
+        // this one began.
+        None if counted == end => start,
+        None => counted,
+    };
+    let messages = parse(&buf[(from - start) as usize..], from, images_dir);
+    Ok(Window {
+        messages,
+        from,
+        earlier: from > 0,
+        until: until(f, size, end, chunk, images_dir),
+    })
+}
+
+/// When the message at `end` was said, where the window ends before one:
+/// a look shown after it belongs to the turns after the window.
+fn until<F: Read + Seek>(
+    f: &mut F,
+    size: u64,
+    end: u64,
+    chunk: u64,
+    images_dir: &Path,
+) -> Option<i64> {
+    if end >= size {
+        return None;
     }
-    let messages = parse(&String::from_utf8_lossy(&buf), MOST, &images::dir());
-    (messages, take < size)
+    let mut line = Vec::new();
+    f.seek(SeekFrom::Start(end)).ok()?;
+    f.take(chunk).read_to_end(&mut line).ok()?;
+    let line = &line[..line.iter().position(|b| *b == b'\n')?];
+    parse(line, end, images_dir)
+        .first()
+        .map(|m| m.at)
+        .filter(|at| *at != 0)
 }
 
 #[cfg(test)]
@@ -232,7 +360,7 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed."}]}}"#,
         ]
         .join("\n");
-        let messages = parse(&text, MOST, Path::new("/i"));
+        let messages = parse(text.as_bytes(), 0, Path::new("/i"));
         let said: Vec<(&str, &str)> = messages.iter().map(|m| (m.who, m.text.as_str())).collect();
         assert_eq!(
             said,
@@ -244,7 +372,10 @@ mod tests {
             ]
         );
         assert!(messages[0].at > 0);
-        assert_eq!(parse(&text, 1, Path::new("/i")).len(), 1);
+        assert_eq!(
+            messages[1].offset,
+            text.find("{\"type\":\"assistant").unwrap() as u64
+        );
     }
 
     #[test]
@@ -254,7 +385,7 @@ mod tests {
             "type": "user",
             "message": {"content": format!("Wraps on my phone too\n/i/{a}")},
         });
-        let messages = parse(&line.to_string(), MOST, Path::new("/i"));
+        let messages = parse(line.to_string().as_bytes(), 0, Path::new("/i"));
         assert_eq!(messages[0].text, "Wraps on my phone too");
         assert_eq!(messages[0].images, [a]);
     }
@@ -269,7 +400,7 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"The two-commit one."}]}}"#,
         ]
         .join("\n");
-        let messages = parse(&text, MOST, Path::new("/i"));
+        let messages = parse(text.as_bytes(), 0, Path::new("/i"));
         let said: Vec<(&str, &str, &str)> = messages
             .iter()
             .map(|m| (m.who, m.text.as_str(), m.from.as_str()))
@@ -302,7 +433,7 @@ mod tests {
             peer("mid-turn"),
         ]
         .join("\n");
-        let messages = parse(&text, MOST, Path::new("/i"));
+        let messages = parse(text.as_bytes(), 0, Path::new("/i"));
         let queued: Vec<(&str, bool)> = messages
             .iter()
             .filter(|m| m.who == "tab")
@@ -318,7 +449,7 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"CI passed."}]}}"#,
         ]
         .join("\n");
-        let messages = parse(&text, MOST, Path::new("/i"));
+        let messages = parse(text.as_bytes(), 0, Path::new("/i"));
         let said: Vec<(&str, &str)> = messages.iter().map(|m| (m.who, m.text.as_str())).collect();
         assert_eq!(
             said,
@@ -327,5 +458,102 @@ mod tests {
                 ("claude", "CI passed.")
             ]
         );
+    }
+
+    /// A conversation of `turns` turns, each your ask, a tool call whose
+    /// output is `output` bytes, and Claude's reply.
+    fn conversation(turns: usize, output: usize) -> Vec<u8> {
+        let mut out = String::new();
+        for n in 0..turns {
+            let lines = [
+                serde_json::json!({"type": "user", "message": {"content": format!("ask {n}")}}),
+                serde_json::json!({"type": "assistant", "message": {"stop_reason": "tool_use", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls"}}]}}),
+                serde_json::json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t", "content": "x".repeat(output)}]}}),
+                serde_json::json!({"type": "assistant", "message": {"content": [{"type": "text", "text": format!("reply {n}")}]}}),
+            ];
+            for line in lines {
+                out.push_str(&line.to_string());
+                out.push('\n');
+            }
+        }
+        out.into_bytes()
+    }
+
+    fn read(bytes: &[u8], before: Option<u64>, chunk: u64, bound: u64) -> Window {
+        let mut f = std::io::Cursor::new(bytes);
+        read_window(
+            &mut f,
+            bytes.len() as u64,
+            before,
+            TURNS,
+            chunk,
+            bound,
+            Path::new("/i"),
+        )
+        .unwrap()
+    }
+
+    fn asks(w: &Window) -> Vec<String> {
+        w.messages
+            .iter()
+            .filter(|m| m.who == "you")
+            .map(|m| m.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_transcript_of_long_tool_outputs_opens_on_its_last_turns() {
+        // 30 turns of 200 KB tool outputs: 6 MB, nearly all of it output.
+        let bytes = conversation(30, 200 * 1024);
+        let w = read(&bytes, None, CHUNK, BOUND);
+        let want: Vec<String> = (10..30).map(|n| format!("ask {n}")).collect();
+        assert_eq!(asks(&w), want);
+        assert!(w.earlier);
+        assert_eq!(w.messages[0].offset, w.from);
+        assert_eq!(&bytes[w.from as usize..][..20], br#"{"type":"user","mess"#);
+        assert_eq!(w.messages.last().unwrap().text, "reply 29");
+        assert_eq!(w.messages.iter().filter(|m| m.who == "tool").count(), 20);
+        assert_eq!(w.until, None);
+    }
+
+    #[test]
+    fn before_reads_the_turns_before_and_says_where_the_conversation_starts() {
+        let bytes = conversation(30, 1000);
+        let last = read(&bytes, None, 4096, BOUND);
+        let before = read(&bytes, Some(last.from), 4096, BOUND);
+        let want: Vec<String> = (0..10).map(|n| format!("ask {n}")).collect();
+        assert_eq!(asks(&before), want);
+        assert_eq!(before.from, 0);
+        assert!(!before.earlier);
+        assert_eq!(before.messages.last().unwrap().text, "reply 9");
+        // Ending before an untimed message, it has no time to end by.
+        assert_eq!(before.until, None);
+        assert_eq!(read(&bytes, Some(0), 4096, BOUND).messages, []);
+    }
+
+    #[test]
+    fn the_bound_sends_what_it_found_and_where_to_read_on() {
+        let bytes = conversation(30, 1000);
+        // 4 KB at a time, 16 KB in all: some turns, not 20.
+        let w = read(&bytes, None, 4096, 16 * 1024);
+        let found = asks(&w).len();
+        assert!((1..TURNS).contains(&found), "{found}");
+        assert!(w.earlier);
+        assert!(w.from >= bytes.len() as u64 - 16 * 1024);
+        // The next read carries on from there, with nothing twice.
+        let next = read(&bytes, Some(w.from), 4096, 16 * 1024);
+        assert!(next.messages.iter().all(|m| m.offset < w.from));
+        assert_eq!(
+            asks(&next).last().unwrap(),
+            &format!("ask {}", 30 - found - 1)
+        );
+        // A line longer than the bound: nothing found, and the next read
+        // ends where this one began.
+        let mut long = conversation(2, 1000);
+        long.extend(conversation(1, 64 * 1024));
+        let w = read(&long, None, 4096, 16 * 1024);
+        assert_eq!(asks(&w), Vec::<String>::new());
+        assert!(w.earlier);
+        assert!(w.from < long.len() as u64);
     }
 }
