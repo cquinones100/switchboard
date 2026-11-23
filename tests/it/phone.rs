@@ -1014,6 +1014,53 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     );
 }
 
+/// The drawer ends on the app's build, short, and says which of the page
+/// and its worker is behind the server's build; every request names both.
+#[test]
+fn the_drawer_ends_on_the_build_and_says_when_the_worker_is_behind() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const source = fs.readFileSync(process.argv[1], "utf8").replace('const BUILD = "dev";', 'const BUILD = "1a2b3c4d5e6f";');
+const ctx = vm.createContext({
+  Node: class Node {},
+  document: { getElementById: () => ({ querySelector: () => null }), addEventListener: () => {}, createElement: (tag) => ({ tag, children: [], className: "", setAttribute() {}, append(...k) { this.children.push(...k); } }), createTextNode: (text) => ({ text }) },
+  window: { addEventListener: () => {} },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(source, ctx);
+const line = ([worker, server]) => vm.runInContext(`
+  workerBuild = ${JSON.stringify(worker)};
+  state.me = { build: ${JSON.stringify(server)} };
+  ((l) => l.className + "=" + l.children.map((c) => c.text).join("") + "|" + buildHeader()["X-Switchboard-Build"])(buildLine());
+`, ctx);
+// [the worker's build, the server's]; a server older than the page names none.
+for (const c of [[null, "1a2b3c4d5e6f"], ["none", "1a2b3c4d5e6f"], ["1a2b3c4d5e6f", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "1a2b3c4d5e6f"], ["unknown", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "9f8e7d6c5b4a"], ["1a2b3c4d5e6f", "9f8e7d6c5b4a"], ["9f8e7d6c5b4a", undefined]]) console.log(line(c));
+// A page left open across a restart reads the server's build again.
+ctx.fetch = async () => ({ status: 200, ok: true, json: async () => ({ paired: true, build: "9f8e7d6c5b4a" }) });
+vm.runInContext("readServerBuild()", ctx).then(() => console.log("server=" + vm.runInContext("state.me.build", ctx)));
+"#;
+    let Some(out) = run_app_js(script) else {
+        return;
+    };
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        [
+            "build-line=build 1a2b3c4|page=1a2b3c4d5e6f",
+            "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=none",
+            "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=unknown",
+            "build-line behind=app behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "server=9f8e7d6c5b4a",
+        ],
+        "{out}"
+    );
+}
+
 /// The drawer's search (assets/phone/app.js's `groups`), run in Node over
 /// tabs as the phone reads them; skipped without Node.
 #[test]
@@ -2418,6 +2465,24 @@ mod preview_server {
         assert_eq!(tabs["tabs"].as_array().unwrap().len(), 20);
         let turns = json_of(at, "/api/tabs/13/turns");
         assert!(!turns["messages"].as_array().unwrap().is_empty());
+    }
+
+    /// The preview stamps app.js with its own build, as the phone server
+    /// stamps app.js and sw.js.
+    #[test]
+    fn the_preview_stamps_the_app_with_its_builds_commit() {
+        let at = preview(&assets());
+        let (status, app) = http(at, "GET", "/app.js", None);
+        assert_eq!(status, 200);
+        let stamp = format!("const BUILD = \"{}", env!("SWITCHBOARD_COMMIT"));
+        assert!(app.contains(&stamp), "{}", &app[..app.len().min(600)]);
+        assert!(!app.contains("const BUILD = \"dev\";"));
+        // The build the drawer tells a page behind by is the same one.
+        let me = json_of(at, "/api/me");
+        assert!(
+            stamp.ends_with(me["build"].as_str().unwrap().split('+').next().unwrap()),
+            "{me}"
+        );
     }
 
     #[test]

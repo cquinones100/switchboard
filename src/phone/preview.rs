@@ -407,9 +407,20 @@ async fn app_file(State(preview): State<Arc<Preview>>, name: &'static str) -> Re
             with_inset_variables(&String::from_utf8_lossy(&bytes)),
         )
             .into_response(),
+        // Stamped with the preview's own build, as the phone server stamps it.
+        Ok(bytes) if name == "app.js" => (
+            [(header::CONTENT_TYPE, kind)],
+            super::build::stamped(&String::from_utf8_lossy(&bytes), &build_of(&preview.dir)),
+        )
+            .into_response(),
         Ok(bytes) => ([(header::CONTENT_TYPE, kind)], bytes).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "Not here").into_response(),
     }
+}
+
+/// The preview's own build, for the clone whose `assets/phone` is `dir`.
+fn build_of(dir: &Path) -> String {
+    super::build::of(dir.parent().and_then(Path::parent))
 }
 
 async fn frame(name: &'static str) -> Response {
@@ -527,12 +538,13 @@ async fn control(State(preview): State<Arc<Preview>>, UrlPath(what): UrlPath<Str
     }
 }
 
-async fn me() -> Response {
+async fn me(State(preview): State<Arc<Preview>>) -> Response {
     axum::Json(json!({
         "paired": true,
         "revoked": false,
         "device": "preview",
         "computer": "preview",
+        "build": build_of(&preview.dir),
     }))
     .into_response()
 }

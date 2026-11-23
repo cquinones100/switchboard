@@ -78,6 +78,8 @@ pub struct App {
     /// reached (`live`).
     tabs: watch::Receiver<Value>,
     push_key: Option<Arc<EcdsaKeyPair>>,
+    /// Which devices were last said to be behind the build, and how.
+    builds: super::build::Seen,
 }
 
 /// The address a request came from, put on it as it arrives.
@@ -181,6 +183,7 @@ pub async fn serve(status: Status, config: super::config::Config) -> Result<()> 
         whois: Mutex::new(WhoisCache::default()),
         tabs: rx,
         push_key,
+        builds: super::build::Seen::default(),
     });
     let router = routes(app.clone());
     for l in &listeners {
@@ -384,8 +387,22 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
             return refuse(refusal, Some(ip), &path);
         }
     }
+    if let Some(builds) = req
+        .headers()
+        .get(super::build::HEADER)
+        .and_then(|h| h.to_str().ok())
+        && let Some(line) = app.builds.note(&device, builds, &served_build())
+    {
+        super::log::line(&line);
+    }
     req.extensions_mut().insert(Device(device));
     next.run(req).await
+}
+
+/// The build serving the app, as `app.js` and `sw.js` are stamped with it.
+fn served_build() -> String {
+    let assets = assets::dir();
+    super::build::of(assets.as_deref().and_then(std::path::Path::parent))
 }
 
 fn whois(ip: IpAddr) -> Option<Peer> {
@@ -442,10 +459,18 @@ async fn file(name: &'static str) -> Response {
             ),
             "text/html; charset=utf-8",
         ),
-        "app.js" => (
-            assets::text("phone/app.js", include_str!("../../assets/phone/app.js")),
-            "text/javascript; charset=utf-8",
-        ),
+        "app.js" | "sw.js" => {
+            let text = if name == "app.js" {
+                assets::text("phone/app.js", include_str!("../../assets/phone/app.js"))
+            } else {
+                assets::text("phone/sw.js", include_str!("../../assets/phone/sw.js"))
+            };
+            return (
+                [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                super::build::stamped(&text, &served_build()),
+            )
+                .into_response();
+        }
         // markdown-it 15.0.3's browser build, as published, for app.js's
         // `markdown` (its license beside it).
         "markdown-it.min.js" => (
@@ -458,10 +483,6 @@ async fn file(name: &'static str) -> Response {
         "app.css" => (
             assets::text("phone/app.css", include_str!("../../assets/phone/app.css")),
             "text/css; charset=utf-8",
-        ),
-        "sw.js" => (
-            assets::text("phone/sw.js", include_str!("../../assets/phone/sw.js")),
-            "text/javascript; charset=utf-8",
         ),
         "manifest.webmanifest" => (
             assets::text(
@@ -501,6 +522,8 @@ async fn me(
         "revoked": revoked,
         "device": device,
         "computer": app.computer,
+        // What the drawer tells a page or worker behind by.
+        "build": served_build(),
     }))
     .into_response()
 }

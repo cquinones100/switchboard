@@ -233,6 +233,8 @@ button {
 .head .title.whole { white-space: normal; overflow-wrap: anywhere; padding: 10px 0; }
 .head .where { color: var(--dim); font-weight: 400; }
 .offline-line { color: var(--dim); padding: var(--s1) var(--edge) 0; font-size: var(--fact); }
+.build-line { color: var(--faint); padding: var(--s3) var(--edge) 0; font-size: var(--fact); }
+.build-line.behind { color: var(--dim); }
 
 /* ── Chips and marks ── */
 /* Chip: a fact, never a control; 24 high, its words 12 bold. */

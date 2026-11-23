@@ -13,6 +13,12 @@
 //
 // The copy holds the page's files alone, never what is under /api/ (your
 // tabs, their turns, pairing), which is always asked of the computer.
+//
+// BUILD is the commit of the build serving it, put in as it is served
+// (src/phone/build.rs), so a new build's worker differs in its bytes and is
+// installed on the phone's next look; the page asks for it to say when the
+// worker running is behind.
+const BUILD = "dev";
 const CACHE = "switchboard-phone-v1";
 const TAPPED = "switchboard-phone-tapped";
 const TAPPED_KEY = "/tapped";
@@ -158,8 +164,9 @@ self.addEventListener("notificationclick", (event) => {
 self.addEventListener("message", (event) => {
   const data = event.data || {};
   if (data.took) return event.waitUntil(forgetTapped(data.took).catch(() => {}));
-  if (!data.tapped || !event.ports[0]) return;
   const port = event.ports[0];
+  if (data.build && port) return port.postMessage({ build: BUILD });
+  if (!data.tapped || !port) return;
   event.waitUntil(
     (async () => {
       try {
