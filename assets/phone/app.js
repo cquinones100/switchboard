@@ -969,7 +969,13 @@ async function loadEarlier() {
     state.earlier = !!r.earlier;
     if (shown) shown.grew = true;
   } catch (_) {
-    // Asked again on the next scroll to the top.
+    // Asked again on the next scroll, never at once, so a computer out of
+    // reach isn't asked over and over.
+    if (state.open === n) {
+      state.loadingEarlier = false;
+      render();
+    }
+    return;
   } finally {
     if (state.open === n) state.loadingEarlier = false;
   }
