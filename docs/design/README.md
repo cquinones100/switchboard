@@ -346,7 +346,7 @@ The relay's DM, threads and Home tab.
 
 ## Proposal: stepping over a prompt's questions on the phone
 
-- [188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it, a swipe across the card steps; going back shows the answer given, and Submit reviews every answer](https://cquinones100.github.io/switchboard/design/188.html)
+- [188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it; going back shows the answer given, and Submit reviews every answer](https://cquinones100.github.io/switchboard/design/188.html)
 
 ## Proposal: a tab's own views on the phone
 

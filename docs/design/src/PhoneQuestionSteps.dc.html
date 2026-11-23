@@ -277,7 +277,7 @@ const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: '
 // A PROMPT OF SEVERAL QUESTIONS ON THE PHONE: Claude Code asks them one at a time under a line of their names, ☐ unanswered and
 // ☒ answered, then a Submit step that reviews the answers, and ← and → move between them. The phone's card gains the same
 // line: the questions' names as steps, the one shown lit, each answered one with ✓, Submit last; ‹ and › at its ends step back
-// and forward (pressing ← and →), a tap on a name steps straight to it, and a swipe across the card steps as ‹ and › do.
+// and forward (pressing ← and →) and a tap on a name steps straight to it; a swipe across the card stays the channel's, opening the drawer or mission control.
 // Answering a question moves on to the next, as in the terminal.
 const C = { bg: '#11121a', surface: '#1b1e29', raised: '#20243a', chosen: '#262b40', line: '#3a3f52', text: '#c9cdd9', dim: '#8d93a8', faint: '#565b6e', accent: '#5fd7ff', ink: '#11131a', yellow: '#f2c56b', ybg: '#3a3220', green: '#7fd18b', gbg: '#1d3a2a', blue: '#82aaff', bbg: '#20304f', red: '#ff8a94', claude: '#d97757', you: '#5f9fd7' };
 const PT = (pt) => pt / 22, Wd = (pt) => pt / 10.4;
@@ -353,12 +353,11 @@ const NAMES = (a, b) => [['Colors', a], ['Size', b], ['Submit', false]];
 // 1. THE FIRST QUESTION: ‹ dimmed, Colors lit; a tap on an option answers it and steps on to Size.
 { const sx = phone(8, 'The first of two questions', '0');
   qTop(sx, '6 theme picker');
-  qCard(sx, 7, 19.2, '1 of 2');
+  qCard(sx, 7, 16.4, '1 of 2');
   qSteps(sx + 2.4, 8.6, 31.2, NAMES(false, false), 0);
   tx(sx + 2.7, 11.4, 30, 1, 'Which colors should the picker', C.text, 12, true); tx(sx + 2.7, 12.3, 30, 1, 'offer first?', C.text, 12, true);
   [['1  Warm', 14.0], ['2  Cool', 16.4], ['3  Both', 18.8]].forEach(([t, yy]) => btn(sx + 2.7, yy, 30.6, t, 'plain'));
   tx(sx + 2.7, 21.6, 30, 1.4, 'Or type your own answer below', C.faint, 11);
-  tx(sx + 2.7, 23.6, 30, 1, 'swipe across the card, or ‹ ›, to step', C.faint, 10);
   K(sx, 39.6, 36, 0.06, 'background:' + C.line);
   icon(sx + 0.4, 40.6, '+', 'fill'); field(sx + 0.4 + Wd(44) + 0.8, 40.6, 36 - 2 * Wd(44) - 2.8, '', 'Your own answer'); icon(sx + 35.6 - Wd(44), 40.6, '➤', 'fill'); }
 

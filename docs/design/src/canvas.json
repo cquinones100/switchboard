@@ -746,7 +746,7 @@
       "page": "design"
     },
     "PhoneQuestionSteps.dc.html": {
-      "title": "188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it, a swipe across the card steps; going back shows the answer given, and Submit reviews every answer",
+      "title": "188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it; going back shows the answer given, and Submit reviews every answer",
       "page": "design"
     },
     "PhoneTabViews.dc.html": {
