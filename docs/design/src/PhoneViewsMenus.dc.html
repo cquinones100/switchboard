@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), a view with nothing to show, and the toast that says the first time where the panel is</title>
+<title>Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -280,7 +280,7 @@ const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: '
 // it away. It opens on the list of views, Landing, Autopilot, PRs, CI and Notifications, each while its setting is on, each
 // with what needs you in it counted; a tap on one slides its items in, in the groups mission control files them under, from
 // the same items the server builds for it, with ‹ back to the list. A tap on an item opens its menu; ⋯ opens the view's own
-// menu (m's). The first time the app opens with the panel unseen, a toast says to swipe from the right edge for it.
+// menu (m's). The channel's ⋯ menu opens it too, its first option. The first time the app opens with the panel unseen, a toast says to swipe from the right edge for it.
 const C = { bg: '#11121a', surface: '#1b1e29', raised: '#20243a', chosen: '#262b40', line: '#3a3f52', text: '#c9cdd9', dim: '#8d93a8', faint: '#565b6e', accent: '#5fd7ff', ink: '#11131a', yellow: '#f2c56b', ybg: '#3a3220', green: '#7fd18b', gbg: '#1d3a2a', blue: '#82aaff', bbg: '#20304f', red: '#ff8a94', claude: '#d97757', you: '#5f9fd7' };
 const PT = (pt) => pt / 22, Wd = (pt) => pt / 10.4;
 // TEXT AS AN IMAGE, so it sits on the controls drawn as images: one color, one size, vertically centered in its box.
@@ -387,12 +387,16 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'failed', '#90 Clippy (Linux x86_64)', 'split the parser · 1 of 6', '3m', 'r');
   vMenu(sx, 'CI', [['Read CI again now'], ["Re-run main's failed jobs…"]], 3); }
 
-// 3. A VIEW WITH NOTHING: mission control's own words in the list's place.
-{ const sx = phone(84, 'A view with nothing to show', '1');
-  pHead(sx, 36, '‹', 'PRs', true);
-  tx(sx + 2, 13, 32, 1.2, 'No open PRs of yours.', C.dim, 12, false, 'center');
-  tx(sx + 2, 15, 32, 1.2, 'A view whose setting is off', C.faint, 11, false, 'center');
-  tx(sx + 2, 16, 32, 1.2, 'is left out of the list of views.', C.faint, 11, false, 'center'); }
+// 3. THE CHANNEL'S ⋯ MENU: Mission control first, set off from the tab's own options by a rule, › at its right; it slides
+// the panel in as the swipe does, for whoever doesn't swipe. A view with nothing to show says mission control's own words in its list's place.
+{ const sx = phone(84, '⋯ on a channel: Mission control', '0');
+  header(sx, 3, '6 review PR 41', ['needs you', C.yellow, C.ybg]);
+  K(sx + 1, 6.95, Wd(28), PT(28), 'border-radius:50%;background:' + C.claude);
+  T(sx + 4, 7, ['Claude', 't', 'b'], ['  9:38', 'd']);
+  put(sx + 4, 8, 'I read both fixture sets in the', 't'); put(sx + 4, 9, 'PR. The redraw test can time', 't'); put(sx + 4, 10, 'either.', 't');
+  vMenu(sx, 'Tab 6 · review PR 41', [['Mission control'], ['Pin it'], ['Remind me'], ['Close tab', 'danger']], 3);
+  tx(sx + 30, 3 + PT(44) + 0.2, 3.4, PT(44), '›', C.accent, 14, true, 'flex-end');
+  K(sx + 0.6, 3 + 2 * PT(44) + 0.2, 34.8, 0.06, 'background:' + C.line); }
 
 // 4. THE FIRST TIME: the drawer as it is, with nothing added, and a toast over its foot saying where the views are.
 { const sx = phone(122, 'The first time: a toast', '1');

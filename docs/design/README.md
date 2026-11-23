@@ -340,9 +340,9 @@ The relay's DM, threads and Home tab.
 
 ## Proposal: mission control's views on the phone
 
-- [185. Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen: a swipe in shows Landing, Autopilot, PRs, CI and Notifications with what needs you counted; a tap on one shows its items in its groups; a tap on an item opens its menu, less what needs the computer's screen](https://cquinones100.github.io/switchboard/design/185.html)
+- [185. Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen, and from Mission control in a channel's ⋯ menu: a swipe in shows Landing, Autopilot, PRs, CI and Notifications with what needs you counted; a tap on one shows its items in its groups; a tap on an item opens its menu, less what needs the computer's screen](https://cquinones100.github.io/switchboard/design/185.html)
 - [186. PRs and CI in the phone's right panel: the PR board's columns as groups, CI's runs with what fails first; a failing run's menu leads with Start a CI loop…, and an option ending in … asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
-- [187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), a view with nothing to show, and the toast that says the first time where the panel is](https://cquinones100.github.io/switchboard/design/187.html)
+- [187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is](https://cquinones100.github.io/switchboard/design/187.html)
 
 ## Other boards
 

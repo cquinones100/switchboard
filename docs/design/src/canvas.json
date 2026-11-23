@@ -734,7 +734,7 @@
       "page": "design"
     },
     "PhoneViews.dc.html": {
-      "title": "185. Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen: a swipe in shows Landing, Autopilot, PRs, CI and Notifications with what needs you counted; a tap on one shows its items in its groups; a tap on an item opens its menu, less what needs the computer's screen",
+      "title": "185. Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen, and from Mission control in a channel's ⋯ menu: a swipe in shows Landing, Autopilot, PRs, CI and Notifications with what needs you counted; a tap on one shows its items in its groups; a tap on an item opens its menu, less what needs the computer's screen",
       "page": "design"
     },
     "PhoneViewsPrsCi.dc.html": {
@@ -742,7 +742,7 @@
       "page": "design"
     },
     "PhoneViewsMenus.dc.html": {
-      "title": "187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), a view with nothing to show, and the toast that says the first time where the panel is",
+      "title": "187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is",
       "page": "design"
     }
   }
