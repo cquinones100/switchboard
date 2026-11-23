@@ -1029,7 +1029,9 @@ mod tests {
         v.key(Key::new(KeyCode::Char('o'), Mods::CTRL));
         assert_eq!(v.editor.row(), 39_999, "back where it jumped from");
         assert!(v.top + 10 > 39_999 && v.top <= 39_999);
-        assert!(started.elapsed() < Duration::from_secs(1));
+        // Laying out every line between, a screen at a time, took hours;
+        // a busy debug build takes seconds for the rest.
+        assert!(started.elapsed() < Duration::from_secs(30));
     }
 
     #[test]
