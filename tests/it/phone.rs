@@ -617,6 +617,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   latest = { messages: turns(21, 41), from: 210, earlier: true, conversation: "c" };
   await vm.runInContext("loadTurns()", ctx);
   console.log("kept=" + app.querySelectorAll(".msg").length + " " + first());
+  // More new turns than a read holds: no gap kept, the channel starts again.
+  latest = { messages: turns(70, 90), from: 700, earlier: true, conversation: "c" };
+  await vm.runInContext("loadTurns()", ctx);
+  console.log("again=" + app.querySelectorAll(".msg").length + " " + first());
 })();
 "##]
     .concat();
@@ -634,6 +638,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
             "loaded=80 ask 0 at 2000",
             "above=Start of the conversation",
             "kept=82 ask 0",
+            "again=40 ask 70",
         ],
         "{stdout}"
     );

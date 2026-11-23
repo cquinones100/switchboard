@@ -936,7 +936,10 @@ async function loadTurns() {
     // The turns loaded by scrolling up stay, the ones since read again
     // from where this read starts; a new conversation in the pane starts
     // the channel again.
-    const keeps = state.turnsLoaded && r.conversation === state.conversation && r.from > state.from;
+    // Only while what is held reaches where this read starts: after more
+    // turns than a read holds (the phone asleep a while), the channel starts again.
+    const reaches = state.messages.some((m) => m.offset !== undefined && m.offset >= r.from);
+    const keeps = state.turnsLoaded && r.conversation === state.conversation && r.from > state.from && reaches;
     if (keeps) state.messages = state.messages.filter((m) => m.offset !== undefined && m.offset < r.from).concat(messages);
     else {
       state.messages = messages;
