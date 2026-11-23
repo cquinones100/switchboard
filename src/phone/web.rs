@@ -12,11 +12,13 @@
 //! why. No response allows another origin (no CORS headers), and each
 //! carries a strict Content-Security-Policy.
 //!
-//! Six things change anything, each asked of the server over its socket,
+//! Seven things change anything, each asked of the server over its socket,
 //! which refuses a pane not running Claude: answering a tab's prompt,
 //! sending its Claude a message, marking it seen, setting or clearing its
 //! reminder, pinning or unpinning it, and closing it (which the app asks
-//! about first). A pane is
+//! about first); and running an option of one of mission control's menus
+//! the phone shows (`phone::mission`), which the server refuses for one
+//! the phone leaves out. A pane is
 //! taken only when the server's own `watch` lists it as a Claude tab. An
 //! image from the phone's photo library is kept on the computer first
 //! (`images`, for that tab alone, under a name made here), and the message
@@ -259,6 +261,8 @@ fn routes(app: Arc<App>) -> Router {
         .route("/api/tabs/{pane}/close", post(close))
         .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/tabs/{pane}/pin", post(pin))
+        .route("/api/views/{view}/item", post(view_item))
+        .route("/api/views/{view}/act", post(view_act))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(subscribe))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -868,6 +872,24 @@ async fn close(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Respons
         "phone".into(),
     ])
     .await
+}
+
+/// An option of mission control's menu for an item of a view, by the
+/// item's ID and the option's label: the server builds the menu again and
+/// runs it, refusing one the phone leaves out or no longer offered.
+async fn view_item(Path(view): Path<String>, axum::Json(body): axum::Json<Value>) -> Response {
+    ask(vec![
+        "phone-item".into(),
+        view,
+        text_of(&body, "id"),
+        text_of(&body, "label"),
+    ])
+    .await
+}
+
+/// An option of a view's own menu, by its label, as `view_item`.
+async fn view_act(Path(view): Path<String>, axum::Json(body): axum::Json<Value>) -> Response {
+    ask(vec!["phone-view".into(), view, text_of(&body, "label")]).await
 }
 
 /// A tab's reminder set for `when` (one of the box's times, or one

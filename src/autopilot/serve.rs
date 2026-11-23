@@ -40,8 +40,9 @@ use crate::cmd::work::main_clone;
 use crate::cmd::work_recent;
 use crate::cmd::worktree_from_note::{self, Item};
 use crate::diff::in_place::PARKED_PANE;
-use crate::mission::Mission;
 use crate::mission::ask::Ask;
+use crate::mission::choices::Do;
+use crate::mission::{Finish, Mission, Ran};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::TabState;
@@ -1278,24 +1279,17 @@ impl Server {
                 );
             }
             // A write to GitHub, asked first.
-            Act::Priority(text, to) => {
-                let Some((repo, number)) = super::issues::reference_in(&text) else {
+            act @ Act::Priority(..) => {
+                let Some(question) = crate::mission::choices::question(&Do::Autopilot(act.clone()))
+                else {
                     return;
-                };
-                let label = super::issues::priority_label(to);
-                let question = if to == super::issues::HIGHEST {
-                    format!(
-                        "Put {repo}#{number} first among autopilot's issues, labeling it \"{label}\" on GitHub?"
-                    )
-                } else {
-                    format!("Label {repo}#{number} \"{label}\" on GitHub?")
                 };
                 self.ask(
                     client,
                     crate::ui::Confirm::new(question),
                     move |server, client, yes| {
-                        if yes {
-                            server.autopilot_set_priority(client, text, repo, number, to);
+                        if yes && let Ok(ran) = server.autopilot_run(act) {
+                            server.mission_ran(client, "Labeling it", ran);
                         }
                     },
                 );
@@ -1317,35 +1311,42 @@ impl Server {
         }
     }
 
-    /// Issue `number` of `repo` given priority `to` on GitHub, off the
-    /// task, and the queue read again once it is: at the highest, its item
-    /// (`text`) put first among the issues, the mode's `next` holding it as
-    /// it holds a note's item put next, and at any other, taken out of it.
-    fn autopilot_set_priority(
-        &mut self,
-        client: ClientId,
-        text: String,
-        repo: crate::integrations::github::Repo,
-        number: u64,
-        to: u8,
-    ) {
-        let reference = format!("{repo}#{number}");
-        self.off_task(
-            client,
-            move || super::issues::wait_for(super::issues::set_priority(&repo, number, to)),
-            move |server, client, done| match done {
-                Ok(()) => {
-                    if to == super::issues::HIGHEST {
-                        let _ = server.autopilot_issues_queued(vec![text], &[]);
-                    } else {
-                        let _ = server
-                            .autopilot_issues_queued(Vec::new(), std::slice::from_ref(&reference));
-                    }
-                    server.mission_note(client, format!("{reference} is priority {to}"));
-                }
-                Err(e) => server.mission_note(client, format!("Couldn't label {reference}: {e}")),
-            },
-        );
+    /// What of autopilot's menus runs with no client (`Server::mission_run`):
+    /// an item skipped or taken again, and an issue given priority `to` on
+    /// GitHub, off the task, the queue read again once it is (at the
+    /// highest, its item put first among the issues, the mode's `next`
+    /// holding it as it holds a note's item put next, and at any other,
+    /// taken out of it). Its question is asked before this. Any other act
+    /// is handed back.
+    pub(crate) fn autopilot_run(&mut self, act: Act) -> Result<Ran, Act> {
+        match act {
+            Act::Skip(_) | Act::Unskip(_) => Ok(Ran::Said(self.autopilot_apply(act))),
+            Act::Priority(text, to) => {
+                let Some((repo, number)) = super::issues::reference_in(&text) else {
+                    return Ok(Ran::Said("It names no issue.".into()));
+                };
+                let reference = format!("{repo}#{number}");
+                Ok(Ran::OffTask(Box::new(move || {
+                    let done =
+                        super::issues::wait_for(super::issues::set_priority(&repo, number, to));
+                    Box::new(move |server: &mut Server| match done {
+                        Ok(()) => {
+                            if to == super::issues::HIGHEST {
+                                let _ = server.autopilot_issues_queued(vec![text], &[]);
+                            } else {
+                                let _ = server.autopilot_issues_queued(
+                                    Vec::new(),
+                                    std::slice::from_ref(&reference),
+                                );
+                            }
+                            format!("{reference} is priority {to}")
+                        }
+                        Err(e) => format!("Couldn't label {reference}: {e}"),
+                    }) as Finish
+                })))
+            }
+            act => Err(act),
+        }
     }
 
     /// Issues whose priority labels GitHub now has, taken into the queue
@@ -1414,16 +1415,21 @@ impl Server {
 
     /// What an option of its menu changes in the mode, done and said.
     fn autopilot_change(&mut self, client: ClientId, act: Act) {
+        let said = self.autopilot_apply(act);
+        self.mission_note(client, said);
+    }
+
+    /// What an option of its menu changes in the mode, done: what it says
+    /// of it, empty for nothing.
+    fn autopilot_apply(&mut self, act: Act) -> String {
         let mut said = None;
         match Mode::update(&paths::state_dir(), |m| said = line::apply(&act, m)) {
             Ok(_) => {
                 self.autopilot.pilot.reset();
                 self.autopilot_tick();
-                if let Some(said) = said {
-                    self.mission_note(client, said);
-                }
+                said.unwrap_or_default()
             }
-            Err(e) => self.mission_note(client, format!("Couldn't save it: {e}")),
+            Err(e) => format!("Couldn't save it: {e}"),
         }
     }
 

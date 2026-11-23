@@ -34,6 +34,9 @@ const state = {
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
   haptics: true, // whether the app buzzes (Settings' phone_haptics), from the stream
+  views: null, // mission control's views for the panel, from the stream; null while Settings' phone_views is off
+  panel: null, // { view }: the panel showing, on a view's items (its key) or the list (null)
+  refreshed: {}, // when PRs and CI were last asked again from the panel, by view
 };
 
 function el(tag, attrs, ...kids) {
@@ -219,8 +222,8 @@ async function pair() {
   setTimeout(look, 1500);
 }
 
-function toast(text, failed) {
-  const t = el("div", { class: "toast" }, failed ? el("span", { class: "bad" }, "✕") : el("span", { class: "ok" }, "✓"), text);
+function toast(text, failed, hint) {
+  const t = el("div", { class: "toast" + (hint ? " hint" : "") }, hint ? null : failed ? el("span", { class: "bad" }, "✕") : el("span", { class: "ok" }, "✓"), text);
   document.body.append(t);
   setTimeout(() => leave(t), 3000);
 }
@@ -614,10 +617,15 @@ function menuChoices(tab) {
   return choices;
 }
 
-// The kit's box under the row, or, from a channel's ⋯, under its header.
+// The kit's box under the row, or, from a channel's ⋯, under its header,
+// where Mission control leads it (board 187), set off by a rule, while the
+// panel is on.
 function showMenu(tab) {
   const n = number(tab);
   const options = menuChoices(tab).map(([words, tone, act]) => el("button", { class: "menu-option" + tone, role: "menuitem", onclick: act }, words));
+  if (state.open && state.views) {
+    options.unshift(el("button", { class: "menu-option mc", role: "menuitem", onclick: () => openPanel() }, el("span", {}, "Mission control"), el("span", { class: "go" }, "›")));
+  }
   if (!options.length) return closeMenu();
   const box = el("div", { class: "box", role: "menu", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, boxHead("Tab " + tab.index + " · " + (tab.name || "")), options);
   layer(box);
@@ -631,8 +639,9 @@ function showMenu(tab) {
   if (options[0].focus) options[0].focus();
 }
 
-// The question Close tab asks first, as every yes/no question asks: [Y/n]
-// after it, Close (the yes) first and lit; only Close closes the tab.
+// The question Close tab asks first, as every yes/no question asks (board
+// 186): [Y/n] after it, No at the left and Close (the yes) lit at the right;
+// only Close closes the tab.
 function ask(n) {
   const tab = state.tabs.find((t) => number(t) === n);
   if (!tab) return closeMenu();
@@ -644,7 +653,7 @@ function ask(n) {
     boxHead("Close tab"),
     el("div", { class: "question" }, el("b", {}, "Close tab " + tab.index + " " + (tab.name || "") + "? "), el("span", { class: "dim" }, "[Y/n]")),
     el("div", { class: "dim" }, "Its Claude and its panes end."),
-    el("div", { class: "answers" }, yes, el("button", { class: "option", onclick: () => closeMenu() }, "No")),
+    el("div", { class: "answers" }, el("button", { class: "option", onclick: () => closeMenu() }, "No"), yes),
   );
   layer(box);
   if (yes.focus) yes.focus();
@@ -1516,7 +1525,7 @@ function channelHead(tab) {
     follow(el("span", { class: "mark " + kind }, m), "head-mark:" + number(tab), tab.needs),
     title(tab),
     follow(el("span", { class: "chip " + chip[1] }, chip[0]), "head-chip:" + number(tab)),
-    menuChoices(tab).length ? el("button", { class: "icon tab-menu", "aria-label": "Tab " + tab.index + "'s menu", "aria-haspopup": "menu", onclick: () => openMenu(number(tab)) }, "⋯") : null,
+    menuChoices(tab).length || state.views ? el("button", { class: "icon tab-menu", "aria-label": "Tab " + tab.index + "'s menu", "aria-haspopup": "menu", onclick: () => openMenu(number(tab)) }, "⋯") : null,
   );
 }
 
@@ -1724,6 +1733,417 @@ function render(stick) {
   else drawer();
 }
 
+// ── Mission control's panel (boards 185 to 187) ──
+// A panel swiped in from the right edge, on a channel or the drawer, or
+// opened from a channel's ⋯: mission control's Landing, Autopilot, PRs, CI
+// and Notifications views as the computer sends them (src/phone/mission.rs),
+// each a 56 row with what needs you counted; a tap on one slides its items
+// in under mission control's groups, and a tap on an item opens its menu,
+// the options the phone can do: going to a tab opens its channel, opening
+// or copying a link happens here, and the rest runs on the computer, asked
+// first where the option says so. A swipe right, or a tap on the dimmed
+// strip at its left, puts it away. Off with Settings' phone_views, the
+// stream carries no views and none of it shows.
+
+const EDGE = 24; // px from the right edge a swipe starts the panel from
+const REFRESH_MS = 60000; // the least time between asking PRs or CI again
+const HINT = "mc-hint-shown"; // the toast was shown, kept on this phone
+let panelLayer = null; // { layer, panel, list, strip }: the panel while it shows
+let edge = null; // { x, y, dx, at, speed, decided, opening }: an edge swipe under way
+
+// Whether the toast was shown, kept on this phone alone; a page without
+// storage shows it each time.
+function hinted(set) {
+  try {
+    if (set) localStorage.setItem(HINT, "1");
+    return !!localStorage.getItem(HINT);
+  } catch (_) {
+    return false;
+  }
+}
+
+const viewOf = (key) => (state.views || []).find((v) => v.key === key);
+
+function closePanel() {
+  state.panel = null;
+  if (!panelLayer) return;
+  const { layer, panel } = panelLayer;
+  panelLayer = null;
+  slidePanel(layer, panel, false, () => layer.remove());
+}
+
+// The panel slides in or out as swipeable slides a channel: over --slide, or,
+// with Reduce Motion, fading.
+function slidePanel(layer, panel, opens, then) {
+  const lasts = still() ? ms("--quick") : ms("--slide");
+  const strip = layer.querySelector(".panel-strip");
+  if (still()) {
+    // Where a swipe left it, it comes to rest at once and only fades.
+    panel.style.transform = "";
+    if (strip) strip.style.opacity = "";
+    layer.style.transition = "opacity " + lasts + "ms " + EASE;
+    layer.style.opacity = opens ? "1" : "0";
+  } else {
+    panel.style.transition = "transform " + lasts + "ms " + EASE;
+    panel.style.transform = opens ? "" : "translateX(100%)";
+    if (strip) {
+      strip.style.transition = "opacity " + lasts + "ms " + EASE;
+      strip.style.opacity = opens ? "1" : "0";
+    }
+  }
+  setTimeout(() => {
+    panel.style.transition = "";
+    if (strip) strip.style.transition = "";
+    if (then) then();
+  }, lasts);
+}
+
+function panelLayerNode() {
+  const strip = el("div", { class: "panel-strip", onclick: () => closePanel() });
+  const panel = el("div", { class: "panel", role: "dialog", "aria-label": "Mission control" });
+  const layer = el("div", { class: "panel-layer" }, strip, panel);
+  panelSwipe(panel);
+  return { layer, panel, strip };
+}
+
+// Opened from ⋯ or a swipe that went far enough: slid in from where it is.
+function openPanel(from) {
+  if (!state.views) return;
+  hinted(true);
+  if (state.menu) closeMenu();
+  state.panel = { view: null };
+  if (!panelLayer) {
+    panelLayer = from || panelLayerNode();
+    if (!from) {
+      panelLayer.panel.style.transform = still() ? "" : "translateX(100%)";
+      if (still()) panelLayer.layer.style.opacity = "0";
+      panelLayer.strip.style.opacity = still() ? "" : "0";
+      document.body.append(panelLayer.layer);
+      // Laid out at its start before it slides.
+      void panelLayer.panel.offsetWidth;
+    }
+  }
+  drawPanel();
+  slidePanel(panelLayer.layer, panelLayer.panel, true);
+}
+
+function drawPanel() {
+  if (!panelLayer || !state.panel) return;
+  const view = state.panel.view && viewOf(state.panel.view);
+  if (state.panel.view && !view) state.panel.view = null;
+  const old = panelLayer.panel.querySelector(".panel-list");
+  const kept = old && old.viewKey === (state.panel.view || "") ? old.scrollTop : 0;
+  const head = view ? viewHead(view) : el(
+    "div",
+    { class: "head" },
+    el("button", { class: "icon", "aria-label": "Close mission control", onclick: () => closePanel() }, "›"),
+    el("span", { class: "title" }, "Mission control"),
+  );
+  const list = view ? viewItems(view) : viewList();
+  list.viewKey = state.panel.view || "";
+  panelLayer.panel.replaceChildren(head, list);
+  list.scrollTop = kept;
+}
+
+function viewHead(view) {
+  return el(
+    "div",
+    { class: "head" },
+    el("button", { class: "icon", "aria-label": "Back to the views", onclick: () => { state.panel.view = null; drawPanel(); } }, "‹"),
+    el("span", { class: "title" }, view.title),
+    view.acts && view.acts.length
+      ? el("button", { class: "icon tab-menu", "aria-label": view.title + "'s menu", "aria-haspopup": "menu", onclick: () => viewMenu(view.key) }, "⋯")
+      : null,
+  );
+}
+
+// The views, each a row: its name, a line of what it holds, and what needs
+// you counted at the right with the first one's mark and tone, no count
+// when nothing does.
+function viewList() {
+  const list = el("div", { class: "panel-list drawer" + (state.live ? "" : " off") });
+  if (!state.views.length) list.append(el("div", { class: "empty" }, "No view of mission control's shows now."));
+  for (const v of state.views) {
+    list.append(
+      el(
+        "button",
+        { class: "row view-row", "data-view": v.key, onclick: () => openView(v.key) },
+        el("span", { class: "mark " + (v.tone || "idle") }, v.mark || "○"),
+        el("span", { class: "name" }, v.title),
+        v.needs ? el("span", { class: "count " + (v.tone || "") }, v.needs) : el("span", {}),
+        el("span", { class: "sub" }, v.line),
+      ),
+    );
+  }
+  return list;
+}
+
+function openView(key) {
+  state.panel.view = key;
+  drawPanel();
+  // PRs and CI read again as they open, at most once a minute, so they are
+  // current while the computer's lookups pause with you away.
+  const v = viewOf(key);
+  const again = v && (v.acts || []).find((a) => /^Read .* again now$/.test(a.label) && !a.ask);
+  const last = state.refreshed[key] || 0;
+  if (again && Date.now() - last > REFRESH_MS) {
+    state.refreshed[key] = Date.now();
+    api("/api/views/" + encodeURIComponent(key) + "/act", { label: again.label }).catch(() => {});
+  }
+}
+
+const TONE_OF_GROUP = (items) => (items[0] && items[0].tone) || "idle";
+
+// A view's items under its groups, in its order and tones, or its own words
+// for having none, needing setting up, or its last look failing.
+function viewItems(view) {
+  const list = el("div", { class: "panel-list drawer" + (state.live ? "" : " off") });
+  const items = view.groups.reduce((n, g) => n + g.items.length, 0);
+  if (view.setup) list.append(el("div", { class: "empty" }, view.setup));
+  else if (!items) list.append(el("div", { class: "empty" }, view.loaded === false ? "Loading…" : view.empty || "Nothing here."));
+  if (view.error) list.append(el("div", { class: "empty refused" }, view.error));
+  if (view.setup) return list;
+  for (const g of view.groups) {
+    const group = el("div", { class: "group" });
+    if (g.title) group.append(el("div", { class: "label " + TONE_OF_GROUP(g.items) }, el("span", {}, g.title), el("span", {}, g.items.length)));
+    for (const item of g.items) {
+      group.append(
+        el(
+          "button",
+          { class: "row item-row", "data-item": item.id, "aria-haspopup": "menu", onclick: () => itemMenu(view.key, item.id) },
+          el("span", { class: "mark " + item.tone }, item.mark),
+          el("span", { class: "name" }, item.title),
+          el("span", { class: "when " + (item.tone === "idle" ? "" : item.tone) }, item.time ? ago(item.time).replace(" ago", "") : ""),
+          item.detail ? el("span", { class: "sub" }, item.detail) : null,
+        ),
+      );
+    }
+    list.append(group);
+  }
+  return list;
+}
+
+const itemOf = (view, id) => {
+  for (const g of (view && view.groups) || []) {
+    const found = g.items.find((i) => i.id === id);
+    if (found) return found;
+  }
+  return null;
+};
+
+// What a menu offered, so one opened before the computer changed it is
+// closed rather than acted on.
+const optionsKey = (options) => JSON.stringify(options || []);
+
+function itemMenu(key, id) {
+  const item = itemOf(viewOf(key), id);
+  if (!item) return;
+  if (!item.options.length) return toast("Nothing to do with it from the phone.");
+  state.menu = { panel: true, view: key, id, key: optionsKey(item.options), asking: false };
+  document.addEventListener("keydown", menuKeys);
+  showOptions(item.title, item.options, (o) => runOption(key, id, o));
+}
+
+function viewMenu(key) {
+  const view = viewOf(key);
+  if (!view || !view.acts.length) return;
+  state.menu = { panel: true, view: key, id: null, key: optionsKey(view.acts), asking: false };
+  document.addEventListener("keydown", menuKeys);
+  showOptions(view.title, view.acts, (o) => runOption(key, null, o));
+}
+
+function showOptions(title, options, pick) {
+  const buttons = options.map((o) => el("button", { class: "menu-option" + (/^Take it out|^Close/.test(o.label) ? " r" : ""), role: "menuitem", onclick: () => pick(o) }, o.shown || o.label));
+  const box = el("div", { class: "box options", role: "menu", "aria-label": title }, boxHead(title), buttons);
+  layer(box);
+  if (buttons[0] && buttons[0].focus) buttons[0].focus();
+}
+
+// What the phone does itself told to the computer, which puts a
+// notification away after it and records what it led to, as mission
+// control does after any pick; nothing is said of it.
+function told(key, id, o) {
+  if (id === null) return;
+  api("/api/views/" + encodeURIComponent(key) + "/item", { id, label: o.label }).catch(() => {});
+}
+
+function runOption(key, id, o) {
+  if (o.go || o.open || o.copy) told(key, id, o);
+  if (o.go) {
+    closeMenu();
+    closePanel();
+    const n = String(o.go).replace(/^%/, "");
+    if (state.tabs.some((t) => number(t) === n)) openTab(n);
+    else toast("That tab isn't running Claude.", true);
+    return;
+  }
+  if (o.open) {
+    closeMenu();
+    window.open(o.open, "_blank", "noopener");
+    return;
+  }
+  if (o.copy) {
+    closeMenu();
+    copy(o.copy);
+    return;
+  }
+  if (o.ask) return askFirst(key, id, o);
+  send(key, id, o);
+}
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied " + text);
+  } catch (_) {
+    toast("Couldn't copy it.", true);
+  }
+}
+
+// The kit's question (board 186): [Y/n], No at the left and Yes lit at the
+// right, Yes the default.
+function askFirst(key, id, o) {
+  state.menu.asking = true;
+  const title = (o.shown || o.label).replace(/…$/, "");
+  const yes = el("button", { class: "option lit", onclick: () => send(key, id, o) }, "Yes");
+  const box = el(
+    "div",
+    { class: "box ask", role: "alertdialog", "aria-label": title },
+    boxHead(title),
+    el("div", { class: "question" }, el("b", {}, o.ask + " "), el("span", { class: "dim" }, "[Y/n]")),
+    el("div", { class: "answers" }, el("button", { class: "option", onclick: () => closeMenu() }, "No"), yes),
+  );
+  layer(box);
+  if (yes.focus) yes.focus();
+}
+
+async function send(key, id, o) {
+  closeMenu();
+  const path = "/api/views/" + encodeURIComponent(key) + (id === null ? "/act" : "/item");
+  const body = id === null ? { label: o.label } : { id, label: o.label };
+  try {
+    const r = await api(path, body);
+    buzz();
+    toast(r.said || "Done.");
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
+// A menu the computer has changed under: its item gone or its options not
+// what they were, said and closed.
+function staleMenu() {
+  const m = state.menu;
+  if (!m || !m.panel) return;
+  const view = viewOf(m.view);
+  const options = !view ? null : m.id === null ? view.acts : (itemOf(view, m.id) || {}).options;
+  if (!options || optionsKey(options) !== m.key) {
+    closeMenu();
+    toast("That has changed since the menu opened.", true);
+  }
+}
+
+// A swipe right on the panel follows the finger and, let go past a third of
+// its width or flicked, puts it away; a swipe left from the right edge, on a
+// channel or the drawer, brings it in under the finger.
+function panelSwipe(panel) {
+  let s = null;
+  panel.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) return (s = null);
+    const t = e.touches[0];
+    s = { x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, decided: false };
+  }, { passive: true });
+  panel.addEventListener("touchmove", (e) => {
+    if (!s || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (!s.decided) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_DECIDES) return;
+      if (dx <= Math.abs(dy)) return (s = null);
+      s.decided = true;
+    }
+    e.preventDefault();
+    const elapsed = e.timeStamp - s.at;
+    if (elapsed > 0) s.speed = (dx - s.dx) / elapsed;
+    s.at = e.timeStamp;
+    s.dx = Math.max(0, dx);
+    panel.style.transform = "translateX(" + s.dx + "px)";
+  }, { passive: false });
+  const end = (e) => {
+    const done = s;
+    s = null;
+    if (!done || !done.decided || !panelLayer) return;
+    const away = e.type === "touchend" && (done.dx > panel.offsetWidth / 3 || (done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
+    if (away) closePanel();
+    else slidePanel(panelLayer.layer, panel, true);
+  };
+  panel.addEventListener("touchend", end);
+  panel.addEventListener("touchcancel", end);
+}
+
+let edgeFollowed = false;
+function edgeSwipe() {
+  if (edgeFollowed) return;
+  edgeFollowed = true;
+  document.addEventListener("touchstart", (e) => {
+    edge = null;
+    if (!state.views || panelLayer || state.menu || state.full || e.touches.length !== 1) return;
+    if (e.target && e.target.closest && e.target.closest("textarea, .tray, .full")) return;
+    const t = e.touches[0];
+    if (t.clientX < window.innerWidth - EDGE) return;
+    edge = { x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, decided: false, opening: null };
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!edge || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - edge.x;
+    const dy = t.clientY - edge.y;
+    if (!edge.decided) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_DECIDES) return;
+      if (-dx <= Math.abs(dy)) return (edge = null);
+      edge.decided = true;
+      edge.opening = panelLayerNode();
+      edge.opening.panel.style.transform = "translateX(100%)";
+      edge.opening.strip.style.opacity = "0";
+      state.panel = { view: null };
+      panelLayer = edge.opening;
+      drawPanel();
+      document.body.append(edge.opening.layer);
+    }
+    e.preventDefault();
+    const elapsed = e.timeStamp - edge.at;
+    if (elapsed > 0) edge.speed = (dx - edge.dx) / elapsed;
+    edge.at = e.timeStamp;
+    edge.dx = Math.min(0, dx);
+    const width = edge.opening.panel.offsetWidth || window.innerWidth;
+    edge.opening.panel.style.transform = "translateX(" + Math.max(0, width + edge.dx) + "px)";
+    edge.opening.strip.style.opacity = String(Math.min(1, -edge.dx / width));
+  }, { passive: false });
+  const end = (e) => {
+    const done = edge;
+    edge = null;
+    if (!done || !done.decided) return;
+    const width = done.opening.panel.offsetWidth || window.innerWidth;
+    const opens = e.type === "touchend" && (-done.dx > width / 3 || (-done.speed > SWIPE_FLICK && e.timeStamp - done.at < SWIPE_FLICK_MS));
+    if (opens) {
+      buzz();
+      openPanel(done.opening);
+    } else {
+      closePanel();
+    }
+  };
+  document.addEventListener("touchend", end);
+  document.addEventListener("touchcancel", end);
+}
+
+// The first time the app opens with the panel never opened, once.
+function hintPanel() {
+  if (!state.views || hinted()) return;
+  hinted(true);
+  toast("← Swipe from the right for mission control", false, true);
+}
+
 // ── The stream and Web Push ──
 
 let source = null;
@@ -1756,8 +2176,12 @@ function listen() {
     state.haptics = data.haptics !== false;
     state.reminders = data.reminders !== false;
     state.remindTimes = data.remind_times || state.remindTimes;
-    if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
+    state.views = data.views || null;
+    if (state.menu && state.menu.panel) staleMenu();
+    else if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
+    if (!state.views) closePanel();
     render();
+    drawPanel();
     if (turned) loadTurns();
     tabsRead();
   };
@@ -1784,6 +2208,7 @@ async function reconnect(posted) {
   try {
     const r = await api("/api/tabs");
     state.tabs = r.tabs || [];
+    state.views = r.views || null;
     state.live = !!r.live;
     if (state.live) state.lastHeard = Date.now();
     render();
@@ -1953,11 +2378,14 @@ async function start() {
   state.live = !!(r && r.live);
   state.close = !r || r.close !== false;
   state.haptics = !r || r.haptics !== false;
+  state.views = (r && r.views) || null;
   state.lastHeard = Date.now();
   const wanted = decodeURIComponent(location.hash.slice(1));
   if (wanted && state.tabs.some((t) => number(t) === wanted)) openTab(wanted);
   else render();
   listen();
+  edgeSwipe();
+  hintPanel();
   offerPush().catch(() => {});
   // Then a tapped push's tab, since a window opened for one may start at "/",
   // once the tabs are read.

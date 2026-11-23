@@ -268,7 +268,7 @@ const ANSWER_PREFIX_W: usize = 8;
 
 /// The notification a menu is for: its source, its item under its own id,
 /// and whether to put it away after what is picked.
-type Notice = Option<(String, Item, bool)>;
+pub(crate) type Notice = Option<(String, Item, bool)>;
 
 /// Where a tab's menu is opened from: mission control's leads with going
 /// there; the sidebar's with peeking, chosen as it opens from m, Space or a
@@ -302,6 +302,26 @@ fn notice_for(item: &Item, dismiss: bool) -> Notice {
     Some((source, own, dismiss))
 }
 
+/// How a notification is put away after what was picked from its menu
+/// (`Server::pick_before`, `pick_after`): `dismissed` when the pick put it
+/// away itself, `leaves_it` when the pick leaves it where it is.
+pub(crate) struct PickAfter {
+    dismissed: bool,
+    leaves_it: bool,
+}
+
+/// What a menu's option run with no client gives (`Server::mission_run`):
+/// its words at once, work off the task whose words come once it ends,
+/// or work off the task (`OffTask`) finished on the server, which says.
+pub(crate) enum Ran {
+    Said(String),
+    Later(std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>),
+    OffTask(Box<dyn FnOnce() -> Finish + Send>),
+}
+
+/// The server's part of an `OffTask`, once its work is done: what it says.
+pub(crate) type Finish = Box<dyn FnOnce(&mut Server) -> String + Send>;
+
 /// Whether a row of the Notifications view's history is a notification,
 /// not a day's heading or a fold.
 fn is_a_notice(item: &Item) -> bool {
@@ -315,6 +335,18 @@ pub(crate) struct NoticeLook {
     kind: usize,
     unfolded: std::collections::HashSet<String>,
     screenful: usize,
+}
+
+impl NoticeLook {
+    /// Every kind, no day unfolded, and `screenful` rows before a day
+    /// folds: how a client with no keycaps of its own (the phone) looks.
+    pub(crate) fn every(screenful: usize) -> NoticeLook {
+        NoticeLook {
+            kind: 0,
+            unfolded: Default::default(),
+            screenful,
+        }
+    }
 }
 
 /// What mission control opens on.
@@ -1602,11 +1634,7 @@ impl Server {
     pub(crate) fn mission_view_list(
         &mut self,
     ) -> Vec<(views::Group, String, Option<String>, usize)> {
-        let look = NoticeLook {
-            kind: 0,
-            unfolded: Default::default(),
-            screenful: usize::MAX,
-        };
+        let look = NoticeLook::every(usize::MAX);
         let all = self.mission_views(false, false, false, &look);
         views::groups(&all)
             .into_iter()
@@ -1621,12 +1649,23 @@ impl Server {
             .collect()
     }
 
+    /// What needs you in a view: its items, headings left out, whose state
+    /// is `Attention`, in its order. The phone's list of views counts them
+    /// and marks a view as the first of them.
+    pub(crate) fn needing_you(view: &View) -> Vec<&Item> {
+        view.data
+            .items
+            .iter()
+            .filter(|i| !views::is_header(i) && i.state == crate::items::State::Attention)
+            .collect()
+    }
+
     /// Every view after the tabs, each only while its setting is on (the
     /// Work map for M-j's picker and Reopen for M-o's whatever their
     /// settings), Landing
     /// only while something lands or `keep_landing` (the client has it in
     /// front), Autopilot only while it is on or `keep_autopilot`.
-    fn mission_views(
+    pub(crate) fn mission_views(
         &mut self,
         picker: bool,
         keep_landing: bool,
@@ -3885,7 +3924,7 @@ impl Server {
 
     /// What an item's menu offers, with what the menus need to know of the
     /// tabs, the repositories and the suggestions.
-    fn item_choices(&self, view: &ViewId, item: &Item, shown: &[Item]) -> Vec<Choice> {
+    pub(crate) fn item_choices(&self, view: &ViewId, item: &Item, shown: &[Item]) -> Vec<Choice> {
         let repos_of = |p: &Path| {
             crate::sources::repo::remotes_of(p)
                 .all()
@@ -4223,9 +4262,10 @@ impl Server {
         use super::view_acts::Whole;
         match act {
             Whole::Do(act) => self.mission_do(client, act, label),
-            Whole::Refresh(view) => {
-                self.refresh_sources(Some(view));
-                self.mission_note(client, "Asked again.");
+            act @ Whole::Refresh(_) => {
+                if let Ok(ran) = self.whole_run(act) {
+                    self.mission_ran(client, label, ran);
+                }
             }
             Whole::CheckSlack { down: true } => {
                 self.mission_note(client, "Asking Claude Code about Slack…");
@@ -4256,40 +4296,57 @@ impl Server {
     /// The failed jobs of each failing default branch's run started again
     /// on GitHub, asked first, since it starts CI there.
     fn rerun_main(&mut self, client: ClientId, runs: Vec<(String, String)>) {
-        let n = runs.len();
-        let question = format!(
-            "Run the failed jobs of {n} default branch run{} again on GitHub?",
-            if n == 1 { "" } else { "s" }
-        );
         let shown = runs
             .iter()
             .map(|(repo, run)| format!("{repo} run {run}"))
             .collect();
+        let act = super::view_acts::Whole::RerunMain(runs);
+        let Some(question) = super::view_acts::question(&act) else {
+            return;
+        };
         self.ask(
             client,
             Confirm::new(question).list(shown),
             move |server, client, yes| {
-                if !yes {
-                    return;
+                if yes && let Ok(ran) = server.whole_run(act) {
+                    server.mission_ran(client, "Starting the failed jobs again", ran);
                 }
-                server.mission_busy(client, "Starting the failed jobs again", None, async move {
-                    use crate::integrations::github;
-                    let mut failed = Vec::new();
-                    for (repo, run) in &runs {
-                        let path = format!("repos/{repo}/actions/runs/{run}/rerun-failed-jobs");
-                        if let Err(e) = github::rest("POST", &path, None, "mission: CI view").await
-                        {
-                            failed.push(format!("{repo} run {run}: {e}"));
-                        }
-                    }
-                    Some(if failed.is_empty() {
-                        "Started the failed jobs again.".to_string()
-                    } else {
-                        format!("Couldn't start them all again: {}", failed.join("; "))
-                    })
-                });
             },
         );
+    }
+
+    /// What of a view's own menu runs with no client, as `mission_run`
+    /// does an item's: a lookup asked again, main's failed jobs started
+    /// again (asked before this), and what an item's menu could do too.
+    /// Any other act is handed back.
+    pub(crate) fn whole_run(
+        &mut self,
+        act: super::view_acts::Whole,
+    ) -> Result<Ran, super::view_acts::Whole> {
+        use super::view_acts::Whole;
+        match act {
+            Whole::Do(act) => self.mission_run(act).map_err(Whole::Do),
+            Whole::Refresh(view) => {
+                self.refresh_sources(Some(view));
+                Ok(Ran::Said("Asked again.".into()))
+            }
+            Whole::RerunMain(runs) => Ok(Ran::Later(Box::pin(async move {
+                use crate::integrations::github;
+                let mut failed = Vec::new();
+                for (repo, run) in &runs {
+                    let path = format!("repos/{repo}/actions/runs/{run}/rerun-failed-jobs");
+                    if let Err(e) = github::rest("POST", &path, None, "mission: CI view").await {
+                        failed.push(format!("{repo} run {run}: {e}"));
+                    }
+                }
+                Some(if failed.is_empty() {
+                    "Started the failed jobs again.".to_string()
+                } else {
+                    format!("Couldn't start them all again: {}", failed.join("; "))
+                })
+            }))),
+            act => Err(act),
+        }
     }
 
     /// The notifications the sidebar shows, each under the id the
@@ -4472,6 +4529,32 @@ impl Server {
         }
     }
 
+    /// A Notifications view row's menu and the notification it puts away,
+    /// as mission control opens it, for a menu opened with no client (the
+    /// phone): with the history on, a notification's row through
+    /// `notice_menu_choices` and `kept_notice`, none for a fold or a row
+    /// whose service is off; else the notification's own menu, put away
+    /// after what is picked.
+    pub(crate) fn notice_row_menu(&self, item: &Item) -> Option<(Vec<Choice>, Notice)> {
+        if !Self::notice_history_on() {
+            let list = self.item_choices(&ViewId::Notifications, item, &[]);
+            return Some((list, notice_for(item, true)));
+        }
+        if !is_a_notice(item) {
+            return None;
+        }
+        let (source, _) = choices::notice_of(item);
+        let service = match source.as_str() {
+            "prs" | "ci" => Some("github"),
+            "inbox" => Some("linear"),
+            _ => None,
+        };
+        if service.is_some_and(|key| !settings::is_on(key)) {
+            return None;
+        }
+        Some((self.notice_menu_choices(item), kept_notice(item)))
+    }
+
     /// A kept notification's menu: its menu as the sidebar's has it, but
     /// one the sidebar no longer shows is neither put away nor offered to
     /// be.
@@ -4580,41 +4663,68 @@ impl Server {
     /// says so, unless the choice put it away itself.
     fn mission_pick(&mut self, client: ClientId, c: Choice, seen: Option<Item>, notice: Notice) {
         let label = c.label.clone();
-        let dismissed = choices::puts_away(&c.act);
+        let after = self.pick_before(&c.act, &label, seen.as_ref(), &notice);
+        self.mission_do(client, c.act, &label);
+        self.pick_after(notice, after);
+    }
+
+    /// What picking `act` from an item's menu records before it is done,
+    /// wherever it was picked (mission control, the phone): `seen` a Slack
+    /// message seen, and what it led to on `notice`'s notification; and
+    /// how that notification is put away after it (`pick_after`).
+    pub(crate) fn pick_before(
+        &mut self,
+        act: &Do,
+        label: &str,
+        seen: Option<&Item>,
+        notice: &Notice,
+    ) -> PickAfter {
+        let c = act;
+        let dismissed = choices::puts_away(c);
         // Playing its picture or video leaves it unseen and its notification
         // in place, as `p` did, so the list keeps its order and its next is
         // played from the same row.
-        let playing = matches!(c.act, Do::SlackPlay(_));
+        let playing = matches!(c, Do::SlackPlay(_));
         // The restart may yet refuse or fail its build, so the notification
         // that main is ahead stays until a build at or past main takes over.
-        let restarting = matches!(c.act, Do::Restart);
+        let restarting = matches!(c, Do::Restart);
         // Shown in the Slack view or the Inbox, an item stays listed there,
         // since dismissing either takes it out of the view it is being shown
         // in: a Slack message seen puts its notification away, an Inbox one
         // stays until it is dismissed from the view.
         let kept_in_its_view = matches!(
-            c.act,
+            c,
             Do::ShowIn {
                 view: ViewId::Slack | ViewId::Inbox,
                 ..
             }
         );
-        if let Some(item) = seen.as_ref().filter(|_| !playing) {
+        if let Some(item) = seen.filter(|_| !playing) {
             self.slack_item_acted(item);
         }
-        if let Some((source, item, _)) = &notice {
-            self.notice_led_to_by(source, item, &c.act, &label);
+        if let Some((source, item, _)) = notice {
+            self.notice_led_to_by(source, item, c, label);
         }
-        self.mission_do(client, c.act, &label);
+        PickAfter {
+            dismissed,
+            leaves_it: playing || restarting || kept_in_its_view,
+        }
+    }
+
+    /// The notification a pick was made from put away after it, as
+    /// `pick_before` worked out.
+    pub(crate) fn pick_after(&mut self, notice: Notice, after: PickAfter) {
+        let PickAfter {
+            dismissed,
+            leaves_it,
+        } = after;
         match notice {
             // Put away by the choice itself, it was dismissed, whatever
             // seeing it and its list changing made of it on the way.
             Some((source, item, _)) if dismissed => {
                 self.notice_history_mark(&source, &item.id, Sidebar::Dismissed, true);
             }
-            Some((source, item, true)) if !playing && !restarting && !kept_in_its_view => {
-                self.notice_dismiss(&source, &item)
-            }
+            Some((source, item, true)) if !leaves_it => self.notice_dismiss(&source, &item),
             // A suggestion's choice says what becomes of it, which puts it
             // out of the sidebar as you dismissing it.
             Some((source, item, false)) if source == "habits" => {
@@ -4844,109 +4954,25 @@ impl Server {
                 self.mission_go(client, tab);
                 self.open_palette(client);
             }
-            Do::Land { root, way } => {
-                let Ok(exe) = crate::util::exe() else {
+            act @ (Do::Land { .. } | Do::PrMove { .. }) => {
+                if let Ok(ran) = self.mission_run(act) {
+                    self.mission_ran(client, label, ran);
+                }
+            }
+            act @ (Do::PrLeave { .. } | Do::LeaveQueue(_)) => {
+                let Some(question) = choices::question(&act) else {
                     return;
                 };
-                self.mission_busy(client, label, None, async move {
-                    let out = tokio::task::spawn_blocking(move || {
-                        util::output_of(
-                            std::process::Command::new(exe)
-                                .args(["land-lock", "move"])
-                                .arg(&root)
-                                .arg(way)
-                                .current_dir(&root),
-                        )
-                    })
-                    .await;
-                    match out {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(e)) => Some(format!("Couldn't move it: {e}")),
-                        Err(e) => Some(format!("Couldn't move it: {e}")),
+                let mut confirm = Confirm::new(question);
+                if let Do::LeaveQueue(root) = &act {
+                    confirm = confirm.list(vec![paths::tilde(root)]);
+                }
+                let label = label.to_string();
+                self.ask(client, confirm, move |server, client, yes| {
+                    if yes && let Ok(ran) = server.mission_run(act) {
+                        server.mission_ran(client, &label, ran);
                     }
                 });
-            }
-            Do::PrMove {
-                common,
-                number,
-                way,
-            } => {
-                self.mission_busy(client, label, None, async move {
-                    let moved = tokio::task::spawn_blocking(move || {
-                        crate::merge_queue::change(&common, |q| {
-                            crate::merge_queue::move_pr(q, number, way)
-                        })
-                    })
-                    .await;
-                    match moved {
-                        Ok(Ok(true)) => None,
-                        Ok(Ok(false)) => {
-                            Some(format!("#{number} isn't waiting in the merge queue."))
-                        }
-                        Ok(Err(e)) => Some(format!("Couldn't move it: {e}")),
-                        Err(e) => Some(format!("Couldn't move it: {e}")),
-                    }
-                });
-            }
-            Do::PrLeave { common, number } => {
-                let label = label.to_string();
-                self.ask(
-                    client,
-                    Confirm::new(format!("Take #{number} out of the merge queue?")),
-                    move |server, client, yes| {
-                        if !yes {
-                            return;
-                        }
-                        server.mission_busy(client, &label, None, async move {
-                            let out = tokio::task::spawn_blocking(move || {
-                                crate::merge_queue::change(&common, |q| {
-                                    crate::merge_queue::dequeue_pr(q, number)
-                                })
-                            })
-                            .await;
-                            Some(match out {
-                                Ok(Ok(_)) => format!("Took #{number} out of the merge queue."),
-                                Ok(Err(e)) => format!("Couldn't take it out: {e}"),
-                                Err(e) => format!("Couldn't take it out: {e}"),
-                            })
-                        });
-                    },
-                );
-            }
-            Do::LeaveQueue(root) => {
-                let Ok(exe) = crate::util::exe() else {
-                    return;
-                };
-                let folder = root
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let label = label.to_string();
-                self.ask(
-                    client,
-                    Confirm::new("Take it out of the landing queue?")
-                        .list(vec![paths::tilde(&root)]),
-                    move |server, client, yes| {
-                        if !yes {
-                            return;
-                        }
-                        server.mission_busy(client, &label, None, async move {
-                            let out = tokio::task::spawn_blocking(move || {
-                                util::output_of(
-                                    std::process::Command::new(exe)
-                                        .args(["land-lock", "leave"])
-                                        .current_dir(&root),
-                                )
-                            })
-                            .await;
-                            Some(match out {
-                                Ok(Ok(_)) => format!("Took {folder} out of the landing queue."),
-                                Ok(Err(e)) => format!("Couldn't take it out: {e}"),
-                                Err(e) => format!("Couldn't take it out: {e}"),
-                            })
-                        });
-                    },
-                );
             }
             Do::CloseTab(tab) => {
                 let name = self
@@ -5263,9 +5289,10 @@ impl Server {
                     });
                 });
             }
-            Do::SlackDismiss(items) => {
-                self.slack_dismiss(&items);
-                self.mission_note(client, "Dismissed.");
+            act @ Do::SlackDismiss(_) => {
+                if let Ok(ran) = self.mission_run(act) {
+                    self.mission_ran(client, label, ran);
+                }
             }
             Do::Reopen(key) => match self.reopen_closed(client, &key) {
                 Ok((_, note)) => {
@@ -5359,24 +5386,10 @@ impl Server {
                 Ok(None) => {}
                 Err(e) => self.mission_note(client, e),
             },
-            Do::Dismiss { source, item } => {
-                self.notice_dismiss(&source, &item);
-                self.mission_note(client, "Dismissed.");
-            }
-            Do::DismissAll(notices) => {
-                for (source, item) in &notices {
-                    self.notice_dismiss(source, item);
+            act @ (Do::Dismiss { .. } | Do::DismissAll(_)) => {
+                if let Ok(ran) = self.mission_run(act) {
+                    self.mission_ran(client, label, ran);
                 }
-                // Dismissed in the history too, though one put away before
-                // it took it out of its list on the way (a Slack thread's
-                // older message), as `slack_dismiss` marks its own.
-                for (source, item) in &notices {
-                    self.notice_history_mark(source, &item.id, Sidebar::Dismissed, true);
-                }
-                self.mission_note(
-                    client,
-                    format!("Dismissed {} notifications.", notices.len()),
-                );
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
             Do::ReadLog { job, name, line } => self.read_ci_log(client, &job, &name, line),
@@ -5447,6 +5460,128 @@ impl Server {
                     self.mission_note(client, note);
                 }
             }
+        }
+    }
+
+    /// What an option of a menu does that needs no one's screen, run with
+    /// no client (`Ran`): mission control's menus and the phone's both run
+    /// these, each saying what it gives its own way (`mission_ran`, the
+    /// phone's toast). A question one asks first is asked before this, by
+    /// whoever runs it (`choices::question`). Any other act is handed back.
+    pub(crate) fn mission_run(&mut self, act: Do) -> Result<Ran, Do> {
+        Ok(match act {
+            Do::Land { root, way } => {
+                let Ok(exe) = crate::util::exe() else {
+                    return Ok(Ran::Said("Couldn't find Switchboard's binary.".into()));
+                };
+                Ran::Later(Box::pin(async move {
+                    let out = tokio::task::spawn_blocking(move || {
+                        util::output_of(
+                            std::process::Command::new(exe)
+                                .args(["land-lock", "move"])
+                                .arg(&root)
+                                .arg(way)
+                                .current_dir(&root),
+                        )
+                    })
+                    .await;
+                    match out {
+                        Ok(Ok(_)) => None,
+                        Ok(Err(e)) => Some(format!("Couldn't move it: {e}")),
+                        Err(e) => Some(format!("Couldn't move it: {e}")),
+                    }
+                }))
+            }
+            Do::PrMove {
+                common,
+                number,
+                way,
+            } => Ran::Later(Box::pin(async move {
+                let moved = tokio::task::spawn_blocking(move || {
+                    crate::merge_queue::change(&common, |q| {
+                        crate::merge_queue::move_pr(q, number, way)
+                    })
+                })
+                .await;
+                match moved {
+                    Ok(Ok(true)) => None,
+                    Ok(Ok(false)) => Some(format!("#{number} isn't waiting in the merge queue.")),
+                    Ok(Err(e)) => Some(format!("Couldn't move it: {e}")),
+                    Err(e) => Some(format!("Couldn't move it: {e}")),
+                }
+            })),
+            Do::PrLeave { common, number } => Ran::Later(Box::pin(async move {
+                let out = tokio::task::spawn_blocking(move || {
+                    crate::merge_queue::change(&common, |q| {
+                        crate::merge_queue::dequeue_pr(q, number)
+                    })
+                })
+                .await;
+                Some(match out {
+                    Ok(Ok(_)) => format!("Took #{number} out of the merge queue."),
+                    Ok(Err(e)) => format!("Couldn't take it out: {e}"),
+                    Err(e) => format!("Couldn't take it out: {e}"),
+                })
+            })),
+            Do::LeaveQueue(root) => {
+                let Ok(exe) = crate::util::exe() else {
+                    return Ok(Ran::Said("Couldn't find Switchboard's binary.".into()));
+                };
+                let folder = root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Ran::Later(Box::pin(async move {
+                    let out = tokio::task::spawn_blocking(move || {
+                        util::output_of(
+                            std::process::Command::new(exe)
+                                .args(["land-lock", "leave"])
+                                .current_dir(&root),
+                        )
+                    })
+                    .await;
+                    Some(match out {
+                        Ok(Ok(_)) => format!("Took {folder} out of the landing queue."),
+                        Ok(Err(e)) => format!("Couldn't take it out: {e}"),
+                        Err(e) => format!("Couldn't take it out: {e}"),
+                    })
+                }))
+            }
+            Do::SlackDismiss(items) => {
+                self.slack_dismiss(&items);
+                Ran::Said("Dismissed.".into())
+            }
+            Do::Dismiss { source, item } => {
+                self.notice_dismiss(&source, &item);
+                Ran::Said("Dismissed.".into())
+            }
+            Do::DismissAll(notices) => {
+                for (source, item) in &notices {
+                    self.notice_dismiss(source, item);
+                }
+                // Dismissed in the history too, though one put away before
+                // it took it out of its list on the way (a Slack thread's
+                // older message), as `slack_dismiss` marks its own.
+                for (source, item) in &notices {
+                    self.notice_history_mark(source, &item.id, Sidebar::Dismissed, true);
+                }
+                Ran::Said(format!("Dismissed {} notifications.", notices.len()))
+            }
+            Do::Autopilot(act) => self.autopilot_run(act).map_err(Do::Autopilot)?,
+            act => return Err(act),
+        })
+    }
+
+    /// What `mission_run` gave, said in mission control: at once, under
+    /// its busy box, or once its work off the task is done.
+    pub(crate) fn mission_ran(&mut self, client: ClientId, label: &str, ran: Ran) {
+        match ran {
+            Ran::Said(note) => self.mission_note(client, note),
+            Ran::Later(work) => self.mission_busy(client, label, None, work),
+            Ran::OffTask(work) => self.off_task(client, work, |server, client, finish| {
+                let note = finish(server);
+                server.mission_note(client, note);
+            }),
         }
     }
 
@@ -7769,7 +7904,7 @@ fn follow_reminder(m: &mut Mission) {
 /// A CI item as its failed check `n` would be its only one: the check's
 /// job, name and link in its place, so its menu reads that check's log
 /// and opens that check.
-fn with_check(mut item: Item, n: usize) -> Item {
+pub(crate) fn with_check(mut item: Item, n: usize) -> Item {
     let Some(check) = views::ci_checks(&item).get(n).map(|c| (*c).clone()) else {
         return item;
     };

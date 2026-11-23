@@ -1370,6 +1370,15 @@ impl Server {
                     self.phone_watch(reply);
                     return;
                 }
+                // Answered once the option the phone sent has run, which
+                // may take work off this task (src/phone/mission.rs).
+                if args
+                    .first()
+                    .is_some_and(|a| a == "phone-item" || a == "phone-view")
+                {
+                    self.phone_option_asked(&args, by_hand, reply);
+                    return;
+                }
                 // Answered once its file is read, off this task.
                 if args.first().is_some_and(|a| a == "restore-layout")
                     && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))

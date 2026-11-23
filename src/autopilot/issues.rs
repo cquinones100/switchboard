@@ -135,6 +135,21 @@ fn default_priority() -> u8 {
     DEFAULT_PRIORITY
 }
 
+/// What mission control asks before an issue's priority label is set on
+/// GitHub, by its item's first line (`text`), and the phone too; `None`
+/// when the line names no issue.
+pub fn priority_question(text: &str, to: u8) -> Option<String> {
+    let (repo, number) = reference_in(text)?;
+    let label = priority_label(to);
+    Some(if to == HIGHEST {
+        format!(
+            "Put {repo}#{number} first among autopilot's issues, labeling it \"{label}\" on GitHub?"
+        )
+    } else {
+        format!("Label {repo}#{number} \"{label}\" on GitHub?")
+    })
+}
+
 /// The label that gives an issue priority `n`.
 pub fn priority_label(n: u8) -> String {
     format!("priority: {n}")

@@ -338,6 +338,12 @@ The relay's DM, threads and Home tab.
 
 - [184. The phone app's kit: every control 44 pt (icon buttons 44 × 44, buttons and fields 44 high pills), chips 24, rows 56, header 48, boxes and cards radius 12, pictures 6, type 16 and 12; today's mismatched sizes beside it; a drawer and a channel drawn from the kit alone](https://cquinones100.github.io/switchboard/design/184.html)
 
+## Proposal: mission control's views on the phone
+
+- [185. Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen, and from Mission control in a channel's ⋯ menu: a swipe in shows Landing, Autopilot, PRs, CI and Notifications with what needs you counted; a tap on one shows its items in its groups; a tap on an item opens its menu, less what needs the computer's screen](https://cquinones100.github.io/switchboard/design/185.html)
+- [186. PRs and CI in the phone's right panel: the PR board's columns as groups, CI's runs with what fails first; a failing run's menu leads with Start a CI loop…, and an option ending in … asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
+- [187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is](https://cquinones100.github.io/switchboard/design/187.html)
+
 ## Other boards
 
 - [183. Settings' This computer: the settings that depend on the computer (whether a service is used here, what runs on one computer only, the hardware) listed first under a heading of their own and still in their own categories, every row of one carrying a this computer chip; a service off until it has worked here says so in its default](https://cquinones100.github.io/switchboard/design/183.html)

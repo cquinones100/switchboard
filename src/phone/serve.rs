@@ -57,6 +57,9 @@ pub struct Phone {
     last: String,
     due: bool,
     pub looks: HashMap<PaneId, Vec<looks::Kept>>,
+    /// The views the stream last carried and when they were worked out
+    /// (`phone_views`).
+    pub(super) views: Option<(std::time::Instant, Value)>,
 }
 
 #[derive(Debug)]
@@ -76,6 +79,9 @@ pub enum PhoneEvent {
         seen: bool,
         until: std::time::Instant,
     },
+    /// An option the phone ran whose work off the task is done: the
+    /// server finishes it and answers the phone (`phone_finished`).
+    Finished(super::mission::Finished),
 }
 
 /// How long the app an older build ran has to stop after it is asked
@@ -473,7 +479,8 @@ impl Server {
             return;
         }
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let _ = tx.send(self.phone_snapshot().to_string());
+        let views = self.phone_views();
+        let _ = tx.send(self.phone_snapshot(views).to_string());
         self.phone.watchers.push(tx);
         tokio::spawn(async move {
             let Ok(stream) = given.await else {
@@ -614,9 +621,11 @@ impl Server {
                 eprintln!("switchboard server: {said}");
                 self.say(None, &said);
             }
+            PhoneEvent::Finished(done) => self.phone_finished(done),
             PhoneEvent::Publish => {
                 self.phone.due = false;
-                let line = self.phone_snapshot().to_string();
+                let views = self.phone_views();
+                let line = self.phone_snapshot(views).to_string();
                 if line == self.phone.last {
                     return;
                 }
@@ -629,8 +638,10 @@ impl Server {
     /// Every Claude tab in the sidebar's groups and order: its group, badge
     /// and words as the sidebar has them (`drawer::fields`), its repository
     /// and branch (for the drawer's search), what it waits on, its last
-    /// turn, and the prompt it shows while waiting.
-    pub(crate) fn phone_snapshot(&self) -> Value {
+    /// turn, and the prompt it shows while waiting; and mission control's
+    /// views the phone's panel lists (`phone_views`), none while Settings'
+    /// `phone_views` is off.
+    pub(crate) fn phone_snapshot(&self, views: Option<Value>) -> Value {
         let r = Rules::now();
         let looks_on = settings::is_on("phone_look_pictures");
         let tabs: Vec<_> = self
@@ -708,6 +719,7 @@ impl Server {
         // clock time each means now, as the box shows them.
         json!({
             "tabs": tabs,
+            "views": views,
             "close": crate::settings::is_on("phone_close_tabs"),
             "haptics": crate::settings::is_on("phone_haptics"),
             "reminders": r.reminders,

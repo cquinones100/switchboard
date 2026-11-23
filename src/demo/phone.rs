@@ -13,7 +13,10 @@
 use serde_json::{Value, json};
 
 use crate::facts::{Checks, Landing, Method, PrState};
+use crate::items::{Item, State, ViewData};
+use crate::mission::views::{View, ViewId, header};
 use crate::mux::TabId;
+use crate::phone::views::{self, Kind};
 use crate::sidebar::claude::{LoopRun, Scheduled, SessionRef};
 use crate::sidebar::model::{MergeState, Rules, TabLoop, TabModel, TabState};
 
@@ -627,6 +630,296 @@ pub fn turns(now_ms: i64) -> Vec<(String, Vec<Value>)> {
             (format!("%{}", t.pane), messages)
         })
         .collect()
+}
+
+/// A made-up view's item: its row and its menu's options, each a label
+/// and what the phone does with it (`phone::views::Kind`).
+type MadeUp = (Item, Vec<(&'static str, Kind)>);
+
+/// Mission control's views as the phone's panel lists them (boards 185 to
+/// 187), made up: Landing's train, queue and what landed, Autopilot's tabs,
+/// the PR board's columns, CI's runs and the day's notifications, each with
+/// options as the server offers them, in the shape `phone::mission` sends.
+pub fn views(now_ms: i64) -> Vec<Value> {
+    let ago = |m: i64| now_ms - m * 60_000;
+    let pr = |n: u32| format!("https://github.com/acme/web/pull/{n}");
+    let go = |pane: u32| Kind::Go(format!("%{pane}"));
+    let run = || Kind::Run(None);
+    let asked = |q: &str| Kind::Run(Some(q.to_string()));
+    let pr_options = |n: u32, pane: Option<u32>| -> Vec<(&'static str, Kind)> {
+        let mut out = Vec::new();
+        if let Some(p) = pane {
+            out.push(("Go to tab, where it is open", go(p)));
+        }
+        out.push((
+            "Work on it in a new tab (wtpr)",
+            asked("Work on it in a new tab (wtpr)?"),
+        ));
+        out.push(("Open it in the browser", Kind::Open(pr(n))));
+        out.push(("Copy its link", Kind::Copy(pr(n))));
+        out
+    };
+    let landing: Vec<MadeUp> = vec![
+        (header("train", "Train 14 · testing", 2), vec![]),
+        (
+            Item::new("q88", "#88 benchmark harness")
+                .detail("tab 5 · 6 checks running")
+                .state(State::Active)
+                .time(ago(4)),
+            vec![
+                ("Open the PR", Kind::Open(pr(88))),
+                ("Copy its link", Kind::Copy(pr(88))),
+            ],
+        ),
+        (
+            Item::new("q91", "#91 fork parity fixture")
+                .detail("tab 7 · 6 checks running")
+                .state(State::Active)
+                .time(ago(4)),
+            vec![
+                ("Open the PR", Kind::Open(pr(91))),
+                ("Copy its link", Kind::Copy(pr(91))),
+            ],
+        ),
+        (header("queue", "In the queue", 2), vec![]),
+        (
+            Item::new("q93", "#93 stable note IDs")
+                .detail("tab 2 · next train")
+                .state(State::Active),
+            vec![
+                ("Go to tab 2", go(12)),
+                ("Move it down in the merge queue", run()),
+                ("Open the PR", Kind::Open(pr(93))),
+                ("Copy its link", Kind::Copy(pr(93))),
+                (
+                    "Take it out of the merge queue",
+                    asked("Take #93 out of the merge queue?"),
+                ),
+            ],
+        ),
+        (
+            Item::new("q94", "#94 full titles")
+                .detail("tab 4 · after it")
+                .state(State::Active),
+            vec![
+                ("Move it up in the merge queue", run()),
+                (
+                    "Take it out of the merge queue",
+                    asked("Take #94 out of the merge queue?"),
+                ),
+            ],
+        ),
+        (header("landed", "Landed today", 1), vec![]),
+        (
+            Item::new("q86", "#86 redraw timing")
+                .detail("train 13 · merged 9:12")
+                .time(ago(31)),
+            vec![("Open the PR", Kind::Open(pr(86)))],
+        ),
+    ];
+    let autopilot: Vec<MadeUp> = vec![
+        (
+            Item::new("a1", "review PR 41")
+                .detail("tab 6 · asks: which fixture?")
+                .state(State::Attention)
+                .group("Waiting on you"),
+            vec![
+                ("Go to tab 6", go(16)),
+                ("Skip its item: review PR 41", run()),
+            ],
+        ),
+        (
+            Item::new("a2", "planning")
+                .detail("tab 1 · Monitor: fork parity")
+                .state(State::Active)
+                .group("Working"),
+            vec![("Go to tab 1", go(11)), ("Skip its item: planning", run())],
+        ),
+    ];
+    let prs: Vec<MadeUp> = vec![
+        (
+            Item::new("p41", "#41 review PR 41")
+                .detail("tab 6 · 2 comments")
+                .state(State::Attention)
+                .group("Changes asked")
+                .time(ago(60)),
+            pr_options(41, Some(16)),
+        ),
+        (
+            Item::new("p90", "#90 split the parser")
+                .detail("yours · 1 reviewer")
+                .group("In review")
+                .time(ago(180)),
+            pr_options(90, None),
+        ),
+        (
+            Item::new("p87", "#87 theme the picker")
+                .detail("asks your review")
+                .group("In review")
+                .time(ago(1440)),
+            pr_options(87, None),
+        ),
+        (
+            Item::new("p92", "#92 drop the old hook")
+                .detail("tab 8 · checks passed")
+                .group("Approved")
+                .time(ago(20)),
+            pr_options(92, Some(18)),
+        ),
+        (
+            Item::new("p93", "#93 stable note IDs")
+                .detail("tab 2 · 1st")
+                .state(State::Active)
+                .group("In merge queue"),
+            pr_options(93, Some(12)),
+        ),
+    ];
+    let ci_item = |id: &str, title: &str, detail: &str, state: &str, minutes: i64| {
+        let tone = if state == "failing" {
+            State::Attention
+        } else {
+            State::Idle
+        };
+        Item::new(id, title)
+            .detail(detail)
+            .state(tone)
+            .time(ago(minutes))
+            .data(json!({"ci": {"state": state}}))
+    };
+    let ci: Vec<MadeUp> = vec![
+        (header("failing", "Failing", 1), vec![]),
+        (
+            ci_item(
+                "c90",
+                "#90 Clippy (Linux x86_64)",
+                "split the parser · 1 of 6",
+                "failing",
+                3,
+            ),
+            vec![
+                (
+                    "Start a CI loop on it in tab 11",
+                    asked("Start a CI loop on it in tab 11?"),
+                ),
+                ("Go to tab 11, where it is open", go(11)),
+                (
+                    "Open the failing check in the browser",
+                    Kind::Open(pr(90) + "/checks"),
+                ),
+                ("Open the PR in the browser", Kind::Open(pr(90))),
+                ("Copy its link", Kind::Copy(pr(90))),
+            ],
+        ),
+        (header("running", "Running", 1), vec![]),
+        (
+            ci_item("c-train", "Train 14", "#88, #91 · 6 checks", "running", 4),
+            vec![],
+        ),
+        (header("passing", "Passing", 2), vec![]),
+        (
+            ci_item("c92", "#92 drop the old hook", "6 of 6", "passing", 20),
+            vec![("Open the PR in the browser", Kind::Open(pr(92)))],
+        ),
+        (
+            ci_item("c-main", "main", "after train 13", "passing", 31),
+            vec![],
+        ),
+    ];
+    let dismiss = || ("Dismiss it", Kind::Run(None));
+    let notifications: Vec<MadeUp> = vec![
+        (header("today", "Today", 5), vec![]),
+        (
+            Item::new("n1", "CI failed on #90")
+                .detail("Clippy (Linux x86_64)")
+                .state(State::Attention)
+                .time(ago(3)),
+            vec![
+                ("Open the PR in the browser", Kind::Open(pr(90))),
+                dismiss(),
+            ],
+        ),
+        (
+            Item::new("n2", "Tab 6 asks")
+                .detail("which fixture?")
+                .state(State::Attention)
+                .time(ago(9)),
+            vec![("Go to tab 6", go(16)), dismiss()],
+        ),
+        (
+            Item::new("n3", "#86 landed")
+                .detail("train 13")
+                .time(ago(31)),
+            vec![dismiss()],
+        ),
+        (
+            Item::new("n4", "Tab 8: handoff")
+                .detail("your reminder came due")
+                .state(State::Attention)
+                .time(ago(60)),
+            vec![("Go to tab 8", go(18)), dismiss()],
+        ),
+        (
+            Item::new("n5", "Review asked on #87")
+                .detail("theme the picker")
+                .time(ago(1440)),
+            vec![("Open it in the browser", Kind::Open(pr(87))), dismiss()],
+        ),
+    ];
+    let made = |id: ViewId, title: &str, rows: Vec<MadeUp>, acts: Vec<(&str, Kind)>| {
+        let view = View {
+            id,
+            title: title.to_string(),
+            data: ViewData {
+                items: rows.iter().map(|(i, _)| i.clone()).collect(),
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let options = |item: &Item| -> Vec<Value> {
+            rows.iter()
+                .find(|(i, _)| i.id == item.id)
+                .map(|(_, o)| o.iter().map(|(l, k)| views::option_json(l, k)).collect())
+                .unwrap_or_default()
+        };
+        let acts = acts.iter().map(|(l, k)| views::option_json(l, k)).collect();
+        views::view_json(&view, &options, acts)
+    };
+    vec![
+        made(ViewId::Landing, "Landing", landing, vec![]),
+        made(ViewId::Autopilot, "Autopilot", autopilot, vec![]),
+        made(
+            ViewId::Prs,
+            "PRs",
+            prs,
+            vec![
+                ("Read every PR again now", Kind::Run(None)),
+                (
+                    "Open the PRs waiting on your review on GitHub",
+                    Kind::Open("https://github.com/pulls/review-requested".into()),
+                ),
+            ],
+        ),
+        made(
+            ViewId::Ci,
+            "CI",
+            ci,
+            vec![
+                ("Read CI again now", Kind::Run(None)),
+                (
+                    "Re-run main's failed jobs…",
+                    Kind::Run(Some(
+                        "Run the failed jobs of 1 default branch run again on GitHub?".into(),
+                    )),
+                ),
+            ],
+        ),
+        made(
+            ViewId::Notifications,
+            "Notifications",
+            notifications,
+            vec![],
+        ),
+    ]
 }
 
 /// The images the made-up turns name: drawings of a phone's screen, in SVG.

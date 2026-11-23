@@ -123,6 +123,7 @@ use crate::ui::{Look, Overlay, Step, Theme};
 
 pub use serve::Opening;
 pub(crate) use serve::TabMenuFrom;
+pub(crate) use serve::{Finish, Notice, NoticeLook, Ran, with_check};
 pub use views::{Group, Revived, Scope, View, ViewId, Worktree};
 
 /// Where Tab has put the focus: a group's name or a view's
