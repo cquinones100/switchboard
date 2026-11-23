@@ -76,7 +76,6 @@ use crate::{paths, settings, util};
 
 pub mod away;
 mod pick;
-mod preview;
 mod tab;
 
 pub use pick::list;
@@ -97,19 +96,15 @@ pub enum Command {
     /// Which tab the note Notes shows (or, from `press`, the note named)
     /// is attached to, asked whatever tab it has.
     AttachNote,
-    /// A note read-only, drawn as GitHub draws Markdown, in the pane's
-    /// place: the note picked (or, from `press`, the note named).
-    Preview,
 }
 
 impl Command {
-    pub const ALL: [Command; 6] = [
+    pub const ALL: [Command; 5] = [
         Command::Open,
         Command::Beside,
         Command::NoteTab,
         Command::ChooseNote,
         Command::AttachNote,
-        Command::Preview,
     ];
 
     /// Its name in keys.json, and what the app presses.
@@ -120,7 +115,6 @@ impl Command {
             Command::NoteTab => "note-tab",
             Command::ChooseNote => "choose-tab-note",
             Command::AttachNote => "attach-note",
-            Command::Preview => preview::NAME,
         }
     }
 
@@ -140,7 +134,6 @@ impl Command {
             Command::AttachNote => {
                 "Attach the note in Notes to a tab, asking before it replaces a tab's note"
             }
-            Command::Preview => "Preview a note…: read-only, drawn as GitHub draws Markdown",
         }
     }
 
@@ -162,9 +155,6 @@ impl Command {
             Command::AttachNote => {
                 "Lists every open tab with the note it has now, the one this note is attached to marked. A tab with none takes the note at once; one with another note asks first. The note leaves the tab it was attached to, and Notes stays where it is."
             }
-            Command::Preview => {
-                "Lists every note, the newest first, and shows the one picked in this pane's place as the PR view draws Markdown, following it as it changes; q, Esc or this command again closes it. Notes' palette has \"Preview this note\" for the note it shows. Settings' \"Preview a note read-only\" turns both off."
-            }
         }
     }
 
@@ -175,7 +165,6 @@ impl Command {
             Command::Beside => &["notes", "panes"],
             Command::NoteTab => &["notes", "tabs", "new"],
             Command::ChooseNote | Command::AttachNote => &["notes", "tabs"],
-            Command::Preview => &["notes", "view"],
         }
     }
 
@@ -366,7 +355,6 @@ impl Server {
                 }
             }
             Command::AttachNote => self.attach_note(client, None),
-            Command::Preview => self.preview_note(client, None, pane),
         }
     }
 
@@ -1193,7 +1181,7 @@ impl Server {
         };
         let takes_a_note = matches!(
             action,
-            Action::Notes(Command::NoteTab | Command::AttachNote | Command::Preview)
+            Action::Notes(Command::NoteTab | Command::AttachNote)
         );
         if arg.is_some() && !takes_a_note {
             return Reply::fail(format!("press: {name} takes nothing more"));
@@ -1204,7 +1192,6 @@ impl Server {
         match action {
             Action::Notes(Command::NoteTab) => self.note_tab(client, arg),
             Action::Notes(Command::AttachNote) => self.attach_note(client, arg),
-            Action::Notes(Command::Preview) => self.preview_note(client, arg, caller),
             action => self.act(client, action),
         }
         Reply::ok("")

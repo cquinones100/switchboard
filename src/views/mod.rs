@@ -56,7 +56,6 @@ pub mod given;
 pub mod image;
 pub mod issue;
 pub mod menu;
-pub mod note;
 pub mod page;
 pub mod pager;
 pub mod pictures;
@@ -472,14 +471,8 @@ fn dir_arg(arg: Option<&String>) -> PathBuf {
 /// mission control's "Read the failing log" showed it with `less +G`, or
 /// `view --log +<line> <file>` from that line (its failing step's first);
 /// `view +<line> <file>`, any file as plain text from that line, as the
-/// diff's `gf` opens one it doesn't change; `view --note <file>`, a note's
-/// preview (`note`).
+/// diff's `gf` opens one it doesn't change.
 pub fn view_main(args: Vec<String>) -> ExitCode {
-    if let [flag, file] = args.as_slice()
-        && flag == "--note"
-    {
-        return note::main(file);
-    }
     if let [flag, at, file] = args.as_slice()
         && flag == "--log"
         && let Some(line) = at.strip_prefix('+').and_then(|n| n.parse().ok())
@@ -514,9 +507,7 @@ pub fn view_main(args: Vec<String>) -> ExitCode {
         return pager::run(content, None, None);
     }
     let [file] = args.as_slice() else {
-        eprintln!(
-            "Usage: switchboard view <file.md> | --note <file> | --log [+<line>] <file> | +<line> <file>"
-        );
+        eprintln!("Usage: switchboard view <file.md> | --log [+<line>] <file> | +<line> <file>");
         return ExitCode::from(2);
     };
     let content = match std::fs::read_to_string(file) {

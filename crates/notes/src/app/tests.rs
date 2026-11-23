@@ -5292,16 +5292,16 @@ fn in_a_notes_with_no_room_a_narrowing_key_clears_a_kept_width() {
 }
 
 #[test]
-fn preview_this_note_is_listed_in_a_workspace_and_left_out_alone() {
-    let (_dir, mut app) = started("preview-listed");
+fn the_palette_lists_no_note_preview_in_a_workspace_or_alone() {
+    let (_dir, mut app) = started("no-preview");
     let listed = |app: &App| {
         app.palette_commands(false)
             .iter()
-            .any(|c| c.act == PaletteAct::Preview && c.name == "Preview this note")
+            .any(|c| c.name.contains("Preview"))
     };
-    assert!(!listed(&app), "alone, no workspace to draw it");
+    assert!(!listed(&app), "alone");
     app.opts.server = true;
-    assert!(listed(&app), "in a workspace's pane");
+    assert!(!listed(&app), "in a workspace's pane");
 }
 
 // The plan's width beside its note, set by hand (notes_resize).

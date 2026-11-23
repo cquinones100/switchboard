@@ -864,8 +864,7 @@ impl Action {
 
     /// The words and tags the palette lists it by, or `None` to leave it
     /// out: of M-1 to M-9, only the first, for all nine, as tmux.conf gave
-    /// only M-1 a description; a note's preview while Settings'
-    /// notes_preview is off.
+    /// only M-1 a description.
     pub fn palette_note(&self) -> Option<(String, String)> {
         let words = match self {
             Action::SelectTab(1) => {
@@ -874,11 +873,6 @@ impl Action {
             Action::SelectTab(_) => return None,
             Action::TabStatus if !crate::settings::is_on("tab_status_by_hand") => return None,
             Action::Extra(command) if !command.in_palette() => return None,
-            Action::Notes(crate::notes::serve::Command::Preview)
-                if !crate::settings::is_on("notes_preview") =>
-            {
-                return None;
-            }
             _ => self.about(),
         };
         let tags = self

@@ -138,7 +138,6 @@ pub fn manifest() -> Manifest {
         settings: vec![
             Setting::new("notes_toolbar", true),
             Setting::new("notes_palette", true),
-            Setting::new("notes_preview", true),
             Setting::new("notes_ctrl_v_image", true),
             Setting::new("notes_images", true),
             Setting::new("notes_mermaid", true),
