@@ -1827,12 +1827,28 @@ function hinted(set) {
 
 const viewOf = (key) => (state.views || []).find((v) => v.key === key);
 
-function closePanel() {
+// The panel put away, and the history step an open view added taken back
+// before `then` runs, so a tab it opens is named on the page's own step.
+function closePanel(then) {
   state.panel = null;
-  if (!panelLayer) return;
-  const { layer, panel } = panelLayer;
-  panelLayer = null;
-  slidePanel(layer, panel, false, () => layer.remove());
+  if (panelLayer) {
+    const { layer, panel } = panelLayer;
+    panelLayer = null;
+    slidePanel(layer, panel, false, () => layer.remove());
+  }
+  unwind(then);
+}
+
+let unwinding = null; // what runs once the view's history step is taken back
+
+// Takes back the step in the page's history that opening a view added, then
+// runs `then`; at once when there is none.
+function unwind(then) {
+  const pushed = history.state && history.state.view && typeof history.back === "function";
+  if (!pushed) return then && then();
+  if (unwinding) return;
+  unwinding = then || (() => {});
+  history.back();
 }
 
 // The panel slides in or out as swipeable slides a channel: over --slide, or,
@@ -1895,7 +1911,10 @@ function openPanel(from) {
 function drawPanel() {
   if (!panelLayer || !state.panel) return;
   const view = state.panel.view && viewOf(state.panel.view);
-  if (state.panel.view && !view) closeView();
+  if (state.panel.view && !view) {
+    closeView();
+    unwind();
+  }
   const head = el(
     "div",
     { class: "head" },
@@ -1942,11 +1961,10 @@ function slideView(screen, opens, from) {
   setTimeout(() => (screen.style.transition = ""), lasts);
 }
 
-// Back from a view: the phone's own back when opening it added a step to
-// the page's history, which comes back here through popstate, else at once.
+// Back from a view, taking back the step opening it added to the page's
+// history, as the phone's own back does.
 function back() {
-  if (history.state && history.state.view && typeof history.back === "function") history.back();
-  else closeView();
+  unwind(() => closeView());
 }
 
 // The view put away, the panel showing on its list under it.
@@ -2099,7 +2117,7 @@ function usageItems(view) {
       group.append(
         el(
           open ? "button" : "div",
-          { class: "row usage-tab", onclick: open ? () => { closePanel(); openTab(n); } : null },
+          { class: "row usage-tab", onclick: open ? () => closePanel(() => openTab(n)) : null },
           el("span", { class: "mark idle" }, open ? "●" : "○"),
           el("span", { class: "name" }, t.index ? el("span", { class: "num" }, t.index) : null, t.name),
           el("span", { class: "when" }, dollars(t.spent)),
@@ -2159,10 +2177,11 @@ function runOption(key, id, o) {
   if (o.go || o.open || o.copy) told(key, id, o);
   if (o.go) {
     closeMenu();
-    closePanel();
     const n = String(o.go).replace(/^%/, "");
-    if (state.tabs.some((t) => number(t) === n)) openTab(n);
-    else toast("That tab isn't running Claude.", true);
+    closePanel(() => {
+      if (state.tabs.some((t) => number(t) === n)) openTab(n);
+      else toast("That tab isn't running Claude.", true);
+    });
     return;
   }
   if (o.open) {
@@ -2328,7 +2347,10 @@ function edgeSwipe() {
   document.addEventListener("touchcancel", end);
   // The phone's back with a view open goes back to the panel's list.
   window.addEventListener("popstate", () => {
-    if (state.panel && state.panel.view) closeView();
+    const then = unwinding;
+    unwinding = null;
+    if (then) then();
+    else if (state.panel && state.panel.view) closeView();
   });
 }
 

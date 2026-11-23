@@ -2961,7 +2961,8 @@ vm.runInContext(`
   state.views = [
     { key: "landing", title: "Landing", line: "1 in the queue", needs: 0, groups: [
       { title: "In the queue", items: [
-        { id: "q93", title: "#93 stable note IDs", detail: "tab 2 · next train", mark: "▲", tone: "landing", options: [] },
+        { id: "q93", title: "#93 stable note IDs", detail: "tab 2 · next train", mark: "▲", tone: "landing",
+          options: [{ label: "Go to tab 2", shown: "Go to tab 2", go: "%12" }] },
       ] },
     ], acts: [] },
   ];
@@ -2984,6 +2985,11 @@ head.all((x) => x.attrs["aria-label"] === "Back to the views")[0].fire("click");
 timers.splice(0).forEach((f) => f && f());
 out.push("back=" + backs + " view=" + vm.runInContext("state.panel.view", ctx) + " screens=" + of("panel-view").length + " layers=" + of("panel-layer").length);
 out.push("list=" + body.all((x) => x.attrs["data-view"]).map((r) => r.attrs["data-view"]).join("|"));
+// Going to a tab from an open view takes its history step back first.
+body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
+body.all((x) => x.attrs["data-item"] === "q93")[0].fire("click");
+button("Go to tab 2").fire("click");
+out.push("go=" + backs + " " + ctx.history.state + " " + vm.runInContext("state.open + ' ' + state.panel", ctx));
 console.log(out.join("\n"));
 "##;
     let Some(stdout) = run_app_js(&script) else {
@@ -2997,6 +3003,7 @@ console.log(out.join("\n"));
             r#"items=1 panel=0 pushed=[{"view":"landing"}]"#,
             "back=1 view=null screens=0 layers=1",
             "list=landing",
+            "go=2 null 12 null",
         ],
         "{stdout}"
     );
