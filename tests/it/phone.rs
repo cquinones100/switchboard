@@ -3762,7 +3762,7 @@ ctx.fetch = (path, opts) => {
   read.push(path);
   const kind = path.split("/").pop();
   const data = {
-    ticket: { heading: "Issue #163", title: "Time it", chips: [{ text: "open", tone: "passed" }], body: "Today it reads one." },
+    ticket: { read: true, heading: "Issue #163", title: "Time it", chips: [{ text: "open", tone: "passed" }], body: "Today it reads one." },
     note: { heading: "Redraw", title: "Redraw", body: "# Redraw" },
   }[kind];
   return Promise.resolve({ ok: true, status: 200, json: async () => data });
@@ -3803,7 +3803,7 @@ const out = [];
   screen.all((x) => x.attrs["aria-label"] === "Back to the views")[0].fire("click");
   timers.splice(0).forEach((f) => f && f());
   out.push("views=" + of("panel-view").length + " list=" + list());
-  out.push("held=" + of("held").map((r) => r.attrs["data-tab-view"]).join(","));
+  out.push("held=" + of("shown").map((r) => r.attrs["data-tab-view"]).join(","));
   body.all((x) => x.attrs["data-tab-view"] === "note")[0].fire("click");
   await settle();
   out.push("note=" + of("panel-view")[0].kids[0].text + " read=" + read.join(","));
@@ -3825,7 +3825,7 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "layer=panel-layer full in=panel head=‹Issue #163tab 2 read=/api/tabs/12/ticket",
+            "layer=panel-layer whole in=panel head=‹Issue #163tab 2 read=/api/tabs/12/ticket",
             "body=Time itopenToday it reads one.",
             "views=0 list=Tab 2 · stable note IDs◇Ticket #163open◇NoteRedraw|Mission control|✕CI11 failing",
             "held=ticket",

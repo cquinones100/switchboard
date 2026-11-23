@@ -2044,7 +2044,7 @@ function panelLayerNode() {
   const full = !!tabViews();
   const strip = el("div", { class: "panel-strip", onclick: () => closePanel() });
   const panel = el("div", { class: "panel", role: "dialog", "aria-label": full ? "Views" : "Mission control" });
-  const layer = el("div", { class: "panel-layer" + (full ? " full" : "") }, strip, panel);
+  const layer = el("div", { class: "panel-layer" + (full ? " whole" : "") }, strip, panel);
   panelSwipe(panel, 0, () => closePanel(), () => slidePanel(panelLayer.layer, panel, true));
   return { layer, panel, strip, screen: null, full };
 }
@@ -2189,7 +2189,7 @@ function viewList() {
       group.append(
         el(
           "button",
-          { class: "row view-row" + (state.panel && state.panel.shown === key ? " held" : ""), "data-tab-view": r.kind, onclick: () => openView(key) },
+          { class: "row view-row" + (state.panel && state.panel.shown === key ? " shown" : ""), "data-tab-view": r.kind, onclick: () => openView(key) },
           el("span", { class: "mark " + (r.tone || "idle") }, r.mark || "○"),
           el("span", { class: "name" }, r.title),
           el("span", {}),
@@ -2307,7 +2307,8 @@ function tabViewBody(row) {
   if (kind === "pr") text.append(el("div", { class: "label idle" }, el("span", {}, "Description"), el("span", {})));
   if (read.body) text.append(rendered(read.body));
   else if (kind === "pr") text.append(el("div", { class: "empty" }, "No description."));
-  else text.append(el("div", { class: "empty" }, "Not read on the computer yet: M-i there reads it."));
+  else if (kind === "ticket" && !read.read) text.append(el("div", { class: "empty" }, "Not read on the computer yet: M-i there reads it."));
+  else text.append(el("div", { class: "empty" }, "No text."));
   list.append(text);
   return list;
 }

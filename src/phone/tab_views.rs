@@ -202,8 +202,13 @@ pub fn pr_json(
 ) -> Value {
     let copy = copy.filter(|c| c.get("number").and_then(Value::as_u64) == Some(number));
     let pr = read_pr(facts, copy);
-    let (state, tone) = pr_state(pr.state, pr.draft);
-    let mut chips = vec![chip(state, tone)];
+    // Its state only when something read it: a PR the lookups haven't
+    // answered for, and the PR view hasn't read, may be merged or closed.
+    let mut chips = Vec::new();
+    if facts.is_some() || copy.is_some() {
+        let (state, tone) = pr_state(pr.state, pr.draft);
+        chips.push(chip(state, tone));
+    }
     if pr.queued {
         chips.push(chip("in the merge queue", Tone::Landing));
     }
@@ -318,6 +323,7 @@ pub fn ticket_json(ticket: &Ticket, copy: Option<&Value>) -> Value {
         "url": url,
         "chips": state.map(|(words, mark)| vec![chip(&words, mark.look().1)]).unwrap_or_default(),
         "body": body,
+        "read": copy.is_some(),
     })
 }
 
@@ -463,6 +469,8 @@ mod tests {
         assert_eq!(v["chips"][0]["tone"], "working");
         assert_eq!(ticket_row("ENG-42", Some(&held))["line"], "In Progress");
         assert_eq!(ticket_json(&linear, None)["body"], Value::Null);
+        assert_eq!(ticket_json(&linear, None)["read"], false);
+        assert_eq!(pr_json(41, None, None, None)["chips"], json!([]));
     }
 
     #[test]
