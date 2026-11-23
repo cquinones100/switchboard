@@ -70,49 +70,82 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
     // changes nothing; then those that left Next first, so a failure after
     // leaves none of them first; and the server told of what was written
     // even when a later one failed.
+    // A repository you can't push to, or an issue GitHub doesn't have, is
+    // left out for good, saying which; any other failure changes nothing.
     let looked = util::block_on(async {
+        let mut refused: Vec<(String, String)> = Vec::new();
         let mut checked: Vec<String> = Vec::new();
         for (repo, _) in next.iter().chain(&left) {
-            if !checked.contains(&repo.to_string()) {
-                pushable(repo).await?;
-                checked.push(repo.to_string());
+            let name = repo.to_string();
+            if checked.contains(&name) || refused.iter().any(|(r, _)| *r == name) {
+                continue;
+            }
+            match pushable(repo).await {
+                Ok(()) => checked.push(name),
+                Err(e) if e.downcast_ref::<NotPushable>().is_some() => {
+                    refused.push((name, format!("{e:#}")));
+                }
+                Err(e) => return Err(e),
             }
         }
-        let mut texts = Vec::new();
-        for (repo, number) in next.iter().chain(&left) {
-            let issue = github::rest(
-                "GET",
-                &format!("/repos/{repo}/issues/{number}"),
-                None,
-                SOURCE,
-            )
-            .await?;
-            // The queue's item for it, as autopilot words an issue
-            // (`Issue::text`).
-            let title = issue
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            texts.push(format!(
-                "{repo}#{number}: {}",
-                crate::worktree::one_line(title)
-            ));
-        }
-        texts.truncate(next.len());
-        anyhow::Ok(texts)
+        let mut skipped = Vec::new();
+        let looked_up = |list: &Issues| {
+            let list = list.clone();
+            let refused = refused.clone();
+            async move {
+                let mut kept = Vec::new();
+                let mut skipped = Vec::new();
+                for (repo, number) in list {
+                    let reference = format!("{repo}#{number}");
+                    if let Some((_, why)) = refused.iter().find(|(r, _)| *r == repo.to_string()) {
+                        skipped.push(format!("skipped {reference}: {why}"));
+                        continue;
+                    }
+                    let path = format!("/repos/{repo}/issues/{number}");
+                    match github::rest("GET", &path, None, SOURCE).await {
+                        Ok(issue) => {
+                            // The queue's item for it, as autopilot words
+                            // an issue (`Issue::text`).
+                            let title = issue
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let text = format!("{reference}: {}", crate::worktree::one_line(title));
+                            kept.push((repo, number, text));
+                        }
+                        Err(e)
+                            if crate::net::kind_of(&e)
+                                == Some(&crate::net::ErrorKind::NotFound) =>
+                        {
+                            skipped.push(format!("skipped {reference}: GitHub has no such issue"));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                anyhow::Ok((kept, skipped))
+            }
+        };
+        let (next, more) = looked_up(&next).await?;
+        skipped.extend(more);
+        let (left, more) = looked_up(&left).await?;
+        skipped.extend(more);
+        anyhow::Ok((next, left, skipped))
     });
-    let texts = match looked {
-        Ok(texts) => texts,
+    let (next, left, skipped) = match looked {
+        Ok(looked) => looked,
         Err(e) => return fail(NAME, &format!("{e:#}; no label changed")),
     };
+    for line in &skipped {
+        println!("{line}");
+    }
     let mut taken_out = Vec::new();
     let mut first = Vec::new();
     let written = util::block_on(async {
-        for (repo, number) in &left {
+        for (repo, number, _) in &left {
             set_priority(repo, *number, LOWEST).await?;
             taken_out.push(format!("{repo}#{number}"));
         }
-        for ((repo, number), text) in next.iter().zip(&texts) {
+        for (repo, number, text) in &next {
             set_priority(repo, *number, HIGHEST).await?;
             first.push(text.clone());
         }
@@ -152,10 +185,22 @@ pub fn order_main(args: Vec<String>) -> ExitCode {
 async fn pushable(repo: &Repo) -> anyhow::Result<()> {
     let about = github::rest("GET", &format!("/repos/{repo}"), None, SOURCE).await?;
     if about.pointer("/permissions/push") != Some(&Value::Bool(true)) {
-        anyhow::bail!("{repo} isn't a repository you can push to");
+        return Err(NotPushable(repo.to_string()).into());
     }
     Ok(())
 }
+
+/// A repository you can't push to.
+#[derive(Debug)]
+struct NotPushable(String);
+
+impl std::fmt::Display for NotPushable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} isn't a repository you can push to", self.0)
+    }
+}
+
+impl std::error::Error for NotPushable {}
 
 /// What `coordinator-post` posts.
 #[derive(Debug, PartialEq, Eq)]

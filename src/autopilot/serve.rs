@@ -1395,6 +1395,14 @@ impl Server {
         })
     }
 
+    /// Whether `tab`'s landing saw its PR merge (`MERGED`), which may come
+    /// before GitHub's lookups answer it.
+    pub fn autopilot_marked_merged(&self, tab: TabId) -> bool {
+        self.tabs
+            .get(&tab)
+            .is_some_and(|t| t.opts.get(MERGED).is_some_and(|v| !v.trim().is_empty()))
+    }
+
     /// What an option of its menu changes in the mode, done and said.
     fn autopilot_change(&mut self, client: ClientId, act: Act) {
         let mut said = None;
