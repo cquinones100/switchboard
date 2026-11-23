@@ -826,6 +826,9 @@ pub fn carry_over() -> Result<()> {
     }
     util::make_dirs(&state)?;
     util::write_atomic(&marker, format!("{}\n", util::now_ms()))?;
+    // A new computer's services found at once, for a command run before
+    // the server ever starts here.
+    turn_on_found();
     Ok(())
 }
 

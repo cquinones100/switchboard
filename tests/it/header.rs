@@ -563,8 +563,14 @@ fn settings_moves_by_category_flips_an_option_and_opens_the_file() {
     client.type_text("\x1b ");
     client.wait_text("MISSION CONTROL");
     client.type_text("vsett\r");
-    client.wait_for("the board, Integrations in front", |s| {
-        s.iter().any(|l| l.contains("CATEGORIES")) && s.iter().any(|l| l.contains("│ Integrations"))
+    client.wait_for("the board, This computer in front", |s| {
+        s.iter().any(|l| l.contains("CATEGORIES"))
+            && s.iter().any(|l| l.contains("│ This computer"))
+    });
+    // l: Integrations, the first category of its own.
+    client.type_text("l");
+    client.wait_for("Integrations in front", |s| {
+        s.iter().any(|l| l.contains("│ Integrations"))
     });
     // l: the next category, Notifications, whose first option is off.
     client.type_text("l");
