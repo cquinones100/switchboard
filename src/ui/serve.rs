@@ -19,10 +19,10 @@ use super::picker::Order;
 use super::picture::{self, Picture};
 use super::pictures::{self, Pictures};
 use super::{
-    Confirm, Layer, Look, Menu, Message, Outcome, Overlay, PickItem, Picked, Picker, Step, Then,
-    Tip, Ui, UiEvent, keylist, message, tip,
+    Back, Came, Coming, Confirm, Layer, Look, Menu, Message, Outcome, Overlay, PickItem, Picked,
+    Picker, Step, Then, Tip, Ui, UiEvent, keylist, message, tip,
 };
-use crate::mux::input::{Input, Mouse, MouseButton, MouseKind, Parsed};
+use crate::mux::input::{Input, KeyCode, Mouse, MouseButton, MouseKind, Parsed};
 use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
@@ -131,6 +131,23 @@ pub enum Handed {
     Took { only_itself: bool },
 }
 
+/// Boxes that never go back with Esc, nor take where the box before them
+/// came from: a message (`say`), which tells what a pick did rather than
+/// asking anything, a tip, a hover's peek, mission control, the pictures
+/// beside a pane and the restart's steps.
+const NEVER_COMES: &[&str] = &[
+    "message",
+    "tip",
+    "peek",
+    "mission",
+    "pictures",
+    "build-steps",
+];
+
+/// How long a pick's box may take to open (a lookup) and still go back to
+/// the box it was picked in.
+const COMING_FOR: Duration = Duration::from_secs(30);
+
 /// How long after a pick from the palette its key's tip comes, so it shows
 /// over what the command opened rather than before it (tip.sh's `-d 1`).
 const KEY_TIP_DELAY: Duration = Duration::from_secs(1);
@@ -167,10 +184,22 @@ impl Server {
         }
         c.overlays.look = Look::read_for(c.truecolor());
         let about = c.overlays.about_next.take();
+        let mut came = Came::default();
+        let takes_coming = !NEVER_COMES.contains(&overlay.kind());
+        if takes_coming
+            && let Some(coming) = c.overlays.coming.take()
+            && coming.at.elapsed() < COMING_FOR
+        {
+            if let Some(kept) = &coming.kept {
+                overlay.restore(kept);
+            }
+            came = coming.came;
+        }
         c.overlays.layers.push(Layer {
             overlay,
             then,
             about,
+            came,
         });
         self.overlays_changed(client);
     }
@@ -385,7 +414,8 @@ impl Server {
                     return Handed::Took { only_itself };
                 }
                 Step::Close(outcome) => {
-                    self.finish_top(id, outcome);
+                    let esc = matches!(&parsed.input, Input::Key(k) if k.code == KeyCode::Esc && k.mods.is_empty());
+                    self.finish_top_by(id, outcome, esc);
                     return Handed::Took { only_itself: false };
                 }
                 Step::Pass => {
@@ -409,18 +439,108 @@ impl Server {
     }
 
     fn finish_top(&mut self, id: ClientId, outcome: Outcome) {
-        if let Some(layer) = self
+        self.finish_top_by(id, outcome, false);
+    }
+
+    /// As `finish_top`, closed by Esc when `esc`: a box that came from
+    /// another (`Came`) and closed with nothing chosen opens that one
+    /// again, as it was.
+    fn finish_top_by(&mut self, id: ClientId, outcome: Outcome, esc: bool) {
+        let mut back = None;
+        if let Some(mut layer) = self
             .clients
             .get_mut(&id)
             .and_then(|c| c.overlays.layers.pop())
         {
+            if esc && matches!(outcome, Outcome::Dismissed | Outcome::No) {
+                back = layer.came.back.take();
+            }
             self.finished(id, layer, outcome);
         }
         self.overlays_changed(id);
+        if let Some(back) = back {
+            self.go_back(id, back);
+        }
     }
 
-    /// An overlay taken off the stack: its opener is told how it ended.
+    /// Opens again the box Esc went back to, with its search and row, it
+    /// going back in turn to the one it came from.
+    fn go_back(&mut self, id: ClientId, back: Back) {
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        let Back {
+            reopen,
+            kept,
+            before,
+        } = back;
+        c.overlays.coming = Some(Coming {
+            came: Came {
+                back: before.map(|b| *b),
+                reopen: Some(reopen.clone()),
+            },
+            kept,
+            at: Instant::now(),
+        });
+        reopen(self, id);
+    }
+
+    /// How the next box opened on a client opens again, for one opened from
+    /// it to go back to it: M-p's palette, and the command picked in it.
+    pub(crate) fn reopens_with(&mut self, client: ClientId, reopen: super::Reopen) {
+        let Some(c) = self.clients.get_mut(&client) else {
+            return;
+        };
+        match &mut c.overlays.coming {
+            Some(coming) => coming.came.reopen = Some(reopen),
+            None => {
+                c.overlays.coming = Some(Coming {
+                    came: Came {
+                        back: None,
+                        reopen: Some(reopen),
+                    },
+                    kept: None,
+                    at: Instant::now(),
+                })
+            }
+        }
+    }
+
+    /// Input reached the workspace (a key, a press, a paste): the next box
+    /// opened came from nothing before it.
+    pub(crate) fn forget_coming(&mut self, client: ClientId) {
+        if let Some(c) = self.clients.get_mut(&client) {
+            c.overlays.coming = None;
+        }
+    }
+
+    /// An overlay taken off the stack: its opener is told how it ended. A
+    /// pick in a box that came from M-p (or is M-p) leaves where the next
+    /// box comes from first, for one its opener opens.
     fn finished(&mut self, id: ClientId, layer: Layer, outcome: Outcome) {
+        let picked = !matches!(outcome, Outcome::Dismissed | Outcome::No);
+        let Came { back, reopen } = layer.came;
+        let back = match reopen {
+            Some(reopen) => Some(Back {
+                reopen,
+                kept: layer.overlay.kept(),
+                before: back.map(Box::new),
+            }),
+            None => back,
+        };
+        if picked
+            && let Some(back) = back
+            && let Some(c) = self.clients.get_mut(&id)
+        {
+            c.overlays.coming = Some(Coming {
+                came: Came {
+                    back: Some(back),
+                    reopen: None,
+                },
+                kept: None,
+                at: Instant::now(),
+            });
+        }
         if let Some(then) = layer.then {
             then(self, id, outcome);
         }
@@ -544,6 +664,7 @@ impl Server {
                             overlay: Box::new(pictures),
                             then: None,
                             about: None,
+                            came: Came::default(),
                         },
                     );
                 }
@@ -1314,6 +1435,8 @@ impl Server {
             .chain(entries.iter().map(Entry::preview))
             .collect();
         picker = picker.previews(previews).kit(caps);
+        // Esc in a box a command picked here opened opens the palette again.
+        self.reopens_with(client, std::sync::Arc::new(|s, c| s.open_palette(c)));
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;
@@ -1340,6 +1463,11 @@ impl Server {
             if server.mission_open(client) && !entry.action.in_mission() {
                 server.mission_close(client);
             }
+            let action = entry.action.clone();
+            server.reopens_with(
+                client,
+                std::sync::Arc::new(move |s, c| s.act(c, action.clone())),
+            );
             server.act(client, entry.action.clone());
             if let Some(key) = entry.keys.first() {
                 server.key_tip_later(client, key);

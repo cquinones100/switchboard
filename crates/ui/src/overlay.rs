@@ -68,6 +68,15 @@ pub enum Outcome {
     PickedMany(Vec<Picked>),
 }
 
+/// What a box shows of its list as it closes (what is typed in its search
+/// and the row chosen, by its value), so a box it opened can open it again
+/// as it was when Esc goes back to it (`Overlay::kept`, `Overlay::restore`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Kept {
+    pub typed: String,
+    pub chosen: Option<String>,
+}
+
 /// What came of a key or a mouse event given to an overlay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -149,6 +158,14 @@ pub trait Overlay: AsAny + Send {
     fn deadline(&self) -> Option<Instant> {
         None
     }
+
+    /// Its search and chosen row, for a box with a list; none for the rest.
+    fn kept(&self) -> Option<Kept> {
+        None
+    }
+
+    /// Takes the search and chosen row it had (`kept`) as it opens again.
+    fn restore(&mut self, _kept: &Kept) {}
 
     /// Where the terminal's cursor goes while it is on top (a field being
     /// typed in); hidden when `None`.

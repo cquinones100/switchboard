@@ -802,6 +802,29 @@ fn lit(
 }
 
 impl Overlay for Picker {
+    fn kept(&self) -> Option<crate::overlay::Kept> {
+        Some(crate::overlay::Kept {
+            typed: self.query.clone(),
+            chosen: self.chosen().map(|item| item.value.clone()),
+        })
+    }
+
+    fn restore(&mut self, kept: &crate::overlay::Kept) {
+        self.query = kept.typed.clone();
+        self.field = Field::new().with_text(&kept.typed);
+        self.refilter();
+        if let Some(at) = kept.chosen.as_ref().and_then(|value| {
+            self.shown
+                .iter()
+                .position(|(i, _)| self.items[*i].value == *value)
+        }) {
+            self.cursor = at;
+            if self.cursor >= self.top + self.room.max(1) {
+                self.top = self.cursor + 1 - self.room.max(1);
+            }
+        }
+    }
+
     fn drawn(&self) -> Option<&crate::draw::Drawn> {
         self.drawn.as_ref()
     }
@@ -1128,6 +1151,20 @@ mod tests {
         for c in text.chars() {
             p.key(Key::new(KeyCode::Char(c), Mods::NONE), &Look::default());
         }
+    }
+
+    #[test]
+    fn a_list_opened_again_takes_what_was_typed_and_the_row_chosen_by_its_value() {
+        let mut first = Picker::new("t", items());
+        typed(&mut first, "pane");
+        first.key(Key::new(KeyCode::Down, Mods::NONE), &Look::default());
+        let kept = first.kept().unwrap();
+        assert_eq!(kept.typed, "pane");
+        // The same rows in another order, as the palette's recent first.
+        let mut again = Picker::new("t", items().into_iter().rev().collect());
+        again.restore(&kept);
+        assert_eq!(again.typed(), "pane");
+        assert_eq!(again.chosen().map(|i| &i.value), kept.chosen.as_ref());
     }
 
     #[test]

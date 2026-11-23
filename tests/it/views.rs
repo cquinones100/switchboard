@@ -1004,6 +1004,59 @@ fn desktop_stand_ins(home: &Path, did: &Path) {
     stand_in::desktop(&home.join("bin"), &tools, did, &home.join("clipboard"));
 }
 
+/// Esc in the link list M-p opened goes back to M-p, with what was typed
+/// in it and the command chosen, and a second Esc closes M-p; the same
+/// list opened by its own key closes on Esc, to the pane.
+#[test]
+fn esc_in_the_link_list_goes_back_to_m_p_only_when_m_p_opened_it() {
+    let server = start(json!({"sidebar": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text("printf 'see http://127.0.0.1:9/plain\\n'\r");
+    client.wait_for("the printed line", |s| {
+        s.iter().any(|l| l.starts_with("see http"))
+    });
+
+    let palette_up = |s: &[String]| s.iter().any(|l| l.contains("╭─ Actions"));
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("link");
+    client.wait_text("› ");
+    // Its row chosen, wherever 'link' ranks it.
+    const OPEN: &str = "› Open a link from this pane in";
+    for _ in 0..12 {
+        if client.screen().iter().any(|l| l.contains(OPEN)) {
+            break;
+        }
+        client.type_text("\x1b[B");
+        std::thread::sleep(Duration::from_millis(100) * common::patience());
+    }
+    client.wait_text(OPEN);
+    client.type_text("\r");
+    client.wait_text("ctrl-o read it beside");
+    client.type_text("\x1b");
+    let screen = client.wait_for("M-p back", |s| {
+        palette_up(s) && !s.iter().any(|l| l.contains("ctrl-o read it beside"))
+    });
+    assert!(
+        screen.iter().any(|l| l.contains("› link")),
+        "what was typed kept:\n{}",
+        screen.join("\n")
+    );
+    client.wait_text(OPEN);
+    client.type_text("\x1b");
+    client.wait_for("M-p closed", |s| !palette_up(s));
+
+    server.ok(&["press", "open-link"]);
+    client.wait_text("ctrl-o read it beside");
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("ctrl-o read it beside"))
+    });
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    assert!(!palette_up(&client.screen()), "to the pane, not M-p");
+}
+
 #[test]
 fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
     let server = start(json!({"sidebar": false}));

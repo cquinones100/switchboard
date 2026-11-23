@@ -3315,6 +3315,16 @@ impl Server {
                 return;
             }
         }
+        // What is typed or pressed is the workspace's now: a box opened
+        // after it came from no box before it (src/ui).
+        let pressed = match &parsed.input {
+            Input::Key(_) | Input::Paste(_) => true,
+            Input::Mouse(m) => m.kind == input::MouseKind::Press,
+            _ => false,
+        };
+        if pressed {
+            self.forget_coming(id);
+        }
         // A tab's digits held after M-1 to M-9 take the next digit, and
         // any other key goes to their tab first (src/mux/tab_digits.rs).
         if self.tab_digit_input(id, &parsed.input) {

@@ -356,6 +356,31 @@ pub fn wrap_step(at: usize, n: usize, down: bool) -> usize {
 }
 
 impl Overlay for Menu {
+    fn kept(&self) -> Option<crate::overlay::Kept> {
+        Some(crate::overlay::Kept {
+            typed: self.filter.typed().to_string(),
+            chosen: self
+                .shown
+                .get(self.cursor)
+                .map(|&i| self.options[i].label.clone()),
+        })
+    }
+
+    fn restore(&mut self, kept: &crate::overlay::Kept) {
+        if !kept.typed.is_empty() {
+            self.filter.open = true;
+            self.filter.field = Field::new().with_text(&kept.typed);
+        }
+        self.refilter();
+        if let Some(at) = kept.chosen.as_ref().and_then(|label| {
+            self.shown
+                .iter()
+                .position(|&i| self.options[i].label == *label)
+        }) {
+            self.cursor = at;
+        }
+    }
+
     fn drawn(&self) -> Option<&crate::draw::Drawn> {
         self.drawn.as_ref()
     }
