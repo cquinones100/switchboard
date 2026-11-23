@@ -109,11 +109,18 @@ impl Server {
         pane: PaneId,
         arg: String,
     ) {
-        let pane = self.work_pane(tab, pane);
-        if let Some(old) = self.marked_in(tab, CODE_VIEW)
-            && old != pane
-        {
+        let mut pane = self.work_pane(tab, pane);
+        // The file read before goes, the pane it stood in for (or, beside
+        // it, the tab's pane) taking the new one.
+        if let Some(old) = self.marked_in(tab, CODE_VIEW) {
+            let parked = self.parked_of(old);
             self.kill_pane(old);
+            if old == pane {
+                match parked.or_else(|| self.tabs.get(&tab).map(|t| t.active)) {
+                    Some(p) if self.panes.contains_key(&p) => pane = p,
+                    _ => return,
+                }
+            }
         }
         let command = vec![crate::views::exe(), "code".into(), arg];
         let opened = match self.clear_beside(tab) {

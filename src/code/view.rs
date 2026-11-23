@@ -87,6 +87,8 @@ pub struct Viewer {
     looked: Instant,
     /// Where a drag started, in the text.
     drag_from: Option<(usize, usize)>,
+    /// Why the file can't be shown: said until any key closes the viewer.
+    failed: Option<String>,
 }
 
 /// The file's text, a binary one said rather than shown.
@@ -167,6 +169,7 @@ impl Viewer {
             copy,
             looked: Instant::now(),
             drag_from: None,
+            failed: None,
         }
     }
 
@@ -216,14 +219,19 @@ impl Viewer {
         self.editor.top = top;
     }
 
-    /// The top moved so the cursor's line is shown whole.
+    /// The top moved so the cursor's line is shown whole: a line more than
+    /// a screen above it can't be on the screen with it, so only the lines
+    /// within a screen of it are laid out.
     fn scroll_to_cursor(&mut self) {
         let row = self.editor.row();
+        let rows = self.body_rows();
         if row < self.top {
             self.top = row;
         }
-        let rows = self.body_rows();
-        while self.top < row && (self.top..=row).map(|r| self.rows_of(r)).sum::<usize>() > rows {
+        self.top = self.top.max(row.saturating_sub(rows));
+        let mut used: usize = (self.top..=row).map(|r| self.rows_of(r)).sum();
+        while self.top < row && used > rows {
+            used -= self.rows_of(self.top);
             self.top += 1;
         }
         self.editor.top = self.top;
@@ -232,6 +240,10 @@ impl Viewer {
     /// A key, read-only Vim's unless a prompt is open or it closes the
     /// viewer.
     pub fn key(&mut self, key: Key) {
+        if self.failed.is_some() {
+            self.quit = true;
+            return;
+        }
         self.message = None;
         if self.prompt.is_some() {
             return self.prompt_key(key);
@@ -425,7 +437,7 @@ impl Viewer {
     /// The file read again when it changed on disk since it was last read,
     /// the cursor kept on its line; whether it was.
     pub fn look(&mut self, now: Instant) -> bool {
-        if now.duration_since(self.looked) < LOOK_EVERY {
+        if self.failed.is_some() || now.duration_since(self.looked) < LOOK_EVERY {
             return false;
         }
         self.looked = now;
@@ -493,6 +505,18 @@ impl Viewer {
         if usize::from(area.width) > header.len() + tag.len() {
             let x = area.width - tag.len() as u16;
             buf.set_string(x, 0, tag, dim);
+        }
+        if let Some(why) = &self.failed {
+            buf.set_stringn(
+                1,
+                2,
+                why,
+                usize::from(area.width).saturating_sub(2),
+                Style::default(),
+            );
+            let any = "Any key closes it";
+            buf.set_stringn(1, 4, any, usize::from(area.width).saturating_sub(2), dim);
+            return None;
         }
         let gutter = self.gutter();
         let width = self.text_width();
@@ -628,18 +652,18 @@ pub fn parse_arg(arg: &str) -> (PathBuf, Option<usize>) {
 
 /// Runs the viewer on this terminal until it is closed.
 pub fn run(path: PathBuf, line: Option<usize>) -> ExitCode {
-    let text = match read_text(&path) {
-        Ok(text) => text,
-        Err(e) => {
-            eprintln!("switchboard code: {}: {e}", path.display());
-            return ExitCode::FAILURE;
-        }
+    // A file that can't be shown says why in the viewer, until a key
+    // closes it, rather than on a pane that goes as it ends.
+    let (text, failed) = match read_text(&path) {
+        Ok(text) => (text, None),
+        Err(e) => (String::new(), Some(e)),
     };
     let name = crate::paths::tilde(&path);
     let copy: fn(&str) = |text| {
         let _ = crate::platform::copy(text);
     };
     let mut viewer = Viewer::new(path, name, text, copy);
+    viewer.failed = failed;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     viewer.resize(cols, rows);
     if let Some(line) = line {
@@ -865,6 +889,37 @@ mod tests {
             mods: Mods::NONE,
         });
         assert_eq!((v.editor.row(), v.editor.col()), (1, 4));
+    }
+
+    #[test]
+    fn a_file_that_cant_be_shown_says_why_until_a_key_closes_it() {
+        let mut v = viewer();
+        v.failed = Some("A binary file, not shown".into());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 12));
+        v.draw(&mut buf);
+        let row: String = (0..40).map(|x| buf[(x, 2)].symbol().to_string()).collect();
+        assert!(row.contains("A binary file"), "{row}");
+        press(&mut v, "j");
+        assert!(v.quit);
+    }
+
+    #[test]
+    fn a_far_jump_scrolls_straight_to_its_line() {
+        let lines: String = (1..=50_000).map(|n| format!("line {n}\n")).collect();
+        let mut v = Viewer::new(
+            PathBuf::from("/nowhere/a.txt"),
+            "a.txt".into(),
+            lines,
+            |_| {},
+        );
+        v.resize(40, 12);
+        v.open_at(40_000);
+        press(&mut v, "gg");
+        let started = Instant::now();
+        v.key(Key::new(KeyCode::Char('o'), Mods::CTRL));
+        assert_eq!(v.editor.row(), 39_999, "back where it jumped from");
+        assert!(v.top + 10 > 39_999 && v.top <= 39_999);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

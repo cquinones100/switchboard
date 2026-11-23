@@ -499,6 +499,8 @@ impl Pager {
             self.cols += 1;
             self.bar = true;
         }
+        // Vim reads the text as it is now drawn, whatever laid it out again.
+        self.vim_follow_layout();
     }
 
     fn lay_out_at_width(&mut self) {
@@ -905,7 +907,10 @@ impl Pager {
                         if !typed.is_empty() {
                             self.query = Some(typed.clone());
                         }
+                        let from = self.cursor;
                         self.vim.search_for(&typed, kind == '/');
+                        self.vim.prompt_done();
+                        return self.vim_found_or_find(from, kind == '/');
                     }
                 }
                 self.vim.prompt_done();
@@ -1134,6 +1139,14 @@ impl Pager {
             }
         }
         let vim_key = vim_key_of(key)?;
+        let searching = idle && !ctrl && matches!(key.code, KeyCode::Char('n' | 'N'));
+        if searching {
+            let from = self.cursor;
+            self.vim.key(vim_key);
+            let back = key.code == KeyCode::Char('N');
+            let forward = (self.vim.search.as_ref().is_none_or(|(_, f)| *f)) != back;
+            return Some(self.vim_found_or_find(from, forward));
+        }
         let before = self.vim_state();
         self.vim.top = self.top;
         self.vim.height = self.body();
@@ -1167,9 +1180,33 @@ impl Pager {
         self.vim_after_from(from)
     }
 
+    /// A search Vim made from line `from`: where Vim found it, or, when
+    /// its text (the lines as they show) has none, where the view finds
+    /// it, by a picture's or diagram's words too and quiet about a match
+    /// only in a board's panel, as its own search was.
+    fn vim_found_or_find(&mut self, from: usize, forward: bool) -> Act {
+        let effects = self.vim.effects();
+        let missed = effects
+            .iter()
+            .any(|e| matches!(e, Effect::Message(m) if m.starts_with("E486") || m.starts_with("E384") || m.starts_with("E385")));
+        if !missed {
+            return self.vim_apply(effects, (from, 0));
+        }
+        let at = if forward { from + 1 } else { from };
+        let act = self.find(at, forward);
+        self.vim.go_to(self.cursor, 0);
+        act
+    }
+
     /// `vim_after` for a key that started with the cursor at `from`.
     fn vim_after_from(&mut self, from: (usize, usize)) -> Act {
-        for effect in self.vim.effects() {
+        let effects = self.vim.effects();
+        self.vim_apply(effects, from)
+    }
+
+    /// `vim_after_from` with the effects already taken.
+    fn vim_apply(&mut self, effects: Vec<Effect>, from: (usize, usize)) -> Act {
+        for effect in effects {
             match effect {
                 Effect::Copy(text) => {
                     (self.copy)(&text);
@@ -1221,7 +1258,7 @@ impl Pager {
             return;
         };
         let plain = line.plain();
-        let at = super::markdown::width(&plain[..self.vim.col().min(plain.len())]);
+        let at = width_to(&plain, self.vim.col());
         let cols = self.across_cols().max(1);
         if at < self.left {
             self.left = at;
@@ -1236,7 +1273,7 @@ impl Pager {
             return None;
         }
         let (s, e) = self.vim.selection()?.span(i, plain)?;
-        let width = |b: usize| super::markdown::width(&plain[..b.min(plain.len())]);
+        let width = |b: usize| width_to(plain, b);
         // A line selected whole with nothing on it is lit a column wide.
         let end = width(e).max(width(s) + 1);
         Some((width(s), end))
@@ -1253,7 +1290,7 @@ impl Pager {
             return None;
         }
         let plain = self.doc.lines.get(self.vim.row())?.plain();
-        let at = super::markdown::width(&plain[..self.vim.col().min(plain.len())]);
+        let at = width_to(&plain, self.vim.col());
         let x = (at.checked_sub(self.left)? + self.gutter()).min(self.cols.saturating_sub(1));
         Some((x, row))
     }
@@ -1637,6 +1674,16 @@ fn vim_key_of(key: KeyEvent) -> Option<Key> {
     mods.alt = key.modifiers.contains(KeyModifiers::ALT);
     mods.shift = key.modifiers.contains(KeyModifiers::SHIFT);
     Some(Key::new(code, mods))
+}
+
+/// The columns a line's text takes up to byte `byte`, a byte inside a
+/// character counted from that character's start.
+fn width_to(plain: &str, byte: usize) -> usize {
+    let mut end = byte.min(plain.len());
+    while !plain.is_char_boundary(end) {
+        end -= 1;
+    }
+    super::markdown::width(&plain[..end])
 }
 
 /// The byte of a line's text at display column `col`, its end past it.
@@ -2251,6 +2298,25 @@ mod tests {
                 Some(switchboard_vim::editor::READ_ONLY)
             );
         }
+    }
+
+    #[test]
+    fn a_column_inside_a_wide_character_is_measured_from_its_start() {
+        assert_eq!(width_to("a\u{E0B6}b", 2), 1);
+        assert_eq!(width_to("a\u{E0B6}b", 4), 2);
+    }
+
+    #[test]
+    fn a_search_vim_s_text_misses_finds_a_picture_by_its_words() {
+        let text = "Before\n\n![Login screen](https://x.example/a.png)\n\nAfter\n";
+        let mut pager = with_pictures(text, 80, 30);
+        press(&mut pager, "/Login");
+        pager.key(key(KeyCode::Enter));
+        assert!(
+            pager.doc.lines[pager.cursor].picture.is_some(),
+            "on the picture"
+        );
+        assert_eq!(pager.vim.row(), pager.cursor);
     }
 
     #[test]
