@@ -1042,11 +1042,15 @@ function turns(messages, working) {
     const rest = turn.slice(opened);
     const last = rest.map((m) => m.who).lastIndexOf("tool");
     if (last < 0) return [...said, ...rest];
-    let replied = last;
-    while (respawns(rest[last]) && replied > 0 && rest[replied - 1].who === "claude") replied -= 1;
-    const reply = rest.slice(replied, last);
+    // A landing that retried its respawn ends with several in a row: the
+    // reply is the text before the first of them.
+    let ended = last;
+    while (ended > 0 && respawns(rest[ended]) && respawns(rest[ended - 1])) ended -= 1;
+    let replied = ended;
+    while (respawns(rest[ended]) && replied > 0 && rest[replied - 1].who === "claude") replied -= 1;
+    const reply = rest.slice(replied, ended);
     const unanswered = !reply.length && working && g === groups.length - 1;
-    const steps = unanswered ? rest : [...rest.slice(0, replied), ...rest.slice(last, last + 1)];
+    const steps = unanswered ? rest : [...rest.slice(0, replied), ...rest.slice(ended, last + 1)];
     // The pictures Claude showed stay in sight with the steps folded.
     const looks = steps.filter((m) => m.who === "look");
     const key = keys[g];
