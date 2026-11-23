@@ -24,12 +24,11 @@ pub struct Found {
 }
 
 impl Found {
-    /// The path as `switchboard code` takes it: `path:line` with a line.
+    /// The path as `switchboard code` takes it: `path:line`.
     pub fn arg(&self, file: &Path) -> String {
-        match self.line {
-            Some(line) => format!("{}:{line}", file.display()),
-            None => file.display().to_string(),
-        }
+        // Always with a line, so a file whose name ends in `:<digits>`
+        // isn't read as one.
+        format!("{}:{}", file.display(), self.line.unwrap_or(1))
     }
 
     /// What its row in the list says: the path and where in it.
@@ -131,6 +130,7 @@ pub fn repo_files(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
     let out = Command::new("git")
         .arg("-C")
         .arg(&top)
+        .args(["-c", "core.quotePath=false"])
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .output()
         .ok()

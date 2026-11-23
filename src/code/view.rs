@@ -81,7 +81,7 @@ pub struct Viewer {
     jump_at: usize,
     pub quit: bool,
     /// How a yank reaches the clipboard.
-    copy: fn(&str),
+    copy: fn(&str) -> Result<(), String>,
     /// When the file was last read.
     modified: Option<SystemTime>,
     looked: Instant,
@@ -148,7 +148,12 @@ fn layout(line: &str, width: usize) -> Vec<Vec<Cell>> {
 }
 
 impl Viewer {
-    pub fn new(path: PathBuf, name: String, text: String, copy: fn(&str)) -> Viewer {
+    pub fn new(
+        path: PathBuf,
+        name: String,
+        text: String,
+        copy: fn(&str) -> Result<(), String>,
+    ) -> Viewer {
         let mut editor = Editor::new(Text::from_file(&text));
         editor.read_only = true;
         editor.clipboard = true;
@@ -277,12 +282,11 @@ impl Viewer {
         for effect in self.editor.effects() {
             match effect {
                 Effect::Copy(text) => {
-                    (self.copy)(&text);
                     let lines = text.trim_end_matches('\n').lines().count().max(1);
-                    self.message = Some(if lines == 1 {
-                        "Copied".into()
-                    } else {
-                        format!("Copied {lines} lines")
+                    self.message = Some(match (self.copy)(&text) {
+                        Err(e) => format!("Couldn't copy: {e}"),
+                        Ok(()) if lines == 1 => "Copied".into(),
+                        Ok(()) => format!("Copied {lines} lines"),
                     });
                 }
                 Effect::Message(text) => self.message = Some(text),
@@ -660,9 +664,8 @@ pub fn run(path: PathBuf, line: Option<usize>) -> ExitCode {
         Err(e) => (String::new(), Some(e)),
     };
     let name = crate::paths::tilde(&path);
-    let copy: fn(&str) = |text| {
-        let _ = crate::platform::copy(text);
-    };
+    let copy: fn(&str) -> Result<(), String> =
+        |text| crate::platform::copy(text).map_err(|e| e.to_string());
     let mut viewer = Viewer::new(path, name, text, copy);
     viewer.failed = failed;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -784,7 +787,10 @@ mod tests {
     const CODE: &str = "fn main() {\n    let total = add(1, 2);\n    println!(\"{total}\");\n}\n\nfn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
 
     fn viewer() -> Viewer {
-        let copy: fn(&str) = |t| COPIED.lock().unwrap().push(t.to_string());
+        let copy: fn(&str) -> Result<(), String> = |t| {
+            COPIED.lock().unwrap().push(t.to_string());
+            Ok(())
+        };
         let mut v = Viewer::new(
             PathBuf::from("/nowhere/main.rs"),
             "main.rs".into(),
@@ -847,7 +853,7 @@ mod tests {
             PathBuf::from("/nowhere/a.txt"),
             "a.txt".into(),
             lines,
-            |_| {},
+            |_| Ok(()),
         );
         v.resize(40, 12);
         v.open_at(50);
@@ -911,7 +917,7 @@ mod tests {
             PathBuf::from("/nowhere/a.txt"),
             "a.txt".into(),
             lines,
-            |_| {},
+            |_| Ok(()),
         );
         v.resize(40, 12);
         v.open_at(40_000);

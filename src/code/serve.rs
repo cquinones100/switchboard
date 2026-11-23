@@ -18,8 +18,23 @@ use crate::mux::{PaneId, TabId};
 use crate::ui::{PickItem, Picker};
 use crate::{paths, settings};
 
+/// The most of the repository's files typing searches: the picker filters
+/// them on the server's task at each key, so a list beyond this would slow
+/// every tab while you type; the box says when it was cut.
+const MOST_FILES: usize = 50_000;
+
 /// The option marking the viewer's pane.
 pub const CODE_VIEW: &str = "@code_view";
+
+/// What `open_code` found off the server's task: the files the screen
+/// names with where each is, the repository's files by their path from its
+/// top, and whether that list was cut at `MOST_FILES`.
+struct Listed {
+    files: Vec<(Found, PathBuf)>,
+    repo: Vec<String>,
+    top: PathBuf,
+    cut: bool,
+}
 
 impl Server {
     /// M-p's "Open a file from this pane in the side panel": the files the
@@ -47,25 +62,28 @@ impl Server {
                     .filter_map(|f| Some((find::resolve(&f.path, &dir, &home)?, f)))
                     .map(|(file, f)| (f, file))
                     .collect();
-                let (top, repo) = find::repo_files(&dir).unwrap_or((dir, Vec::new()));
-                (files, repo, top)
+                let (top, mut repo) = find::repo_files(&dir).unwrap_or((dir, Vec::new()));
+                let cut = repo.len() > MOST_FILES;
+                repo.truncate(MOST_FILES);
+                Listed {
+                    files,
+                    repo,
+                    top,
+                    cut,
+                }
             },
-            move |server, client, (files, repo, top)| {
-                server.pick_code(client, tab, pane, files, repo, top);
-            },
+            move |server, client, listed| server.pick_code(client, tab, pane, listed),
         );
     }
 
     /// The list `open_code` found, or why there is none.
-    fn pick_code(
-        &mut self,
-        client: ClientId,
-        tab: TabId,
-        pane: PaneId,
-        files: Vec<(Found, PathBuf)>,
-        repo: Vec<String>,
-        top: PathBuf,
-    ) {
+    fn pick_code(&mut self, client: ClientId, tab: TabId, pane: PaneId, listed: Listed) {
+        let Listed {
+            files,
+            repo,
+            top,
+            cut,
+        } = listed;
         if files.is_empty() && repo.is_empty() {
             return self.say(Some(client), "No file in this pane");
         }
@@ -74,11 +92,16 @@ impl Server {
             .iter()
             .map(|(found, file)| PickItem::new(found.row(), found.arg(file)))
             .collect();
-        items.extend(repo.iter().map(|name| {
-            let mut item = PickItem::new(name.clone(), top.join(name).display().to_string());
-            item.tags = "repository".into();
-            item
-        }));
+        // A file the screen names is listed once, at the line it names;
+        // a file's value always carries a line, so a name ending in
+        // `:<digits>` isn't read as one.
+        let shown: Vec<&PathBuf> = files.iter().map(|(_, file)| file).collect();
+        items.extend(
+            repo.iter()
+                .map(|name| (name, top.join(name)))
+                .filter(|(_, file)| !shown.contains(&file))
+                .map(|(name, file)| PickItem::new(name.clone(), format!("{}:1", file.display()))),
+        );
         let mut picker = Picker::new("Open a file from this pane", items)
             .named("code")
             .prompt("Open: ")
@@ -86,6 +109,11 @@ impl Server {
             .searched_from(on_screen);
         if on_screen == 0 {
             picker = picker.header("No file on the screen: type to search the repository's");
+        }
+        if cut {
+            picker = picker.header(format!(
+                "Typing searches the repository's first {MOST_FILES} files of more"
+            ));
         }
         self.about_tab(client, tab, move |s| {
             s.pick(client, picker, move |server, client, picked| {
@@ -116,6 +144,7 @@ impl Server {
                     if let Some(slot) = self.panes.get_mut(&old) {
                         slot.opts.insert(CODE_VIEW.into(), "1".into());
                     }
+                    self.focus_pane(old);
                 }
                 Err(e) => self.say(Some(client), &format!("Couldn't open the file: {e}")),
             }

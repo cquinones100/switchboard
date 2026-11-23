@@ -64,4 +64,4 @@ It is the same program in both. Alone, it answers for the workspace itself, and 
 
 ## How it is built
 
-Of Switchboard's crates it depends on two: `switchboard-plugin-api`, everything a plugin and the workspace say to each other, and `switchboard-ui`, what everything draws with. It never depends on `switchboard` itself, so the compiler keeps it out of the multiplexer. Everything it asks of the workspace is in [`src/host.rs`](src/host.rs).
+Of Switchboard's crates it depends on three: `switchboard-plugin-api`, everything a plugin and the workspace say to each other, `switchboard-ui`, what everything draws with, and `switchboard-vim`, the Vim it edits with, which Switchboard's views and code viewer read with too. It never depends on `switchboard` itself, so the compiler keeps it out of the multiplexer. Everything it asks of the workspace is in [`src/host.rs`](src/host.rs).

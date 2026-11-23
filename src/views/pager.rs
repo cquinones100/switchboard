@@ -195,7 +195,7 @@ pub struct Pager {
     /// there is one (`has_cursor`).
     vim: Editor,
     /// How a yank reaches the clipboard.
-    copy: fn(&str),
+    copy: fn(&str) -> Result<(), String>,
     /// What the prompt line says for a moment ("Pattern not found").
     note: Option<String>,
     /// The page being read, which o opens.
@@ -261,9 +261,7 @@ impl Pager {
                 vim.clipboard = true;
                 vim
             },
-            copy: |text| {
-                let _ = crate::platform::copy(text);
-            },
+            copy: |text| crate::platform::copy(text).map_err(|e| e.to_string()),
             note: None,
             url: None,
             pictures: None,
@@ -1217,12 +1215,11 @@ impl Pager {
         for effect in effects {
             match effect {
                 Effect::Copy(text) => {
-                    (self.copy)(&text);
                     let lines = text.trim_end_matches('\n').lines().count().max(1);
-                    self.note = Some(if lines == 1 {
-                        "Copied".into()
-                    } else {
-                        format!("Copied {lines} lines")
+                    self.note = Some(match (self.copy)(&text) {
+                        Err(e) => format!("Couldn't copy: {e}"),
+                        Ok(()) if lines == 1 => "Copied".into(),
+                        Ok(()) => format!("Copied {lines} lines"),
                     });
                 }
                 Effect::Message(text) => self.note = Some(text),
@@ -2350,7 +2347,10 @@ mod tests {
             10,
         )
         .with_cursor(true);
-        pager.copy = |t| COPIED.lock().unwrap().push(t.to_string());
+        pager.copy = |t| {
+            COPIED.lock().unwrap().push(t.to_string());
+            Ok(())
+        };
         press(&mut pager, "wvey");
         assert_eq!(
             COPIED.lock().unwrap().pop().as_deref(),

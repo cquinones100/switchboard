@@ -316,7 +316,7 @@ jobs:
           fi
           # Only what changed Notes: a commit to the rest of the
           # repository is no part of this release.
-          git log --no-merges --format='- %s (%h)' "$range" -- crates/notes > commits.md
+          git log --no-merges --format='- %s (%h)' "$range" -- crates/notes crates/vim > commits.md
           limit=60000
           {
             if [ -n "$previous" ]; then

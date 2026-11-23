@@ -25,8 +25,9 @@
 # nothing here.
 #
 # The version is Cargo.toml's `version` (the workspace's, the first line of
-# the file that sets one, which the `switchboard`, `switchboard-ui` and
-# `switchboard-plugin-api` crates take; the diff, crates/diff, and Notes,
+# the file that sets one, which the `switchboard`, `switchboard-ui`,
+# `switchboard-plugin-api`, `switchboard-vim` and `switchboard-highlight`
+# crates take; the diff, crates/diff, and Notes,
 # crates/notes, each have a version and releases of their own,
 # release-diff.yml and release-notes.yml), which the binary compares
 # (CARGO_PKG_VERSION) with the releases' to know when one is newer. Bump it
