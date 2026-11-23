@@ -735,7 +735,8 @@ console.log("no tools=" + said());
 
 /// A turn that ends by running `switchboard respawn` (queue-and-clean's
 /// last step, assets/phone/app.js's `turns`) keeps the text before that call
-/// open after its folded steps; a turn a finished background task woke
+/// open after its folded steps, however many respawns follow it (a landing
+/// that retried its respawn); a turn a finished background task woke
 /// starts at a dim line, with no avatar. Skipped without Node.
 #[test]
 fn a_respawned_turns_last_line_stays_open_and_a_wake_up_is_a_dim_line() {
@@ -771,6 +772,9 @@ for (const state of ["idle", "working"]) {
 }
 app.querySelector("button.steps").click();
 console.log("opened=" + said());
+app.querySelector("button.steps").click();
+draw([...landed, { who: "tool", text: "Bash: switchboard respawn -c '/repo' claude --resume abc", at: 7 }]);
+console.log("retried=" + said());
 update("idle");
 draw([
   { who: "you", text: "Watch CI", at: 10 },
@@ -793,6 +797,7 @@ console.log("woken=" + said());
             "idle=@/queue-and-clean | [▸ 3 steps] | @queue-and-clean: success (merged)",
             "working=@/queue-and-clean | [▸ 3 steps] | @queue-and-clean: success (merged)",
             "opened=@/queue-and-clean | [▾ 3 steps] | tool:Bash: switchboard landing | @Landing. | tool:Bash: gh pr merge | tool:Bash: switchboard respawn -c '/repo' claude --resume abc | @queue-and-clean: success (merged)",
+            "retried=@/queue-and-clean | [▸ 4 steps] | @queue-and-clean: success (merged)",
             "woken=@Watch CI | [▸ 1 step] | @Watching. | dim:a background task finished | [▸ 1 step] | @CI passed.",
         ],
         "{stdout}"
