@@ -473,8 +473,23 @@ button {
   display: grid;
   place-items: center;
   padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  overflow: hidden;
+  /* Its pinch and drag are app.js's own, the one zoom in the app. */
+  touch-action: none;
 }
-.full img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--picture); }
+.full img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--picture);
+  transform-origin: 0 0;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+/* A double tap's zoom eases there; a pinch or drag follows the fingers. */
+.full img.settle { transition: transform var(--move) var(--ease); }
+@media (prefers-reduced-motion: reduce) { .full img.settle { transition: none; } }
+.full .close { z-index: 1; }
 .full .close {
   position: absolute;
   top: calc(var(--s2) + env(safe-area-inset-top));

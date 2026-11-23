@@ -509,6 +509,7 @@ const ctx = vm.createContext({
   history: { replaceState: (_, __, url) => addresses.push(url) },
   window: { addEventListener: () => {}, innerWidth: 390 },
   setTimeout,
+  clearTimeout,
   location: { hash: "" },
   fetch: () => new Promise(() => {}),
 });
@@ -851,6 +852,97 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
             "on the drawer=5 channel buzzes=0",
             "far=null drawer # buzzes=1",
             "flick=null drawer",
+        ],
+        "{stdout}"
+    );
+}
+
+/// An image shown whole (assets/phone/app.js's `full`), run in Node over a
+/// page of its own: a pinch zooms it about the fingers up to 5×, a drag pans
+/// it with its edges held at the screen's, a double tap toggles 2.5× and
+/// fitted, a tap closes it only while fitted, an update keeps its zoom, and
+/// its × closes it; skipped without Node.
+#[test]
+fn an_image_shown_whole_pinches_pans_and_double_taps() {
+    let script = [CHANNEL_PAGE, r##"
+ctx.window.innerHeight = 800;
+const tab = { pane: "%5", index: 2, name: "phone", state: "working", wait: "", turn: { prompt: "go" } };
+const update = () => source.onmessage({ data: JSON.stringify({ live: true, tabs: [tab] }) });
+vm.runInContext(`state.me = { paired: true, computer: "mac" }; listen();`, ctx);
+update();
+let at = 0;
+const show = () => {
+  vm.runInContext(`state.open = "5"; state.full = "a.png"; render();`, ctx);
+  // Fitted: the whole width, centered under the notch's padding.
+  app.querySelector(".full img").getBoundingClientRect = () => ({ left: 0, top: 200, width: 390, height: 400 });
+};
+const img = () => app.querySelector(".full img");
+const shown = () => (img() ? JSON.stringify(img().style.transform || "fitted") : "closed");
+const send = (type, init) => { at += 20; img().dispatchEvent(new Event(type, { timeStamp: at, ...init })); };
+const ptr = (type, id, x, y) => send(type, { pointerId: id, clientX: x, clientY: y });
+const tap = (x, y) => { ptr("pointerdown", 9, x, y); ptr("pointerup", 9, x, y); send("click", { clientX: x, clientY: y }); };
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+(async () => {
+  show();
+  // Two fingers 100px apart, spread to 300px, their middle moved 100px right.
+  ptr("pointerdown", 1, 100, 300);
+  ptr("pointerdown", 2, 200, 300);
+  ptr("pointermove", 2, 400, 300);
+  console.log("pinched=" + shown());
+  ptr("pointermove", 2, 2000, 300);
+  console.log("most=" + shown().includes("scale(5)"));
+  ptr("pointermove", 2, 150, 300);
+  console.log("least=" + shown());
+  ptr("pointermove", 2, 400, 300);
+  ptr("pointerup", 2, 400, 300);
+  ptr("pointerup", 1, 100, 300);
+  send("click", { clientX: 250, clientY: 300 });
+  tap(250, 300);
+  await wait(400);
+  console.log("tapped zoomed=" + shown());
+  // Dragged far left, held at the right edge.
+  ptr("pointerdown", 1, 100, 100);
+  ptr("pointermove", 1, -900, 100);
+  ptr("pointerup", 1, -900, 100);
+  console.log("panned=" + shown());
+  update();
+  console.log("updated=" + shown());
+  tap(100, 300);
+  tap(100, 300);
+  console.log("double=" + shown());
+  tap(100, 300);
+  tap(100, 300);
+  console.log("again=" + shown() + " settle=" + img().classList.has("settle"));
+  app.querySelector(".full button.close").click();
+  console.log("x=" + shown());
+  show();
+  console.log("reopened=" + shown());
+  tap(100, 300);
+  console.log("before=" + shown());
+  await wait(400);
+  console.log("tapped fitted=" + shown());
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            r#"pinched="translate(-200px, -200px) scale(3)""#,
+            "most=true",
+            r#"least="fitted""#,
+            r#"tapped zoomed="translate(-200px, -200px) scale(3)""#,
+            r#"panned="translate(-780px, -200px) scale(3)""#,
+            r#"updated="translate(-780px, -200px) scale(3)""#,
+            r#"double="fitted""#,
+            r#"again="translate(-150px, -200px) scale(2.5)" settle=true"#,
+            "x=closed",
+            r#"reopened="fitted""#,
+            r#"before="fitted""#,
+            "tapped fitted=closed",
         ],
         "{stdout}"
     );

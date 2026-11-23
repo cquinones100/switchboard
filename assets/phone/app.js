@@ -1080,16 +1080,144 @@ function message(m, i, all) {
 
 const imageUrl = (name) => "/api/images/" + encodeURIComponent(name);
 
-// An image shown whole, over the channel, until its × or a tap.
+// An image shown whole, over the channel, until its × or a tap while it is
+// at its fitted size. It zooms and pans, the one thing in the app that does:
+// two fingers pinch it about the point between them (a trackpad's pinch, a
+// wheel with Ctrl, in the preview), one finger (or the mouse) drags it while
+// zoomed, and a double tap zooms to 2.5× there or back to fitted. The zoom is
+// a transform alone, so the page never reflows, and the image's edges are
+// held at the screen's once it is bigger than the screen.
+const ZOOM_MOST = 5;
+const ZOOM_TAPPED = 2.5;
+const DOUBLE_TAP = 300; // ms between a double tap's taps
+const TAP_SLOP = 10; // px a tap may move and still be a tap
+
 function full() {
   if (!state.full) return null;
+  const name = state.full;
   const close = () => { state.full = null; render(); };
-  return el(
+  const img = el("img", { src: imageUrl(state.full), alt: "The image, whole", draggable: "false" });
+  const box = el(
     "div",
-    { class: "full", onclick: close },
-    el("button", { class: "icon close", "aria-label": "Close" }, "×"),
-    el("img", { src: imageUrl(state.full), alt: "The image, whole" }),
+    { class: "full" },
+    el("button", { class: "icon close", "aria-label": "Close", onclick: close }, "×"),
+    img,
   );
+  // The image's place at its fitted size, read whenever it is there.
+  let base = null; // { left, top, width, height }
+  let s = 1;
+  let tx = 0;
+  let ty = 0;
+  const fitted = () => s === 1;
+  const measure = () => {
+    if (!fitted() || !img.getBoundingClientRect) return;
+    const r = img.getBoundingClientRect();
+    base = { left: r.left, top: r.top, width: r.width, height: r.height };
+  };
+  // Where an edge of the image sits on one axis: held to the screen's edges
+  // while bigger than it, else centered where it was fitted, moving toward the
+  // screen's middle as it grows so nothing jumps as it fills the screen.
+  const edge = (wanted, start, size, screen) => {
+    const now = size * s;
+    if (now >= screen) return Math.min(0, Math.max(screen - now, wanted));
+    const off = start - (screen - size) / 2;
+    return (screen - now) / 2 + (screen > size ? (off * (screen - now)) / (screen - size) : 0);
+  };
+  const draw = () => {
+    img.style.transform = fitted() ? "" : `translate(${tx}px, ${ty}px) scale(${s})`;
+  };
+  // Zoom to `to` keeping the image's point under (x, y) at (x2, y2).
+  const zoom = (to, x, y, x2 = x, y2 = y) => {
+    if (!base) return;
+    const u = (x - base.left - tx) / s;
+    const v = (y - base.top - ty) / s;
+    s = Math.min(ZOOM_MOST, Math.max(1, to));
+    if (s < 1.001) s = 1;
+    pan(x2 - base.left - u * s, y2 - base.top - v * s);
+  };
+  const pan = (x, y) => {
+    tx = edge(base.left + x, base.left, base.width, window.innerWidth) - base.left;
+    ty = edge(base.top + y, base.top, base.height, window.innerHeight) - base.top;
+    if (fitted()) tx = ty = 0;
+    draw();
+  };
+  const settle = (on) => img.classList.toggle("settle", on);
+
+  // The pointers down, by id, and the gesture they started.
+  const down = new Map();
+  let gesture = null; // { s, tx, ty, x, y, apart } as it started
+  let moved = false;
+  const begin = () => {
+    measure();
+    const [a, b] = [...down.values()];
+    gesture = b
+      ? { s, tx, ty, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, apart: Math.hypot(a.x - b.x, a.y - b.y) || 1 }
+      : { s, tx, ty, x: a.x, y: a.y };
+  };
+  box.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    if (!down.size) moved = false;
+    settle(false);
+    down.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+    if (box.setPointerCapture) box.setPointerCapture(e.pointerId);
+    begin();
+  });
+  box.addEventListener("pointermove", (e) => {
+    const p = down.get(e.pointerId);
+    if (!p || !gesture || !base) return;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (Math.hypot(p.x - p.x0, p.y - p.y0) > TAP_SLOP) moved = true;
+    const [a, b] = [...down.values()];
+    if (b) {
+      const x = (a.x + b.x) / 2;
+      const y = (a.y + b.y) / 2;
+      const to = (gesture.s * Math.hypot(a.x - b.x, a.y - b.y)) / gesture.apart;
+      // From the gesture's start, so the fingers' point stays under them.
+      [s, tx, ty] = [gesture.s, gesture.tx, gesture.ty];
+      zoom(to, gesture.x, gesture.y, x, y);
+    } else if (!fitted()) {
+      pan(gesture.tx + p.x - gesture.x, gesture.ty + p.y - gesture.y);
+    }
+  });
+  const up = (e) => {
+    if (!down.delete(e.pointerId)) return;
+    if (down.size) begin();
+    else gesture = null;
+  };
+  box.addEventListener("pointerup", up);
+  box.addEventListener("pointercancel", up);
+
+  // A trackpad's pinch reaches a desktop browser as a wheel with Ctrl.
+  box.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    measure();
+    settle(false);
+    zoom(s * Math.exp(-e.deltaY / 100), e.clientX, e.clientY);
+  }, { passive: false });
+
+  // A tap closes it while fitted, once it is plainly not a double tap.
+  let tapped = null; // { x, y, at, timer }
+  box.addEventListener("click", (e) => {
+    if (e.target.closest("button") || moved) return;
+    const at = e.timeStamp;
+    if (tapped && at - tapped.at < DOUBLE_TAP && Math.hypot(e.clientX - tapped.x, e.clientY - tapped.y) < 40) {
+      clearTimeout(tapped.timer);
+      tapped = null;
+      measure();
+      settle(true);
+      if (fitted()) zoom(ZOOM_TAPPED, e.clientX, e.clientY);
+      else zoom(1, e.clientX, e.clientY);
+      return;
+    }
+    if (tapped) clearTimeout(tapped.timer);
+    tapped = { x: e.clientX, y: e.clientY, at, timer: setTimeout(() => {
+      tapped = null;
+      if (fitted() && state.full === name) close();
+    }, DOUBLE_TAP) };
+  });
+  return box;
 }
 
 // One chosen image kept on the computer for the tab; its name.
@@ -1371,10 +1499,11 @@ function channelHead(tab) {
 }
 
 // The open tab's screen, kept while it is open: a redraw puts in a new head,
-// prompt card, "doing" line and image shown whole, the messages only when
+// prompt card and "doing" line, an image shown whole only when another is
+// shown (so one zoomed stays zoomed), the messages only when
 // the turns changed, and leaves the composer where it is, since taking a
 // focused field out of the page closes the keyboard.
-let shown = null; // { open, screen, head, list, messages, drawn, count, working, arrived, now, cardKey, composer, full }
+let shown = null; // { open, screen, head, list, messages, drawn, count, working, arrived, now, cardKey, composer, full, fullName }
 
 function channel(stick) {
   const tab = current();
@@ -1392,7 +1521,7 @@ function channel(stick) {
     const head = el("div", { class: "head" });
     const box = composer();
     const whole = el("div");
-    shown = { open: state.open, screen: el("div", { class: "screen channel-screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole };
+    shown = { open: state.open, screen: el("div", { class: "screen channel-screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole, fullName: null };
     swipeable(shown.screen);
     app.replaceChildren(shown.screen);
   }
@@ -1445,9 +1574,13 @@ function channel(stick) {
   if (newCard && cardKey === "answered" && foldGone < ms("--move")) fold(newCard, shown.folding.wasTall, foldGone);
   shown.cardKey = cardKey;
   shown.composer.sync(tab);
-  const whole = full() || el("div");
-  shown.full.replaceWith(whole);
-  shown.full = whole;
+  // The same image stays as it was, zoomed or not, as the channel updates.
+  if (shown.fullName !== state.full) {
+    const whole = full() || el("div");
+    shown.full.replaceWith(whole);
+    shown.full = whole;
+    shown.fullName = state.full;
+  }
   shown.list.scrollTop = stick || atEnd ? shown.list.scrollHeight : top;
 }
 
