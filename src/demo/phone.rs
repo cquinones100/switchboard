@@ -638,7 +638,7 @@ type MadeUp = (Item, Vec<(&'static str, Kind)>);
 
 /// Mission control's views as the phone's panel lists them (boards 185 to
 /// 187), made up: Landing's train, queue and what landed, Autopilot's tabs,
-/// the PR board's columns, CI's runs and the day's notifications, each with
+/// the PR board's columns, CI's runs, the day's notifications and Usage, each with
 /// options as the server offers them, in the shape `phone::mission` sends.
 pub fn views(now_ms: i64) -> Vec<Value> {
     let ago = |m: i64| now_ms - m * 60_000;
@@ -919,7 +919,66 @@ pub fn views(now_ms: i64) -> Vec<Value> {
             notifications,
             vec![],
         ),
+        usage(now_ms),
     ]
+}
+
+/// The Usage view, made up: the 5-hour limit filling past itself at its
+/// pace, the week's comfortably, today's and the week's spend, and the
+/// day's top tabs by spend, one of them closed since.
+fn usage(now_ms: i64) -> Value {
+    use crate::usage::charts::{self, Limit, Model, SpanSpend, TabSpend};
+    let now = now_ms.div_euclid(1000);
+    let tab = |pane: Option<u32>, index: usize, name: &str, spent: f64| TabSpend {
+        key: format!("tab:{index}"),
+        tab: pane,
+        index,
+        name: name.into(),
+        spent,
+        ..TabSpend::default()
+    };
+    let limit = |key: &str, used: f64, left: i64, pace: Option<f64>| Limit {
+        key: key.into(),
+        name: crate::usage::sessions::limit_name(key),
+        used,
+        resets_at: now + left,
+        pace,
+        detail: None,
+    };
+    let model = Model {
+        today: SpanSpend {
+            total: 14.2,
+            tabs: vec![
+                tab(Some(15), 5, "Checkout page layout", 5.1),
+                tab(Some(11), 1, "Migrate the orders table", 3.4),
+                tab(None, 27, "Reword the pricing page", 2.6),
+                tab(Some(13), 3, "Rate limit by token", 1.9),
+                tab(Some(19), 9, "Flaky login test", 1.2),
+            ],
+            ..SpanSpend::default()
+        },
+        week: SpanSpend {
+            total: 86.75,
+            ..SpanSpend::default()
+        },
+        limits: vec![
+            limit("five_hour", 62.0, 2 * 3600 + 600, Some(104.0)),
+            limit("seven_day", 41.0, 3 * 86400, Some(57.0)),
+        ],
+        ..Model::default()
+    };
+    let view = View {
+        id: ViewId::Usage,
+        title: "Usage".into(),
+        data: ViewData {
+            items: charts::items(vec![Item::new("spent", "$14.20 today")], &model),
+            ..ViewData::default()
+        },
+        loaded: true,
+    };
+    // The made-up tabs' Claude panes are their own ids.
+    let open = |t: TabId| Some(format!("%{}", t.0));
+    views::usage_json(&view, now, &open)
 }
 
 /// The images the made-up turns name: drawings of a phone's screen, in SVG.

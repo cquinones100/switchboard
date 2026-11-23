@@ -1797,7 +1797,7 @@ function render(stick) {
 // ── Mission control's panel (boards 185 to 187) ──
 // A panel swiped in from the right edge, on a channel or the drawer, or
 // opened from a channel's ⋯: mission control's Landing, Autopilot, PRs, CI
-// and Notifications views as the computer sends them (src/phone/mission.rs),
+// Notifications and Usage views as the computer sends them (src/phone/mission.rs),
 // each a 56 row with what needs you counted; a tap on one slides its items
 // in under mission control's groups, and a tap on an item opens its menu,
 // the options the phone can do: going to a tab opens its channel, opening
@@ -1958,6 +1958,7 @@ const TONE_OF_GROUP = (items) => (items[0] && items[0].tone) || "idle";
 // A view's items under its groups, in its order and tones, or its own words
 // for having none, needing setting up, or its last look failing.
 function viewItems(view) {
+  if (view.key === "usage") return usageItems(view);
   const list = el("div", { class: "panel-list drawer" + (state.live ? "" : " off") });
   const items = view.groups.reduce((n, g) => n + g.items.length, 0);
   if (view.setup) list.append(el("div", { class: "empty" }, view.setup));
@@ -1976,6 +1977,76 @@ function viewItems(view) {
           el("span", { class: "name" }, item.title),
           el("span", { class: "when " + (item.tone === "idle" ? "" : item.tone) }, item.time ? ago(item.time).replace(" ago", "") : ""),
           item.detail ? el("span", { class: "sub" }, item.detail) : null,
+        ),
+      );
+    }
+    list.append(group);
+  }
+  return list;
+}
+
+const dollars = (n) => "$" + Number(n || 0).toFixed(2);
+
+// The Usage view (src/phone/views.rs's usage_json), drawn from its numbers:
+// each limit a meter of the kit (board 184) in its tone, with its percent,
+// when it resets and, when its pace runs over, where that pace ends up;
+// today's and the week's spend; today's top tabs by spend, a tap on an
+// open one opening its channel. Nothing on it acts on the computer.
+function usageItems(view) {
+  const list = el("div", { class: "panel-list drawer usage" + (state.live ? "" : " off") });
+  const u = view.usage;
+  if (!u) {
+    list.append(el("div", { class: "empty" }, view.loaded === false ? "Loading…" : view.empty || "Nothing here."));
+    if (view.error) list.append(el("div", { class: "empty refused" }, view.error));
+    return list;
+  }
+  if (u.limits.length) {
+    const group = el("div", { class: "group" }, el("div", { class: "label idle" }, el("span", {}, "Limits"), el("span", {})));
+    for (const l of u.limits) {
+      const fill = el("span", { class: "fill " + l.tone });
+      fill.style.width = Math.max(0, Math.min(100, l.used)) + "%";
+      const meter = el("span", { class: "meter" }, fill);
+      if (l.pace !== null && l.pace !== undefined) {
+        const tick = el("span", { class: "tick" });
+        tick.style.left = Math.min(100, l.pace) + "%";
+        meter.append(tick);
+      }
+      const words = [l.resets];
+      if (l.over) words.push("at this pace, " + l.pace + "% by then");
+      group.append(
+        el(
+          "div",
+          { class: "limit", "data-limit": l.key },
+          el("span", { class: "name" }, l.name),
+          el("span", { class: "pct " + l.tone }, l.used + "%"),
+          meter,
+          el("span", { class: "sub" + (l.over ? " needs" : "") }, words.join(" · ")),
+        ),
+      );
+    }
+    list.append(group);
+  }
+  list.append(
+    el(
+      "div",
+      { class: "group" },
+      el("div", { class: "label idle" }, el("span", {}, "Spend"), el("span", {})),
+      el("div", { class: "spend" }, el("span", {}, "Today"), el("b", {}, dollars(u.today))),
+      el("div", { class: "spend" }, el("span", {}, "This week"), el("b", {}, dollars(u.week))),
+    ),
+  );
+  if (u.tabs.length) {
+    const group = el("div", { class: "group" }, el("div", { class: "label idle" }, el("span", {}, "Today's tabs"), el("span", {})));
+    for (const t of u.tabs) {
+      const n = t.pane ? String(t.pane).replace(/^%/, "") : null;
+      const open = n && state.tabs.some((x) => number(x) === n);
+      group.append(
+        el(
+          open ? "button" : "div",
+          { class: "row usage-tab", onclick: open ? () => { closePanel(); openTab(n); } : null },
+          el("span", { class: "mark idle" }, open ? "●" : "○"),
+          el("span", { class: "name" }, t.index ? el("span", { class: "num" }, t.index) : null, t.name),
+          el("span", { class: "when" }, dollars(t.spent)),
         ),
       );
     }

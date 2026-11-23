@@ -25,16 +25,22 @@ use crate::mission::choices::{self, Do};
 use crate::mission::view_acts::{self, Whole};
 use crate::mission::views::{self, View, ViewId};
 use crate::mux::TabId;
+use crate::usage::charts::{self, Limit};
+use crate::usage::sessions::{self, LIMIT_FULL};
 
 /// The views the phone lists, in its order, each while mission control
 /// would list it for a client with no view kept in front.
-pub const SHOWN: [ViewId; 5] = [
+pub const SHOWN: [ViewId; 6] = [
     ViewId::Landing,
     ViewId::Autopilot,
     ViewId::Prs,
     ViewId::Ci,
     ViewId::Notifications,
+    ViewId::Usage,
 ];
+
+/// How many of today's tabs by spend the Usage view lists.
+pub const TOP_TABS: usize = 5;
 
 /// How many of the Notifications view's rows show before a day folds: a
 /// phone's screenful.
@@ -291,6 +297,105 @@ pub fn view_json(
     })
 }
 
+/// Whether a limit needs you: as full as mission control marks it
+/// (`LIMIT_FULL`), or filling at a pace that runs past it before it resets.
+fn limit_needs(limit: &Limit) -> bool {
+    limit.used >= LIMIT_FULL || limit.pace.is_some_and(|p| p > 100.0)
+}
+
+/// A limit's tone as the computer's board colors its meter, its pace
+/// running over counting as full.
+fn limit_tone(limit: &Limit) -> &'static str {
+    if limit.used >= 100.0 {
+        "failed"
+    } else if limit_needs(limit) {
+        "needs"
+    } else {
+        "passed"
+    }
+}
+
+/// The Usage view as the phone's stream carries it, from the board's own
+/// model (`charts::Model`, carried by the view's first row) at `now`
+/// (seconds): its line, the fullest limit and today's spend; what needs
+/// you, each limit full or filling past it; each limit's percent, reset
+/// and pace; today's and the week's spend; and today's top tabs by spend,
+/// each with the Claude pane `pane_of` gives an open tab, for its channel.
+/// It has no groups and no options: nothing on it acts.
+pub fn usage_json(view: &View, now: i64, pane_of: &dyn Fn(TabId) -> Option<String>) -> Value {
+    let model = view
+        .loaded
+        .then(|| charts::model_of(&view.data.items))
+        .flatten();
+    let needs = model
+        .as_ref()
+        .map_or(0, |m| m.limits.iter().filter(|l| limit_needs(l)).count());
+    let line = match &model {
+        None if !view.loaded => "Loading…".to_string(),
+        None => line(view),
+        Some(m) => {
+            let spent = format!("${:.2} today", m.today.total);
+            match m.limits.iter().max_by(|a, b| a.used.total_cmp(&b.used)) {
+                Some(l) => format!("{} {}% · {spent}", l.name, l.used.round() as i64),
+                None => spent,
+            }
+        }
+    };
+    let usage = model.as_ref().map(|m| {
+        let limits: Vec<Value> = m
+            .limits
+            .iter()
+            .map(|l| {
+                json!({
+                    "key": l.key,
+                    "name": l.name,
+                    "used": l.used.round() as i64,
+                    "resets": sessions::resets(l.resets_at, now),
+                    "pace": l.pace.map(|p| p.round() as i64),
+                    "over": l.pace.is_some_and(|p| p > 100.0),
+                    "tone": limit_tone(l),
+                })
+            })
+            .collect();
+        let tabs: Vec<Value> = m
+            .today
+            .tabs
+            .iter()
+            .filter(|t| t.spent > 0.0)
+            .take(TOP_TABS)
+            .map(|t| {
+                json!({
+                    "index": (t.index > 0).then_some(t.index),
+                    "name": t.name,
+                    "spent": t.spent,
+                    "pane": t.tab.and_then(|id| pane_of(TabId(id))),
+                })
+            })
+            .collect();
+        json!({
+            "limits": limits,
+            "today": m.today.total,
+            "week": m.week.total,
+            "tabs": tabs,
+        })
+    });
+    json!({
+        "key": view.key(),
+        "title": views::bar_title(view),
+        "line": line,
+        "needs": needs,
+        "mark": if needs > 0 { "●" } else { "○" },
+        "tone": if needs > 0 { "needs" } else { "idle" },
+        "groups": [],
+        "acts": [],
+        "usage": usage,
+        "empty": view.data.empty,
+        "setup": view.data.setup,
+        "error": view.data.error,
+        "loaded": view.loaded,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +533,110 @@ mod tests {
             ..view(ViewId::Landing, Vec::new())
         };
         assert_eq!(line(&empty), "Nothing is landing.");
+    }
+    fn usage_view(limits: Vec<Limit>) -> View {
+        use crate::usage::charts::{Model, SpanSpend, TabSpend};
+        let tab = |tab: Option<u32>, index: usize, name: &str, spent: f64| TabSpend {
+            key: format!("k{index}"),
+            tab,
+            index,
+            name: name.into(),
+            spent,
+            ..TabSpend::default()
+        };
+        let model = Model {
+            today: SpanSpend {
+                total: 14.2,
+                tabs: vec![
+                    tab(Some(7), 3, "Checkout", 6.0),
+                    tab(None, 9, "Closed one", 3.0),
+                    tab(None, 0, "sessions outside a tab", 2.0),
+                    tab(Some(8), 4, "Four", 1.5),
+                    tab(Some(9), 5, "Five", 1.0),
+                    tab(Some(10), 6, "Six", 0.7),
+                ],
+                ..SpanSpend::default()
+            },
+            week: SpanSpend {
+                total: 80.5,
+                ..SpanSpend::default()
+            },
+            limits,
+            ..Model::default()
+        };
+        let items = charts::items(vec![Item::new("spent", "$14.20 today")], &model);
+        View {
+            loaded: true,
+            ..view(ViewId::Usage, items)
+        }
+    }
+
+    fn limit(key: &str, used: f64, pace: Option<f64>) -> Limit {
+        Limit {
+            key: key.into(),
+            name: sessions::limit_name(key),
+            used,
+            resets_at: 1_000 + 7_800,
+            pace,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn the_usage_view_carries_the_limits_spends_and_top_tabs() {
+        let pane = |t: TabId| (t == TabId(7)).then(|| "%21".to_string());
+        let v = usage_view(vec![
+            limit("five_hour", 62.4, Some(80.0)),
+            limit("seven_day", 30.0, None),
+        ]);
+        let u = usage_json(&v, 1_000, &pane);
+        assert_eq!(u["key"], "usage");
+        assert_eq!(u["line"], "5-hour 62% · $14.20 today");
+        assert_eq!(u["needs"], 0, "no count while no limit is near full");
+        assert_eq!(u["groups"], json!([]));
+        assert_eq!(u["acts"], json!([]), "nothing on it acts");
+        let d = &u["usage"];
+        assert_eq!(d["today"], 14.2);
+        assert_eq!(d["week"], 80.5);
+        assert_eq!(d["limits"][0]["name"], "5-hour");
+        assert_eq!(d["limits"][0]["used"], 62);
+        assert_eq!(d["limits"][0]["resets"], "resets in 2h 10m");
+        assert_eq!(d["limits"][0]["pace"], 80);
+        assert_eq!(d["limits"][0]["over"], false);
+        assert_eq!(d["limits"][0]["tone"], "passed");
+        let tabs = d["tabs"].as_array().unwrap();
+        assert_eq!(tabs.len(), TOP_TABS);
+        assert_eq!(tabs[0]["index"], 3);
+        assert_eq!(tabs[0]["spent"], 6.0);
+        assert_eq!(tabs[0]["pane"], "%21", "an open tab's channel");
+        assert_eq!(tabs[1]["index"], 9);
+        assert_eq!(tabs[1]["pane"], Value::Null, "a closed tab has none");
+        assert_eq!(tabs[2]["index"], Value::Null, "outside a tab: no number");
+    }
+
+    #[test]
+    fn a_full_limit_or_one_paced_past_it_needs_you() {
+        let none = |_| None;
+        let v = usage_view(vec![
+            limit("five_hour", 92.0, None),
+            limit("seven_day", 40.0, Some(130.0)),
+            limit("spend_limit", 10.0, None),
+        ]);
+        let u = usage_json(&v, 1_000, &none);
+        assert_eq!(u["needs"], 2);
+        assert_eq!(u["tone"], "needs");
+        assert_eq!(u["line"], "5-hour 92% · $14.20 today", "the fullest");
+        let limits = &u["usage"]["limits"];
+        assert_eq!(limits[0]["tone"], "needs");
+        assert_eq!(limits[1]["over"], true);
+        assert_eq!(limits[1]["tone"], "needs");
+        assert_eq!(limits[2]["tone"], "passed");
+        let loading = View {
+            loaded: false,
+            ..view(ViewId::Usage, Vec::new())
+        };
+        let u = usage_json(&loading, 1_000, &none);
+        assert_eq!(u["line"], "Loading…");
+        assert_eq!(u["usage"], Value::Null);
     }
 }

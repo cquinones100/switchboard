@@ -2198,7 +2198,7 @@
     "key": "phone_views",
     "category": "Phone app",
     "label": "Mission control on the phone",
-    "description": "A panel swiped in from the phone app's right edge, or opened from a channel's ⋯ menu, lists mission control's Landing, Autopilot, PRs, CI and Notifications views as mission control shows them, each with what needs you counted, and runs their menus' options that don't need the computer's screen, asking first on the phone for one that asks in mission control or starts work in a tab. Off, the panel and its ⋯ option are gone and the server sends the phone no views",
+    "description": "A panel swiped in from the phone app's right edge, or opened from a channel's ⋯ menu, lists mission control's Landing, Autopilot, PRs, CI, Notifications and Usage views as mission control shows them, each with what needs you counted, and runs their menus' options that don't need the computer's screen, asking first on the phone for one that asks in mission control or starts work in a tab. Off, the panel and its ⋯ option are gone and the server sends the phone no views",
     "default": true
   },
   {

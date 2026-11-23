@@ -3013,3 +3013,131 @@ fn the_stream_carries_mission_controls_views_and_their_options_run() {
     assert_ne!(code, 0);
     assert!(err.contains("off"), "{err}");
 }
+
+/// The Usage view in the phone's panel (src/phone/mission.rs): listed
+/// last while Settings' `usage` is on, its line the fullest limit and
+/// today's spend, a limit past 90% counted as needing you and drawn in the
+/// attention tone, nothing on it acting; gone with `usage` off.
+#[test]
+fn the_panel_lists_usage_while_it_is_on() {
+    let server = TestServer::start_with_settings(r#"{ "phone": true }"#);
+    let usage = server.state.join("usage");
+    std::fs::create_dir_all(&usage).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    std::fs::write(
+        usage.join("limits"),
+        json!({
+            "five_hour": { "used_percentage": 92, "resets_at": now + 7_830 },
+            "seven_day": { "used_percentage": 40, "resets_at": now + 3 * 86_400 },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut stream = watch(&server);
+    let usage_of = |v: &Value| -> Option<Value> {
+        v["views"]
+            .as_array()?
+            .iter()
+            .find(|v| v["key"] == "usage")
+            .cloned()
+    };
+    let line = next_line(&mut stream, |v| {
+        usage_of(v).is_some_and(|u| !u["usage"].is_null())
+    });
+    let views = line["views"].as_array().unwrap();
+    assert_eq!(views.last().unwrap()["key"], "usage", "after the rest");
+    let u = usage_of(&line).unwrap();
+    assert_eq!(u["title"], "Usage");
+    assert_eq!(u["line"], "5-hour 92% · $0.00 today", "{u}");
+    assert_eq!(u["needs"], 1);
+    assert_eq!(u["tone"], "needs");
+    let five = &u["usage"]["limits"][0];
+    assert_eq!(five["used"], 92);
+    assert_eq!(five["tone"], "needs");
+    assert!(
+        five["resets"].as_str().unwrap().starts_with("resets in 2h"),
+        "{five}"
+    );
+    assert_eq!(u["acts"], json!([]));
+    let (code, _, err) = server.run(&["phone-view", "usage", "Anything"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("Usage"), "{err}");
+
+    common::write_settings(&server.home, json!({ "phone": true, "usage": false }));
+    let off = next_line(&mut stream, |v| {
+        v["views"].as_array().is_some() && usage_of(v).is_none()
+    });
+    assert!(
+        off["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["key"] != "usage")
+    );
+}
+
+/// The Usage view in assets/phone/app.js: each limit a meter in its tone
+/// with its percent, its reset and, paced over, where it ends up; today's
+/// and the week's spend; today's top tabs, a tap on an open one opening its
+/// channel and a closed one doing nothing; skipped without Node.
+#[test]
+fn the_usage_view_draws_its_limits_spend_and_tabs() {
+    let script = PRELUDE.to_string()
+        + r##"vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = [
+    { index: 2, pane: "%12", name: "stable note IDs", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle" },
+  ];
+  state.views = [
+    { key: "usage", title: "Usage", line: "5-hour 92% · $14.20 today", needs: 1, mark: "●", tone: "needs", groups: [], acts: [], loaded: true,
+      usage: { today: 14.2, week: 80.5,
+        limits: [
+          { key: "five_hour", name: "5-hour", used: 92, resets: "resets in 2h 10m", pace: 130, over: true, tone: "needs" },
+          { key: "seven_day", name: "Week", used: 30, resets: "resets Fri 9:00 AM", pace: null, over: false, tone: "passed" },
+        ],
+        tabs: [
+          { index: 2, name: "stable note IDs", spent: 6, pane: "%12" },
+          { index: 9, name: "closed one", spent: 3, pane: null },
+        ] } },
+  ];
+  state.open = "12";
+  render();
+`, ctx);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const out = [];
+app.all((x) => x.attrs["aria-label"] === "Tab 2's menu")[0].fire("click");
+button("Mission control›").fire("click");
+out.push("row=" + body.all((x) => x.attrs["data-view"])[0].text);
+body.all((x) => x.attrs["data-view"] === "usage")[0].fire("click");
+for (const l of body.all((x) => x.attrs["data-limit"])) {
+  const fill = l.all((x) => (x.className || "").startsWith("fill"))[0];
+  out.push(l.attrs["data-limit"] + "=" + l.text + " fill=" + fill.className + " " + fill.style.width);
+}
+out.push("spend=" + body.all((x) => x.className === "spend").map((s) => s.text).join("|"));
+const tabs = body.all((x) => (x.className || "").includes("usage-tab"));
+out.push("tabs=" + tabs.map((t) => t.tag + ":" + t.text).join("|"));
+tabs[0].fire("click");
+out.push("go=" + vm.runInContext("state.open + ' ' + state.panel", ctx));
+console.log(out.join("\n"));
+"##;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "row=●Usage15-hour 92% · $14.20 today",
+            "five_hour=5-hour92%resets in 2h 10m · at this pace, 130% by then fill=fill needs 92%",
+            "seven_day=Week30%resets Fri 9:00 AM fill=fill passed 30%",
+            "spend=Today$14.20|This week$80.50",
+            "tabs=button:●2stable note IDs$6.00|div:○9closed one$3.00",
+            "go=12 null",
+        ],
+        "{stdout}"
+    );
+}
