@@ -1283,7 +1283,7 @@
     "key": "view_cursor",
     "category": "Appearance",
     "label": "A cursor in the views",
-    "description": "Gives the PR, ticket, link and project views a cursor on a character, with a yellow › on its line, moved by Vim's keys, read-only, as the code viewer's are: every motion and text object, counts, / and ? with n and N, marks, gg and G, Ctrl-D and Ctrl-U, and Visual mode (v, V, Ctrl-V), whose y copies the selection as the text shows; a picture or diagram is one line, and Enter or a click on one shows it full size over the view, as a note's does, Esc going back. q, m, o, r and Space keep the view's own meaning. Off, the views scroll as less does, and a click on a picture opens its link",
+    "description": "Gives the PR, ticket, link and project views a cursor on a character, with a yellow › on its line, moved by Vim's keys, read-only, as the code viewer's are: every motion and text object, counts, / and ? with n and N, marks (set with m only in a view with no menu, such as the link view, since m opens the PR's and ticket's), gg and G, Ctrl-D and Ctrl-U, and Visual mode (v, V, Ctrl-V), whose y copies the selection as the text shows; a picture or diagram is one line, and Enter or a click on one shows it full size over the view, as a note's does, Esc going back. q, m, o, r and Space keep the view's own meaning. Off, the views scroll as less does, and a click on a picture opens its link",
     "default": true
   },
   {

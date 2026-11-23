@@ -255,7 +255,12 @@ impl Pager {
             query: None,
             typing: None,
             typing_kind: '/',
-            vim: Editor::new(Text::default()),
+            vim: {
+                let mut vim = Editor::new(Text::default());
+                vim.read_only = true;
+                vim.clipboard = true;
+                vim
+            },
             copy: |text| {
                 let _ = crate::platform::copy(text);
             },
@@ -355,23 +360,31 @@ impl Pager {
         }
         let lines: Vec<String> = self.doc.lines.iter().map(|l| l.plain()).collect();
         let text = Text::from_lines(&lines);
+        let first = self.vim.doc.text.lines() == [""];
         if text != self.vim.doc.text {
-            let search = self.vim.search.take();
-            let col = self.vim.col();
-            self.vim = Editor::new(text);
-            self.vim.read_only = true;
-            self.vim.clipboard = true;
-            self.vim.search = search;
+            // The text laid out again (a resize, a picture arriving, a new
+            // copy read) taken in as a change from outside, so the marks
+            // follow their lines and a selection, the search and the
+            // register stay.
+            let mode = self.vim.mode;
+            self.vim.change_outside(|doc| doc.text = text);
+            self.vim.mode = mode;
+            let last = lines.len().saturating_sub(1);
+            let row = self.vim.anchor.0.min(last);
+            let col = self.vim.anchor.1.min(lines.get(row).map_or(0, String::len));
+            self.vim.anchor = (row, col);
+        }
+        if first || self.vim.row() != self.cursor {
             // A new view opens on its line's text, past its margin.
-            let col = match col {
+            let col = match self.vim.col() {
                 0 => lines
                     .get(self.cursor)
                     .map_or(0, |l| l.len() - l.trim_start().len()),
                 col => col,
             };
+            let mode = self.vim.mode;
             self.vim.go_to(self.cursor, col);
-        } else if self.vim.row() != self.cursor {
-            self.vim.go_to(self.cursor, 0);
+            self.vim.mode = mode;
         }
         self.vim.folds = PictureRows {
             closed: (0..self.doc.lines.len())
@@ -2298,6 +2311,26 @@ mod tests {
                 Some(switchboard_vim::editor::READ_ONLY)
             );
         }
+    }
+
+    #[test]
+    fn a_mark_and_a_selection_outlive_a_new_layout() {
+        let mut pager = Pager::new(markdown(&long_text()), 100, 20).with_cursor(true);
+        press(&mut pager, "}jma");
+        let marked = cursor_line(&pager);
+        press(&mut pager, "Gv");
+        pager.resize(60, 20);
+        assert!(
+            matches!(pager.vim.mode, Mode::Visual { .. }),
+            "still selecting"
+        );
+        assert_eq!(
+            pager.key(key(KeyCode::Esc)),
+            Act::Redraw,
+            "Esc leaves the selection"
+        );
+        press(&mut pager, "'a");
+        assert!(cursor_line(&pager).contains(marked.trim().split(' ').next().unwrap()));
     }
 
     #[test]

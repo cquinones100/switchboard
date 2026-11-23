@@ -115,27 +115,32 @@ pub fn resolve(path: &str, dir: &Path, home: &Path) -> Option<PathBuf> {
     file.is_file().then_some(file)
 }
 
-/// The repository's files under `dir`, as git lists them (tracked, and
-/// untracked but not ignored), relative to `dir`; none outside a
-/// repository. Starts git, so never on the server's task.
-pub fn repo_files(dir: &Path) -> Vec<String> {
-    let Ok(out) = Command::new("git")
+/// The top of the repository `dir` is in, and its files as git lists them
+/// (tracked, and untracked but not ignored), relative to that top, from a
+/// pane in a folder of it too; none outside a repository. Starts git, so
+/// never on the server's task.
+pub fn repo_files(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
+    let top = Command::new("git")
         .arg("-C")
         .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let top = PathBuf::from(String::from_utf8_lossy(&top.stdout).trim_end_matches('\n'));
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&top)
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .output()
-    else {
-        return Vec::new();
-    };
-    if !out.status.success() {
-        return Vec::new();
-    }
+        .ok()
+        .filter(|o| o.status.success())?;
     let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(str::to_string)
         .collect();
     files.dedup();
-    files
+    Some((top, files))
 }
 
 #[cfg(test)]

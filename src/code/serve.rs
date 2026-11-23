@@ -50,12 +50,12 @@ impl Server {
                     .filter_map(|f| Some((find::resolve(&f.path, &dir, &home)?, f)))
                     .map(|(file, f)| (f, file))
                     .collect();
-                let mut repo = find::repo_files(&dir);
+                let (top, mut repo) = find::repo_files(&dir).unwrap_or((dir, Vec::new()));
                 repo.truncate(MOST_FILES);
-                (files, repo, dir)
+                (files, repo, top)
             },
-            move |server, client, (files, repo, dir)| {
-                server.pick_code(client, tab, pane, files, repo, dir);
+            move |server, client, (files, repo, top)| {
+                server.pick_code(client, tab, pane, files, repo, top);
             },
         );
     }
@@ -68,7 +68,7 @@ impl Server {
         pane: PaneId,
         files: Vec<(Found, PathBuf)>,
         repo: Vec<String>,
-        dir: PathBuf,
+        top: PathBuf,
     ) {
         if files.is_empty() && repo.is_empty() {
             return self.say(Some(client), "No file in this pane");
@@ -79,7 +79,7 @@ impl Server {
             .map(|(found, file)| PickItem::new(found.row(), found.arg(file)))
             .collect();
         items.extend(repo.iter().map(|name| {
-            let mut item = PickItem::new(name.clone(), dir.join(name).display().to_string());
+            let mut item = PickItem::new(name.clone(), top.join(name).display().to_string());
             item.tags = "repository".into();
             item
         }));
