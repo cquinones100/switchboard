@@ -2539,10 +2539,11 @@ async function start() {
 // keyboard shortens, against the window, which it leaves alone. While it is
 // open, the page takes the visual viewport's top and height, so it ends at
 // the keyboard's top; iOS scrolls the visual viewport as a field takes the
-// focus, so its scroll moves the page too. A home-screen app gets the
-// window as the screen less the status bar it draws under, so there the page
-// is given the screen's own height, the side of the screen that stands
-// upright.
+// focus, so its scroll moves the page too. A home-screen app on iOS 26
+// draws under the status bar yet shows only a window of the screen less the
+// status bar's height, cutting off the home indicator's inset below it
+// (WebKit bug 301994), so there the page is marked clipped and leaves the
+// inset out.
 function followKeyboard() {
   const viewport = window.visualViewport;
   const keyboardOpen = Math.round(viewport.height) < window.innerHeight;
@@ -2550,14 +2551,9 @@ function followKeyboard() {
   const standalone =
     (typeof navigator !== "undefined" && navigator.standalone === true) ||
     (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
-  root.classList.toggle("standalone", standalone);
-  if (standalone) {
-    const upright = window.innerHeight >= window.innerWidth;
-    const screenHeight = upright ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-    root.style.setProperty("--app-height", Math.max(screenHeight, window.innerHeight) + "px");
-  } else {
-    root.style.removeProperty("--app-height");
-  }
+  const upright = window.innerHeight >= window.innerWidth;
+  const screenHeight = standalone && (upright ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height));
+  root.classList.toggle("clipped", standalone && window.innerHeight < screenHeight);
   root.classList.toggle("keyboard", keyboardOpen);
   if (keyboardOpen) {
     root.style.setProperty("--viewport-top", viewport.offsetTop + "px");
@@ -2572,37 +2568,6 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener("scroll", followKeyboard);
   window.addEventListener("resize", followKeyboard);
   followKeyboard();
-}
-
-// With ?debug in the app's address, a line over the page prints the sizes
-// iOS gives it, so they can be read on the phone.
-function showSizes() {
-  const line = document.createElement("div");
-  line.className = "sizes";
-  const probe = document.createElement("div");
-  probe.style.cssText =
-    "position:fixed;visibility:hidden;pointer-events:none;" +
-    "padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
-  document.body.append(line, probe);
-  const update = () => {
-    const inset = getComputedStyle(probe);
-    const viewport = window.visualViewport;
-    line.textContent =
-      `inner ${window.innerWidth}x${window.innerHeight} screen ${screen.width}x${screen.height}` +
-      ` visual ${viewport ? Math.round(viewport.height) + "@" + Math.round(viewport.offsetTop) : "-"}` +
-      ` client ${document.documentElement.clientHeight} body ${Math.round(document.body.getBoundingClientRect().height)}` +
-      `\nsafe t${inset.paddingTop} r${inset.paddingRight} b${inset.paddingBottom} l${inset.paddingLeft}` +
-      ` app-height ${document.documentElement.style.getPropertyValue("--app-height") || "-"}`;
-  };
-  update();
-  window.addEventListener("resize", update);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", update);
-    window.visualViewport.addEventListener("scroll", update);
-  }
-}
-if (typeof location !== "undefined" && /[?&]debug(=|&|$)/.test(location.search || "")) {
-  showSizes();
 }
 
 // Safari pinches to zoom with these whatever the viewport says.

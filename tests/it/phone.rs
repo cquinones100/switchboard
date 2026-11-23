@@ -1497,7 +1497,7 @@ fn the_composer_spaces_its_text_box_evenly() {
         (".composer", "padding: var(--s2);"),
         (
             ".composer",
-            "padding-bottom: max(var(--s2), env(safe-area-inset-bottom) - var(--s2));",
+            "padding-bottom: max(var(--s2), var(--inset-bottom) - var(--s2));",
         ),
         (".keyboard .composer", "padding-bottom: var(--s2);"),
         (".screen.channel-screen", "padding-bottom: 0;"),
@@ -1570,12 +1570,12 @@ console.log("closed again=" + classes.has("keyboard") + " " + app());
     );
 }
 
-/// A home-screen app's height (assets/phone/app.js's `followKeyboard`): the
-/// window there is the screen less the status bar, so the page is given the
-/// screen's upright side, run in Node over a stand-in window; skipped without
-/// Node.
+/// A home-screen app cut short above the home indicator (assets/phone/app.js's
+/// `followKeyboard`): marked clipped while the window is shorter than the
+/// screen's upright side, and not once it reaches it, run in Node over a
+/// stand-in window; skipped without Node.
 #[test]
-fn a_home_screen_app_takes_the_screens_full_height() {
+fn a_home_screen_app_cut_short_is_marked_clipped() {
     let script = r#"
 const vm = require("vm");
 const fs = require("fs");
@@ -1599,12 +1599,17 @@ const ctx = vm.createContext({
   console,
 });
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
-console.log([...classes].join(",") + " " + vars.get("--app-height"));
+console.log("short=" + classes.has("clipped"));
+win.innerHeight = 932;
+viewport.height = 932;
+vm.runInContext("followKeyboard()", ctx);
+console.log("whole=" + classes.has("clipped"));
 "#;
     let Some(stdout) = run_app_js(script) else {
         return;
     };
-    assert_eq!(stdout.trim(), "standalone 932px", "{stdout}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines, ["short=true", "whole=false"], "{stdout}");
 }
 
 /// What the phone's Close tab asks of the server: a Claude tab closed and
