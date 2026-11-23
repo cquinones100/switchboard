@@ -73,7 +73,7 @@ use crate::mux::server::Event;
 use crate::{paths, settings, util, worktree};
 
 /// The setting that turns this on, kept in this computer's own
-/// settings.json (`settings::LOCAL`).
+/// settings.json, with the other settings of the computer's own (`settings::COMPUTER`).
 pub const SETTING: &str = "files_from_repo";
 
 /// The files of yours that stay in `~/.config/switchboard`.
@@ -398,7 +398,24 @@ fn seed(local: &Path, dest: &Path, top: bool, depth: usize) -> std::io::Result<(
                 seed(&entry.path(), &to, false, depth + 1)?;
             }
         } else if fs::symlink_metadata(&to).is_err() {
-            fs::copy(entry.path(), &to)?;
+            let parsed = (top && name == "settings.json")
+                .then(|| fs::read_to_string(entry.path()).ok())
+                .flatten()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .filter(serde_json::Value::is_object);
+            if let Some(serde_json::Value::Object(mut mine)) = parsed {
+                // This computer's own settings stay in its own file; one
+                // that can't be read is copied as it is, as before.
+                for key in settings::COMPUTER {
+                    mine.shift_remove(*key);
+                }
+                util::write_atomic(
+                    &to,
+                    format!("{}\n", util::json_pretty(&serde_json::Value::Object(mine))),
+                )?;
+            } else {
+                fs::copy(entry.path(), &to)?;
+            }
         }
     }
     Ok(())

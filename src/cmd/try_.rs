@@ -916,6 +916,20 @@ impl Try {
             },
             _ => Map::new(),
         };
+        // This computer's own settings from its own file, never the synced
+        // one's, since the try runs on this computer.
+        if from_repo.is_some() {
+            let own = util::read_json_object(local.join("settings.json"));
+            for key in crate::settings::COMPUTER
+                .iter()
+                .filter(|k| **k != crate::files::SETTING)
+            {
+                match own.get(*key) {
+                    Some(value) => settings.insert(key.to_string(), value.clone()),
+                    None => settings.shift_remove(*key),
+                };
+            }
+        }
         turn_off(&mut settings);
         util::write_atomic(
             &file,

@@ -38,6 +38,11 @@ fn main() -> ExitCode {
             libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         }
     }
+    // This computer's settings carried into its own file before anything
+    // reads them, in every process of a build installed before the server
+    // restarts on it, the stand-ins below among them.
+    // Quietly: a hook prints nothing, and the server says why as it starts.
+    let _ = switchboard::settings::carry_over();
     // The `cargo`, `npm` and `pnpm` first on a pane's PATH: the real one,
     // through the queue for heavy work when the work is.
     if switchboard::cmd::slot::STAND_INS.contains(&called.as_str()) {

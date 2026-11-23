@@ -271,6 +271,7 @@ impl Server {
         }
         if (!away || self.day.slack_asked.is_none())
             && settings::is_on("slack_background")
+            && settings::is_on("view_slack")
             && due(
                 self.day.slack_asked,
                 self.day.slack_pace.every(slack_look_every(&dirs)),
@@ -304,6 +305,7 @@ impl Server {
         self.connectors_tick(ms);
         if due(self.day.minute, MINUTE_MS, started, 9_000, ms) {
             self.day.minute = Some(ms);
+            settings::turn_on_found();
             self.day_minute(&dirs, &now);
         }
         self.day_views(&dirs, &now);
@@ -315,6 +317,10 @@ impl Server {
         match event {
             DayEvent::Feed(fetched) => {
                 self.day.feed_busy = false;
+                // Your calendar read here is the Calendar used here.
+                if matches!(fetched, calendar::Fetched::Day(..)) {
+                    settings::turn_on_where_it_works("view_calendar");
+                }
                 if let Fetched::Failed(why) = &fetched {
                     log(&dirs.state, why);
                 }
@@ -1188,10 +1194,13 @@ impl Server {
             .keys()
             .map(String::as_str)
             .collect();
-        let services = self
-            .day
-            .connectors
-            .due(&connector::down(), config, &shown, now);
+        // A service not used on this computer is asked nothing, not even
+        // whether its connector is connected.
+        let down: Vec<_> = connector::down()
+            .into_iter()
+            .filter(|(service, _)| settings::connector_used_here(service))
+            .collect();
+        let services = self.day.connectors.due(&down, config, &shown, now);
         if services.is_empty() {
             return;
         }

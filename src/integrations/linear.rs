@@ -68,6 +68,8 @@ async fn credential() -> Result<Credential> {
     match found {
         Some(credential) => {
             REMEMBERED.set(&credential);
+            // A key found is Linear used on this computer.
+            crate::settings::turn_on_where_it_works("linear");
             Ok(credential)
         }
         None => Err(ServiceError::new(

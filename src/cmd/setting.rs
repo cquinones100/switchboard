@@ -11,7 +11,9 @@
 //! the rest, anything else refused; `--reset` gives it its default back.
 //! The write is `settings::write_setting`'s, the one Settings makes: never
 //! over a file that can't be read as a JSON object, the version before kept
-//! as `settings.json.bak`, a value equal to its default left out. A running
+//! as `settings.json.bak`, a value equal to its default left out (a
+//! computer setting's kept, and `--reset` takes it out, so a service's
+//! turns on again once it works here). A running
 //! workspace takes it at once, as it reads the file again on any change.
 //! Changing `claude_plugin` moves Switchboard into its plugin or back into
 //! `~/.claude` after, as Settings does (`switchboard setup --move`).
@@ -46,7 +48,20 @@ pub fn main(args: Vec<String>) -> ExitCode {
             println!("{}", words_of(&now));
             return ExitCode::SUCCESS;
         }
-        (None, true) => option.default.clone(),
+        (None, true) if !settings::is_computer(key) => option.default.clone(),
+        (None, true) => {
+            return match settings::reset_setting(key) {
+                Ok(()) => {
+                    let now = settings::setting(key).unwrap_or(option.default);
+                    println!("{}", words_of(&now));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("switchboard setting: {e:#}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         (Some(given), _) => match value_of(&option, given) {
             Some(value) => value,
             None => {

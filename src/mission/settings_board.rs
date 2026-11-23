@@ -5,7 +5,9 @@
 //! it, an option a row with its label, a "changed" chip, its key at the
 //! right and a switch (src/ui/images.rs) or its value's words; the chosen
 //! option opens to its whole description and its default. New with UX
-//! 2.0, with no tmux-version file behind it.
+//! 2.0, with no tmux-version file behind it. The settings of this
+//! computer's own lead the categories under "This computer" (board 183),
+//! and carry a "this computer" chip there and in their own categories.
 //!
 //! It draws the view's own rows (`views::settings_items`), so the cursor,
 //! the filter, Enter and Space work on them as on the plain list: the
@@ -38,6 +40,8 @@ pub const BOARD_AT: usize = 136;
 /// name, its chip and count need, between the two.
 const SIDE_MAX: usize = 34;
 const SIDE_MIN: usize = 24;
+/// The chip on a setting of this computer's own, wherever it is listed.
+pub const COMPUTER_CHIP: &str = "this computer";
 /// A wrapped description at most, however wide the pane.
 const TEXT_MAX: usize = 100;
 
@@ -59,9 +63,21 @@ struct Entry {
 fn entries(items: &[Item]) -> (Vec<Entry>, Vec<Entry>) {
     let all = settings::shown_settings();
     let names = settings::categories(&all);
-    let mut categories: Vec<Entry> = names
+    let computer: Vec<&settings::Setting> = all
         .iter()
-        .map(|&category| {
+        .filter(|o| o.scope == settings::Scope::Computer)
+        .collect();
+    // This computer's own first, as the view lists them.
+    let this_computer = (!computer.is_empty()).then(|| Entry {
+        id: format!("header:{}", settings::THIS_COMPUTER),
+        name: settings::THIS_COMPUTER.to_string(),
+        group: None,
+        count: computer.len(),
+        changed: computer.iter().filter(|o| o.changed()).count(),
+    });
+    let mut categories: Vec<Entry> = this_computer
+        .into_iter()
+        .chain(names.iter().map(|&category| {
             let members = all.iter().filter(|o| o.category == category);
             Entry {
                 id: format!("header:{category}"),
@@ -73,7 +89,7 @@ fn entries(items: &[Item]) -> (Vec<Entry>, Vec<Entry>) {
                 count: members.clone().count(),
                 changed: members.filter(|o| o.changed()).count(),
             }
-        })
+        }))
         .collect();
     let mut files: Vec<Entry> = Vec::new();
     for f in OWN_FILES {
@@ -212,7 +228,8 @@ fn enter_words(item: &Item) -> String {
     if d["choice"] == true {
         return format!("default {default} · Enter lists its choices");
     }
-    if d["changed"] == true {
+    // A computer setting is kept as set, never back to "until it works".
+    if d["changed"] == true && d["computer"] != true {
         format!("default {default} · Enter turns it back {next}")
     } else {
         format!("default {default} · Enter turns it {next}")
@@ -265,6 +282,10 @@ fn option_lines(item: &Item, row: usize, chosen: bool, w: usize, m: &Mission) ->
         ),
         Span::raw(" "),
     ];
+    if d["computer"] == true {
+        left.extend(kit::chip(COMPUTER_CHIP, Tone::Dim, caps, theme));
+        left.push(Span::raw(" "));
+    }
     if d["changed"] == true {
         left.extend(kit::chip("changed", Tone::Needs, caps, theme));
     }

@@ -36,14 +36,17 @@ fn has(program: &str) -> bool {
 /// Every optional part, in the order said.
 pub fn all() -> Vec<Optional> {
     let mut all = Vec::new();
-    if settings::is_on("github") {
+    // A service is said while it is on, or not yet set on this computer,
+    // where setting it up is what turns it on.
+    let said = |key: &str| settings::is_on(key) || !settings::is_set(key);
+    if said("github") {
         all.push(line(
             util::block_on(github::token()).is_ok(),
             "GitHub (M-v, M-d's base, the PRs and CI views, PR numbers in tab names)",
             "GitHub, for M-v, M-d's base, the PRs and CI views and PR numbers in tab names: install GitHub's CLI (gh) and run gh auth login",
         ));
     }
-    if settings::is_on("linear") {
+    if said("linear") {
         all.push(line(
             util::block_on(linear::api_key()).is_ok(),
             "Linear (M-i, the Tickets and Inbox views, ticket titles in tab names)",

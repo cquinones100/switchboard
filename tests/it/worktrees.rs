@@ -2994,6 +2994,13 @@ fn wt_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fro
     .unwrap();
     let state = w.path("state");
     std::fs::create_dir_all(&state).unwrap();
+    // Autopilot on this computer, which it starts off on.
+    std::fs::create_dir_all(w.path(".config/switchboard")).unwrap();
+    std::fs::write(
+        w.path(".config/switchboard/settings.json"),
+        json!({ "autopilot": true }).to_string(),
+    )
+    .unwrap();
     // An older version's saved source is left unread: the repository's
     // tickets decide.
     std::fs::write(

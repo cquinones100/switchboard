@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-22 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-23 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -337,3 +337,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: the phone app's kit
 
 - [184. The phone app's kit: every control 44 pt (icon buttons 44 × 44, buttons and fields 44 high pills), chips 24, rows 56, header 48, boxes and cards radius 12, pictures 6, type 16 and 12; today's mismatched sizes beside it; a drawer and a channel drawn from the kit alone](https://cquinones100.github.io/switchboard/design/184.html)
+
+## Other boards
+
+- [183. Settings' This computer: the settings that depend on the computer (whether a service is used here, what runs on one computer only, the hardware) listed first under a heading of their own and still in their own categories, every row of one carrying a this computer chip; a service off until it has worked here says so in its default](https://cquinones100.github.io/switchboard/design/183.html)
