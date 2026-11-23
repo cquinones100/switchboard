@@ -6,7 +6,10 @@
 // the Claude sessions that load the plugin, the ones in Switchboard's panes:
 //
 // - ALLOW: the few of Switchboard's own commands its instructions have
-//   Claude run on any turn (switchboard tabs, show, set, ...). Only one
+//   Claude run on any turn (switchboard tabs, show, set, ...), and the
+//   landing's own, switchboard land-lock open-pr and item-done, which
+//   queue-and-clean runs on a turn that read its skill rather than started
+//   it, each only with the options it gives them (SHAPES). Only one
 //   simple command, with no operator, redirect, expansion or line break,
 //   and only when Claude Code's own verdict is the plain ask it gives a
 //   call no rule decided, so a deny or ask rule of yours, a hook's ask, a
@@ -33,13 +36,19 @@ const SETTING = 'pane_permissions';
 // One simple command's words, or null when it is anything else: an
 // operator, a redirect, an expansion, a substitution, an escape, a glob, a
 // comment, a line break. Single quotes are taken as written; double quotes
-// may hold nothing the shell would expand.
+// may hold nothing the shell would expand; outside quotes a backslash may
+// stand only before a single quote, as `'it'\''s'` writes an apostrophe.
 export function words(command) {
   const out = [];
   let word = null;
   let quote = null;
+  let escaped = false;
   for (const c of String(command).trim()) {
-    if (quote === "'") {
+    if (escaped) {
+      if (c !== "'") return null;
+      word = (word ?? '') + c;
+      escaped = false;
+    } else if (quote === "'") {
       if (c === "'") quote = null;
       else if (c === '\n') return null;
       else word += c;
@@ -53,13 +62,15 @@ export function words(command) {
     } else if (c === "'" || c === '"') {
       quote = c;
       word = word ?? '';
+    } else if (c === '\\') {
+      escaped = true;
     } else if (/[A-Za-z0-9_@%+=:,.\/-]/.test(c)) {
       word = (word ?? '') + c;
     } else {
       return null;
     }
   }
-  if (quote !== null) return null;
+  if (quote !== null || escaped) return null;
   if (word !== null) out.push(word);
   return out;
 }
@@ -96,10 +107,39 @@ function fits({ start, more }, w) {
 
 const ALLOWED = ALLOW.map(bashRule).filter(Boolean);
 
+// The landing's commands as queue-and-clean gives them: the options each
+// takes, those that take a value and those that don't, and nothing else.
+// item-done's worktree as a word of its own and --checked-in, whose branch
+// it takes on trust, are left to Claude Code, so the hook never lets it
+// remove another worktree or one whose work is on no remote.
+const SHAPES = [
+  {
+    start: ['switchboard', 'item-done'],
+    values: ['--says', '--hash', '--already-on', '--merged-pr-head'],
+    switches: ['--without-asking', '--close-issue'],
+  },
+  {
+    start: ['switchboard', 'land-lock', 'open-pr'],
+    values: ['--title', '--body-file'],
+    switches: [],
+  },
+];
+
+function asGiven(w) {
+  const shape = SHAPES.find(({ start }) => start.every((s, i) => w[i] === s));
+  if (!shape) return true;
+  for (let i = shape.start.length; i < w.length; i++) {
+    if (shape.switches.includes(w[i])) continue;
+    if (!shape.values.includes(w[i]) || i + 1 >= w.length) return false;
+    i++;
+  }
+  return true;
+}
+
 // Whether a shell command is one of the allowed commands, alone.
 export function allows(command) {
   const w = words(command);
-  return w !== null && ALLOWED.some((r) => fits(r, w));
+  return w !== null && asGiven(w) && ALLOWED.some((r) => fits(r, w));
 }
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

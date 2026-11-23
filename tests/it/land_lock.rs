@@ -1977,3 +1977,89 @@ fn queue_pr_keeps_order_across_worktrees_and_refuses_a_pr_twice() {
         "a number is needed"
     );
 }
+
+#[test]
+fn open_pr_pushes_and_opens_the_pr_only_once_its_checks_pass() {
+    use std::os::unix::fs::PermissionsExt;
+    let l = Landing::new();
+    // A gh that writes down how `gh pr create` was called and says the PR's
+    // address, as gh does.
+    let bin = l.server.home.join("open-pr-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\n[ \"$1 $2\" = 'pr create' ] || exit 1\nprintf '%s\\n' \"$@\" > \"$HOME/gh-args\"\nprintf 'https://github.com/acme/switchboard/pull/7\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let body = l.server.home.join("body.md");
+    std::fs::write(&body, "Add the feature.\n").unwrap();
+    let open = || {
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        Command::new(BIN)
+            .args(["land-lock", "open-pr", "--title", "Add the feature"])
+            .args(["--body-file", body.to_str().unwrap()])
+            .current_dir(&l.one)
+            .env("HOME", &l.server.home)
+            .env("SWITCHBOARD_STATE_DIR", &l.server.state)
+            .env("SWITCHBOARD", l.server.socket())
+            .env("SWITCHBOARD_PANE", &l.pane)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@e")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@e")
+            .env("PATH", path)
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let on_origin = || rev(&l.origin, "refs/heads/one");
+
+    // Not a tab that lands without asking: nothing pushed.
+    let asks = open();
+    assert_eq!(code(&asks), 6, "{}", String::from_utf8_lossy(&asks.stderr));
+    assert!(stdout(&asks).contains("why: the tab doesn't land without asking"));
+    assert!(!on_origin().starts_with(|c: char| c.is_ascii_hexdigit()));
+
+    // leak-check finds something, in Switchboard's clone.
+    l.server.ok(&["set", "-t", &l.tab, "@land", "1"]);
+    l.as_switchboard();
+    let words = l.server.home.join(".config/switchboard/leak-check.txt");
+    std::fs::write(&words, "feature\n").unwrap();
+    let leak = open();
+    assert_eq!(code(&leak), 6, "{}", stdout(&leak));
+    assert!(stdout(&leak).contains("leak: "), "{}", stdout(&leak));
+    std::fs::remove_file(&words).unwrap();
+
+    // Every check passes: pushed under its own name and the PR opened.
+    let opened = open();
+    assert_eq!(
+        code(&opened),
+        0,
+        "{}{}",
+        stdout(&opened),
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    assert_eq!(
+        stdout(&opened),
+        "#7\nhttps://github.com/acme/switchboard/pull/7\n"
+    );
+    assert_eq!(on_origin(), rev(&l.one, "HEAD"), "pushed");
+    let args = std::fs::read_to_string(l.server.home.join("gh-args")).unwrap();
+    assert!(
+        args.contains("--head\nacme:one\n") && args.contains("--base\nmain\n"),
+        "{args}"
+    );
+    assert!(args.contains("--title\nAdd the feature\n"), "{args}");
+
+    // A commit after the review: no longer the change it found clean.
+    std::fs::write(l.one.join("feature.txt"), "a feature, fixed\n").unwrap();
+    git(&l.one, &["commit", "-q", "-am", "Fix the feature"]);
+    let stale = open();
+    assert_eq!(code(&stale), 6, "{}", stdout(&stale));
+    assert!(stdout(&stale).contains("isn't the one the review found clean"));
+    assert_ne!(on_origin(), rev(&l.one, "HEAD"), "nothing pushed");
+}

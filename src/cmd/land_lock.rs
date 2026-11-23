@@ -172,7 +172,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|settle [--command <cmd>] [--patch <id>]|queue-pr|dequeue-pr|pr-status <number>|move-pr <number> up|down|first|pr-queue|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|open-pr --title <title> --body-file <file>|settle [--command <cmd>] [--patch <id>]|queue-pr|dequeue-pr|pr-status <number>|move-pr <number> up|down|first|pr-queue|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -226,6 +226,10 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     let target = given_target.or_else(|| recorded_target(&here));
     let push_target = target.clone();
     let lock_here = here.clone();
+    // A PR's first push needs no landing lock: the merge queue orders PRs.
+    if command == "open-pr" {
+        return super::land_open_pr::main(&common, &lock_here, push_target, &args[1..]);
+    }
     if command == "squash" {
         let target = || target.or_else(|| crate::tabs::git::default_branch(&common));
         return super::land_squash::main(&args[1..], &cwd, target);

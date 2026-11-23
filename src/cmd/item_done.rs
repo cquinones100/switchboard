@@ -13,7 +13,9 @@
 //!    else the default branch, its remote fetched and pruned too), a squash
 //!    included, as queue-and-clean's "No PR" judges it, or HEAD being the
 //!    head of the PR GitHub merged (`--merged-pr-head`, its `headRefOid`
-//!    read just before), which covers a squash merge whose branch GitHub
+//!    read just before, counted only once GitHub names a merged PR of the
+//!    clone's repository with that head, since the plugin's permission
+//!    hook runs this command unasked), which covers a squash merge whose branch GitHub
 //!    deleted and whose files the default branch has changed since, or
 //!    `--checked-in <branch>`, every change found there by reading it, as
 //!    queue-and-clean's "No PR" does when the default branch has changed the
@@ -131,6 +133,10 @@ fn given(args: &[String]) -> Result<Given, String> {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // A program you run (queue-and-clean's cleanup), whose look for a
+    // merged PR the github setting doesn't stop; `close_issue` still reads
+    // it before changing the issue.
+    crate::integrations::run_by_you();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         eprint!("{USAGE}");
         return ExitCode::SUCCESS;
@@ -142,7 +148,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match run(&given, &notes_dir(), &close_on_github) {
+    match run(&given, &notes_dir(), &close_on_github, &merged_on_github) {
         Ok(lines) => {
             for line in lines {
                 println!("{line}");
@@ -164,8 +170,52 @@ fn close_on_github(repo: &Repo, number: u64, hash: &str, done: &str) -> Result<C
 /// What closes an issue, `close_on_github` but in tests.
 type Close<'a> = &'a dyn Fn(&Repo, u64, &str, &str) -> Result<Closed, String>;
 
+/// Whether GitHub names a merged PR of the main clone's repository from
+/// `branch` whose head is `commit`: the proof `--merged-pr-head` claims.
+/// Asked by the branch, since GitHub lists a commit's PRs only once the
+/// commit is on the default branch, which a squash merge's head never is.
+fn merged_on_github(main: &Path, branch: &str, commit: &str) -> Result<bool, String> {
+    use crate::integrations::github;
+    // Pushed to origin, the PR opened where gh opens it (the project, in a
+    // fork's clone).
+    let pushed_to = worktree::default_remote(main)
+        .and_then(|r| worktree::git_at(main, &["remote", "get-url", &r]).ok())
+        .and_then(|url| github::parse_remote(url.trim()))
+        .ok_or("the clone's remote isn't a GitHub repository")?;
+    let repo = issues::wait_for(github::repo_of(main)).map_err(|e| format!("{e:#}"))?;
+    let head = encode(&format!("{}:{branch}", pushed_to.owner));
+    let pulls = issues::wait_for(github::rest(
+        "GET",
+        &format!("/repos/{repo}/pulls?state=closed&head={head}&per_page=100"),
+        None,
+        "item-done",
+    ))
+    .map_err(|e| format!("{e:#}"))?;
+    Ok(pulls
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|pr| pr["merged_at"].is_string() && pr["head"]["sha"].as_str() == Some(commit)))
+}
+
+/// What asks GitHub for a merged PR's head, `merged_on_github` but in tests.
+type Merged<'a> = &'a dyn Fn(&Path, &str, &str) -> Result<bool, String>;
+
+/// A query parameter's value, percent-encoded as `encodeURIComponent` does.
+fn encode(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
 /// The steps, as the module's opening says; the lines to print.
-fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String> {
+fn run(given: &Given, notes: &Path, close: Close, merged: Merged) -> Result<Vec<String>, String> {
     let git = |dir: &Path, args: &[&str]| {
         worktree::git_at(dir, args).map_err(|e| format!("git {}: {}", args[0], first_line(&e)))
     };
@@ -212,8 +262,11 @@ fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String>
         given.already_on.as_deref(),
         remote.as_deref(),
     )
-    // The branch being deleted proves nothing about itself.
-    .filter(|r| *r != format!("refs/heads/{branch}") && *r != branch);
+    // The branch being deleted proves nothing about itself, and a ref is
+    // read only by its full name, never a revision (`<branch>^0`) that
+    // would name it another way.
+    .filter(|r| *r != format!("refs/heads/{branch}") && *r != branch)
+    .filter(|r| worktree::git_ok(&top, &["show-ref", "--verify", "--quiet", r]));
     let head = git(&top, &["rev-parse", "HEAD"])?;
     // Read by hand, in a branch other than the one deleted, which is there:
     // a local branch, or one of the fetched remote's, by its name, never a
@@ -234,22 +287,38 @@ fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String>
         .find(|r| worktree::git_ok(&top, &["show-ref", "--verify", "--quiet", r]))
         .is_some_and(|r| r != own)
     });
-    let pr_merged_from_here = given.merged_pr_head.as_deref() == Some(head.as_str());
-    if !pr_merged_from_here
-        && !checked_elsewhere
-        && !remote.as_deref().is_some_and(|r| on_remote(&top, r))
-        && !lands_on.as_deref().is_some_and(|r| holds(&top, r))
-    {
+    let in_target = lands_on.as_deref().is_some_and(|r| holds(&top, r));
+    let safe_here =
+        checked_elsewhere || remote.as_deref().is_some_and(|r| on_remote(&top, r)) || in_target;
+    // GitHub is asked last, and only when the claim is about this HEAD and
+    // nothing else shows the work is safe; a failed look proves nothing.
+    let claims_merged = given.merged_pr_head.as_deref() == Some(head.as_str());
+    let mut unasked = None;
+    let mut ask_github = || {
+        merged(&main, &branch, &head).unwrap_or_else(|e| {
+            unasked = Some(e);
+            false
+        })
+    };
+    let pr_merged_from_here = !safe_here && claims_merged && ask_github();
+    if !safe_here && !pr_merged_from_here {
         return Err(format!(
-            "{branch} has commits on no remote branch{}{}: removing it would lose them",
+            "{branch} has commits on no remote branch{}{}{}: removing it would lose them",
             lands_on
                 .map(|r| format!(", and {r} lacks its work"))
                 .unwrap_or_default(),
             unfetched
                 .map(|r| format!(" (git fetch {r} failed)"))
+                .unwrap_or_default(),
+            unasked
+                .map(|e| format!(" (GitHub couldn't say whether a PR merged from it: {e})"))
                 .unwrap_or_default()
         ));
     }
+    // What shows the work landed, which an issue is closed on: in the branch
+    // it lands on, or a merged PR GitHub names (asked now when the remote
+    // alone showed the work safe), else the commit given holding it.
+    let landed = in_target || pr_merged_from_here || (claims_merged && ask_github());
     let mut out = Vec::new();
     let claim = worktree::git_at(
         &main,
@@ -279,7 +348,9 @@ fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String>
         Some((file, first)) => out.push(tick_file(&file?, &first, &done)?),
     }
     if let Some((repo, number)) = issue {
-        out.push(close_issue(given, &top, &hash, &done, &repo, number, close));
+        out.push(close_issue(
+            given, &top, landed, &hash, &done, &repo, number, close,
+        ));
     }
     let top_text = top.to_string_lossy().into_owned();
     git(&main, &["worktree", "remove", &top_text])
@@ -296,9 +367,11 @@ fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String>
 /// asked to (`--close-issue`) and, in Switchboard's clone
 /// (`dev::is_switchboard_clone`), leak-check's scan finds nothing in it,
 /// since it is public; the line saying what became of it.
+#[allow(clippy::too_many_arguments)]
 fn close_issue(
     given: &Given,
     top: &Path,
+    landed: bool,
     hash: &str,
     done: &str,
     repo: &Repo,
@@ -309,6 +382,11 @@ fn close_issue(
         return format!(
             "left open: {repo}#{number}: --close-issue not given, so not asked to close it"
         );
+    }
+    // The look for a merged PR runs with the setting off (`main`'s
+    // run_by_you), but the issue is changed only while it is on.
+    if !crate::settings::is_on("github") {
+        return format!("left open: {repo}#{number}: GitHub is turned off in Settings");
     }
     use crate::cmd::leak_check;
     // A rule of Switchboard's own repository alone (src/dev.rs).
@@ -336,6 +414,11 @@ fn close_issue(
         &["rev-parse", "--verify", &format!("{hash}^{{commit}}")],
     )
     .unwrap_or_else(|_| hash.to_string());
+    // The work must have landed, so the issue is never closed on a commit
+    // that landed something else.
+    if !landed && !holds(top, &whole) {
+        return format!("left open: {repo}#{number}: {hash} doesn't hold this branch's work");
+    }
     match close(repo, number, &whole, done) {
         Ok(Closed::Closed) => format!("closed: {repo}#{number}"),
         Ok(Closed::Commented) => {
@@ -725,6 +808,18 @@ mod tests {
     }
 
     /// No issue is closed in a test but where one is looked for.
+    fn merged(_: &Path, _: &str, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+
+    fn unmerged(_: &Path, _: &str, _: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn unreachable(_: &Path, _: &str, _: &str) -> Result<bool, String> {
+        Err("GitHub is turned off in Settings".into())
+    }
+
     fn never(_: &Repo, _: u64, _: &str, _: &str) -> Result<Closed, String> {
         panic!("no issue to close")
     }
@@ -746,7 +841,7 @@ mod tests {
     fn a_landed_worktree_is_ticked_removed_and_its_branch_deleted() {
         let (dir, main, wt, notes) = landed_setup("landed");
         git(&wt, &["push", "-q", "origin", "HEAD:main"]);
-        let out = run(&given_for(&wt), &notes, &never).unwrap();
+        let out = run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(out.iter().any(|l| l.starts_with("ticked:")), "{out:?}");
         assert!(!wt.exists(), "the worktree is removed");
         assert!(
@@ -761,8 +856,14 @@ mod tests {
     #[test]
     fn work_on_no_remote_is_neither_ticked_nor_removed() {
         let (dir, main, wt, notes) = landed_setup("unlanded");
-        let err = run(&given_for(&wt), &notes, &never).unwrap_err();
+        let err = run(&given_for(&wt), &notes, &never, &merged).unwrap_err();
         assert!(err.contains("would lose them"), "{err}");
+        for itself in ["note/copy^0", "note/copy@{0}", "heads/note/copy"] {
+            let mut given = given_for(&wt);
+            given.already_on = Some(itself.into());
+            let err = run(&given, &notes, &never, &merged).unwrap_err();
+            assert!(err.contains("would lose them"), "{itself}: {err}");
+        }
         assert!(wt.exists());
         assert!(worktree::branch_exists(&main, "note/copy"));
         assert_eq!(
@@ -779,7 +880,7 @@ mod tests {
         git(&main, &["fetch", "-q", "origin"]);
         let origin = dir.join("origin.git");
         git(&origin, &["branch", "-D", "note/copy"]);
-        let err = run(&given_for(&wt), &notes, &never).unwrap_err();
+        let err = run(&given_for(&wt), &notes, &never, &merged).unwrap_err();
         assert!(err.contains("would lose them"), "{err}");
         assert!(wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -796,13 +897,82 @@ mod tests {
         );
         git(&main, &["push", "-q", "origin", "main"]);
         assert!(
-            run(&given_for(&wt), &notes, &never).is_err(),
+            run(&given_for(&wt), &notes, &never, &merged).is_err(),
             "no proof without the PR"
         );
         let mut given = given_for(&wt);
         given.merged_pr_head = Some(git(&wt, &["rev-parse", "HEAD"]));
-        run(&given, &notes, &never).unwrap();
+        assert!(
+            run(&given, &notes, &never, &unmerged).is_err(),
+            "no proof while GitHub names no merged PR with that head"
+        );
+        let err = run(&given, &notes, &never, &unreachable).unwrap_err();
+        assert!(err.contains("GitHub couldn't say"), "{err}");
+        run(&given, &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_issue_closes_on_a_squash_merge_main_changed_since_once_github_names_the_pr() {
+        let (dir, main, wt, notes) = landed_setup("squash-issue");
+        git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
+        git(
+            &main,
+            &["config", "branch.note/copy.wtnIssue", "acme/widgets#12"],
+        );
+        // Pushed, then squash-merged onto a main that changed its file since.
+        git(&wt, &["push", "-q", "origin", "HEAD:note/copy"]);
+        std::fs::write(main.join("copy.txt"), "copied\nand more since\n").unwrap();
+        git(&main, &["add", "copy.txt"]);
+        git(
+            &main,
+            &["commit", "-q", "-m", "Squash-merged, then changed"],
+        );
+        git(&main, &["push", "-q", "origin", "main"]);
+        let squash = git(&main, &["rev-parse", "--short", "HEAD"]);
+        let closed = std::cell::RefCell::new(0);
+        let close = |_: &Repo, _: u64, _: &str, _: &str| {
+            *closed.borrow_mut() += 1;
+            Ok(Closed::Closed)
+        };
+        let mut given = given_for(&wt);
+        given.hash = Some(squash);
+        given.close_issue = true;
+        given.merged_pr_head = Some(git(&wt, &["rev-parse", "HEAD"]));
+        let out = run(&given, &notes, &close, &merged).unwrap();
+        assert!(
+            out.contains(&"closed: acme/widgets#12".to_string()),
+            "{out:?}"
+        );
+        assert_eq!(*closed.borrow(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_issue_isn_t_closed_on_a_commit_that_landed_something_else() {
+        let (dir, main, wt, notes) = landed_setup("unlanded-issue");
+        git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
+        git(
+            &main,
+            &["config", "branch.note/copy.wtnIssue", "acme/widgets#12"],
+        );
+        // Pushed, its PR still open; main moved on without it.
+        git(&wt, &["push", "-q", "origin", "HEAD:note/copy"]);
+        git(
+            &main,
+            &["commit", "-q", "--allow-empty", "-m", "Other work"],
+        );
+        git(&main, &["push", "-q", "origin", "main"]);
+        let mut given = given_for(&wt);
+        given.hash = Some(git(&main, &["rev-parse", "--short", "HEAD"]));
+        given.close_issue = true;
+        let out = run(&given, &notes, &never, &unmerged).unwrap();
+        assert!(
+            out.iter()
+                .any(|l| l.contains("doesn't hold this branch's work")),
+            "{out:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -815,7 +985,7 @@ mod tests {
         git(&main, &["push", "-q", "origin", "main"]);
         let mut given = given_for(&wt);
         given.checked_in = Some("main".into());
-        run(&given, &notes, &never).unwrap();
+        run(&given, &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -830,7 +1000,7 @@ mod tests {
             &["config", "branch.note/copy.wtnTarget", "integration"],
         );
         git(&wt, &["push", "-q", ".", "HEAD:integration"]);
-        run(&given_for(&wt), &notes, &never).unwrap();
+        run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -848,7 +1018,7 @@ mod tests {
             &main,
             &["remote", "set-url", "origin", "/nowhere/at/all.git"],
         );
-        run(&given_for(&wt), &notes, &never).unwrap();
+        run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -859,7 +1029,7 @@ mod tests {
         for own in ["note/copy", "HEAD", "refs/heads/note/copy"] {
             let mut given = given_for(&wt);
             given.checked_in = Some(own.into());
-            assert!(run(&given, &notes, &never).is_err(), "{own}");
+            assert!(run(&given, &notes, &never, &merged).is_err(), "{own}");
         }
         assert!(wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -872,7 +1042,7 @@ mod tests {
         git(&main, &["add", "copy.txt"]);
         git(&main, &["commit", "-q", "-m", "Copy the reply, squashed"]);
         git(&main, &["push", "-q", "origin", "main"]);
-        run(&given_for(&wt), &notes, &never).unwrap();
+        run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -886,7 +1056,7 @@ mod tests {
             NOTE.replace("FEAT: Copy the reply", "FEAT: Reworded"),
         )
         .unwrap();
-        let err = run(&given_for(&wt), &notes, &never).unwrap_err();
+        let err = run(&given_for(&wt), &notes, &never, &merged).unwrap_err();
         assert!(err.contains("no item reading"), "{err}");
         assert!(wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -922,6 +1092,8 @@ mod tests {
         git(&wt, &["checkout", "-q", "-b", branch]);
         git(&main, &["branch", "-q", "-D", "note/copy"]);
         git(&wt, &["push", "-q", "origin", "HEAD:main"]);
+        // given_for's --hash, the commit the work landed as.
+        git(&wt, &["tag", "1234abcd"]);
         (dir, main, wt, notes)
     }
 
@@ -948,7 +1120,7 @@ mod tests {
             close_issue: true,
             ..given_for(&wt)
         };
-        let out = run(&given, &notes, &close).unwrap();
+        let out = run(&given, &notes, &close, &merged).unwrap();
         assert!(
             out.contains(&"closed: acme/widgets#12".to_string()),
             "{out:?}"
@@ -958,7 +1130,7 @@ mod tests {
             [(
                 "acme/widgets".to_string(),
                 12,
-                "1234abcd".to_string(),
+                git(&main, &["rev-parse", "1234abcd^{commit}"]),
                 "Done: 1234abcd. It copies.".to_string()
             )]
         );
@@ -986,7 +1158,7 @@ mod tests {
             close_issue: true,
             ..given_for(&wt)
         };
-        let out = run(&given, &notes, &close).unwrap();
+        let out = run(&given, &notes, &close, &merged).unwrap();
         assert!(
             out.contains(&"left open: other/thing#9: GitHub is off in Settings".to_string()),
             "{out:?}"
@@ -1003,7 +1175,7 @@ mod tests {
             close_issue: true,
             ..given_for(&wt)
         };
-        let out = run(&given, &notes, &never).unwrap();
+        let out = run(&given, &notes, &never, &merged).unwrap();
         assert!(out.iter().all(|l| !l.contains("#42")), "{out:?}");
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -1020,7 +1192,7 @@ mod tests {
             says: leaky.clone(),
             ..given_for(&wt)
         };
-        let out = run(&given, &notes, &never).unwrap();
+        let out = run(&given, &notes, &never, &merged).unwrap();
         assert!(
             out.iter()
                 .any(|l| l.starts_with("left open: acme/widgets#12: leak-check found")),
@@ -1040,7 +1212,7 @@ mod tests {
             ..given_for(&wt)
         };
         let closed = |_: &Repo, _: u64, _: &str, _: &str| Ok(Closed::Closed);
-        let out = run(&given, &notes, &closed).unwrap();
+        let out = run(&given, &notes, &closed, &merged).unwrap();
         assert!(
             out.contains(&"closed: acme/widgets#12".to_string()),
             "{out:?}"
@@ -1052,7 +1224,7 @@ mod tests {
             &main,
             &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
         );
-        let out = run(&given_for(&wt), &notes, &never).unwrap();
+        let out = run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(
             out.contains(
                 &"left open: acme/widgets#12: --close-issue not given, so not asked to close it"
