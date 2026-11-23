@@ -1191,7 +1191,7 @@ fn the_composer_is_its_text_boxs_height() {
         body[..body.find('}').unwrap()].to_string()
     };
     assert!(
-        rule(".composer").contains("padding: 0 12px;"),
+        rule(".composer").contains("padding: 0 var(--s2);"),
         "{}",
         rule(".composer")
     );
