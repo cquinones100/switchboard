@@ -19,7 +19,10 @@ use regex::Regex;
 
 use super::render::{self, Hl, Kind};
 use super::table;
+#[cfg(test)]
 use super::text::Text;
+
+pub use switchboard_vim::{Block, Insert, Selection};
 
 /// Notes' "Move checked items to bottom": ticking an item moves it under
 /// the ones still to do, so a list leads with what is left, a blank line
@@ -28,8 +31,6 @@ use super::text::Text;
 pub struct Options {
     pub move_checked_to_bottom: bool,
     pub gap_before_checked: bool,
-    /// The indent Tab gives an item (the config's `shiftwidth`).
-    pub shiftwidth: usize,
 }
 
 impl Default for Options {
@@ -37,7 +38,6 @@ impl Default for Options {
         Options {
             move_checked_to_bottom: true,
             gap_before_checked: true,
-            shiftwidth: 2,
         }
     }
 }
@@ -52,112 +52,26 @@ pub struct Pending {
     pub close: &'static str,
 }
 
-/// A selection, for the styles that act on one: its first and last row,
-/// the byte where it starts on the first and where it ends (exclusive) on
-/// the last, whether whole lines were selected, and the block's columns
-/// when it is a block (Ctrl-V).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Selection {
-    pub start: (usize, usize),
-    pub end: (usize, usize),
-    pub linewise: bool,
-    pub block: Option<Block>,
+/// What a note keeps beside its text in the shared editor: the empty pair
+/// of markers waiting to be typed into, and the checklist's options; its
+/// folds are its sections (`fold::Folds`).
+#[derive(Clone, Debug, Default)]
+pub struct Note {
+    pub pending: Option<Pending>,
+    pub opts: Options,
 }
 
-impl Selection {
-    /// The bytes of a row inside the selection, the end exclusive; none
-    /// for a row it misses.
-    pub fn span(&self, row: usize, line: &str) -> Option<(usize, usize)> {
-        if row < self.start.0 || row > self.end.0 {
-            return None;
-        }
-        if let Some(block) = self.block {
-            return block.span(line);
-        }
-        let s = if self.linewise || row > self.start.0 {
-            0
-        } else {
-            self.start.1.min(line.len())
-        };
-        let e = if self.linewise || row < self.end.0 {
-            line.len()
-        } else {
-            self.end.1.min(line.len())
-        };
-        Some((s, e.max(s)))
+impl switchboard_vim::Note for Note {
+    type Folds = super::fold::Folds;
+
+    fn reset(&mut self) {
+        self.pending = None;
     }
-}
-
-/// A block selection's columns, in characters, the right one inclusive,
-/// and whether it reaches each line's end (`$`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Block {
-    pub cols: (usize, usize),
-    pub to_end: bool,
-}
-
-impl Block {
-    /// The bytes of a line inside the block, the end exclusive; none for a
-    /// line that ends before the block's left column.
-    pub fn span(&self, line: &str) -> Option<(usize, usize)> {
-        let mut starts = line.char_indices().map(|(i, _)| i).skip(self.cols.0);
-        let from = starts.next()?;
-        let to = if self.to_end {
-            line.len()
-        } else {
-            starts.nth(self.cols.1 - self.cols.0).unwrap_or(line.len())
-        };
-        Some((from, to))
-    }
-}
-
-/// What Insert mode was asked for by an edit: at the cursor, or after the
-/// line's end.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Insert {
-    Here,
-    End,
 }
 
 /// A note's lines and the cursor in them, as format, table and the editor
 /// change them.
-#[derive(Clone, Debug)]
-pub struct Doc {
-    pub text: Text,
-    pub row: usize,
-    pub col: usize,
-    pub pending: Option<Pending>,
-    /// Typing asked for by the edit just made.
-    pub insert: Option<Insert>,
-    pub opts: Options,
-}
-
-impl Doc {
-    pub fn new(text: Text) -> Doc {
-        Doc {
-            text,
-            row: 0,
-            col: 0,
-            pending: None,
-            insert: None,
-            opts: Options::default(),
-        }
-    }
-
-    pub fn line(&self, row: usize) -> String {
-        self.text.line(row)
-    }
-
-    pub fn set_line(&mut self, row: usize, text: &str) {
-        self.text.set_line(row, text);
-    }
-
-    /// Asks for Insert mode: at the cursor, or after the line's end (Vim's
-    /// `startinsert` and `startinsert!`).
-    pub fn start_insert(&mut self, at_end: bool) {
-        self.insert = Some(if at_end { Insert::End } else { Insert::Here });
-    }
-}
+pub type Doc = switchboard_vim::Doc<Note>;
 
 static MARKERS: LazyLock<[Regex; 6]> = LazyLock::new(|| {
     [
@@ -426,7 +340,7 @@ pub fn word_at(line: &str, col: usize) -> (usize, usize) {
 
 /// Takes the empty pair of markers out, if it is still there and empty.
 pub fn drop_empty(doc: &mut Doc) {
-    let Some(p) = doc.pending.take() else {
+    let Some(p) = doc.note.pending.take() else {
         return;
     };
     let line = doc.line(p.row);
@@ -561,7 +475,7 @@ pub fn character(
         .min(line.len());
     let new = format!("{}{open}{close}{}", &line[..at], &line[at..]);
     doc.set_line(row, &new);
-    doc.pending = Some(Pending {
+    doc.note.pending = Some(Pending {
         row,
         col: at,
         open,
@@ -729,7 +643,7 @@ pub fn sort_checked(doc: &mut Doc, row: usize) {
         return;
     };
     let part = &lines[first..=last];
-    let out = sorted(part, true, doc.opts.gap_before_checked);
+    let out = sorted(part, true, doc.note.opts.gap_before_checked);
     if out != part {
         doc.text.set_lines(first, last + 1, &out);
     }
@@ -751,7 +665,7 @@ pub fn toggle_check(doc: &mut Doc, row: usize) -> bool {
     };
     let new = format!("{}{mark}{}", &line[..open + 1], &line[open + 2..]);
     doc.set_line(row, &new);
-    if doc.opts.move_checked_to_bottom {
+    if doc.note.opts.move_checked_to_bottom {
         sort_checked(doc, row);
     }
     true
@@ -920,7 +834,7 @@ pub fn tab(doc: &mut Doc, step: i32) -> bool {
     if !kind.is_list() {
         return false;
     }
-    let width = doc.opts.shiftwidth;
+    let width = doc.shiftwidth;
     if step > 0 {
         doc.set_line(row, &format!("{}{line}", " ".repeat(width)));
         doc.col = col + width;
@@ -995,7 +909,7 @@ mod tests {
             d.col = col;
             d
         };
-        let snap = |d: &Doc| (d.line(0), d.col, d.pending.as_ref().map(|p| p.col));
+        let snap = |d: &Doc| (d.line(0), d.col, d.note.pending.as_ref().map(|p| p.col));
         let mut d = at(6, "alpha beta gamma");
         character(&mut d, Character::Bold, None, None);
         assert_eq!(snap(&d).0, "alpha **beta** gamma");
@@ -1135,14 +1049,14 @@ mod tests {
             Options::default().move_checked_to_bottom,
             "a list leads with what is left unless turned off"
         );
-        d.opts.move_checked_to_bottom = false;
+        d.note.opts.move_checked_to_bottom = false;
         assert!(!toggle_check(&mut d, 0));
         toggle_check(&mut d, 1);
         assert_eq!(
             &d.text.lines()[1..4],
             ["- [x] eggs", "- [ ] milk", "- [ ] bread"]
         );
-        d.opts.move_checked_to_bottom = true;
+        d.note.opts.move_checked_to_bottom = true;
         toggle_check(&mut d, 2);
         assert_eq!(
             &d.text.lines()[1..5],

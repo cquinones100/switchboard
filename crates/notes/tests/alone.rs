@@ -222,7 +222,7 @@ fn it_names_itself_and_its_usage_and_asks_only_an_app_that_runs() {
 }
 
 #[test]
-fn of_the_workspace_s_crates_it_depends_on_the_api_and_the_drawing_alone() {
+fn of_the_workspace_s_crates_it_depends_on_the_api_the_drawing_and_vim_alone() {
     let manifest =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
     let mut by_path: Vec<&str> = manifest
@@ -231,7 +231,14 @@ fn of_the_workspace_s_crates_it_depends_on_the_api_and_the_drawing_alone() {
         .filter_map(|line| line.split_whitespace().next())
         .collect();
     by_path.sort_unstable();
-    assert_eq!(by_path, ["switchboard-plugin-api", "switchboard-ui"]);
+    assert_eq!(
+        by_path,
+        [
+            "switchboard-plugin-api",
+            "switchboard-ui",
+            "switchboard-vim"
+        ]
+    );
     assert!(
         !manifest
             .lines()

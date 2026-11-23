@@ -24,6 +24,8 @@ path = "src/lib.rs"
 [dependencies]
 switchboard-plugin-api = { path = "../plugin-api", features = ["release"] }
 switchboard-ui = { path = "../ui" }
+# Syntax colors, shared with the code viewer (`switchboard code`).
+switchboard-highlight = { path = "../highlight" }
 anyhow = "1"
 libc = "0.2"
 regex = "1"
@@ -33,10 +35,6 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm"]
 crossterm = "0.29"
 unicode-width = "0.2"
 unicode-segmentation = "1"
-syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
-# The grammars: bat's set for syntect, which holds the languages syntect's
-# own leaves out (TypeScript, TSX, TOML, Dockerfile and more).
-two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 similar = "3.2.1"
 # The cache keys of a story and an order: SHA-256 of the diff.
 sha2 = "0.11"

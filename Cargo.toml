@@ -25,8 +25,8 @@ default-run = "switchboard"
 # `default-members` names them all, so fmt, clippy and the tests run over
 # every crate with no flag.
 [workspace]
-members = ["crates/ui", "crates/plugin-api", "crates/diff", "crates/notes"]
-default-members = [".", "crates/ui", "crates/plugin-api", "crates/diff", "crates/notes"]
+members = ["crates/ui", "crates/plugin-api", "crates/vim", "crates/highlight", "crates/diff", "crates/notes"]
+default-members = [".", "crates/ui", "crates/plugin-api", "crates/vim", "crates/highlight", "crates/diff", "crates/notes"]
 
 [[bin]]
 name = "switchboard"

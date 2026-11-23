@@ -846,9 +846,10 @@ impl App {
     pub fn new(store: Store, opts: Options, cols: u16, rows: u16, tx: Sender<Msg>) -> App {
         let mut editor = Editor::new(Text::default());
         editor.clipboard = opts.clipboard;
+        editor.paste_from = super::host::platform::paste;
         editor.easy = opts.easy;
-        editor.doc.opts.move_checked_to_bottom = opts.move_checked_to_bottom;
-        editor.doc.opts.gap_before_checked = opts.gap_before_checked;
+        editor.doc.note.opts.move_checked_to_bottom = opts.move_checked_to_bottom;
+        editor.doc.note.opts.gap_before_checked = opts.gap_before_checked;
         // The boxes' look, from the settings read as the app started.
         let look = Look {
             hover: opts.hover,

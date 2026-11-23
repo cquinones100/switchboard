@@ -1,0 +1,21 @@
+[package]
+name = "switchboard-vim"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+rust-version = "1.99"
+description = "Vim's keys over lines of text and a cursor, shared by Switchboard's notes app, its views and its code viewer"
+publish = false
+
+# Of the workspace's crates, only what everything draws with (its keys):
+# never `switchboard`, so the notes app and the views take the same Vim
+# without the multiplexer. Pure-Rust crates only, as the workspace's root
+# says.
+[dependencies]
+switchboard-ui = { path = "../ui" }
+regex = "1"
+# The text as a rope, whose clones share their pieces, so each undo step
+# keeps the whole text for little.
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+# The line diff marks and folds follow an edit by.
+similar = "3.2.1"

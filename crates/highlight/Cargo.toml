@@ -1,0 +1,18 @@
+[package]
+name = "switchboard-highlight"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+rust-version = "1.99"
+description = "Syntax colors in the terminal's own palette, shared by Switchboard's diff and its code viewer"
+publish = false
+
+# Of the workspace's crates, none: the diff and `switchboard` both take it,
+# so it depends on neither. Pure-Rust crates only, as the workspace's root
+# says (syntect with its pure-Rust regex engine).
+[dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+# The grammars: bat's set for syntect, which holds the languages syntect's
+# own leaves out (TypeScript, TSX, TOML, Dockerfile and more).
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
