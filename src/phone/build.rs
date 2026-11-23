@@ -95,8 +95,10 @@ impl Seen {
     /// caught up is forgotten, so falling behind again is said again.
     pub fn note(&self, device: &str, header: &str, server: &str) -> Option<String> {
         let (page, worker) = parse(header);
-        let page = page?;
-        let worker = worker.unwrap_or("none");
+        // A page names its worker's build only once the worker answers, a
+        // moment after it starts: until then nothing is known of the worker,
+        // so nothing is said or forgotten.
+        let (page, worker) = (page?, worker?);
         let behind = page != server || (worker != "none" && worker != server);
         let mut seen = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if !behind {
@@ -166,6 +168,10 @@ mod tests {
             "{line}"
         );
         assert_eq!(seen.note("phone", "page=new worker=old", "new"), None);
+        // Each load's first request, before the worker answers, changes
+        // nothing.
+        assert_eq!(seen.note("phone", "page=new", "new"), None);
+        assert_eq!(seen.note("phone", "page=new worker=old", "new"), None);
         assert!(seen.note("tablet", "page=new worker=old", "new").is_some());
         // Caught up, then behind again: said again.
         assert_eq!(seen.note("phone", "page=new worker=new", "new"), None);
@@ -178,8 +184,10 @@ mod tests {
     fn a_page_with_no_worker_or_no_header_is_never_behind_for_it() {
         let seen = Seen::default();
         assert_eq!(seen.note("phone", "page=new worker=none", "new"), None);
-        assert_eq!(seen.note("phone", "page=new", "new"), None);
+        assert_eq!(seen.note("phone", "page=old", "new"), None);
         assert_eq!(seen.note("phone", "", "new"), None);
         assert!(seen.note("phone", "page=old worker=none", "new").is_some());
+        assert_eq!(seen.note("phone", "page=old", "new"), None);
+        assert_eq!(seen.note("phone", "page=old worker=none", "new"), None);
     }
 }

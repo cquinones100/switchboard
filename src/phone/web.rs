@@ -522,6 +522,8 @@ async fn me(
         "revoked": revoked,
         "device": device,
         "computer": app.computer,
+        // What the drawer tells a page or worker behind by.
+        "build": served_build(),
     }))
     .into_response()
 }

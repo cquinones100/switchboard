@@ -1014,10 +1014,8 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     );
 }
 
-/// The drawer's search (assets/phone/app.js's `groups`), run in Node over
-/// tabs as the phone reads them; skipped without Node.
-/// The drawer ends on the app's build, short, and says the worker is behind
-/// while its build isn't the page's; every request names both builds.
+/// The drawer ends on the app's build, short, and says which of the page
+/// and its worker is behind the server's build; every request names both.
 #[test]
 fn the_drawer_ends_on_the_build_and_says_when_the_worker_is_behind() {
     let script = r#"
@@ -1032,11 +1030,13 @@ const ctx = vm.createContext({
   console,
 });
 vm.runInContext(source, ctx);
-const line = (worker) => vm.runInContext(`
+const line = ([worker, server]) => vm.runInContext(`
   workerBuild = ${JSON.stringify(worker)};
+  state.me = { build: ${JSON.stringify(server)} };
   ((l) => l.className + "=" + l.children.map((c) => c.text).join("") + "|" + buildHeader()["X-Switchboard-Build"])(buildLine());
 `, ctx);
-for (const worker of [null, "none", "1a2b3c4d5e6f", "9f8e7d6c5b4a"]) console.log(line(worker));
+// [the worker's build, the server's]; a server older than the page names none.
+for (const c of [[null, "1a2b3c4d5e6f"], ["none", "1a2b3c4d5e6f"], ["1a2b3c4d5e6f", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "1a2b3c4d5e6f"], ["unknown", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "9f8e7d6c5b4a"], ["1a2b3c4d5e6f", "9f8e7d6c5b4a"], ["9f8e7d6c5b4a", undefined]]) console.log(line(c));
 "#;
     let Some(out) = run_app_js(script) else {
         return;
@@ -1048,11 +1048,17 @@ for (const worker of [null, "none", "1a2b3c4d5e6f", "9f8e7d6c5b4a"]) console.log
             "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=none",
             "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
             "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=unknown",
+            "build-line behind=app behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
         ],
         "{out}"
     );
 }
 
+/// The drawer's search (assets/phone/app.js's `groups`), run in Node over
+/// tabs as the phone reads them; skipped without Node.
 #[test]
 fn the_drawers_search_keeps_the_tabs_matching_in_their_groups() {
     // The page's own globals stood in for, its start left waiting on a
@@ -2467,6 +2473,12 @@ mod preview_server {
         let stamp = format!("const BUILD = \"{}", env!("SWITCHBOARD_COMMIT"));
         assert!(app.contains(&stamp), "{}", &app[..app.len().min(600)]);
         assert!(!app.contains("const BUILD = \"dev\";"));
+        // The build the drawer tells a page behind by is the same one.
+        let me = json_of(at, "/api/me");
+        assert!(
+            stamp.ends_with(me["build"].as_str().unwrap().split('+').next().unwrap()),
+            "{me}"
+        );
     }
 
     #[test]

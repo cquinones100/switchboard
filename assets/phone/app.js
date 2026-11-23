@@ -96,11 +96,16 @@ async function askWorkerBuild() {
 }
 
 // The dim line at the end of the drawer: the app's build, short, or, while
-// the worker running isn't the page's, how to take up the new one.
+// the worker or the page isn't the server's build (the page's, from a server
+// that names none), which is behind and how to take up the new one. A new
+// worker takes over an open page as it installs, so either can be behind.
 function buildLine() {
-  const workerBehind = workerBuild && workerBuild !== "none" && workerBuild !== BUILD;
+  const server = state.me && state.me.build;
+  const workerBehind = !!workerBuild && workerBuild !== "none" && workerBuild !== (server || BUILD);
+  const pageBehind = !!server && BUILD !== server;
   const short = BUILD.split("+").map((c) => c.slice(0, 7)).join("+");
-  return el("div", { class: "build-line" + (workerBehind ? " behind" : "") }, workerBehind ? "worker behind, close and reopen the app" : "build " + short);
+  const behind = workerBehind ? "worker" : pageBehind ? "app" : null;
+  return el("div", { class: "build-line" + (behind ? " behind" : "") }, behind ? behind + " behind, close and reopen the app" : "build " + short);
 }
 
 async function api(path, body) {
