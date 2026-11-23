@@ -1082,8 +1082,8 @@ const imageUrl = (name) => "/api/images/" + encodeURIComponent(name);
 
 // An image shown whole, over the channel, until its × or a tap while it is
 // at its fitted size. It zooms and pans, the one thing in the app that does:
-// two fingers pinch it about the point between them (a trackpad's pinch, a
-// wheel with Ctrl, in the preview), one finger (or the mouse) drags it while
+// two fingers pinch it about the point between them (a trackpad's pinch in
+// Chrome, a wheel with Ctrl, in the preview), one finger (or the mouse) drags it while
 // zoomed, and a double tap zooms to 2.5× there or back to fitted. The zoom is
 // a transform alone, so the page never reflows, and the image's edges are
 // held at the screen's once it is bigger than the screen.
@@ -1095,7 +1095,11 @@ const TAP_SLOP = 10; // px a tap may move and still be a tap
 function full() {
   if (!state.full) return null;
   const name = state.full;
-  const close = () => { state.full = null; render(); };
+  const close = () => {
+    if (tapped) clearTimeout(tapped.timer);
+    state.full = null;
+    render();
+  };
   const img = el("img", { src: imageUrl(state.full), alt: "The image, whole", draggable: "false" });
   const box = el(
     "div",
@@ -1112,6 +1116,8 @@ function full() {
   const measure = () => {
     if (!fitted() || !img.getBoundingClientRect) return;
     const r = img.getBoundingClientRect();
+    // Not yet loaded, it has no size to zoom about.
+    if (!r.width || !r.height) return;
     base = { left: r.left, top: r.top, width: r.width, height: r.height };
   };
   // Where an edge of the image sits on one axis: held to the screen's edges
@@ -1147,6 +1153,7 @@ function full() {
   const down = new Map();
   let gesture = null; // { s, tx, ty, x, y, apart } as it started
   let moved = false;
+  let tapped = null; // { x, y, at, timer }: a tap that may become a double tap
   const begin = () => {
     measure();
     const [a, b] = [...down.values()];
@@ -1157,6 +1164,11 @@ function full() {
   box.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button")) return;
     if (!down.size) moved = false;
+    // A finger down again starts a gesture, never the tap before it closing.
+    if (tapped && down.size) {
+      clearTimeout(tapped.timer);
+      tapped = null;
+    }
     settle(false);
     down.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
     if (box.setPointerCapture) box.setPointerCapture(e.pointerId);
@@ -1199,7 +1211,6 @@ function full() {
   }, { passive: false });
 
   // A tap closes it while fitted, once it is plainly not a double tap.
-  let tapped = null; // { x, y, at, timer }
   box.addEventListener("click", (e) => {
     if (e.target.closest("button") || moved) return;
     const at = e.timeStamp;
