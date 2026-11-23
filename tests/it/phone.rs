@@ -1938,6 +1938,14 @@ fn the_phone_stops_a_working_claude_with_esc() {
     let log = server.log();
     assert!(log.contains("from your phone: tab 1 "), "logged: {log}");
     assert!(log.contains("): Stopped"), "logged: {log}");
+
+    // Still working with a permission prompt on screen, as auto mode asks
+    // one, Esc would refuse it rather than stop the turn: refused.
+    server.ok(&["send-keys", "-t", &pane, "C-c"]);
+    show_prompt(&server, &pane);
+    let (code, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
+    assert_eq!(code, 1, "a Claude asking");
+    assert!(err.contains("asking something"), "{err}");
 }
 
 /// `pin`, which the phone's route asks: it pins a Claude tab as M-f does,

@@ -12,11 +12,11 @@
 //! why. No response allows another origin (no CORS headers), and each
 //! carries a strict Content-Security-Policy.
 //!
-//! Seven things change anything, each asked of the server over its socket,
+//! Eight things change anything, each asked of the server over its socket,
 //! which refuses a pane not running Claude: answering a tab's prompt,
 //! sending its Claude a message, marking it seen, setting or clearing its
-//! reminder, pinning or unpinning it, and closing it (which the app asks
-//! about first); and running an option of one of mission control's menus
+//! reminder, pinning or unpinning it, stopping its working Claude's turn and
+//! closing it (the last two asked about first in the app); and running an option of one of mission control's menus
 //! the phone shows (`phone::mission`), which the server refuses for one
 //! the phone leaves out. A pane is
 //! taken only when the server's own `watch` lists it as a Claude tab. An

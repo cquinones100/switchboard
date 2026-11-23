@@ -294,9 +294,11 @@ impl Server {
         if self.agents.state(pane) != Some(crate::agent::State::Working) {
             return Err("its Claude isn't working".into());
         }
-        // A permission auto mode asks while still working, or a dialog,
-        // which Esc would refuse or close rather than stop the turn.
-        if self.phone_asking(pane) || self.phone_dialog(pane) {
+        // A prompt on screen (a permission auto mode asks while still
+        // working) or a dialog, which Esc would refuse or close rather than
+        // stop the turn; a request auto mode allowed, still marked asked
+        // while its command runs, shows none and is stopped.
+        if self.phone_prompt_of(pane).is_some() || self.phone_dialog(pane) {
             return Err("its Claude is asking something: answer it first".into());
         }
         let tab = self.panes[&pane].tab;
