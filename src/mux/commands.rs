@@ -254,7 +254,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "stop",
-        "stop [-t pane] [-s from]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude and for one whose Claude isn't working; -s names who asked (phone), written in the server's log",
+        "stop [-t pane] [-s from]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude, for one whose Claude isn't working and for one showing a permission prompt or dialog; -s names who asked (phone), written in the server's log",
     ),
     (
         "watch",

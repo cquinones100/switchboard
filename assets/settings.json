@@ -2183,7 +2183,7 @@
     "key": "phone",
     "category": "Phone app",
     "label": "Phone app",
-    "description": "switchboard phone (M-p's \"Open the phone app in its own tab\") serves a web app on your tailnet alone, for answering, messaging, reminding you of, pinning and closing your Claude tabs (closing asked first, and off with Close tabs from the phone) from the phones phone.json lists: their prompts, their recent turns, and a Web Push naming the tab when one starts waiting on you or its reminder comes due, which passes through your phone's push service. Needs Tailscale. Off, it refuses to start, and one running stops answering",
+    "description": "switchboard phone (M-p's \"Open the phone app in its own tab\") serves a web app on your tailnet alone, for answering, messaging, reminding you of, pinning, stopping and closing your Claude tabs (stopping and closing asked first, closing off with Close tabs from the phone) from the phones phone.json lists: their prompts, their recent turns, and a Web Push naming the tab when one starts waiting on you or its reminder comes due, which passes through your phone's push service. Needs Tailscale. Off, it refuses to start, and one running stops answering",
     "default": false,
     "scope": "computer"
   },
