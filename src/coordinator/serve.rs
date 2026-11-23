@@ -1,8 +1,7 @@
 //! The coordinator on the server (src/coordinator/mod.rs): starting its
 //! pane as Settings' `coordinator` says and keeping it running, the events
 //! that wake it, its hooks, M-C showing it beside the tab in front and the
-//! keys it takes then, the two commands its permissions allow
-//! (`coordinator-close`, `coordinator-open`), and its line in `list`.
+//! keys it takes then, and its line in `list`.
 
 use std::time::Instant;
 
@@ -16,7 +15,7 @@ use crate::mission::answer;
 use crate::mux::compose::{self, Frame};
 use crate::mux::input::{Key, KeyCode, Mouse, MouseButton, MouseKind};
 use crate::mux::pane::PaneView;
-use crate::mux::server::{ClientId, Opened, Reply, Server};
+use crate::mux::server::{ClientId, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{settings, util};
 
@@ -48,9 +47,11 @@ impl Server {
             self.coordinator_ended();
         }
         // Another note chosen: started again on it, resumed, once it
-        // sleeps, so its permissions name the new one.
+        // sleeps, so its permissions name the new one; a session given
+        // another skill, fresh.
         if self.coordinator.pane.is_some()
-            && self.coordinator.note != Self::coordinator_note_title()
+            && (self.coordinator.note != Self::coordinator_note_title()
+                || self.coordinator.stale_skill)
             && !matches!(
                 self.coordinator.pane.and_then(|p| self.agents.state(p)),
                 Some(State::Working | State::Waiting)
@@ -96,7 +97,21 @@ impl Server {
         let model = settings::setting(super::MODEL)
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default();
-        let resume = self.coordinator.saved.session.clone();
+        // A session given another skill isn't resumed, since it would
+        // follow the skill it started with.
+        let skill = super::skill_hash();
+        let resume = self
+            .coordinator
+            .saved
+            .session
+            .clone()
+            .filter(|_| self.coordinator.saved.skill.as_deref() == Some(skill.as_str()));
+        if resume.is_none() {
+            self.coordinator.saved.session = None;
+            self.coordinator.saved.skill = Some(skill);
+            self.coordinator_save();
+        }
+        self.coordinator.stale_skill = false;
         let command = super::command(
             &crate::worktree::work_shell(),
             &super::model_of(&model, "sonnet"),
@@ -130,10 +145,11 @@ impl Server {
             ready: pane.is_some() && handed.ready,
             note: Self::coordinator_note_title(),
             pending: handed.pending,
-            opened: handed.opened.map(|(tab, dir)| (tab, dir, Instant::now())),
             ..Coordinator::default()
         };
         self.coordinator.load();
+        self.coordinator.stale_skill = pane.is_some()
+            && self.coordinator.saved.skill.as_deref() != Some(super::skill_hash().as_str());
         self.coordinator.note_seen = self.coordinator_note_modified();
     }
 
@@ -296,7 +312,8 @@ impl Server {
     }
 
     /// The tabs' facts before `new` takes their place: a PR that was open
-    /// and now has merged wakes it.
+    /// and now has merged wakes it, an autopilot tab's too, so its note
+    /// ticks the item autopilot landed.
     pub fn coordinator_facts(&mut self, new: &Facts) {
         if !Self::coordinator_on() {
             return;
@@ -317,7 +334,7 @@ impl Server {
                 self.coordinator.started = Instant::now().checked_sub(super::RESTART_AFTER);
             }
             let told = self.coordinator.saved.told.contains(&pr.url);
-            if !told && pr.state == PrState::Merged && !self.autopilot_tab(*tab) {
+            if !told && pr.state == PrState::Merged {
                 merged.push(Wake::Merged {
                     tab: self.tab_number(*tab),
                     name: self.tab_label_without_pr_title(*tab),
@@ -337,6 +354,46 @@ impl Server {
         self.coordinator_save();
         for wake in merged {
             self.coordinator_wake(wake);
+        }
+    }
+
+    /// An autopilot tab just landed: its PR's merge wakes it, when the tab
+    /// has one it wasn't told of that merged, as GitHub last answered or as
+    /// its landing marked it (`@autopilot_merged`, which comes before the
+    /// next lookup), since autopilot may close the tab before GitHub is next
+    /// asked; with no PR, the landing itself, once it pushed or merged; with
+    /// a PR not merged (open or closed), or none and nothing pushed (back in
+    /// the main clone having landed nothing), nothing, a merge told when
+    /// GitHub answers it.
+    pub fn coordinator_landed(&mut self, tab: TabId) {
+        if !Self::coordinator_on() {
+            return;
+        }
+        if self.coordinator.started.is_none() {
+            self.coordinator.load();
+            self.coordinator.started = Instant::now().checked_sub(super::RESTART_AFTER);
+        }
+        let (number, name) = (self.tab_number(tab), self.tab_label_without_pr_title(tab));
+        let pr = self.facts.get(&tab).and_then(|f| f.pr.clone());
+        match pr {
+            Some(pr) if self.coordinator.saved.told.contains(&pr.url) => {}
+            // Not merged, open or closed: nothing is done yet, whatever
+            // was pushed.
+            Some(pr) if !(pr.state == PrState::Merged || self.autopilot_marked_merged(tab)) => {}
+            Some(pr) => {
+                self.coordinator.saved.tell(&pr.url);
+                self.coordinator_save();
+                self.coordinator_wake(Wake::Merged {
+                    tab: number,
+                    name,
+                    number: pr.number,
+                    url: pr.url,
+                });
+            }
+            None if self.autopilot_landed_something(tab) => {
+                self.coordinator_wake(Wake::Landed { tab: number, name });
+            }
+            None => {}
         }
     }
 
@@ -685,100 +742,6 @@ impl Server {
         }
         self.coordinator_redraw();
         true
-    }
-
-    // ── Its commands ────────────────────────────────────────────────────────
-
-    /// The tab a command names: `@<id>`, or the number `switchboard tabs`
-    /// shows.
-    fn coordinator_tab_named(&self, named: &str) -> Result<TabId, String> {
-        let tab = match named.strip_prefix('@') {
-            Some(id) => id.parse().ok().map(TabId),
-            None => named.parse().ok().and_then(|n| self.tab_numbered(n)),
-        };
-        tab.filter(|t| self.tabs.contains_key(t))
-            .ok_or_else(|| format!("no tab {named}"))
-    }
-
-    /// `coordinator-close <tab>`: closes a tab whose PR has merged, as
-    /// GitHub last answered; refuses any other, and a tab of autopilot's.
-    pub fn cmd_coordinator_close(&mut self, rest: &[String]) -> Result<Reply, String> {
-        let [named] = rest else {
-            return Err("usage: switchboard coordinator-close <tab>".into());
-        };
-        let tab = self.coordinator_tab_named(named)?;
-        if self.autopilot_tab(tab) {
-            return Err(format!(
-                "tab {named} is autopilot's; it closes its own tabs"
-            ));
-        }
-        let merged = self
-            .facts
-            .get(&tab)
-            .and_then(|f| f.pr.as_ref())
-            .is_some_and(|pr| pr.state == PrState::Merged);
-        if !merged {
-            return Err(format!(
-                "tab {named}'s PR hasn't merged, as GitHub last answered; ask before closing it"
-            ));
-        }
-        self.kill_tab(tab);
-        Ok(Reply::ok(""))
-    }
-
-    /// `coordinator-open-tab -c <dir> <owner/repo#number>`, from `switchboard
-    /// coordinator-open` once GitHub says the issue may be taken: a tab in the
-    /// background running `wt --issue` on that issue in `dir`, once the tab
-    /// it opened last has made its worktree (or is closed); prints the tab.
-    pub fn cmd_coordinator_open(&mut self, rest: &[String]) -> Result<Reply, String> {
-        const USAGE: &str = "usage: switchboard coordinator-open-tab -c <dir> <owner/repo#number>";
-        let (dir, reference) = match rest {
-            [c, dir, reference] if c == "-c" => (dir, reference),
-            _ => return Err(USAGE.into()),
-        };
-        let (repo, number) =
-            crate::autopilot::issues::parse_reference(reference).ok_or(USAGE.to_string())?;
-        let dir = std::path::PathBuf::from(dir);
-        if !dir.is_absolute() || !dir.is_dir() {
-            return Err(format!("{} isn't a folder", dir.display()));
-        }
-        if let Some((last, from, at)) = self.coordinator.opened.clone()
-            && self.tabs.contains_key(&last)
-            && at.elapsed() < super::OPEN_WAIT
-            && !self.coordinator_branch_made(last, &from)
-        {
-            return Err(format!(
-                "tab {} hasn't made its worktree yet; open the next once it has",
-                self.tab_number(last)
-            ));
-        }
-        let session = self
-            .latest_client()
-            .and_then(|c| self.clients.get(&c))
-            .map(|c| c.session.clone())
-            .or_else(|| self.sessions.first().map(|s| s.name.clone()))
-            .ok_or("no session to open a tab in")?;
-        let args = vec!["--issue".to_string(), format!("{repo}#{number}")];
-        let command = crate::worktree::tab_running("worktree-from-ticket", "wt", &args);
-        let (tab, _) = self
-            .new_tab(
-                &session,
-                Some(dir.clone()),
-                Some(command),
-                None,
-                Opened::Background,
-            )
-            .map_err(|e| format!("couldn't open a tab: {e}"))?;
-        self.tab_to_end(tab);
-        self.coordinator.opened = Some((tab, dir, Instant::now()));
-        Ok(Reply::ok(format!("{}\n", self.tab_number(tab))))
-    }
-
-    /// Whether a tab opened in `from` has moved into a worktree on a
-    /// branch of its own, as `wt` does once it has recorded its branch.
-    fn coordinator_branch_made(&self, tab: TabId, from: &std::path::Path) -> bool {
-        self.tab_path(tab)
-            .is_some_and(|dir| dir != from && self.tab_names.names.branch(dir).is_some())
     }
 
     /// Its line in `list`: its pane as a tab's are listed, with the Claude

@@ -577,7 +577,8 @@ fn check_status(response: &Response, credential: &Credential) -> Result<()> {
             )
         }
         403 | 429 if is_rate_limited(response, &message) => rate_limited(response, &message),
-        404 => ServiceError::new(
+        // 410: an issue deleted, which is no more there than one never made.
+        404 | 410 => ServiceError::new(
             ErrorKind::NotFound,
             SERVICE,
             format!(

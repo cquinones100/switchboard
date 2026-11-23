@@ -140,9 +140,9 @@ pub const COMMANDS: &[Command] = &[
         about: "Switchboard's instructions for Claude, as a session starts (run by Claude Code's hooks)",
     },
     Command {
-        name: "coordinator-open",
-        run: coordinator::open_main,
-        about: "The coordinator opening a tab running wt --issue on an issue autopilot's rule lets it take, once its last tab has its worktree",
+        name: "coordinator-order",
+        run: coordinator::order_main,
+        about: "The coordinator setting the order autopilot takes issues in: those named priority 1 and first in its queue in that order, those after --left priority 4 and out of it, on repositories you can push to",
     },
     Command {
         name: "coordinator-post",

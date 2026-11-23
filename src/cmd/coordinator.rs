@@ -2,12 +2,13 @@
 //! reaches GitHub without asking, each checking in code what its skill
 //! only says, so text it read on GitHub can't steer it past them:
 //!
-//! - `coordinator-open -c <dir> <owner/repo#number>`: asks GitHub whether
-//!   the issue may be taken by autopilot's rule (open, assigned to you, and
-//!   opened by you or labeled for autopilot by you or a writer,
-//!   `issues::coordinator_may_open`), then has the server open its tab
-//!   (`coordinator-open-tab`), which refuses while the last one hasn't
-//!   made its worktree.
+//! - `coordinator-order <owner/repo#number>... [--left <owner/repo#number>...]`:
+//!   gives Next's issues `priority: 1` and those that left Next
+//!   `priority: 4` (`issues::set_priority`, as the Autopilot board's Move up
+//!   and Move down do), on repositories you can push to, changing nothing
+//!   else of them; then tells the server (`coordinator-ordered`) in one go,
+//!   which puts Next's first in autopilot's queue in their order and
+//!   takes the others out.
 //! - `coordinator-post issue -C <clone> --title <title> --body-file <file>`
 //!   and `coordinator-post comment -C <clone> <number> --body-file <file>`:
 //!   files an issue (assigned to you) or comments on one, only on the
@@ -36,52 +37,174 @@ fn fail(what: &str, why: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
-/// `coordinator-open -c <dir> <owner/repo#number>`.
-pub fn open_main(args: Vec<String>) -> ExitCode {
-    const NAME: &str = "coordinator-open";
-    let [c, dir, reference] = args.as_slice() else {
-        eprintln!("usage: switchboard {NAME} -c <dir> <owner/repo#number>");
+/// Issues by their repository and number.
+type Issues = Vec<(Repo, u64)>;
+
+/// Its arguments: Next's issues in order, and after `--left` those that
+/// left Next; at least one, every one an `<owner/repo#number>`.
+fn order_args(args: &[String]) -> Option<(Issues, Issues)> {
+    let (next, left) = match args.iter().position(|a| a == "--left") {
+        Some(at) => (&args[..at], &args[at + 1..]),
+        None => (args, &[][..]),
+    };
+    let parse = |refs: &[String]| -> Option<Issues> {
+        refs.iter()
+            .map(|r| crate::autopilot::issues::parse_reference(r))
+            .collect()
+    };
+    let (next, left) = (parse(next)?, parse(left)?);
+    (!next.is_empty() || !left.is_empty()).then_some((next, left))
+}
+
+/// `coordinator-order <owner/repo#number>... [--left <owner/repo#number>...]`.
+pub fn order_main(args: Vec<String>) -> ExitCode {
+    const NAME: &str = "coordinator-order";
+    use crate::autopilot::issues::{HIGHEST, LOWEST, set_priority};
+    let Some((next, left)) = order_args(&args) else {
+        eprintln!(
+            "usage: switchboard {NAME} <owner/repo#number>... [--left <owner/repo#number>...]"
+        );
         return ExitCode::from(2);
     };
-    if c != "-c" {
-        eprintln!("usage: switchboard {NAME} -c <dir> <owner/repo#number>");
-        return ExitCode::from(2);
-    }
-    let Some((repo, number)) = crate::autopilot::issues::parse_reference(reference) else {
-        return fail(NAME, &format!("{reference} isn't <owner/repo#number>"));
+    // Every issue looked up before any label is written, so a wrong one
+    // changes nothing; then those that left Next first, so a failure after
+    // leaves none of them first; and the server told of what was written
+    // even when a later one failed.
+    // A repository you can't push to, or an issue GitHub doesn't have, is
+    // left out for good, saying which; any other failure changes nothing.
+    let looked = util::block_on(async {
+        let mut refused: Vec<(String, String)> = Vec::new();
+        let mut checked: Vec<String> = Vec::new();
+        for (repo, _) in next.iter().chain(&left) {
+            let name = repo.to_string();
+            if checked.contains(&name) || refused.iter().any(|(r, _)| *r == name) {
+                continue;
+            }
+            match pushable(repo).await {
+                Ok(()) => checked.push(name),
+                Err(e) if e.downcast_ref::<NotPushable>().is_some() => {
+                    refused.push((name, format!("{e:#}")));
+                }
+                Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {
+                    let why = format!("GitHub has no repository {name} you can see");
+                    refused.push((name, why));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        let mut skipped = Vec::new();
+        let looked_up = |list: &Issues| {
+            let list = list.clone();
+            let refused = refused.clone();
+            async move {
+                let mut kept = Vec::new();
+                let mut skipped = Vec::new();
+                for (repo, number) in list {
+                    let reference = format!("{repo}#{number}");
+                    if let Some((_, why)) = refused.iter().find(|(r, _)| *r == repo.to_string()) {
+                        skipped.push(format!("skipped {reference}: {why}"));
+                        continue;
+                    }
+                    let path = format!("/repos/{repo}/issues/{number}");
+                    match github::rest("GET", &path, None, SOURCE).await {
+                        Ok(issue) => {
+                            // The queue's item for it, as autopilot words
+                            // an issue (`Issue::text`).
+                            let title = issue
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let text = format!("{reference}: {}", crate::worktree::one_line(title));
+                            kept.push((repo, number, text));
+                        }
+                        Err(e)
+                            if crate::net::kind_of(&e)
+                                == Some(&crate::net::ErrorKind::NotFound) =>
+                        {
+                            skipped.push(format!("skipped {reference}: GitHub has no such issue"));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                anyhow::Ok((kept, skipped))
+            }
+        };
+        let (next, more) = looked_up(&next).await?;
+        skipped.extend(more);
+        let (left, more) = looked_up(&left).await?;
+        skipped.extend(more);
+        anyhow::Ok((next, left, skipped))
+    });
+    let (next, left, skipped) = match looked {
+        Ok(looked) => looked,
+        Err(e) => return fail(NAME, &format!("{e:#}; no label changed")),
     };
-    let dir = PathBuf::from(dir);
-    if !dir.is_dir() {
-        return fail(NAME, &format!("{} isn't a folder", dir.display()));
+    for line in &skipped {
+        println!("{line}");
     }
-    let label = crate::repos::issue_label_known(&dir);
-    let may = util::block_on(crate::autopilot::issues::coordinator_may_open(
-        &repo,
-        number,
-        label.as_deref(),
-    ));
-    if let Err(why) = may {
-        return fail(NAME, &why);
+    let mut taken_out = Vec::new();
+    let mut first = Vec::new();
+    let written = util::block_on(async {
+        for (repo, number, _) in &left {
+            set_priority(repo, *number, LOWEST).await?;
+            taken_out.push(format!("{repo}#{number}"));
+        }
+        for (repo, number, text) in &next {
+            set_priority(repo, *number, HIGHEST).await?;
+            first.push(text.clone());
+        }
+        anyhow::Ok(())
+    });
+    if first.is_empty() && taken_out.is_empty() {
+        return match written {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(NAME, &format!("{e:#}; no label changed")),
+        };
     }
-    let dir = dir.canonicalize().unwrap_or(dir);
-    let reference = format!("{repo}#{number}");
-    match socket::ask(&[
-        "coordinator-open-tab",
-        "-c",
-        &dir.to_string_lossy(),
-        &reference,
-    ]) {
-        Ok((0, out, _)) => {
-            print!("{out}");
-            ExitCode::SUCCESS
-        }
-        Ok((code, _, err)) => {
-            eprint!("{err}");
-            ExitCode::from(u8::try_from(code).unwrap_or(1))
-        }
-        Err(e) => fail(NAME, &format!("{e:#}")),
+    // Told at once, so autopilot never opens from half of the new order.
+    let (put, out) = (first.len(), taken_out.len());
+    let mut asked = vec!["coordinator-ordered".to_string()];
+    asked.extend(first);
+    if !taken_out.is_empty() {
+        asked.push("--left".into());
+        asked.extend(taken_out);
+    }
+    let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
+    let told = socket::ask(&asked);
+    println!("{put} issue(s) first in autopilot's queue, in order; {out} taken out");
+    let told = match told {
+        Ok((0, _, _)) => Ok(()),
+        Ok((_, _, err)) => Err(err.trim().to_string()),
+        Err(e) => Err(format!("{e:#}")),
+    };
+    match (written, told) {
+        (Ok(()), Ok(())) => ExitCode::SUCCESS,
+        (Err(e), _) => fail(NAME, &format!("{e:#}; only the issues above were done")),
+        (_, Err(e)) => fail(NAME, &format!("labeled, but autopilot wasn't told: {e}")),
     }
 }
+
+/// Refuses a repository you can't push to, so nothing changes on someone
+/// else's.
+async fn pushable(repo: &Repo) -> anyhow::Result<()> {
+    let about = github::rest("GET", &format!("/repos/{repo}"), None, SOURCE).await?;
+    if about.pointer("/permissions/push") != Some(&Value::Bool(true)) {
+        return Err(NotPushable(repo.to_string()).into());
+    }
+    Ok(())
+}
+
+/// A repository you can't push to.
+#[derive(Debug)]
+struct NotPushable(String);
+
+impl std::fmt::Display for NotPushable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} isn't a repository you can push to", self.0)
+    }
+}
+
+impl std::error::Error for NotPushable {}
 
 /// What `coordinator-post` posts.
 #[derive(Debug, PartialEq, Eq)]
@@ -172,10 +295,7 @@ pub fn post_main(args: Vec<String>) -> ExitCode {
             .map_err(|e| anyhow::anyhow!("{} has no origin: {e}", clone.display()))?;
         let repo: Repo = github::parse_remote(origin.trim())
             .ok_or_else(|| anyhow::anyhow!("{}'s origin isn't on GitHub", clone.display()))?;
-        let about = github::rest("GET", &format!("/repos/{repo}"), None, SOURCE).await?;
-        if about.pointer("/permissions/push") != Some(&Value::Bool(true)) {
-            anyhow::bail!("{repo} isn't a repository you can push to");
-        }
+        pushable(&repo).await?;
         match &post {
             Post::Issue { title } => {
                 let me = github::rest("GET", "/user", None, SOURCE).await?;
@@ -224,6 +344,24 @@ mod tests {
 
     fn args(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn order_takes_next_in_its_order_and_what_left_it() {
+        let (next, left) = order_args(&args(&["o/r#3", "o/r#1", "--left", "o/r#2"])).unwrap();
+        let named = |v: &Issues| {
+            v.iter()
+                .map(|(r, n)| format!("{r}#{n}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named(&next), ["o/r#3", "o/r#1"]);
+        assert_eq!(named(&left), ["o/r#2"]);
+        assert!(order_args(&args(&["--left", "o/r#2"])).is_some());
+        assert!(order_args(&args(&[])).is_none());
+        assert!(
+            order_args(&args(&["o/r#3", "1"])).is_none(),
+            "a priority is no issue"
+        );
     }
 
     #[test]

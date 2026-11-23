@@ -242,24 +242,6 @@ fn events_wait_while_it_works_and_are_typed_together_once_it_sleeps() {
     assert!(kept.contains("coord-1"), "{kept}");
 }
 
-#[test]
-fn it_closes_only_a_tab_whose_pr_merged() {
-    let server = TestServer::start();
-    let mut client = server.attach(100, 30);
-    client.wait_text("$");
-    background_tab(&server, "work");
-    let (code, _, err) = server.run(&["coordinator-close", "2"]);
-    assert_ne!(code, 0);
-    assert!(err.contains("hasn't merged"), "{err}");
-    assert_eq!(
-        server.list()["sessions"][0]["tabs"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-}
-
 /// Runs git in `dir` with an identity of its own.
 #[cfg(feature = "net")]
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -278,7 +260,7 @@ fn git(dir: &std::path::Path, args: &[&str]) {
 
 #[cfg(feature = "net")]
 #[test]
-fn a_tab_s_pr_merging_is_typed_into_it() {
+fn an_autopilot_tab_s_pr_merging_is_typed_into_it() {
     use common::http::{Fake, Reply};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -339,6 +321,12 @@ fn a_tab_s_pr_merging_is_typed_into_it() {
         "SessionStart",
         json!({"session_id": "coord-1", "source": "startup"}),
     );
+    // Autopilot's tab: autopilot closes it, and the coordinator ticks its item.
+    let tab_id = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &tab_id, "@autopilot", "1"]);
     let tab = || server.list()["sessions"][0]["tabs"][0]["facts"].clone();
     wait("the tab's open PR", tab, |f| f["pr"]["state"] == "OPEN");
 
@@ -359,6 +347,31 @@ fn a_tab_s_pr_merging_is_typed_into_it() {
         typed.contains("https://github.com/acme/widgets/pull/12"),
         "{typed}"
     );
-    // Now it may close that tab.
-    server.ok(&["coordinator-close", "1"]);
+}
+
+#[test]
+fn coordinator_order_puts_next_s_issues_first_in_autopilot_s_queue_in_its_order() {
+    let server = TestServer::start();
+    // C (#2) first, then Next as A (#3) and B (#1) with C left out of it.
+    server.ok(&["coordinator-ordered", "o/r#2: C"]);
+    server.ok(&[
+        "coordinator-ordered",
+        "o/r#3: A",
+        "o/r#1: B",
+        "--left",
+        "o/r#2",
+    ]);
+    let mode: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("autopilot.json")).unwrap(),
+    )
+    .unwrap();
+    let next: Vec<&str> = mode["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x["text"].as_str())
+        .collect();
+    assert_eq!(next, ["o/r#3: A", "o/r#1: B"]);
+    let (code, _, err) = server.run(&["coordinator-ordered", "not an issue"]);
+    assert_ne!(code, 0, "a line naming no issue is refused: {err}");
 }

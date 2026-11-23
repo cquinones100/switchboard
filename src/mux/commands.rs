@@ -144,9 +144,8 @@ pub const NAMES: &[&str] = &[
     "autopilot-start",
     "autopilot-board",
     "autopilot-pause",
+    "coordinator-ordered",
     "slot-report",
-    "coordinator-close",
-    "coordinator-open-tab",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -303,16 +302,12 @@ pub const USAGE: &[(&str, &str)] = &[
         "autopilot-pause on|off: autopilot paused or resumed, as its menu's Pause and Resume do",
     ),
     (
+        "coordinator-ordered",
+        "coordinator-ordered <first line>... [--left <owner/repo#number>...]: from switchboard coordinator-order once GitHub has the issues' priority labels, autopilot's queue told of them at once as the Autopilot board's Move up and Move down tell it: the issues named by their items' first lines put first in that order, those after --left taken out of what is put first, the issues read again",
+    ),
+    (
         "slot-report",
         "slot-report wait|hold <kind> <pid> [index cap child] -- command | done <pid>: from the cargo, npm and pnpm stand-ins, a command in the calling pane waiting for, holding or letting go a slot in the queue for heavy work",
-    ),
-    (
-        "coordinator-close",
-        "coordinator-close <tab>: the coordinator closing a tab (its number, or @<id>) whose PR has merged, as GitHub last answered; refuses any other tab, and autopilot's",
-    ),
-    (
-        "coordinator-open-tab",
-        "coordinator-open-tab -c <dir> <owner/repo#number>: from switchboard coordinator-open once GitHub says the issue may be taken, the coordinator opening a tab in the background running wt --issue on that issue in dir, once the tab it opened last has made its worktree; prints the tab's number",
     ),
 ];
 
@@ -492,8 +487,6 @@ impl Server {
                 self.kill_pane(p);
                 Reply::ok("")
             }),
-            "coordinator-close" => self.cmd_coordinator_close(rest),
-            "coordinator-open-tab" => self.cmd_coordinator_open(rest),
             "kill-tab" => Args::parse(rest, "ts").and_then(|a| match a.value('s') {
                 Some(from) => {
                     let pane = self.pane_from(&a, caller)?;
@@ -621,6 +614,22 @@ impl Server {
                 _ => Err("autopilot-pause takes on or off".to_string()),
             }
             .map(|said| Reply::ok(format!("{said}\n"))),
+            "coordinator-ordered" => {
+                let (first, left) = match rest.iter().position(|a| a == "--left") {
+                    Some(at) => (&rest[..at], &rest[at + 1..]),
+                    None => (rest, &[][..]),
+                };
+                use crate::autopilot::issues::{parse_reference, reference_in};
+                let refs_ok = first.iter().all(|t| reference_in(t).is_some())
+                    && left.iter().all(|r| parse_reference(r).is_some());
+                if !refs_ok || first.len() + left.len() == 0 {
+                    return Reply::fail(
+                        "usage: switchboard coordinator-ordered <owner/repo#number: title>... [--left <owner/repo#number>...]",
+                    );
+                }
+                self.autopilot_issues_queued(first.to_vec(), left)
+                    .map(|()| Reply::ok(""))
+            }
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))

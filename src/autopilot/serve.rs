@@ -1335,27 +1335,81 @@ impl Server {
             move || super::issues::wait_for(super::issues::set_priority(&repo, number, to)),
             move |server, client, done| match done {
                 Ok(()) => {
-                    let named = format!("{reference}: ").to_lowercase();
-                    let written = Mode::update(&paths::state_dir(), |mode| {
-                        mode.next
-                            .retain(|x| !x.text.to_lowercase().starts_with(&named));
-                        if to == super::issues::HIGHEST {
-                            let note = mode.note_id.clone();
-                            mode.next.insert(0, mode::Skipped { note, text });
-                        }
-                    });
-                    match written {
-                        Ok(mode) => server.autopilot.mode = mode,
-                        Err(e) => eprintln!("autopilot: couldn't write its queue: {e}"),
+                    if to == super::issues::HIGHEST {
+                        let _ = server.autopilot_issues_queued(vec![text], &[]);
+                    } else {
+                        let _ = server
+                            .autopilot_issues_queued(Vec::new(), std::slice::from_ref(&reference));
                     }
-                    super::issues::forget(&paths::state_dir());
-                    server.autopilot.pilot.reset();
-                    server.autopilot_tick();
                     server.mission_note(client, format!("{reference} is priority {to}"));
                 }
                 Err(e) => server.mission_note(client, format!("Couldn't label {reference}: {e}")),
             },
         );
+    }
+
+    /// Issues whose priority labels GitHub now has, taken into the queue
+    /// at once: those given the highest (`first`, by their items' first
+    /// lines, `Issue::text`) put first among the issues in that order, the
+    /// mode's `next` holding them, and those given another (`out`, by
+    /// their `<owner>/<repo>#<number>`) taken out of it; the issues read
+    /// again, once, so nothing is opened from half of a new order. The
+    /// board's Move up and Move down, and the coordinator's
+    /// `coordinator-order` (`coordinator-ordered`), end here.
+    pub fn autopilot_issues_queued(
+        &mut self,
+        first: Vec<String>,
+        out: &[String],
+    ) -> Result<(), String> {
+        let named: Vec<String> = first
+            .iter()
+            .filter_map(|t| super::issues::reference_in(t))
+            .map(|(repo, number)| format!("{repo}#{number}"))
+            .chain(out.iter().cloned())
+            .map(|r| format!("{r}: ").to_lowercase())
+            .collect();
+        let written = Mode::update(&paths::state_dir(), |mode| {
+            mode.next.retain(|x| {
+                let text = x.text.to_lowercase();
+                !named.iter().any(|n| text.starts_with(n))
+            });
+            let note = mode.note_id.clone();
+            let front = first.into_iter().map(|text| mode::Skipped {
+                note: note.clone(),
+                text,
+            });
+            mode.next.splice(0..0, front);
+        });
+        match written {
+            Ok(mode) => self.autopilot.mode = mode,
+            Err(e) => {
+                // Not read again, so nothing opens from the labels alone.
+                eprintln!("autopilot: couldn't write its queue: {e}");
+                return Err(format!("couldn't write autopilot's queue: {e}"));
+            }
+        }
+        super::issues::forget(&paths::state_dir());
+        self.autopilot.pilot.reset();
+        self.autopilot_tick();
+        Ok(())
+    }
+
+    /// Whether `tab`'s landing pushed or merged, which a tab merely back in
+    /// its main clone may not have.
+    pub fn autopilot_landed_something(&self, tab: TabId) -> bool {
+        self.tabs.get(&tab).is_some_and(|t| {
+            [AUTOLAND, PUSHED, MERGED]
+                .iter()
+                .any(|k| t.opts.get(*k).is_some_and(|v| !v.trim().is_empty()))
+        })
+    }
+
+    /// Whether `tab`'s landing saw its PR merge (`MERGED`), which may come
+    /// before GitHub's lookups answer it.
+    pub fn autopilot_marked_merged(&self, tab: TabId) -> bool {
+        self.tabs
+            .get(&tab)
+            .is_some_and(|t| t.opts.get(MERGED).is_some_and(|v| !v.trim().is_empty()))
     }
 
     /// What an option of its menu changes in the mode, done and said.
@@ -2066,10 +2120,11 @@ impl Server {
                 self.land_as_set(tab);
             }
             self.dirty_tab(tab);
-            if let Mark::Landed(..) = mark
-                && let Some(m) = mine.iter().find(|m| m.tab == tab)
-            {
-                self.autopilot_keep_landed(m);
+            if let Mark::Landed(..) = mark {
+                if let Some(m) = mine.iter().find(|m| m.tab == tab) {
+                    self.autopilot_keep_landed(m);
+                }
+                self.coordinator_landed(tab);
             }
         }
     }
@@ -2160,9 +2215,17 @@ impl Server {
                     mode.skipped.push(done);
                 }
             }
-            // An item put next is next no more once it lands.
-            mode.next
-                .retain(|x| x.note != landed.note || x.text != landed.item);
+            // An item put next is next no more once it lands; an issue
+            // whatever note it was put next under, as `next_here` reads it.
+            let issue_of = |text: &str| {
+                super::issues::reference_in(text).map(|(r, n)| format!("{r}#{n}").to_lowercase())
+            };
+            let landed_issue = issue_of(&landed.item);
+            mode.next.retain(|x| {
+                let same_item = x.note == landed.note && x.text == landed.item;
+                let same_issue = landed_issue.is_some() && issue_of(&x.text) == landed_issue;
+                !same_item && !same_issue
+            });
             mode.landed.push(landed);
         });
         match written {
