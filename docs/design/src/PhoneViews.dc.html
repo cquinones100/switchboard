@@ -331,23 +331,23 @@ const header = (sx, y, title, chip) => {
 // VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
 // right edge, faded, as it scrolls.
 const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
-const viewRow = (sx, y, chosen, skip) => {
+const viewRow = (sx, y, chosen, none) => {
   let x = sx + 1.5;
   const at = VIEWS.findIndex((v) => v[0] === chosen);
   if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
-  for (const [name, n] of VIEWS.slice(Math.max(0, at - 1))) {
-    const words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
+  for (const [name, c] of VIEWS.slice(Math.max(0, at - 1))) {
+    const n = name === none ? '' : c, words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
     if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
     btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
     x += w + Wd(8);
   }
 };
 // THE DRAWER'S HEAD: the workspace's name, live, and ⋯ for the chosen view's own menu; then the search, then the views.
-const dHead = (sx, chosen, placeholder) => {
+const dHead = (sx, chosen, placeholder, none) => {
   tx(sx + 1, 3, 20, PT(44), 'Switchboard  studio', C.text, 12, true); chipK(sx + 22, 3.45, 'live', C.green, C.gbg);
   icon(sx + 35.6 - Wd(44), 3, '⋯', 'fill');
   field(sx + 1.5, 5.6, 33, '', placeholder);
-  viewRow(sx, 8.2, chosen);
+  viewRow(sx, 8.2, chosen, none);
 };
 // AN ITEM: as a tab's row (board 184's, 56 pt): its mark, its title 16 pt, what it says 12 pt dim under it, a fact at the right.
 const vItem = (sx, y, st, title, sub, right, rt, held) => {
@@ -376,8 +376,9 @@ const vMenu = (sx, title, opts, top) => {
   label(sx + 1, y, 'Working', 'b', 2, sx + 34); y++;
   rowK(sx, y, 'working', 1, 'planning', 'Monitor: fork parity', false); y += 2;
   rowK(sx, y, 'working', 3, 'M-d uncommitted', 'Edit diffview.lua', false); y += 3;
-  label(sx + 1, y, 'Landing', 'm', 1, sx + 34); y++;
-  rowK(sx, y, 'landing', 5, 'benchmark harness', 'testing in train 14', false); }
+  label(sx + 1, y, 'Landing', 'm', 2, sx + 34); y++;
+  rowK(sx, y, 'landing', 5, 'benchmark harness', 'testing in train 14', false); y += 2;
+  rowK(sx, y, 'landing', 7, 'fork parity fixture', 'testing in train 14', false); }
 
 // 2. LANDING: what lands, as mission control's Landing view files it: the train under test, the queue in its order, what landed.
 { const sx = phone(46, 'Landing, chosen', '1');
@@ -385,7 +386,7 @@ const vMenu = (sx, title, opts, top) => {
   let y = 11;
   label(sx + 1, y, 'Train 14 · testing', 'b', 2, sx + 34); y++;
   vItem(sx, y, 'working', '#88 benchmark harness', 'tab 5 · 6 checks running', '4m', 'b'); y += 2;
-  vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 1 · 6 checks running', '4m', 'b'); y += 3;
+  vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 7 · 6 checks running', '4m', 'b'); y += 3;
   label(sx + 1, y, 'In the queue', 'm', 2, sx + 34); y++;
   vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · next train', '1st', 'm'); y += 2;
   vItem(sx, y, 'queued', '#94 full titles', 'tab 4 · after it', '2nd', 'm'); y += 3;
@@ -413,7 +414,7 @@ const vMenu = (sx, title, opts, top) => {
   let y = 11;
   label(sx + 1, y, 'Train 14 · testing', 'b', 2, sx + 34); y++;
   vItem(sx, y, 'working', '#88 benchmark harness', 'tab 5 · 6 checks running', '4m', 'b'); y += 2;
-  vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 1 · 6 checks running', '4m', 'b'); y += 3;
+  vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 7 · 6 checks running', '4m', 'b'); y += 3;
   label(sx + 1, y, 'In the queue', 'm', 2, sx + 34); y++;
   vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · next train', '1st', 'm', true); y += 2;
   vMenu(sx, '#93 stable note IDs', [['Go to tab 2'], ['Move it down in the merge queue'], ['Open the PR'], ['Copy its link'], ['Take it out of the merge queue…', 'danger']]); }

@@ -331,23 +331,23 @@ const header = (sx, y, title, chip) => {
 // VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
 // right edge, faded, as it scrolls.
 const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
-const viewRow = (sx, y, chosen, skip) => {
+const viewRow = (sx, y, chosen, none) => {
   let x = sx + 1.5;
   const at = VIEWS.findIndex((v) => v[0] === chosen);
   if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
-  for (const [name, n] of VIEWS.slice(Math.max(0, at - 1))) {
-    const words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
+  for (const [name, c] of VIEWS.slice(Math.max(0, at - 1))) {
+    const n = name === none ? '' : c, words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
     if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
     btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
     x += w + Wd(8);
   }
 };
 // THE DRAWER'S HEAD: the workspace's name, live, and ⋯ for the chosen view's own menu; then the search, then the views.
-const dHead = (sx, chosen, placeholder) => {
+const dHead = (sx, chosen, placeholder, none) => {
   tx(sx + 1, 3, 20, PT(44), 'Switchboard  studio', C.text, 12, true); chipK(sx + 22, 3.45, 'live', C.green, C.gbg);
   icon(sx + 35.6 - Wd(44), 3, '⋯', 'fill');
   field(sx + 1.5, 5.6, 33, '', placeholder);
-  viewRow(sx, 8.2, chosen);
+  viewRow(sx, 8.2, chosen, none);
 };
 // AN ITEM: as a tab's row (board 184's, 56 pt): its mark, its title 16 pt, what it says 12 pt dim under it, a fact at the right.
 const vItem = (sx, y, st, title, sub, right, rt, held) => {
@@ -370,8 +370,8 @@ const vMenu = (sx, title, opts, top) => {
 { const sx = phone(8, 'PRs, chosen', '1');
   dHead(sx, 'PRs', 'Search PRs');
   let y = 11;
-  label(sx + 1, y, 'Changes asked', 'y', 1, sx + 34); y++;
-  vItem(sx, y, 'needs', '#41 review PR 41', 'tab 6 · 2 comments', '1h', 'y'); y += 3;
+  label(sx + 1, y, 'Changes asked', 'r', 1, sx + 34); y++;
+  vItem(sx, y, 'failed', '#41 review PR 41', 'tab 6 · 2 comments', '1h', 'r'); y += 3;
   label(sx + 1, y, 'In review', 'b', 2, sx + 34); y++;
   vItem(sx, y, 'comment', '#90 split the parser', 'yours · 1 reviewer', '3h', 'd'); y += 2;
   vItem(sx, y, 'comment', '#87 theme the picker', 'asks your review', '1d', 'd'); y += 3;
