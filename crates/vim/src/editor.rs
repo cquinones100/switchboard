@@ -907,6 +907,7 @@ impl<N: Note> Editor<N> {
         // inside a character, where the next key would cut it.
         if outside {
             self.clamp();
+            self.clamp_anchor();
         }
         if before.text == self.doc.text {
             return false;
@@ -971,6 +972,19 @@ impl<N: Note> Editor<N> {
             col = line[..col].char_indices().last().map_or(0, |(i, _)| i);
         }
         self.doc.col = col;
+    }
+
+    /// The selection's start kept on a character of the text as it is
+    /// now, for `gv` after a change from outside.
+    fn clamp_anchor(&mut self) {
+        let row = self.anchor.0.min(self.doc.text.len().saturating_sub(1));
+        let line = self.doc.line(row);
+        let mut col = self.anchor.1.min(line.len());
+        while !line.is_char_boundary(col) {
+            col -= 1;
+        }
+        self.anchor = (row, col);
+        self.anchor_col = self.anchor_col.min(line.chars().count());
     }
 
     fn set(&mut self, row: usize, col: usize) {
@@ -4061,6 +4075,16 @@ mod tests {
         e.change_outside(|doc| doc.text = Text::from_lines(&["a ·· cd"]));
         assert!(e.doc.line(0).is_char_boundary(e.col()), "col {}", e.col());
         press(&mut e, "w");
+    }
+
+    #[test]
+    fn gv_after_a_change_from_outside_selects_within_the_new_text() {
+        let mut e = read_only(&["a long line with · inside", "second"]);
+        e.go_to(0, 20);
+        press(&mut e, "vjy<Esc>");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["short ·", "x"]));
+        press(&mut e, "gvy");
+        assert!(e.doc.line(e.anchor.0).is_char_boundary(e.anchor.1));
     }
 
     #[test]
