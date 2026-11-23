@@ -2216,3 +2216,53 @@ mod tickets {
         client.wait_text("AB-2  New work");
     }
 }
+
+#[test]
+fn a_file_the_pane_names_opens_beside_it_at_its_line_and_q_closes_it() {
+    let server = start(json!({"sidebar": false}));
+    let work = server.dir.path().join("work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    let text: String = (1..=60).map(|n| format!("// line {n}\n")).collect();
+    std::fs::write(work.join("src/lib.rs"), text).unwrap();
+
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {} && echo in''-work\r", work.display()));
+    client.wait_text("in-work");
+    client.type_text("printf 'see src/lib.rs'':42 and gone.rs'':3\\n'\r");
+    client.wait_for("the printed line", |s| {
+        s.iter().any(|l| l.starts_with("see src/lib.rs:42"))
+    });
+
+    server.ok(&["press", "open-code"]);
+    let screen = client.wait_text("Open a file from this pane");
+    let listed = |text: &str| screen.iter().any(|l| l.contains('│') && l.contains(text));
+    assert!(listed("src/lib.rs:42"), "{}", screen.join("\n"));
+    assert!(!listed("gone.rs"), "a path that is no file is dropped");
+    client.type_text("\r");
+    let deadline = common::deadline(Duration::from_secs(10));
+    let viewer = loop {
+        let found = panes(&server)
+            .into_iter()
+            .find(|p| p["options"]["@code_view"] == "1");
+        if let Some(found) = found {
+            break found;
+        }
+        assert!(Instant::now() < deadline, "no viewer: {:?}", panes(&server));
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let screen = client.wait_text("read-only");
+    assert!(
+        screen.iter().any(|l| l.contains("42 // line 42")),
+        "opened at its line:\n{}",
+        screen.join("\n")
+    );
+    client.type_text("q");
+    let id = viewer["id"].as_str().unwrap().to_string();
+    let deadline = common::deadline(Duration::from_secs(10));
+    while panes(&server).iter().any(|p| p["id"] == id.as_str()) {
+        assert!(Instant::now() < deadline, "q left it open");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    client.wait_text("in-work");
+}

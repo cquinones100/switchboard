@@ -49,7 +49,7 @@ pub mod ahead;
 pub mod app;
 pub mod clear;
 pub mod git;
-pub mod highlight;
+pub use switchboard_highlight as highlight;
 pub mod host;
 pub mod order;
 pub mod sides;

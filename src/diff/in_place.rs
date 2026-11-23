@@ -232,6 +232,7 @@ impl Server {
                     crate::views::PR_VIEW,
                     crate::views::TICKET_VIEW,
                     crate::views::LINK_VIEW,
+                    crate::code::serve::CODE_VIEW,
                     "@checks_view",
                     // Mission control's logs read beside the pane.
                     "@ci_log",

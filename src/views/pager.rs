@@ -41,13 +41,24 @@
 //! old its copy is once that is five minutes ("read 12m ago").
 //!
 //! Markdown and a board's column have a cursor, with Settings' "A cursor in the views"
-//! (`view_cursor`) on: a yellow `›` in the margin of the line it is on,
-//! which the line keys move, the screen scrolling only to keep it in sight,
-//! past blank lines and over a picture or diagram in one step, its `›` on
-//! every row of it. Enter or a click on a picture or diagram shows it full
-//! size over the view (`Act::Full`, `switchboard picture`), as Enter on a
-//! note's picture does; Enter anywhere else is a line down. Off, or for a
-//! log or a file, the keys scroll as less's do.
+//! (`view_cursor`) on: the terminal's cursor on a character, and a yellow
+//! `›` in the margin of its line, its `›` on every row of a picture or
+//! diagram, the screen scrolling only to keep it in sight. Its keys are the
+//! shared Vim's (crates/vim), read-only, as the code viewer's are, over the
+//! text as it shows (no markup): every motion and text object, counts, `/`
+//! and `?` with `n` and `N`, marks, `gg`, `G`, Ctrl-D and Ctrl-U, and
+//! Visual mode (`v`, `V`, Ctrl-V) with `y` copying the selection to the
+//! clipboard (`platform::copy`); a key that would change the text says
+//! Vim's E21. What the view adds on top keeps its key where Vim's would
+//! change the text or the view has it: `q` and Esc in Normal mode close it,
+//! `m` opens a board's menu (setting a mark in a view with none), `o` opens
+//! the page, `r` reads it again, Space pages down, and Enter or a click on a
+//! picture or diagram shows it full size over the view (`Act::Full`,
+//! `switchboard picture`), as Enter on a note's picture does; Enter
+//! anywhere else is Vim's. A line too wide is still cut at the pane's edge,
+//! Left and Right scrolling across half a screen as less's did, and the view
+//! scrolling across to keep the cursor in sight as it moves. Off, or for a log
+//! or a file, the keys scroll as less's do.
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -65,6 +76,52 @@ use super::follow::{self, Follow, Update};
 use super::markdown::{Doc, Markdown, Span, Style, expand_tabs};
 use super::pictures::{Got, Pictures};
 use crate::ui::draw::wrap;
+use switchboard_ui::input::{Key, KeyCode as VimCode, Mods};
+use switchboard_vim::{Effect, Folding, Mode, Note, Text};
+
+/// What the view keeps beside the text Vim reads: its pictures' rows, a
+/// picture or diagram being one line to Vim's motions, as a closed fold is.
+#[derive(Clone, Debug, Default)]
+struct ViewNote;
+
+impl Note for ViewNote {
+    type Folds = PictureRows;
+}
+
+/// Each picture's rows past its first, hidden under it.
+#[derive(Clone, Debug, Default)]
+struct PictureRows {
+    closed: Vec<(usize, usize)>,
+}
+
+impl Folding for PictureRows {
+    fn shown(&self, lines: &[String]) -> Vec<(usize, Option<usize>)> {
+        let mut shown = Vec::with_capacity(lines.len());
+        let mut row = 0;
+        while row < lines.len() {
+            match self.closed.iter().find(|(s, _)| *s == row) {
+                Some(&(s, e)) => {
+                    shown.push((s, Some(e - s)));
+                    row = e + 1;
+                }
+                None => {
+                    shown.push((row, None));
+                    row += 1;
+                }
+            }
+        }
+        shown
+    }
+
+    fn closed_over(&self, _lines: &[String], row: usize) -> Option<(usize, usize)> {
+        self.closed
+            .iter()
+            .copied()
+            .find(|(s, e)| (*s..=*e).contains(&row))
+    }
+}
+
+type Editor = switchboard_vim::Editor<ViewNote>;
 
 /// Lines the wheel scrolls at a time.
 const WHEEL: usize = 3;
@@ -133,6 +190,16 @@ pub struct Pager {
     query: Option<String>,
     /// A search being typed after `/`.
     typing: Option<String>,
+    /// What started the line being typed with the cursor: `/`, `?` or `:`.
+    typing_kind: char,
+    /// The shared Vim over the text shown, which moves the cursor while
+    /// there is one (`has_cursor`).
+    vim: Editor,
+    /// How a yank reaches the clipboard.
+    copy: fn(&str) -> Result<(), String>,
+    /// Vim's column from before a new layout, until its cursor is put back
+    /// on its line in it (`put_cursor_back`).
+    kept_col: Option<usize>,
     /// What the prompt line says for a moment ("Pattern not found").
     note: Option<String>,
     /// The page being read, which o opens.
@@ -191,6 +258,15 @@ impl Pager {
             left: 0,
             query: None,
             typing: None,
+            typing_kind: '/',
+            vim: {
+                let mut vim = Editor::new(Text::default());
+                vim.read_only = true;
+                vim.clipboard = true;
+                vim
+            },
+            copy: |text| crate::platform::copy(text).map_err(|e| e.to_string()),
+            kept_col: None,
             note: None,
             url: None,
             pictures: None,
@@ -274,7 +350,54 @@ impl Pager {
     pub fn with_cursor(mut self, on: bool) -> Pager {
         self.cursor_on = on;
         self.cursor = self.snap(self.top);
+        self.vim_follow_layout();
         self
+    }
+
+    /// The text Vim reads made the lines as laid out now, its cursor on the
+    /// cursor's line, its column kept as far as the line allows, and its
+    /// search kept.
+    fn vim_follow_layout(&mut self) {
+        if !self.has_cursor() {
+            return;
+        }
+        let lines: Vec<String> = self.doc.lines.iter().map(|l| l.plain()).collect();
+        let text = Text::from_lines(&lines);
+        let first = self.vim.doc.text.lines() == [""];
+        // The column from before any new layout, which a move onto the
+        // cursor's line in it keeps, whatever the text Vim held then.
+        let col = self.kept_col.unwrap_or(self.vim.col());
+        if text != self.vim.doc.text {
+            // The text laid out again (a resize, a picture arriving, a new
+            // copy read) taken in as a change from outside, so the marks
+            // follow their lines and the search and the register stay; a
+            // selection ends, its start being a place in the old layout.
+            if matches!(self.vim.mode, Mode::Visual { .. }) {
+                self.vim.leave_visual();
+            }
+            self.vim.change_outside(|doc| doc.text = text);
+        }
+        if first || self.vim.row() != self.cursor || col != self.vim.col() {
+            // A new view opens on its line's text, past its margin.
+            let col = match col {
+                0 if first => lines
+                    .get(self.cursor)
+                    .map_or(0, |l| l.len() - l.trim_start().len()),
+                col => col,
+            };
+            self.vim.go_to(self.cursor, col);
+        }
+        self.vim.folds = PictureRows {
+            closed: (0..self.doc.lines.len())
+                .filter(|i| self.doc.lines[*i].picture.is_some_and(|p| p.row == 0))
+                .map(|i| (i, self.picture_end(i)))
+                .filter(|(s, e)| e > s)
+                .collect(),
+        };
+        self.vim.height = self.body();
+        // Whatever scrolled the view (Space, the wheel, the scroll bar, its
+        // own search), Vim scrolls on from where it is now.
+        self.vim.top = self.top;
     }
 
     /// Draws its pictures and diagrams as images with `pictures`, those
@@ -384,6 +507,10 @@ impl Pager {
     /// Laid out at the pane's width, and again a column narrower when it
     /// runs past the screen with no panel beside it, for the scroll bar.
     fn lay_out(&mut self) {
+        // Vim's column, kept until its cursor is put back on its line.
+        if self.has_cursor() {
+            self.kept_col.get_or_insert(self.vim.col());
+        }
         self.bar = false;
         self.lay_out_at_width();
         let overflows = crate::ui::kit::has_scrollbar(self.doc.lines.len(), self.body());
@@ -393,6 +520,10 @@ impl Pager {
             self.cols += 1;
             self.bar = true;
         }
+        // Vim reads the text as it is now drawn, whatever laid it out
+        // again; its cursor goes to the cursor's line once that is found
+        // in the new layout (`put_cursor_back`), with its column.
+        self.vim_follow_layout();
     }
 
     fn lay_out_at_width(&mut self) {
@@ -557,8 +688,20 @@ impl Pager {
         if !self.has_cursor() {
             return;
         }
-        self.cursor = self.snap(at.map_or(self.top, |a| self.doc.line_at(a)));
+        // On the line it was on, a blank one or a rule included, as Vim's
+        // motions leave it; on a picture's first row; a view without one
+        // before on the first stop.
+        self.cursor = match at {
+            Some(a) => self.picture_start(
+                self.doc
+                    .line_at(a)
+                    .min(self.doc.lines.len().saturating_sub(1)),
+            ),
+            None => self.snap(self.top),
+        };
         self.show_cursor();
+        self.vim_follow_layout();
+        self.kept_col = None;
     }
 
     /// The first row of the picture line `i` is a row of, or `i`.
@@ -630,24 +773,6 @@ impl Pager {
             Act::Same
         } else {
             Act::Redraw
-        }
-    }
-
-    /// The cursor a stop down, past the picture it is on.
-    fn cursor_down(&mut self) -> Act {
-        let next =
-            (self.picture_end(self.cursor) + 1..self.doc.lines.len()).find(|j| self.is_stop(*j));
-        match next {
-            Some(j) => self.move_cursor(j),
-            None => self.scroll_to(usize::MAX),
-        }
-    }
-
-    /// The cursor a stop up, onto the first row of a picture.
-    fn cursor_up(&mut self) -> Act {
-        match (0..self.cursor).rev().find(|j| self.is_stop(*j)) {
-            Some(j) => self.move_cursor(j),
-            None => self.scroll_to(0),
         }
     }
 
@@ -803,10 +928,32 @@ impl Pager {
     /// A key while a search is typed after `/`.
     fn typing_key(&mut self, key: KeyEvent) -> Act {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let vim = self.has_cursor();
         let Some(typed) = &mut self.typing else {
             return Act::Same;
         };
         match key.code {
+            KeyCode::Enter if vim => {
+                let typed = self.typing.take().unwrap_or_default();
+                match self.typing_kind {
+                    ':' => {
+                        self.vim.top = self.top;
+                        self.vim.ex(&typed);
+                    }
+                    kind => {
+                        if !typed.is_empty() {
+                            self.query = Some(typed.clone());
+                        }
+                        let from = self.cursor;
+                        self.vim.top = self.top;
+                        self.vim.search_for(&typed, kind == '/');
+                        self.vim.prompt_done();
+                        return self.vim_found_or_find(from, kind == '/');
+                    }
+                }
+                self.vim.prompt_done();
+                return self.vim_after();
+            }
             KeyCode::Enter => {
                 let query = self.typing.take().unwrap_or_default();
                 if !query.is_empty() {
@@ -865,7 +1012,7 @@ impl Pager {
         let page = self.body() as isize;
         let half = (page / 2).max(1);
         if self.has_cursor()
-            && let Some(act) = self.cursor_key(key.code, ctrl, page, half)
+            && let Some(act) = self.vim_key(key)
         {
             return if had_note { act_or_redraw(act) } else { act };
         }
@@ -993,42 +1140,213 @@ impl Pager {
         (from..from + VIEW_ACTIONS.len()).contains(&col)
     }
 
-    /// A key that moves the cursor, or Enter on a picture; None for one
-    /// that does what it does without one.
-    fn cursor_key(&mut self, code: KeyCode, ctrl: bool, page: isize, half: isize) -> Option<Act> {
-        Some(match code {
-            KeyCode::Char('n' | 'e' | 'j') if ctrl => self.cursor_down(),
-            KeyCode::Char('p' | 'y' | 'k') if ctrl => self.cursor_up(),
-            KeyCode::Char('f' | 'v') if ctrl => self.page_by(page),
-            KeyCode::Char('b') if ctrl => self.page_by(-page),
-            KeyCode::Char('d') if ctrl => self.page_by(half),
-            KeyCode::Char('u') if ctrl => self.page_by(-half),
-            _ if ctrl => return None,
-            KeyCode::Enter => match self.full_at(self.cursor) {
-                Some(full) => full,
-                None => self.cursor_down(),
-            },
-            KeyCode::Char('j' | 'e') | KeyCode::Down => self.cursor_down(),
-            KeyCode::Char('k' | 'y') | KeyCode::Up => self.cursor_up(),
-            KeyCode::Char(' ' | 'f') | KeyCode::PageDown => self.page_by(page),
-            KeyCode::Char('b') | KeyCode::PageUp => self.page_by(-page),
-            KeyCode::Char('d') => self.page_by(half),
-            KeyCode::Char('u') => self.page_by(-half),
-            KeyCode::Char('g' | '<') | KeyCode::Home => {
-                self.top = 0;
-                self.move_cursor(0);
-                Act::Redraw
+    /// A key while there is a cursor: the view's own (closing it, its
+    /// menu, the page, reading it again, paging with Space, a picture full
+    /// size), else read-only Vim's; None for one neither takes, which the
+    /// rest of `key` does as less's.
+    fn vim_key(&mut self, key: KeyEvent) -> Option<Act> {
+        self.kept_col = None;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let idle = self.vim.mode == Mode::Normal && self.vim.no_keys();
+        if idle {
+            match key.code {
+                KeyCode::Char('q' | 'Q') if !ctrl => return Some(Act::Quit),
+                KeyCode::Esc => return Some(Act::Quit),
+                KeyCode::Char('c') if ctrl => return Some(Act::Same),
+                KeyCode::Char('m') if !ctrl && self.menu_of().is_some() => {
+                    return Some(self.open_menu(None));
+                }
+                KeyCode::Char('o') if !ctrl => {
+                    return Some(match &self.url {
+                        Some(url) => Act::Open(url.clone()),
+                        None => Act::Same,
+                    });
+                }
+                KeyCode::Char('r') if !ctrl && self.follows => return Some(self.read_again()),
+                // Across a line cut at the pane's edge, half a screen at a
+                // time, as less did: a wide table or drawing is read so.
+                KeyCode::Left | KeyCode::Right if !ctrl => return None,
+                KeyCode::Char(' ') => {
+                    let page = self.body() as isize;
+                    let act = self.page_by(page);
+                    self.vim_follow_layout();
+                    return Some(act);
+                }
+                KeyCode::Enter => {
+                    if let Some(full) = self.full_at(self.cursor) {
+                        return Some(full);
+                    }
+                }
+                _ => {}
             }
-            KeyCode::Char('G' | '>') | KeyCode::End => {
-                self.move_cursor(usize::MAX);
-                self.top = self.last_top();
-                Act::Redraw
-            }
-            _ => return None,
+        }
+        let vim_key = vim_key_of(key)?;
+        let searching = idle && !ctrl && matches!(key.code, KeyCode::Char('n' | 'N'));
+        if searching {
+            let from = self.cursor;
+            self.vim.top = self.top;
+            self.vim.key(vim_key);
+            let back = key.code == KeyCode::Char('N');
+            let forward = (self.vim.search.as_ref().is_none_or(|(_, f)| *f)) != back;
+            return Some(self.vim_found_or_find(from, forward));
+        }
+        let before = self.vim_state();
+        self.vim.top = self.top;
+        self.vim.height = self.body();
+        self.vim.begin();
+        self.vim.key(vim_key);
+        self.vim.end();
+        let act = self.vim_after_from(before.0);
+        Some(if act == Act::Redraw && self.vim_state() == before {
+            Act::Same
+        } else {
+            act
         })
     }
 
+    /// What a Vim key can change of what is drawn.
+    fn vim_state(&self) -> ((usize, usize), usize, usize, Mode, bool, bool) {
+        (
+            (self.vim.row(), self.vim.col()),
+            self.top,
+            self.left,
+            self.vim.mode,
+            self.note.is_some(),
+            self.typing.is_some(),
+        )
+    }
+
+    /// What a Vim key came to: its effects done, the cursor's line and the
+    /// screen following it.
+    fn vim_after(&mut self) -> Act {
+        let from = (self.cursor, self.vim.col());
+        self.vim_after_from(from)
+    }
+
+    /// A search Vim made from line `from`: where Vim found it, or, when
+    /// its text (the lines as they show) has none, where the view finds
+    /// it, by a picture's or diagram's words too and quiet about a match
+    /// only in a board's panel, as its own search was.
+    fn vim_found_or_find(&mut self, from: usize, forward: bool) -> Act {
+        let effects = self.vim.effects();
+        let missed = effects
+            .iter()
+            .any(|e| matches!(e, Effect::Message(m) if m.starts_with("E486") || m.starts_with("E384") || m.starts_with("E385")));
+        if !missed {
+            return self.vim_apply(effects, (from, 0));
+        }
+        let at = if forward { from + 1 } else { from };
+        let act = self.find(at, forward);
+        // Where the view found it; a search that found nothing leaves the
+        // cursor where it was, as Vim's does.
+        if self.cursor != from {
+            self.vim.go_to(self.cursor, 0);
+        }
+        act
+    }
+
+    /// `vim_after` for a key that started with the cursor at `from`.
+    fn vim_after_from(&mut self, from: (usize, usize)) -> Act {
+        let effects = self.vim.effects();
+        self.vim_apply(effects, from)
+    }
+
+    /// `vim_after_from` with the effects already taken.
+    fn vim_apply(&mut self, effects: Vec<Effect>, from: (usize, usize)) -> Act {
+        for effect in effects {
+            match effect {
+                Effect::Copy(text) => {
+                    let lines = text.trim_end_matches('\n').lines().count().max(1);
+                    self.note = Some(match (self.copy)(&text) {
+                        Err(e) => format!("Couldn't copy: {e}"),
+                        Ok(()) if lines == 1 => "Copied".into(),
+                        Ok(()) => format!("Copied {lines} lines"),
+                    });
+                }
+                Effect::Message(text) => self.note = Some(text),
+                Effect::Prompt(kind) => {
+                    self.typing = Some(String::new());
+                    self.typing_kind = kind;
+                }
+                Effect::Quit | Effect::SaveQuit => return Act::Quit,
+                _ => {}
+            }
+        }
+        let last = self.doc.lines.len().saturating_sub(1);
+        // On a picture's first row, whatever row of it a motion reached,
+        // or past it for one that paged down into it, where its first row
+        // would take the cursor back and leave a tall one stuck.
+        let landed = self.vim.row().min(last);
+        let start = self.picture_start(landed);
+        self.cursor = if start < landed && start <= from.0 && landed > from.0 {
+            (self.picture_end(landed) + 1).min(last)
+        } else {
+            start
+        };
+        if self.cursor != self.vim.row() {
+            self.vim.go_to(self.cursor, 0);
+        }
+        if std::mem::take(&mut self.vim.center) {
+            self.top = self.cursor.saturating_sub(self.body() / 2);
+        } else {
+            self.top = self.vim.top;
+        }
+        self.show_cursor();
+        self.vim.top = self.top;
+        // Scrolled across only as the cursor moves, so Left and Right's
+        // scroll stays until it does.
+        if (self.vim.row(), self.vim.col()) != from {
+            self.show_cursor_across();
+        }
+        Act::Redraw
+    }
+
+    /// The text scrolled across as little as keeps the cursor's character
+    /// in sight, for a line cut at the pane's edge.
+    fn show_cursor_across(&mut self) {
+        let Some(line) = self.doc.lines.get(self.cursor) else {
+            return;
+        };
+        let plain = line.plain();
+        let at = width_to(&plain, self.vim.col());
+        let cols = self.across_cols().max(1);
+        if at < self.left {
+            self.left = at;
+        } else if at >= self.left + cols {
+            self.left = at + 1 - cols;
+        }
+    }
+
+    /// The selection's columns on line `i`, lit as a search's matches are.
+    fn selected_cols(&self, i: usize, plain: &str) -> Option<(usize, usize)> {
+        if !self.has_cursor() {
+            return None;
+        }
+        let (s, e) = self.vim.selection()?.span(i, plain)?;
+        let width = |b: usize| width_to(plain, b);
+        // A line selected whole with nothing on it is lit a column wide.
+        let end = width(e).max(width(s) + 1);
+        Some((width(s), end))
+    }
+
+    /// The screen cell the cursor's character is in, while it is in sight
+    /// and no menu is up.
+    fn vim_cursor_cell(&self) -> Option<(usize, usize)> {
+        if !self.has_cursor() || self.menu.is_some() {
+            return None;
+        }
+        let row = self.vim.row().checked_sub(self.top)?;
+        if row >= self.body() {
+            return None;
+        }
+        let plain = self.doc.lines.get(self.vim.row())?.plain();
+        let at = width_to(&plain, self.vim.col());
+        let x = (at.checked_sub(self.left)? + self.gutter()).min(self.cols.saturating_sub(1));
+        Some((x, row))
+    }
+
     pub fn mouse(&mut self, mouse: MouseEvent) -> Act {
+        self.kept_col = None;
         if let Some(menu) = &mut self.menu {
             let came = menu.mouse(mouse);
             return self.menu_came(came);
@@ -1051,6 +1369,7 @@ impl Pager {
                 let down = matches!(mouse.kind, MouseEventKind::ScrollDown);
                 let act = self.scroll_by(if down { by } else { -by });
                 self.keep_cursor_in_sight();
+                self.vim_follow_layout();
                 act
             }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging.is_some() => {
@@ -1060,6 +1379,7 @@ impl Pager {
                 let to = crate::ui::kit::scroll_drag(total, body, body, mouse.row as usize, grab);
                 let act = self.scroll_to(to);
                 self.keep_cursor_in_sight();
+                self.vim_follow_layout();
                 act
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -1086,12 +1406,23 @@ impl Pager {
                     let to = crate::ui::kit::scroll_press(total, self.top, body, body, row);
                     let act = self.scroll_to(to.unwrap_or(self.top));
                     self.keep_cursor_in_sight();
+                    self.vim_follow_layout();
                     return act;
                 }
                 let line = self.top + row;
                 let in_column = self.panel.as_ref().is_none_or(|(_, at)| col <= *at);
                 if self.has_cursor() && in_column && line < self.doc.lines.len() {
                     let moved = self.move_cursor(line);
+                    if self.cursor == line {
+                        let at = col.checked_sub(self.gutter()).map_or(0, |c| self.left + c);
+                        let byte = byte_at(&self.doc.lines[line].plain(), at);
+                        if matches!(self.vim.mode, Mode::Visual { .. }) {
+                            self.vim.leave_visual();
+                        }
+                        self.vim.go_to(line, byte);
+                    } else {
+                        self.vim_follow_layout();
+                    }
                     if self.on_picture(line, col)
                         && let Some(full) = self.full_at(line)
                     {
@@ -1171,7 +1502,8 @@ impl Pager {
         for r in 0..body {
             out.push_str(&format!("\x1b[{};{}H", r + 1, gutter + 1));
             if let Some(line) = self.doc.lines.get(self.top + r) {
-                let marks = self.matches(&line.plain());
+                let mut marks = self.matches(&line.plain());
+                marks.extend(self.selected_cols(self.top + r, &line.plain()));
                 let cols = self.text_cols().saturating_sub(gutter);
                 out.push_str(&line.ansi(&self.doc.links, self.left, cols, &marks));
             }
@@ -1232,6 +1564,8 @@ impl Pager {
         }
         if self.typing.is_some() {
             out.push_str("\x1b[?25h");
+        } else if let Some((x, y)) = self.vim_cursor_cell() {
+            out.push_str(&format!("\x1b[{};{}H\x1b[?25h", y + 1, x + 1));
         }
         out.push_str("\x1b[?2026l");
         out
@@ -1275,7 +1609,12 @@ impl Pager {
     /// `room` columns.
     fn prompt(&self, room: usize) -> String {
         if let Some(typed) = &self.typing {
-            return format!("/{typed}");
+            let kind = if self.has_cursor() {
+                self.typing_kind
+            } else {
+                '/'
+            };
+            return format!("{kind}{typed}");
         }
         if let Some(note) = &self.note {
             // Printed as it is, so without control characters, which a
@@ -1285,6 +1624,16 @@ impl Pager {
             let note: String = note.chars().filter(|c| !c.is_control()).collect();
             let note = crate::ui::draw::cut(&note, self.cols.saturating_sub(1));
             return format!("\x1b[7m{note}\x1b[0m");
+        }
+        if self.has_cursor()
+            && let Mode::Visual { line, block, .. } = self.vim.mode
+        {
+            let which = match (line, block) {
+                (true, _) => "-- VISUAL LINE --",
+                (_, true) => "-- VISUAL BLOCK --",
+                _ => "-- VISUAL --",
+            };
+            return format!("\x1b[1m{which}\x1b[0m");
         }
         let full = self.has_cursor() && self.full_at(self.cursor).is_some();
         if let Content::Board(b) = &self.content {
@@ -1352,6 +1701,55 @@ impl Pager {
             })
             .collect()
     }
+}
+
+/// A terminal's key as the shared Vim takes it; None for one it has no
+/// use for.
+fn vim_key_of(key: KeyEvent) -> Option<Key> {
+    let code = match key.code {
+        KeyCode::Char(c) => VimCode::Char(c),
+        KeyCode::Enter => VimCode::Enter,
+        KeyCode::Esc => VimCode::Esc,
+        KeyCode::Backspace => VimCode::Backspace,
+        KeyCode::Tab => VimCode::Tab,
+        KeyCode::Left => VimCode::Left,
+        KeyCode::Right => VimCode::Right,
+        KeyCode::Up => VimCode::Up,
+        KeyCode::Down => VimCode::Down,
+        KeyCode::Home => VimCode::Home,
+        KeyCode::End => VimCode::End,
+        KeyCode::PageUp => VimCode::PageUp,
+        KeyCode::PageDown => VimCode::PageDown,
+        _ => return None,
+    };
+    let mut mods = Mods::NONE;
+    mods.ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    mods.alt = key.modifiers.contains(KeyModifiers::ALT);
+    mods.shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    Some(Key::new(code, mods))
+}
+
+/// The columns a line's text takes up to byte `byte`, a byte inside a
+/// character counted from that character's start.
+fn width_to(plain: &str, byte: usize) -> usize {
+    let mut end = byte.min(plain.len());
+    while !plain.is_char_boundary(end) {
+        end -= 1;
+    }
+    super::markdown::width(&plain[..end])
+}
+
+/// The byte of a line's text at display column `col`, its end past it.
+fn byte_at(plain: &str, col: usize) -> usize {
+    let mut at = 0;
+    for (byte, c) in plain.char_indices() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if col < at + w.max(1) {
+            return byte;
+        }
+        at += w;
+    }
+    plain.len()
 }
 
 fn act_or_redraw(act: Act) -> Act {
@@ -1885,25 +2283,47 @@ mod tests {
         pager.doc.lines[pager.cursor].plain()
     }
 
+    fn press(pager: &mut Pager, keys: &str) {
+        for c in keys.chars() {
+            pager.key(key(KeyCode::Char(c)));
+        }
+    }
+
     #[test]
-    fn the_cursor_moves_past_blank_lines_and_scrolls_only_at_the_edge() {
+    fn the_cursor_moves_as_vim_s_and_scrolls_only_at_the_edge() {
         let mut pager = Pager::new(markdown(&long_text()), 100, 20).with_cursor(true);
         assert!(cursor_line(&pager).contains("A long description"));
         assert!(pager.frame().contains("›"), "the cursor drawn");
-        pager.key(key(KeyCode::Char('j')));
+        let first = pager.cursor;
+        press(&mut pager, "}j");
         assert!(
             cursor_line(&pager).contains("p0w0"),
             "{}",
             cursor_line(&pager)
         );
+        assert_eq!(
+            pager.cursor,
+            first + 2,
+            "past the blank line, then a line down"
+        );
+        press(&mut pager, "w");
+        let word = cursor_line(&pager).find("p0w0");
+        assert_eq!(
+            Some(pager.vim.col()),
+            word,
+            "w past the margin to the first word"
+        );
+        press(&mut pager, "w");
+        let next = cursor_line(&pager).find("p0w1");
+        assert_eq!(Some(pager.vim.col()), next, "w to the next word");
         assert_eq!(pager.top(), 0, "the screen stays while the cursor is in it");
         for _ in 0..30 {
             pager.key(key(KeyCode::Down));
         }
         assert!(pager.top() > 0);
         assert!(pager.cursor < pager.top() + pager.body());
-        pager.key(key(KeyCode::Char('g')));
-        assert_eq!((pager.top(), pager.cursor), (0, 1));
+        press(&mut pager, "gg");
+        assert_eq!((pager.top(), pager.cursor), (0, 0));
         pager.key(key(KeyCode::Char('/')));
         for c in "p6w0".chars() {
             pager.key(key(KeyCode::Char(c)));
@@ -1915,17 +2335,137 @@ mod tests {
     }
 
     #[test]
-    fn j_and_k_pass_over_a_markdown_rule() {
+    fn g_and_gg_go_to_the_ends_and_a_key_that_changes_the_text_says_e21() {
         let mut pager = Pager::new(markdown("Above\n\n---\n\nBelow"), 40, 10).with_cursor(true);
         assert_eq!(cursor_line(&pager).trim(), "Above");
-        pager.key(key(KeyCode::Char('j')));
-        assert_eq!(cursor_line(&pager).trim(), "Below");
-        pager.key(key(KeyCode::Char('k')));
-        assert_eq!(cursor_line(&pager).trim(), "Above");
-        let mut quoted =
-            Pager::new(markdown("> Above\n>\n> ---\n\nBelow"), 40, 10).with_cursor(true);
-        quoted.key(key(KeyCode::Char('j')));
-        assert_eq!(cursor_line(&quoted).trim(), "Below", "a quoted rule too");
+        press(&mut pager, "Gk");
+        assert_eq!(cursor_line(&pager).trim(), "Below", "G to the last line");
+        press(&mut pager, "ggj");
+        assert_eq!(cursor_line(&pager).trim(), "Above", "gg to the first line");
+        let shown = pager.screen();
+        for keys in ["x", "dd", "i"] {
+            press(&mut pager, keys);
+            assert_eq!(pager.screen(), shown, "{keys} changed nothing");
+            assert_eq!(
+                pager.note.as_deref(),
+                Some(switchboard_vim::editor::READ_ONLY)
+            );
+        }
+    }
+
+    #[test]
+    fn a_mark_outlives_a_new_layout_and_a_selection_ends_with_it() {
+        let mut pager = Pager::new(markdown(&long_text()), 100, 20).with_cursor(true);
+        press(&mut pager, "}jma");
+        let marked = cursor_line(&pager);
+        press(&mut pager, "Gv");
+        pager.resize(60, 20);
+        assert_eq!(pager.vim.mode, Mode::Normal, "the selection ended");
+        press(&mut pager, "'a");
+        assert!(cursor_line(&pager).contains(marked.trim().split(' ').next().unwrap()));
+    }
+
+    #[test]
+    fn a_new_layout_keeps_the_cursor_s_column_on_its_line() {
+        let text = format!("{}\n\n```\nfoo bar baz\n```", "word ".repeat(30));
+        let mut pager = Pager::new(markdown(&text), 100, 20).with_cursor(true);
+        press(&mut pager, "/baz");
+        pager.key(key(KeyCode::Enter));
+        let line = cursor_line(&pager);
+        let at = pager.vim.col();
+        assert_eq!(Some(at), line.find("baz"));
+        pager.resize(40, 20);
+        assert_eq!(cursor_line(&pager), line, "the same line");
+        assert_eq!(pager.vim.col(), at, "and column");
+    }
+
+    #[test]
+    fn a_new_layout_leaves_a_cursor_at_its_line_s_start_there() {
+        let text = format!("{}\n\n```\n    indented\n```", "word ".repeat(30));
+        let mut pager = Pager::new(markdown(&text), 100, 20).with_cursor(true);
+        press(&mut pager, "/indented");
+        pager.key(key(KeyCode::Enter));
+        press(&mut pager, "0");
+        pager.resize(40, 20);
+        assert_eq!(pager.vim.col(), 0);
+    }
+
+    #[test]
+    fn a_new_layout_leaves_the_cursor_on_a_blank_line_it_was_on() {
+        let mut pager = Pager::new(markdown(&long_text()), 100, 20).with_cursor(true);
+        press(&mut pager, "}");
+        assert!(cursor_line(&pager).trim().is_empty());
+        pager.resize(100, 18);
+        assert!(
+            cursor_line(&pager).trim().is_empty(),
+            "still on the blank line"
+        );
+    }
+
+    #[test]
+    fn a_column_inside_a_wide_character_is_measured_from_its_start() {
+        assert_eq!(width_to("a\u{E0B6}b", 2), 1);
+        assert_eq!(width_to("a\u{E0B6}b", 4), 2);
+    }
+
+    #[test]
+    fn a_search_that_finds_nothing_leaves_the_cursor_where_it_was() {
+        let mut pager = Pager::new(markdown("Some words here"), 40, 10).with_cursor(true);
+        press(&mut pager, "w");
+        let at = (pager.cursor, pager.vim.col());
+        press(&mut pager, "/zzz");
+        pager.key(key(KeyCode::Enter));
+        assert_eq!((pager.cursor, pager.vim.col()), at);
+    }
+
+    #[test]
+    fn a_search_vim_s_text_misses_finds_a_picture_by_its_words() {
+        let text = "Before\n\n![Login screen](https://x.example/a.png)\n\nAfter\n";
+        let mut pager = with_pictures(text, 80, 30);
+        press(&mut pager, "/Login");
+        pager.key(key(KeyCode::Enter));
+        assert!(
+            pager.doc.lines[pager.cursor].picture.is_some(),
+            "on the picture"
+        );
+        assert_eq!(pager.vim.row(), pager.cursor);
+    }
+
+    #[test]
+    fn visual_mode_copies_the_selection_as_the_text_shows() {
+        static COPIED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let mut pager = Pager::new(
+            markdown("Some **bold** words\n\nAnd a [link](https://x.example) too"),
+            40,
+            10,
+        )
+        .with_cursor(true);
+        pager.copy = |t| {
+            COPIED.lock().unwrap().push(t.to_string());
+            Ok(())
+        };
+        press(&mut pager, "wvey");
+        assert_eq!(
+            COPIED.lock().unwrap().pop().as_deref(),
+            Some("bold"),
+            "no markup"
+        );
+        assert_eq!(pager.note.as_deref(), Some("Copied"));
+        press(&mut pager, "Vjjy");
+        assert_eq!(
+            COPIED.lock().unwrap().pop().as_deref(),
+            Some("  Some bold words\n\n  And a link too\n"),
+            "whole lines as they show"
+        );
+        assert_eq!(pager.vim.mode, Mode::Normal);
+        press(&mut pager, "/link");
+        pager.key(key(KeyCode::Enter));
+        assert_eq!(
+            (pager.cursor, pager.vim.col()),
+            (3, "  And a ".len()),
+            "/ searches"
+        );
+        assert_eq!(pager.key(key(KeyCode::Char('q'))), Act::Quit);
     }
 
     #[test]
@@ -1937,6 +2477,7 @@ mod tests {
             matches!(pager.key(key(KeyCode::Enter)), Act::Redraw),
             "a line down"
         );
+        press(&mut pager, "j");
         assert!(
             pager.doc.lines[pager.cursor].picture.is_some(),
             "on the picture"
@@ -1949,13 +2490,13 @@ mod tests {
                 title: "Login screen".into()
             }
         );
-        pager.key(key(KeyCode::Char('j')));
+        press(&mut pager, "jj");
         assert_eq!(
             cursor_line(&pager).trim(),
             "After",
             "past the picture in one step"
         );
-        pager.key(key(KeyCode::Char('k')));
+        press(&mut pager, "kk");
         assert_eq!(
             pager.doc.lines[pager.cursor].picture.map(|p| p.row),
             Some(0),
@@ -1999,10 +2540,14 @@ mod tests {
             rows > pager.body() / 2,
             "taller than half the screen: {rows}"
         );
-        pager.key(key(KeyCode::Char('j')));
+        press(&mut pager, "jj");
         assert!(pager.doc.lines[pager.cursor].picture.is_some());
-        pager.key(key(KeyCode::Char('d')));
-        assert_eq!(cursor_line(&pager).trim(), "After", "past the picture");
+        pager.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(
+            pager.cursor > pager.picture_end(pager.picture_start(pager.cursor - 1)) - 1
+                && pager.doc.lines[pager.cursor].picture.is_none(),
+            "past the picture"
+        );
     }
 
     #[test]

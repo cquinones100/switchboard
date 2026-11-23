@@ -25,8 +25,8 @@ default-run = "switchboard"
 # `default-members` names them all, so fmt, clippy and the tests run over
 # every crate with no flag.
 [workspace]
-members = ["crates/ui", "crates/plugin-api", "crates/diff", "crates/notes"]
-default-members = [".", "crates/ui", "crates/plugin-api", "crates/diff", "crates/notes"]
+members = ["crates/ui", "crates/plugin-api", "crates/vim", "crates/highlight", "crates/diff", "crates/notes"]
+default-members = [".", "crates/ui", "crates/plugin-api", "crates/vim", "crates/highlight", "crates/diff", "crates/notes"]
 
 [[bin]]
 name = "switchboard"
@@ -52,6 +52,11 @@ switchboard-diff = { path = "crates/diff", default-features = false }
 # Notes (crates/notes), an app of its own and a plugin, which
 # `switchboard notes` loads in its own process.
 switchboard-notes = { path = "crates/notes" }
+# Vim's keys (crates/vim), which the views' pager and the code viewer read
+# with, read-only, as Notes edits with them.
+switchboard-vim = { path = "crates/vim" }
+# The diff's syntax colors (crates/highlight), for the code viewer.
+switchboard-highlight = { path = "crates/highlight" }
 libc = "0.2"
 regex = "1"
 serde = { version = "1", features = ["derive"] }

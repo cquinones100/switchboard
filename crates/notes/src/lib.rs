@@ -76,7 +76,7 @@ pub mod host;
 pub mod id;
 pub mod images;
 pub mod jumps;
-pub mod marks;
+pub use switchboard_vim::marks;
 pub mod menu;
 pub mod palette;
 pub mod plan;
@@ -87,7 +87,7 @@ pub mod squash;
 pub mod store;
 pub mod sync;
 pub mod table;
-pub mod text;
+pub use switchboard_vim::text;
 
 use store::Store;
 use switchboard_plugin_api::sdk as util;

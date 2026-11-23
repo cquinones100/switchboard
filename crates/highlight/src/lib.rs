@@ -1,5 +1,7 @@
-//! Syntax colours for the diff's two sides, in place of the tree-sitter
-//! highlighting nvim/diff.lua started for each file: syntect with bat's
+//! Syntax colours for the diff's two sides and the code viewer
+//! (`switchboard code`), one highlighter so both colour code alike: in
+//! place of the tree-sitter highlighting nvim/diff.lua started for each
+//! file, syntect with bat's
 //! grammars (the two-face crate), which hold syntect's own and the
 //! languages those leave out (TypeScript, TSX, TOML, Dockerfile, Svelte,
 //! Vue and more), picked by the file's extension (else its name, else its
@@ -15,7 +17,8 @@
 //! the terminal's text colour. So the code matches the terminal's theme,
 //! dark or light, with nothing to choose. Only the text's colour is taken:
 //! a background would read as more highlighting in a diff, which paints its
-//! own (diffview.lua's `unpainted`).
+//! own (diffview.lua's `unpainted`). It moved here from the diff
+//! (crates/diff/src/highlight.rs) unchanged.
 //!
 //! A file is coloured off the screen's thread, since a long file takes a
 //! moment; it shows uncoloured until then. A file too long, or a line too

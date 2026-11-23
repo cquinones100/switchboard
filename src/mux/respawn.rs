@@ -55,6 +55,7 @@ pub const PROGRAM_MARKS: &[&str] = &[
     crate::views::TICKET_VIEW,
     crate::views::LINK_VIEW,
     crate::views::LINK_URL,
+    crate::code::serve::CODE_VIEW,
 ];
 
 /// The tab options about the work a tab was doing, which go when it is

@@ -1267,6 +1267,10 @@ impl Server {
             .and_then(|p| self.pane_dir(p))
             .is_some_and(|dir| crate::cmd::work::review_repo(&dir).is_some());
         entries.retain(|e| reviews || e.action != crate::mux::keys::Action::ReviewPr);
+        // Opening a code file only while Settings' code_view is on.
+        let code = crate::mux::keys::Action::View(crate::views::Command::OpenCode);
+        let code_view = on("code_view");
+        entries.retain(|e| code_view || e.action != code);
         if self.autopilot.mode.on {
             palette::autopilot_on(&mut entries, &self.autopilot.mode.note);
         }

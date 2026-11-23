@@ -28,6 +28,11 @@
 //! one, and with the kit each is drawn as its label atom, a number in its
 //! key as the label's count (board 126).
 //!
+//! A list may hold rows found only by typing (`searched_from`), as "Open a
+//! file from this pane" holds the repository's files after the screen's:
+//! they show only once something is typed, and the count is of the rest
+//! until then.
+//!
 //! A list may show the chosen row whole below the rows (`previews`, as
 //! fzf's `--preview` window at the bottom showed wtn-open.zsh's item), when
 //! a row is cut to one line of something longer.
@@ -170,6 +175,8 @@ pub struct Picker {
     headings: bool,
     /// A tag column under six columns is drawn when its tags fit whole.
     short_tags: bool,
+    /// The items from this place on show only once something is typed.
+    searched_from: Option<usize>,
 }
 
 impl Picker {
@@ -204,6 +211,7 @@ impl Picker {
             kit: None,
             headings: false,
             short_tags: false,
+            searched_from: None,
         };
         picker.refilter();
         picker
@@ -291,6 +299,23 @@ impl Picker {
     pub fn headings(mut self) -> Picker {
         self.headings = true;
         self
+    }
+
+    /// The items from `at` on shown only once something is typed: rows
+    /// to search rather than to read down (a repository's files).
+    pub fn searched_from(mut self, at: usize) -> Picker {
+        self.searched_from = Some(at);
+        self.refilter();
+        self
+    }
+
+    /// How many items there are to show: those found only by typing
+    /// count once something is typed.
+    fn total(&self) -> usize {
+        match self.searched_from {
+            Some(at) if self.query.trim().is_empty() => at.min(self.items.len()),
+            _ => self.items.len(),
+        }
     }
 
     /// The rows given anew while it is up, as a list filled in as its
@@ -460,7 +485,8 @@ impl Picker {
         let pattern = Pattern::new(&self.query, CaseMatching::Smart, Normalization::Smart, kind);
         let mut buf = Vec::new();
         let mut found: Vec<(usize, u32, Vec<u32>)> = Vec::new();
-        for (i, item) in self.items.iter().enumerate() {
+        let total = self.total();
+        for (i, item) in self.items.iter().enumerate().take(total) {
             // The text comes first in the haystack, so the letters matched
             // in the text alone are where they would be in the whole.
             let hay = if self.text_only {
@@ -496,7 +522,7 @@ impl Picker {
                 words.iter().all(|w| hay.contains(w.as_str()))
             };
             // Stable, so each half stays in the list's order.
-            matched.sort_by_key(|i| !written(i));
+            matched.sort_by_cached_key(|i| !written(i));
         }
         let order: Vec<usize> = match &self.order {
             Some(order) => order(&self.query, &matched),
@@ -507,14 +533,13 @@ impl Picker {
                 by_score.into_iter().map(|(i, _)| i).collect()
             }
         };
+        // By the item, so a long list (a repository's files) is shown in
+        // one pass rather than searched for each row.
+        let mut by_item: std::collections::HashMap<usize, Vec<u32>> =
+            found.into_iter().map(|(i, _, idx)| (i, idx)).collect();
         self.shown = order
             .into_iter()
-            .filter_map(|i| {
-                found
-                    .iter()
-                    .find(|(j, _, _)| *j == i)
-                    .map(|(_, _, idx)| (i, idx.clone()))
-            })
+            .filter_map(|i| by_item.remove(&i).map(|idx| (i, idx)))
             .collect();
         self.cursor = self.on_row(0, true).unwrap_or(0);
         self.top = 0;
@@ -855,19 +880,15 @@ impl Overlay for Picker {
         }
         let widths = self.columns(inner);
         let none_taken = !self.items.is_empty() && self.items.iter().all(|i| i.off);
+        let total = self.total();
         let count = if none_taken {
-            format!(
-                "{}/{} (none can be picked)",
-                self.shown.len(),
-                self.items.len()
-            )
+            format!("{}/{total} (none can be picked)", self.shown.len())
         } else if self.marked.is_empty() {
-            format!("{}/{}", self.shown.len(), self.items.len())
+            format!("{}/{total}", self.shown.len())
         } else {
             format!(
-                "{}/{} ({} marked)",
+                "{}/{total} ({} marked)",
                 self.shown.len(),
-                self.items.len(),
                 self.marked.len()
             )
         };
@@ -1143,6 +1164,22 @@ mod tests {
         // No room for the text and six columns of a longer tag: none.
         let narrow = 3 + 1 + 5 + 1 + TEXT_MIN;
         assert_eq!(tagged("#tabs #panes").short_tags().columns(narrow).1, 0);
+    }
+
+    #[test]
+    fn rows_searched_from_show_only_once_something_is_typed() {
+        let mut p = Picker::new("Pick", items()).keep_order().searched_from(2);
+        assert_eq!(p.shown(), ["Split pane to the left", "Close the pane"]);
+        typed(&mut p, "pane");
+        assert_eq!(
+            p.shown(),
+            [
+                "Split pane to the left",
+                "Close the pane",
+                "Zoom the pane in or out"
+            ],
+            "the rows to search found by typing, after the rest"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! A note's text as the app edits it: a list of lines, as a Neovim buffer
+//! A text as the shared Vim edits it (a note's, a file's, a view's): a list of lines, as a Neovim buffer
 //! held them for the plugin (`nvim_buf_get_lines` and `nvim_buf_set_lines`
 //! in every file of notes/lua/notes/), kept in a rope.
 //!

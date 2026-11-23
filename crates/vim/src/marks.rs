@@ -4,13 +4,13 @@
 //! New here, since the plugin left marks to Neovim.
 //!
 //! A mark is kept by row and column and carried across every edit by the
-//! line diff the folds use (`fold::rows_after`), so it stays on its line
+//! line diff of `places::rows_after`, so it stays on its line
 //! as lines come and go above it; a mark whose line is deleted goes, as
 //! Neovim drops one. The editor keeps them per note while the app runs.
 
 use std::collections::BTreeMap;
 
-use super::fold::Places;
+use super::places::Places;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Marks {

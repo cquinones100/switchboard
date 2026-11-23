@@ -3005,9 +3005,11 @@ dependencies = [
  "similar",
  "ssh-key",
  "switchboard-diff",
+ "switchboard-highlight",
  "switchboard-notes",
  "switchboard-plugin-api",
  "switchboard-ui",
+ "switchboard-vim",
  "syn 2.0.119",
  "syntect",
  "tar",
@@ -3041,13 +3043,21 @@ dependencies = [
  "sha2 0.11.1",
  "similar",
  "ssh-key",
+ "switchboard-highlight",
  "switchboard-plugin-api",
  "switchboard-ui",
- "syntect",
  "tar",
- "two-face",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "switchboard-highlight"
+version = "0.11.1"
+dependencies = [
+ "ratatui",
+ "syntect",
+ "two-face",
 ]
 
 [[package]]
@@ -3064,13 +3074,13 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "regex",
- "ropey",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "similar",
  "switchboard-plugin-api",
  "switchboard-ui",
+ "switchboard-vim",
  "unicode-segmentation",
  "unicode-width",
 ]
@@ -3106,6 +3116,16 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "vte",
+]
+
+[[package]]
+name = "switchboard-vim"
+version = "0.11.1"
+dependencies = [
+ "regex",
+ "ropey",
+ "similar",
+ "switchboard-ui",
 ]
 
 [[package]]

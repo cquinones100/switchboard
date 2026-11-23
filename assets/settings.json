@@ -937,7 +937,7 @@
     "key": "views_beside_narrow_pane",
     "category": "Tabs and header",
     "label": "Open views in the side panel",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in the side panel instead, the pane keeping its width beside it (the diff and lazygit take Diff's share in the side panel, narrowing the pane while one is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already in the side panel, they open in its place, but for the PR view (M-v), which closes what is there and takes its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, the PR and ticket views that open in Claude's place, and a code file opened from the pane open in the side panel instead, the pane keeping its width beside it (the diff and lazygit take Diff's share in the side panel, narrowing the pane while one is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already in the side panel, they open in its place, but for the PR view (M-v) and a code file opened from the pane, which close what is there and take its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
     "default": true
   },
   {
@@ -1283,7 +1283,7 @@
     "key": "view_cursor",
     "category": "Appearance",
     "label": "A cursor in the views",
-    "description": "Gives the PR, ticket, link and file views a cursor, a yellow › that j and k move from line to line, a picture or diagram one step, the screen scrolling to keep it in sight; Enter or a click on a picture or diagram shows it full size over the view, as a note's does, Esc going back. Off, the views scroll as less does, and a click on a picture opens its link",
+    "description": "Gives the PR, ticket, link and project views, and a Markdown file paged with switchboard view, a cursor on a character, with a yellow › on its line, moved by Vim's keys, read-only, as the code viewer's are: every motion and text object, counts, / and ? with n and N, marks (set with m only in a view with no menu, such as the link view, since m opens the PR's and ticket's), gg and G, Ctrl-D and Ctrl-U, and Visual mode (v, V, Ctrl-V), whose y copies the selection as the text shows; a picture or diagram is one line, and Enter or a click on one shows it full size over the view, as a note's does, Esc going back. q, m, o, r and Space keep the view's own meaning. Off, the views scroll as less does, and a click on a picture opens its link",
     "default": true
   },
   {
@@ -1581,6 +1581,13 @@
     "category": "Palette",
     "label": "Pictures and videos Claude named",
     "description": "M-p's \"Open an image or video from this pane\" also lists the files the last turns of the tab's Claude named that the screen doesn't show, read from its transcript. Off, it lists only what the pane and the tab's note show",
+    "default": true
+  },
+  {
+    "key": "code_view",
+    "category": "Palette",
+    "label": "Open code files from a pane in the side panel",
+    "description": "M-p's \"Open a file from this pane in the side panel\" lists the files the pane names, newest first, typing searching the repository's too, and opens the one picked read-only in the side panel beside a narrow lone pane (else in the pane's place), at the line named, with Vim's keys and the diff's colors, following its changes on disk. Off, the command isn't in M-p",
     "default": true
   },
   {
