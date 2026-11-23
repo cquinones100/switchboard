@@ -291,7 +291,7 @@ fn kept_notice(item: &Item) -> Notice {
 /// after what is picked when `dismiss` says so and its kind is one
 /// dismissing puts away (`choices::dismisses`): a suggestion is recorded
 /// too, though its own choices say what becomes of it.
-pub(crate) fn notice_for(item: &Item, dismiss: bool) -> Notice {
+fn notice_for(item: &Item, dismiss: bool) -> Notice {
     let (source, id) = choices::notice_of(item);
     if source.is_empty() {
         return None;
@@ -4527,6 +4527,32 @@ impl Server {
         if is_a_notice(&item) {
             self.notice_entry_menu(client, item);
         }
+    }
+
+    /// A Notifications view row's menu and the notification it puts away,
+    /// as mission control opens it, for a menu opened with no client (the
+    /// phone): with the history on, a notification's row through
+    /// `notice_menu_choices` and `kept_notice`, none for a fold or a row
+    /// whose service is off; else the notification's own menu, put away
+    /// after what is picked.
+    pub(crate) fn notice_row_menu(&self, item: &Item) -> Option<(Vec<Choice>, Notice)> {
+        if !Self::notice_history_on() {
+            let list = self.item_choices(&ViewId::Notifications, item, &[]);
+            return Some((list, notice_for(item, true)));
+        }
+        if !is_a_notice(item) {
+            return None;
+        }
+        let (source, _) = choices::notice_of(item);
+        let service = match source.as_str() {
+            "prs" | "ci" => Some("github"),
+            "inbox" => Some("linear"),
+            _ => None,
+        };
+        if service.is_some_and(|key| !settings::is_on(key)) {
+            return None;
+        }
+        Some((self.notice_menu_choices(item), kept_notice(item)))
     }
 
     /// A kept notification's menu: its menu as the sidebar's has it, but

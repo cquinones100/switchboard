@@ -20,7 +20,7 @@ use crate::items::Item;
 use crate::mission::choices::{self, Do};
 use crate::mission::view_acts;
 use crate::mission::views::{View, ViewId};
-use crate::mission::{Finish, NoticeLook, Ran, notice_for, with_check};
+use crate::mission::{Finish, Notice, NoticeLook, Ran, with_check};
 use crate::mux::input::{Key, KeyCode, Mods};
 use crate::mux::server::{Answer, Event, Opened, Reply, Server};
 use crate::settings;
@@ -99,8 +99,8 @@ impl Server {
     /// What an item's menu offers on the phone, in mission control's order.
     fn phone_item_options(&self, view: &View, item: &Item) -> Vec<(Offered, Do)> {
         let pane_of = self.phone_pane_of();
-        let menu = Self::phone_menu_item(view, item);
-        self.item_choices(&view.id, &menu, &view.data.items)
+        self.phone_menu(view, item)
+            .0
             .into_iter()
             .filter_map(|c| {
                 let kind = views::kind_of(&c.act, &c.label, &pane_of)?;
@@ -113,6 +113,17 @@ impl Server {
                 ))
             })
             .collect()
+    }
+
+    /// An item's mission control menu, and the notification a pick from it
+    /// puts away: a notification's as mission control opens its row
+    /// (`notice_row_menu`), none for a row it opens no menu for.
+    fn phone_menu(&self, view: &View, item: &Item) -> (Vec<choices::Choice>, Notice) {
+        if view.id == ViewId::Notifications {
+            return self.notice_row_menu(item).unwrap_or_default();
+        }
+        let menu = Self::phone_menu_item(view, item);
+        (self.item_choices(&view.id, &menu, &view.data.items), None)
     }
 
     /// What a view's own menu offers on the phone.
@@ -171,7 +182,12 @@ impl Server {
     /// a tap on an option of an item's menu or of a view's own, from the
     /// phone, run on the computer and answered with what it says once it
     /// is done.
-    pub(crate) fn phone_option_asked(&mut self, args: &[String], reply: oneshot::Sender<Answer>) {
+    pub(crate) fn phone_option_asked(
+        &mut self,
+        args: &[String],
+        by_hand: bool,
+        reply: oneshot::Sender<Answer>,
+    ) {
         let answer = |reply: oneshot::Sender<Answer>, r: Reply| {
             let _ = reply.send(Answer::Reply(r));
         };
@@ -185,6 +201,18 @@ impl Server {
                 );
             }
         };
+        // Only the phone app sends them, which asks first where mission
+        // control does: typed in a pane, they would be a way round that
+        // question, as `answer` would be round a prompt.
+        if by_hand {
+            return answer(
+                reply,
+                Reply::fail("phone-item and phone-view come from the phone app alone"),
+            );
+        }
+        if !settings::is_on("phone") {
+            return answer(reply, Reply::fail("The phone app is off."));
+        }
         let Some(shown) = self.phone_shown_views() else {
             return answer(reply, Reply::fail("Mission control on the phone is off."));
         };
@@ -207,14 +235,7 @@ impl Server {
                 else {
                     return answer(
                         reply,
-                        Reply::fail(phone_refusal(
-                            &self.item_choices(
-                                &view.id,
-                                &Self::phone_menu_item(&view, &item),
-                                &view.data.items,
-                            ),
-                            label,
-                        )),
+                        Reply::fail(phone_refusal(&self.phone_menu(&view, &item).0, label)),
                     );
                 };
                 if !matches!(offered.kind, Kind::Run(_)) {
@@ -222,9 +243,7 @@ impl Server {
                 }
                 // A notification is put away after what is picked in its
                 // menu, as mission control's does.
-                let notice = (view.id == ViewId::Notifications)
-                    .then(|| notice_for(&item, true))
-                    .flatten();
+                let notice = self.phone_menu(&view, &item).1;
                 let seen = choices::is_slack_message(&view.id, &item).then(|| item.clone());
                 let after = self.pick_before(&act, label, seen.as_ref(), &notice);
                 let ran = self.phone_run(act, label);

@@ -1376,7 +1376,7 @@ impl Server {
                     .first()
                     .is_some_and(|a| a == "phone-item" || a == "phone-view")
                 {
-                    self.phone_option_asked(&args, reply);
+                    self.phone_option_asked(&args, by_hand, reply);
                     return;
                 }
                 // Answered once its file is read, off this task.

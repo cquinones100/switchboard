@@ -1778,6 +1778,9 @@ function slidePanel(layer, panel, opens, then) {
   const lasts = still() ? ms("--quick") : ms("--slide");
   const strip = layer.querySelector(".panel-strip");
   if (still()) {
+    // Where a swipe left it, it comes to rest at once and only fades.
+    panel.style.transform = "";
+    if (strip) strip.style.opacity = "";
     layer.style.transition = "opacity " + lasts + "ms " + EASE;
     layer.style.opacity = opens ? "1" : "0";
   } else {

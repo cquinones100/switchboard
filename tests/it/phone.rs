@@ -2904,7 +2904,7 @@ fn ready_notice(server: &TestServer) -> (UnixStream, Value) {
 /// option and refuse one the phone leaves out or never offered.
 #[test]
 fn the_stream_carries_mission_controls_views_and_their_options_run() {
-    let server = TestServer::start();
+    let server = TestServer::start_with_settings(r#"{ "phone": true }"#);
     let (mut stream, item) = ready_notice(&server);
     let labels: Vec<&str> = item["options"]
         .as_array()
@@ -2926,6 +2926,12 @@ fn the_stream_carries_mission_controls_views_and_their_options_run() {
     assert_ne!(code, 0);
     assert!(err.contains("changed"), "{err}");
 
+    // Typed in a pane, as a Claude would, it is refused: only the phone
+    // app, which asks first, sends it.
+    let (code, _, err) = server.run_binary(&["phone-item", "notifications", id, "Dismiss it"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("phone app alone"), "{err}");
+
     // A kept option runs, and the notification is gone from the view.
     let said = server.ok(&["phone-item", "notifications", id, "Dismiss it"]);
     assert_eq!(said.trim(), "Dismissed.");
@@ -2935,7 +2941,7 @@ fn the_stream_carries_mission_controls_views_and_their_options_run() {
     });
 
     // Off, no views, and a tap is refused.
-    common::write_settings(&server.home, json!({ "phone_views": false }));
+    common::write_settings(&server.home, json!({ "phone": true, "phone_views": false }));
     let off = next_line(&mut stream, |v| v["views"].is_null());
     assert!(off["tabs"].is_array());
     let (code, _, err) = server.run(&["phone-view", "ci", "Read CI again now"]);
