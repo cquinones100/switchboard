@@ -376,7 +376,7 @@ const NAMES = (a, b) => [['Colors', a], ['Size', b], ['Submit', false]];
 { const sx = phone(84, '‹ back to Colors, Cool kept', '0');
   qTop(sx, '6 theme picker');
   qCard(sx, 7, 16.4, '1 of 2');
-  qSteps(sx + 2.4, 8.6, 31.2, NAMES(true, true), 0);
+  qSteps(sx + 2.4, 8.6, 31.2, NAMES(true, false), 0);
   tx(sx + 2.7, 11.4, 30, 1, 'Which colors should the picker', C.text, 12, true); tx(sx + 2.7, 12.3, 30, 1, 'offer first?', C.text, 12, true);
   btn(sx + 2.7, 14.0, 30.6, '1  Warm', 'plain'); btn(sx + 2.7, 16.4, 30.6, '2  Cool  ✓', 'lit'); btn(sx + 2.7, 18.8, 30.6, '3  Both', 'plain');
   tx(sx + 2.7, 21.6, 30, 1.4, 'Or type your own answer below', C.faint, 11);
