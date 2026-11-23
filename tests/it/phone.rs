@@ -1941,7 +1941,15 @@ fn the_phone_stops_a_working_claude_with_esc() {
 
     // Still working with a permission prompt on screen, as auto mode asks
     // one, Esc would refuse it rather than stop the turn: refused.
+    // Ctrl-C can flush what is typed right after it, so the shell is asked
+    // until it answers before the prompt is shown.
     server.ok(&["send-keys", "-t", &pane, "C-c"]);
+    wait_until(&server, "the shell back after Ctrl-C", || {
+        server.ok(&["send-keys", "-t", &pane, "-l", "echo back-$((40+2))"]);
+        server.ok(&["send-keys", "-t", &pane, "Enter"]);
+        std::thread::sleep(Duration::from_millis(200));
+        screen(&server, &pane).contains("back-42")
+    });
     show_prompt(&server, &pane);
     let (code, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
     assert_eq!(code, 1, "a Claude asking");
