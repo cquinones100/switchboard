@@ -708,9 +708,9 @@ pub fn turn_on_where_it_works(key: &str) {
     if util::read_json_object(&file).contains_key(key) {
         return;
     }
-    if let Err(e) = write_setting(key, Value::Bool(true)) {
-        eprintln!("switchboard: could not turn {key} on: {e:#}");
-    }
+    // Quietly, as a hook may run it: one that fails is tried again on the
+    // next answer or look.
+    let _ = write_setting(key, Value::Bool(true));
 }
 
 /// A connector that answered: its service's setting turned on here.

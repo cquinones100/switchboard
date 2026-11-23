@@ -497,7 +497,7 @@
     "key": "slack_background",
     "category": "Mission control: Slack",
     "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself, as often as \"Check Slack for new messages every\" says, through your own Slack sign-in while \"Read Slack through your own token\" is on, else through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
+    "description": "While the Slack view is on, mission control looks at Slack itself, as often as \"Check Slack for new messages every\" says, through your own Slack sign-in while \"Read Slack through your own token\" is on, else through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
     "default": true
   },
   {
