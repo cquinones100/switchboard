@@ -297,8 +297,19 @@ impl Server {
         // A prompt on screen (a permission auto mode asks while still
         // working) or a dialog, which Esc would refuse or close rather than
         // stop the turn; a request auto mode allowed, still marked asked
-        // while its command runs, shows none and is stopped.
-        if self.phone_prompt_of(pane).is_some() || self.phone_dialog(pane) {
+        // while its command runs, shows none and is stopped. Only the
+        // visible screen counts, and only options with a prompt's cursor on
+        // one, since a numbered list in Claude's own words reads as options.
+        let prompt_shown = self.panes.get(&pane).is_some_and(|slot| {
+            let screen = slot.pane.text(0);
+            let cursor_on_an_option = screen.lines().any(|l| {
+                l.trim_start()
+                    .strip_prefix('❯')
+                    .is_some_and(|rest| rest.trim_start().starts_with(|c: char| c.is_ascii_digit()))
+            });
+            cursor_on_an_option && answer::options_in(&screen).is_some()
+        });
+        if prompt_shown || self.phone_dialog(pane) {
             return Err("its Claude is asking something: answer it first".into());
         }
         // Scrolled back, Esc would scroll the view down, or reach a prompt

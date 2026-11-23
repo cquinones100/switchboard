@@ -1921,7 +1921,14 @@ fn the_phone_stops_a_working_claude_with_esc() {
     assert!(err.contains("isn't running Claude"), "{err}");
 
     let pane = claude_pane(&server);
-    server.ok(&["send-keys", "-t", &pane, "-l", "clear; cat -v"]);
+    // A numbered list in Claude's own words, which isn't a prompt to answer.
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "clear; printf '1. Plan it\\n2. Build it\\n'; cat -v",
+    ]);
     server.ok(&["send-keys", "-t", &pane, "Enter"]);
     let (code, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
     assert_eq!(code, 1, "an idle Claude");
