@@ -66,7 +66,7 @@ const VIEW_PERCENT: u16 = 45;
 const LINK_PERCENT: u16 = 50;
 
 /// The program to run in a view's pane: this binary.
-fn exe() -> String {
+pub(crate) fn exe() -> String {
     crate::util::exe()
         .ok()
         .filter(|p| p.exists())
@@ -168,6 +168,7 @@ impl Server {
             Command::GoToMentionedTab => self.pick_mentioned_tab(client, false),
             Command::CopyMentionedTab => self.pick_mentioned_tab(client, true),
             Command::OpenMedia => self.open_media(client),
+            Command::OpenCode => self.open_code(client),
             Command::OpenMergeQueue => self.open_merge_queue(client),
             Command::OpenProject => self.open_project(client),
             Command::CopyTicketId => self.copy_ticket(client, false),
@@ -226,7 +227,7 @@ impl Server {
     }
 
     /// The pane a key acts on, its tab, and its directory.
-    fn here(&self, client: ClientId) -> Option<(PaneId, TabId, PathBuf)> {
+    pub(crate) fn here(&self, client: ClientId) -> Option<(PaneId, TabId, PathBuf)> {
         let pane = self.current_pane(client)?;
         let slot = self.panes.get(&pane)?;
         let dir = self.pane_dir(pane).unwrap_or_else(paths::home);
@@ -258,7 +259,7 @@ impl Server {
 
     /// The pane a view about the tab's work opens beside: `pane`, unless
     /// it is Notes beside the work, then the tab's first other pane.
-    fn work_pane(&self, tab: TabId, pane: PaneId) -> PaneId {
+    pub(crate) fn work_pane(&self, tab: TabId, pane: PaneId) -> PaneId {
         let notes = |p: &PaneId| {
             self.panes
                 .get(p)

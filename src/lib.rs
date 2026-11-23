@@ -52,6 +52,8 @@
 //! - `views`: reading things beside your work: the PR description, the
 //!   ticket, any link, a pane's links and images, search everything, and
 //!   whether the PR can merge.
+//! - `code`: a code file a pane names, read beside it (`switchboard code`)
+//!   with the shared Vim, read-only, and the diff's colors.
 //! - `status`: dark and light, and the tick that keeps the tab headers'
 //!   ages current.
 //! - `setup`: what `switchboard setup` puts in place for Claude Code:
@@ -105,6 +107,7 @@ pub mod assets;
 pub mod autopilot;
 pub mod awake;
 pub mod cmd;
+pub mod code;
 pub mod connector;
 pub mod coordinator;
 pub mod day;

@@ -66,7 +66,7 @@ pub mod search;
 pub mod search_box;
 pub mod seen;
 mod serve;
-pub(crate) use serve::{LINK_URL, LINK_VIEW, PR_VIEW, TAB_TICKET, TICKET_ID, TICKET_VIEW};
+pub(crate) use serve::{LINK_URL, LINK_VIEW, PR_VIEW, TAB_TICKET, TICKET_ID, TICKET_VIEW, exe};
 pub mod shown;
 pub mod ticket;
 
@@ -121,6 +121,9 @@ pub enum Command {
     /// An image or video the pane shows, opened in its app (or shown in
     /// its folder).
     OpenMedia,
+    /// A code file the pane names, read in the side panel with Vim's keys
+    /// (`switchboard code`, src/code).
+    OpenCode,
     /// The repository's merge queue for the branch's PR's base, else for
     /// its default branch, in the browser (merge-queue.sh).
     OpenMergeQueue,
@@ -139,7 +142,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 28] = [
+    pub const ALL: [Command; 29] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
@@ -161,6 +164,7 @@ impl Command {
         Command::GoToMentionedTab,
         Command::CopyMentionedTab,
         Command::OpenMedia,
+        Command::OpenCode,
         Command::OpenMergeQueue,
         Command::OpenProject,
         Command::CopyTicketId,
@@ -194,6 +198,7 @@ impl Command {
             Command::GoToMentionedTab => "go-to-mentioned-tab",
             Command::CopyMentionedTab => "copy-mentioned-tab",
             Command::OpenMedia => "open-media",
+            Command::OpenCode => "open-code",
             Command::OpenMergeQueue => "open-merge-queue",
             Command::OpenProject => "open-linear-project",
             Command::CopyTicketId => "copy-ticket-id",
@@ -246,6 +251,7 @@ impl Command {
             Command::OpenMedia => {
                 "Open an image or video from this pane in its app, or show it in its folder"
             }
+            Command::OpenCode => "Open a file from this pane in the side panel",
             Command::OpenMergeQueue => "Open the repository's merge queue in the browser",
             Command::OpenProject => "Open the branch's Linear project in the browser",
             Command::CopyTicketId => "Copy the branch's ticket ID",
@@ -313,6 +319,9 @@ impl Command {
             Command::CopyMentionedTab => {
                 "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out, and copies the picked one's number. Ctrl-O goes to it instead."
             }
+            Command::OpenCode => {
+                "The list is the files the pane names that exist, newest first, a path:line opening at that line; typing searches the repository's files too. The file opens read-only in the side panel beside a narrow lone pane, else in the pane's place, with Vim's keys and the diff's colors, following its changes on disk; q closes it. Off in Settings (code_view), it isn't listed."
+            }
             Command::OpenMedia => {
                 "The list is the picture and video files the pane names that exist, then its links ending in one, newest first. A link opens in the browser, and Ctrl-O shows a file in its folder. With none, a box says so."
             }
@@ -365,6 +374,7 @@ impl Command {
             Command::GoToMentionedTab => &["tabs", "links"],
             Command::CopyMentionedTab => &["tabs", "links", "copy"],
             Command::OpenMedia => &["links", "image", "video", "media"],
+            Command::OpenCode => &["files", "navigate"],
             Command::OpenMergeQueue => &["github", "merge", "browser"],
             Command::OpenProject => &["linear", "project", "browser"],
             Command::CopyTicketId | Command::CopyTicketUrl => {
@@ -396,6 +406,7 @@ impl Command {
             | Command::GoToMentionedTab
             | Command::CopyMentionedTab
             | Command::OpenMedia
+            | Command::OpenCode
             | Command::OpenMergeQueue
             | Command::OpenProject
             | Command::ChooseTicket

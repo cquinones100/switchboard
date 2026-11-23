@@ -356,6 +356,11 @@ pub const COMMANDS: &[Command] = &[
         about: "Page a Markdown file, drawn as the PR view draws one, or any file from a line (+N)",
     },
     Command {
+        name: "code",
+        run: crate::code::main,
+        about: "A code file read-only with Vim's keys and the diff's colors, from a line (<file>[:<line>]; M-p runs it beside a pane)",
+    },
+    Command {
         name: "pr-view",
         run: crate::views::pr_view_main,
         about: "The branch's PR description, paged (M-v runs it beside a pane)",
