@@ -387,6 +387,9 @@ impl Pager {
                 .collect(),
         };
         self.vim.height = self.body();
+        // Whatever scrolled the view (Space, the wheel, the scroll bar, its
+        // own search), Vim scrolls on from where it is now.
+        self.vim.top = self.top;
     }
 
     /// Draws its pictures and diagrams as images with `pictures`, those
@@ -908,12 +911,16 @@ impl Pager {
             KeyCode::Enter if vim => {
                 let typed = self.typing.take().unwrap_or_default();
                 match self.typing_kind {
-                    ':' => self.vim.ex(&typed),
+                    ':' => {
+                        self.vim.top = self.top;
+                        self.vim.ex(&typed);
+                    }
                     kind => {
                         if !typed.is_empty() {
                             self.query = Some(typed.clone());
                         }
                         let from = self.cursor;
+                        self.vim.top = self.top;
                         self.vim.search_for(&typed, kind == '/');
                         self.vim.prompt_done();
                         return self.vim_found_or_find(from, kind == '/');
@@ -1148,6 +1155,7 @@ impl Pager {
         let searching = idle && !ctrl && matches!(key.code, KeyCode::Char('n' | 'N'));
         if searching {
             let from = self.cursor;
+            self.vim.top = self.top;
             self.vim.key(vim_key);
             let back = key.code == KeyCode::Char('N');
             let forward = (self.vim.search.as_ref().is_none_or(|(_, f)| *f)) != back;
