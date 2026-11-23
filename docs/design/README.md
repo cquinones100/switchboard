@@ -341,7 +341,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: mission control's views on the phone
 
 - [185. Mission control's views in the phone app's drawer: a row of 44 pt pills under the search, Tabs first, then Landing, Autopilot, PRs, CI and Notifications with what needs you counted; choosing one fills the drawer's list with that view's items in its groups; a tap on an item opens its menu, less what needs the computer's screen](https://cquinones100.github.io/switchboard/design/185.html)
-- [186. PRs and CI on the phone: the PR board's columns as groups, CI's runs with what failed first; a failing run's menu leads with Start a CI loop, and what runs on the computer asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
+- [186. PRs and CI on the phone: the PR board's columns as groups, CI's runs with what failed first; a failing run's menu leads with Start a CI loop, and an option ending in … asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
 - [187. Notifications on the phone, and each view's own menu from ⋯ in the drawer's head (m's actions over all it shows); a view with nothing to show says so in its own words](https://cquinones100.github.io/switchboard/design/187.html)
 
 ## Other boards

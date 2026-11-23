@@ -328,15 +328,15 @@ const header = (sx, y, title, chip) => {
   K(sx, y + PT(48), 36, 0.06, 'background:' + C.line);
 };
 
-// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count, what needs you, after its name. The row runs off the
+// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
 // right edge, faded, as it scrolls.
-const VIEWS = [['Tabs', '3'], ['Landing', '2'], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '4']];
+const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
 const viewRow = (sx, y, chosen, skip) => {
   let x = sx + 1.5;
   const at = VIEWS.findIndex((v) => v[0] === chosen);
   if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
   for (const [name, n] of VIEWS.slice(Math.max(0, at - 1))) {
-    const words = name + '  ' + n, w = [...words].length * 0.85 + 3;
+    const words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
     if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
     btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
     x += w + Wd(8);
@@ -377,7 +377,7 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'comment', '#87 theme the picker', 'asks your review', '1d', 'd'); y += 3;
   label(sx + 1, y, 'Approved', 'g', 1, sx + 34); y++;
   vItem(sx, y, 'passed', '#92 drop the old hook', 'tab 8 · checks passed', '20m', 'g'); y += 3;
-  label(sx + 1, y, 'In merge queue', 'm', 2, sx + 34); y++;
+  label(sx + 1, y, 'In merge queue', 'm', 1, sx + 34); y++;
   vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · 1st', '', ''); }
 
 // 2. CI: the runs as the CI view files them, what failed first.
@@ -388,7 +388,7 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'failed', '#90 Clippy (Linux x86_64)', 'split the parser · 1 of 6', '3m', 'r'); y += 3;
   label(sx + 1, y, 'Running', 'b', 1, sx + 34); y++;
   vItem(sx, y, 'working', 'Train 14', '#88, #91 · 6 checks', '4m', 'b'); y += 3;
-  label(sx + 1, y, 'Passed', 'g', 2, sx + 34); y++;
+  label(sx + 1, y, 'Passing', 'g', 2, sx + 34); y++;
   vItem(sx, y, 'passed', '#92 drop the old hook', '6 of 6', '20m', 'g'); y += 2;
   vItem(sx, y, 'passed', 'main', 'after train 13', '31m', 'g'); }
 
@@ -398,9 +398,9 @@ const vMenu = (sx, title, opts, top) => {
   let y = 11;
   label(sx + 1, y, 'Failing', 'r', 1, sx + 34); y++;
   vItem(sx, y, 'failed', '#90 Clippy (Linux x86_64)', 'split the parser · 1 of 6', '3m', 'r', true); y += 3;
-  vMenu(sx, '#90 Clippy (Linux x86_64)', [['Start a CI loop on it in tab 11'], ['Go to tab 11'], ['Open the failing check'], ['Open the PR'], ['Copy its link']]); }
+  vMenu(sx, '#90 Clippy (Linux x86_64)', [['Start a CI loop on it in tab 11…'], ['Go to tab 11'], ['Open the failing check'], ['Open the PR'], ['Copy its link']]); }
 
-// 4. WHAT RUNS ON THE COMPUTER ASKS FIRST, the kit's question box, [Y/n]: Yes is lit, at the right, and the default.
+// 4. AN OPTION ENDING IN … ASKS FIRST, as in mission control, the kit's question box, [Y/n]: Yes is lit, at the right, and the default.
 { const sx = phone(122, 'Start a CI loop: asked first', '1');
   dHead(sx, 'CI', 'Search CI');
   let y = 11;

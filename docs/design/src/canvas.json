@@ -738,7 +738,7 @@
       "page": "design"
     },
     "PhoneViewsPrsCi.dc.html": {
-      "title": "186. PRs and CI on the phone: the PR board's columns as groups, CI's runs with what failed first; a failing run's menu leads with Start a CI loop, and what runs on the computer asks first, [Y/n], Yes lit at the right",
+      "title": "186. PRs and CI on the phone: the PR board's columns as groups, CI's runs with what failed first; a failing run's menu leads with Start a CI loop, and an option ending in … asks first, [Y/n], Yes lit at the right",
       "page": "design"
     },
     "PhoneViewsMenus.dc.html": {

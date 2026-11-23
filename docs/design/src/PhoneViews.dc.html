@@ -328,15 +328,15 @@ const header = (sx, y, title, chip) => {
   K(sx, y + PT(48), 36, 0.06, 'background:' + C.line);
 };
 
-// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count, what needs you, after its name. The row runs off the
+// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
 // right edge, faded, as it scrolls.
-const VIEWS = [['Tabs', '3'], ['Landing', '2'], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '4']];
+const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
 const viewRow = (sx, y, chosen, skip) => {
   let x = sx + 1.5;
   const at = VIEWS.findIndex((v) => v[0] === chosen);
   if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
   for (const [name, n] of VIEWS.slice(Math.max(0, at - 1))) {
-    const words = name + '  ' + n, w = [...words].length * 0.85 + 3;
+    const words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
     if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
     btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
     x += w + Wd(8);
@@ -366,7 +366,7 @@ const vMenu = (sx, title, opts, top) => {
   opts.forEach(([o, kind], i) => tx(sx + 2.6, y + PT(44) * (i + 1) + 0.2, 31, PT(44), o, kind === 'danger' ? C.red : C.text, 12));
 };
 
-// 1. THE DRAWER: the views under the search, Tabs chosen, so the list is the tabs as today.
+// 1. THE DRAWER: the views under the search, Tabs chosen, so the list is the tabs as today (cut short here).
 { const sx = phone(8, 'The drawer: views under search', '1');
   dHead(sx, 'Tabs', 'Search tabs');
   let y = 11;
@@ -377,7 +377,7 @@ const vMenu = (sx, title, opts, top) => {
   rowK(sx, y, 'working', 1, 'planning', 'Monitor: fork parity', false); y += 2;
   rowK(sx, y, 'working', 3, 'M-d uncommitted', 'Edit diffview.lua', false); y += 3;
   label(sx + 1, y, 'Landing', 'm', 1, sx + 34); y++;
-  rowK(sx, y, 'landing', 5, 'benchmark harness', '2nd in the merge queue', false); }
+  rowK(sx, y, 'landing', 5, 'benchmark harness', 'testing in train 14', false); }
 
 // 2. LANDING: what lands, as mission control's Landing view files it: the train under test, the queue in its order, what landed.
 { const sx = phone(46, 'Landing, chosen', '1');
@@ -407,7 +407,7 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'failed', 'Sync the phone settings', 'after: Retry a failed upload', '', ''); }
 
 // 4. AN ITEM'S MENU: a tap on #93 in Landing opens its menu, mission control's for it, less what needs the computer's
-// screen; Go to tab opens the tab's channel, the link opens and copies on the phone, the rest run on the computer.
+// screen; Go to tab opens the tab's channel, the link opens and copies on the phone, the rest run on the computer, one ending in … asking first.
 { const sx = phone(122, 'A tap on #93: its menu', '1');
   dHead(sx, 'Landing', 'Search Landing');
   let y = 11;
@@ -416,7 +416,7 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 1 · 6 checks running', '4m', 'b'); y += 3;
   label(sx + 1, y, 'In the queue', 'm', 2, sx + 34); y++;
   vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · next train', '1st', 'm', true); y += 2;
-  vMenu(sx, '#93 stable note IDs', [['Go to tab 2'], ['Move it down in the merge queue'], ['Open the PR'], ['Copy its link'], ['Take it out of the merge queue', 'danger']]); }
+  vMenu(sx, '#93 stable note IDs', [['Go to tab 2'], ['Move it down in the merge queue'], ['Open the PR'], ['Copy its link'], ['Take it out of the merge queue…', 'danger']]); }
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.

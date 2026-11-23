@@ -328,15 +328,15 @@ const header = (sx, y, title, chip) => {
   K(sx, y + PT(48), 36, 0.06, 'background:' + C.line);
 };
 
-// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count, what needs you, after its name. The row runs off the
+// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
 // right edge, faded, as it scrolls.
-const VIEWS = [['Tabs', '3'], ['Landing', '2'], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '4']];
+const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
 const viewRow = (sx, y, chosen, skip) => {
   let x = sx + 1.5;
   const at = VIEWS.findIndex((v) => v[0] === chosen);
   if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
   for (const [name, n] of VIEWS.slice(Math.max(0, at - 1))) {
-    const words = name + '  ' + n, w = [...words].length * 0.85 + 3;
+    const words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
     if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
     btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
     x += w + Wd(8);
