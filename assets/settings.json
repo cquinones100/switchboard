@@ -937,7 +937,7 @@
     "key": "views_beside_narrow_pane",
     "category": "Tabs and header",
     "label": "Open views in the side panel",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, the PR and ticket views that open in Claude's place, and a code file opened from the pane open in the side panel instead, the pane keeping its width beside it (the diff and lazygit take Diff's share in the side panel, narrowing the pane while one is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already in the side panel, they open in its place, but for the PR view (M-v), which closes what is there and takes its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, the PR and ticket views that open in Claude's place, and a code file opened from the pane open in the side panel instead, the pane keeping its width beside it (the diff and lazygit take Diff's share in the side panel, narrowing the pane while one is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already in the side panel, they open in its place, but for the PR view (M-v) and a code file opened from the pane, which close what is there and take its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
     "default": true
   },
   {

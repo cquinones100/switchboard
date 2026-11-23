@@ -9,9 +9,12 @@
 //! the pane already holds; whether a path is a file is asked off it
 //! (`resolve`), and the repository's files (`repo_files`) likewise.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 
@@ -114,11 +117,24 @@ pub fn resolve(path: &str, dir: &Path, home: &Path) -> Option<PathBuf> {
     file.is_file().then_some(file)
 }
 
+/// The repository's files as `repo_files` lists them.
+pub struct RepoFiles {
+    /// The top of the repository.
+    pub top: PathBuf,
+    /// Its files, by their path from the top.
+    pub files: Vec<String>,
+    /// Whether git listed more than were taken, or took too long.
+    pub cut: bool,
+}
+
 /// The top of the repository `dir` is in, and its files as git lists them
 /// (tracked, and untracked but not ignored), relative to that top, from a
-/// pane in a folder of it too; none outside a repository. Starts git, so
-/// never on the server's task.
-pub fn repo_files(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
+/// pane in a folder of it too; none outside a repository. At most `most`
+/// of them, read as git prints them, and only what it printed within
+/// `within`, git ended there, since a repository at the home folder or on a
+/// slow disk can take minutes to walk. Starts git, so never on the server's
+/// task.
+pub fn repo_files(dir: &Path, most: usize, within: Duration) -> Option<RepoFiles> {
     let top = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -127,20 +143,47 @@ pub fn repo_files(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
         .ok()
         .filter(|o| o.status.success())?;
     let top = PathBuf::from(String::from_utf8_lossy(&top.stdout).trim_end_matches('\n'));
-    let out = Command::new("git")
+    let mut git = Command::new("git")
         .arg("-C")
         .arg(&top)
         .args(["-c", "core.quotePath=false"])
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
-    let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = git.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let deadline = Instant::now() + within;
+    let mut files: Vec<String> = Vec::new();
+    let mut cut = false;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(_) if files.len() >= most => {
+                cut = true;
+                break;
+            }
+            Ok(line) => files.push(line),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                cut = true;
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let _ = git.kill();
+    let _ = git.wait();
     files.dedup();
-    Some((top, files))
+    Some(RepoFiles { top, files, cut })
 }
 
 #[cfg(test)]

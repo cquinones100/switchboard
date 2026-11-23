@@ -23,6 +23,10 @@ use crate::{paths, settings};
 /// every tab while you type; the box says when it was cut.
 const MOST_FILES: usize = 50_000;
 
+/// The longest the box waits on git to list them, the screen's files
+/// shown with as many as it listed by then.
+const LIST_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The option marking the viewer's pane.
 pub const CODE_VIEW: &str = "@code_view";
 
@@ -62,9 +66,11 @@ impl Server {
                     .filter_map(|f| Some((find::resolve(&f.path, &dir, &home)?, f)))
                     .map(|(file, f)| (f, file))
                     .collect();
-                let (top, mut repo) = find::repo_files(&dir).unwrap_or((dir, Vec::new()));
-                let cut = repo.len() > MOST_FILES;
-                repo.truncate(MOST_FILES);
+                let listed = find::repo_files(&dir, MOST_FILES, LIST_WITHIN);
+                let (top, repo, cut) = match listed {
+                    Some(l) => (l.top, l.files, l.cut),
+                    None => (dir, Vec::new(), false),
+                };
                 Listed {
                     files,
                     repo,
@@ -112,7 +118,8 @@ impl Server {
         }
         if cut {
             picker = picker.header(format!(
-                "Typing searches the repository's first {MOST_FILES} files of more"
+                "Typing searches the first {MOST_FILES} of the repository's files, or what git listed in {}s",
+                LIST_WITHIN.as_secs()
             ));
         }
         self.about_tab(client, tab, move |s| {
