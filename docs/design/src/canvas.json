@@ -744,6 +744,14 @@
     "PhoneViewsMenus.dc.html": {
       "title": "187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is",
       "page": "design"
+    },
+    "PhoneTabViews.dc.html": {
+      "title": "189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note, each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's",
+      "page": "design"
+    },
+    "PhoneTabViewsList.dc.html": {
+      "title": "190. The list of views with a tab's section: a tab with none of PR, ticket or note says so; from the drawer, with no tab in front, mission control's views alone; a tab's section lists only what it has",
+      "page": "design"
     }
   }
 }
