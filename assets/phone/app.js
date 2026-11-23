@@ -724,6 +724,36 @@ function ask(n) {
   if (yes.focus) yes.focus();
 }
 
+// The question the composer's ■ asks first, as Close tab's does: No at the
+// left, Stop lit at the right; only Stop stops the turn, as Esc does.
+function askStop(n) {
+  const tab = state.tabs.find((t) => number(t) === n);
+  if (!tab) return;
+  state.menu = { pane: n, asking: true };
+  document.addEventListener("keydown", menuKeys);
+  const yes = el("button", { class: "option lit", onclick: () => stopTab(n) }, "Stop");
+  const box = el(
+    "div",
+    { class: "box ask", role: "alertdialog", "aria-label": "Stop" },
+    boxHead("Stop"),
+    el("div", { class: "question" }, el("b", {}, "Stop tab " + tab.index + "'s Claude? "), el("span", { class: "dim" }, "[Y/n]")),
+    el("div", { class: "dim" }, "Its turn ends where it is, as Esc does."),
+    el("div", { class: "answers" }, el("button", { class: "option", onclick: () => closeMenu() }, "No"), yes),
+  );
+  layer(box);
+  if (yes.focus) yes.focus();
+}
+
+async function stopTab(n) {
+  closeMenu();
+  try {
+    const r = await api("/api/tabs/" + n + "/stop", {});
+    toast(r.said);
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
 // The sheet Remind me opens at the screen's foot (board 176): When, the
 // workspace's five times each with the clock time it means, or one typed,
 // which the computer reads; What for, optional. Set, at the right as the
@@ -1523,6 +1553,19 @@ function composer() {
     return !!(tab && tab.prompt && tab.prompt.free);
   };
   const ready = () => field.value.trim() !== "" || (!free() && state.chosen.length > 0);
+  // While the tab's Claude works, an empty composer's button is Stop (■),
+  // and Send again once there is something to send, which queues it.
+  const stopping = () => {
+    const tab = current();
+    return !!(tab && tab.state === "working" && !tab.prompt && !ready());
+  };
+  const light = () => {
+    const stop = stopping();
+    send.textContent = stop ? "■" : "➤";
+    send.setAttribute("aria-label", stop ? "Stop" : "Send");
+    send.classList.toggle("stop", stop);
+    send.classList.toggle("lit", !stop && ready());
+  };
   // CSS grows the box with its text (`field-sizing: content`). Where that
   // isn't supported it is measured here, which forces a layout of the whole
   // page, its channel included, so only when the text's line count could
@@ -1543,7 +1586,7 @@ function composer() {
     measured = { key: keyOf(step), step };
   };
   const resize = () => {
-    send.classList.toggle("lit", ready());
+    light();
     fit();
   };
   field.addEventListener("input", resize);
@@ -1561,6 +1604,7 @@ function composer() {
   });
   send.addEventListener("click", async () => {
     const text = field.value.trim();
+    if (stopping()) return askStop(state.open);
     if (!ready()) return;
     const answering = free();
     send.disabled = true;
@@ -1641,7 +1685,7 @@ function composer() {
     const newError = state.error && !p ? el("div", { class: "error" }, state.error) : el("div");
     error.replaceWith(newError);
     error = newError;
-    send.classList.toggle("lit", ready());
+    light();
   };
   return box;
 }

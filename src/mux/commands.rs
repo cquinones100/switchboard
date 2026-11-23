@@ -133,6 +133,7 @@ pub const NAMES: &[&str] = &[
     "answer",
     "remind",
     "pin",
+    "stop",
     "watch",
     "phone-pair",
     "phone-item",
@@ -250,6 +251,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "pin",
         "pin [-t pane] [-s from] [-u]: the tab of a pane running Claude pinned at the top of Needs you, as M-f pins it, or unpinned with -u; refused for a pane not running Claude; -s names who asked (phone), written in the server's log",
+    ),
+    (
+        "stop",
+        "stop [-t pane] [-s from]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude and for one whose Claude isn't working; -s names who asked (phone), written in the server's log",
     ),
     (
         "watch",
@@ -582,6 +587,10 @@ impl Server {
             "pin" => Args::parse(rest, "ts").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
                 self.phone_pin(pane, !a.has('u'), a.value('s'))
+            }),
+            "stop" => Args::parse(rest, "ts").and_then(|a| {
+                let pane = self.pane_from(&a, caller)?;
+                self.phone_stop(pane, a.value('s'))
             }),
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.

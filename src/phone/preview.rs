@@ -318,6 +318,7 @@ fn routes(preview: Arc<Preview>) -> Router {
         .route("/api/tabs/{pane}/close", post(close))
         .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/tabs/{pane}/pin", post(pin))
+        .route("/api/tabs/{pane}/stop", post(stop))
         .route("/api/views/{view}/item", post(view_item))
         .route("/api/views/{view}/act", post(view_act))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -798,6 +799,25 @@ async fn seen(State(preview): State<Arc<Preview>>, UrlPath(n): UrlPath<String>) 
             d.set_state(&n, "idle", None);
         }
         said("Marked seen")
+    })
+}
+
+/// A working tab's turn stopped, the tab going idle; refused for one that
+/// isn't working, in the server's words.
+async fn stop(State(preview): State<Arc<Preview>>, UrlPath(n): UrlPath<String>) -> Response {
+    preview.change(|d| {
+        if !d.live {
+            return offline();
+        }
+        let Some(tab) = d.tab(&n) else {
+            return no_tab();
+        };
+        if tab["state"] != "working" {
+            return refused(StatusCode::CONFLICT, "its Claude isn't working");
+        }
+        let index = tab["index"].clone();
+        d.set_state(&n, "idle", None);
+        said(format!("Stopped tab {index}"))
     })
 }
 

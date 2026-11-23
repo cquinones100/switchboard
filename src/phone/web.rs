@@ -264,6 +264,7 @@ fn routes(app: Arc<App>) -> Router {
         .route("/api/tabs/{pane}/close", post(close))
         .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/tabs/{pane}/pin", post(pin))
+        .route("/api/tabs/{pane}/stop", post(stop))
         .route("/api/views/{view}/item", post(view_item))
         .route("/api/views/{view}/act", post(view_act))
         .route("/api/push/key", get(push_key))
@@ -935,6 +936,22 @@ async fn close(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Respons
     .await
 }
 
+/// A working tab's Claude stopped as Esc stops it, which the phone asks
+/// about first; the server refuses one that isn't working.
+async fn stop(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response {
+    let Some(tab) = claude_tab(&app, &pane) else {
+        return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
+    };
+    ask(vec![
+        "stop".into(),
+        "-t".into(),
+        pane_of(&tab),
+        "-s".into(),
+        "phone".into(),
+    ])
+    .await
+}
+
 /// An option of mission control's menu for an item of a view, by the
 /// item's ID and the option's label: the server builds the menu again and
 /// runs it, refusing one the phone leaves out or no longer offered.
@@ -1280,6 +1297,7 @@ mod tests {
         assert!(!before_pairing("/api/tabs/1/close", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/remind", &Method::POST));
         assert!(!before_pairing("/api/tabs/1/pin", &Method::POST));
+        assert!(!before_pairing("/api/tabs/1/stop", &Method::POST));
         assert!(!before_pairing("/", &Method::POST));
     }
 

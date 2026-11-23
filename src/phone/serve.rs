@@ -4,7 +4,8 @@
 //! pane), `kill-tab -s` (a Claude tab closed, which the phone asks about
 //! first), `remind` (a Claude tab's reminder set or cleared, as the
 //! workspace's reminder box does), `pin` (a Claude tab pinned or unpinned,
-//! as M-f does) and `watch` (every Claude tab's state and last turn, streamed as
+//! as M-f does), `stop` (a working Claude's turn stopped with Esc, which
+//! the phone asks about first) and `watch` (every Claude tab's state and last turn, streamed as
 //! a line of JSON each time they change), and the server's log's line for
 //! what your phone did, with no notification, since you know what you did
 //! and the tab shows it; and, after the server takes over from another
@@ -15,8 +16,8 @@
 //! A prompt is read and answered with mission control's own reader and
 //! keys (`mission::answer`), the ones the Slack relay uses, so the phone
 //! presses exactly what the answer box would. Nothing here reaches a pane
-//! that isn't running Claude: `prompt`, `answer`, `kill-tab -s`, `remind`
-//! and `pin` refuse one, and `watch` lists Claude tabs alone.
+//! that isn't running Claude: `prompt`, `answer`, `kill-tab -s`, `remind`,
+//! `pin` and `stop` refuse one, and `watch` lists Claude tabs alone.
 //!
 //! `watch` keeps its connection: the server takes the stream back from
 //! the command's task (`Answer::Keep`) and writes `Output` frames to it,
@@ -34,6 +35,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::mission::answer::{self, Prompt};
 use crate::mission::remind;
+use crate::mux::input::{Key, KeyCode, Mods};
 use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
@@ -281,6 +283,32 @@ impl Server {
         self.phone_did(from, tab, "closed it");
         self.kill_tab(tab);
         Ok(Reply::ok(format!("Closed tab {n} {name}\n")))
+    }
+
+    /// `stop`: Esc pressed in a pane's Claude, which stops its turn as Esc
+    /// at the computer does; refused for a pane not running Claude and for
+    /// one whose Claude isn't working, so it can't close a dialog or clear
+    /// a draft instead. `from` names who asked, for the log.
+    pub(crate) fn phone_stop(&mut self, pane: PaneId, from: Option<&str>) -> Result<Reply, String> {
+        self.phone_claude_pane(pane)?;
+        if self.agents.state(pane) != Some(crate::agent::State::Working) {
+            return Err("its Claude isn't working".into());
+        }
+        let tab = self.panes[&pane].tab;
+        self.press(
+            pane,
+            vec![answer::Press::Key(Key::new(KeyCode::Esc, Mods::NONE))],
+        );
+        if let Some(from) = from {
+            self.phone_did(from, tab, "Stopped");
+        }
+        let n = self.tab_number(tab);
+        let name = self
+            .tabs
+            .get(&tab)
+            .map(|t| t.display_name().to_string())
+            .unwrap_or_default();
+        Ok(Reply::ok(format!("Stopped tab {n} {name}\n")))
     }
 
     /// `remind`: the reminder of a pane's tab set for `when` (one of the
