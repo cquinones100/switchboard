@@ -238,15 +238,19 @@ impl Server {
                         Reply::fail(phone_refusal(&self.phone_menu(&view, &item).0, label)),
                     );
                 };
-                if !matches!(offered.kind, Kind::Run(_)) {
-                    return answer(reply, Reply::fail("The phone does that one itself."));
-                }
                 // A notification is put away after what is picked in its
-                // menu, as mission control's does.
+                // menu, as mission control's does, and a Slack message
+                // seen: for what the phone does itself too (going to a
+                // tab, opening or copying a link), which it tells the
+                // server of, so only that is done here.
                 let notice = self.phone_menu(&view, &item).1;
                 let seen = choices::is_slack_message(&view.id, &item).then(|| item.clone());
                 let after = self.pick_before(&act, label, seen.as_ref(), &notice);
-                let ran = self.phone_run(act, label);
+                let ran = if matches!(offered.kind, Kind::Run(_)) {
+                    self.phone_run(act, label)
+                } else {
+                    Ok(Ran::Said(String::new()))
+                };
                 self.pick_after(notice, after);
                 ran
             }

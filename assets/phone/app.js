@@ -1959,7 +1959,16 @@ function showOptions(title, options, pick) {
   if (buttons[0] && buttons[0].focus) buttons[0].focus();
 }
 
+// What the phone does itself told to the computer, which puts a
+// notification away after it and records what it led to, as mission
+// control does after any pick; nothing is said of it.
+function told(key, id, o) {
+  if (id === null) return;
+  api("/api/views/" + encodeURIComponent(key) + "/item", { id, label: o.label }).catch(() => {});
+}
+
 function runOption(key, id, o) {
+  if (o.go || o.open || o.copy) told(key, id, o);
   if (o.go) {
     closeMenu();
     closePanel();
