@@ -142,7 +142,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "coordinator-order",
         run: coordinator::order_main,
-        about: "The coordinator setting the order autopilot takes an issue in: its priority label, 1 to 4, on a repository you can push to",
+        about: "The coordinator setting the order autopilot takes issues in: those named priority 1 and first in its queue in that order, those after --left priority 4 and out of it, on repositories you can push to",
     },
     Command {
         name: "coordinator-post",

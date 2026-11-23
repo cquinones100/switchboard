@@ -303,7 +303,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "coordinator-ordered",
-        "coordinator-ordered <owner/repo#number> <1-4> <first line>: from switchboard coordinator-order once GitHub has the issue's priority label, autopilot's queue told of it as the Autopilot board's Move up and Move down tell it: at 1 put first, else taken out of what is put first, the issues read again",
+        "coordinator-ordered <first line>... [--left <owner/repo#number>...]: from switchboard coordinator-order once GitHub has the issues' priority labels, autopilot's queue told of them at once as the Autopilot board's Move up and Move down tell it: the issues named by their items' first lines put first in that order, those after --left taken out of what is put first, the issues read again",
     ),
     (
         "slot-report",
@@ -615,25 +615,19 @@ impl Server {
             }
             .map(|said| Reply::ok(format!("{said}\n"))),
             "coordinator-ordered" => {
-                let (Some((repo, number)), Some(to), Some(text)) = (
-                    rest.first()
-                        .and_then(|r| crate::autopilot::issues::parse_reference(r)),
-                    rest.get(1)
-                        .and_then(|p| p.parse::<u8>().ok())
-                        .filter(|p| (1..=4).contains(p)),
-                    rest.get(2),
-                ) else {
-                    return Reply::fail(
-                        "usage: switchboard coordinator-ordered <owner/repo#number> <1-4> <first line>",
-                    );
+                let (first, left) = match rest.iter().position(|a| a == "--left") {
+                    Some(at) => (&rest[..at], &rest[at + 1..]),
+                    None => (rest, &[][..]),
                 };
-                let reference = format!("{repo}#{number}");
-                if crate::autopilot::issues::reference_in(text)
-                    .is_none_or(|(r, n)| format!("{r}#{n}") != reference)
-                {
-                    return Reply::fail("coordinator-ordered: the first line must name the issue");
+                use crate::autopilot::issues::{parse_reference, reference_in};
+                let refs_ok = first.iter().all(|t| reference_in(t).is_some())
+                    && left.iter().all(|r| parse_reference(r).is_some());
+                if !refs_ok || first.len() + left.len() == 0 {
+                    return Reply::fail(
+                        "usage: switchboard coordinator-ordered <owner/repo#number: title>... [--left <owner/repo#number>...]",
+                    );
                 }
-                self.autopilot_priority_set(&reference, text.clone(), to);
+                self.autopilot_issues_queued(first.to_vec(), left);
                 Ok(Reply::ok(""))
             }
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),

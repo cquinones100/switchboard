@@ -358,8 +358,10 @@ impl Server {
     }
 
     /// An autopilot tab just landed: its PR's merge wakes it, when the tab
-    /// has one it wasn't told of, else the landing itself, since autopilot
-    /// may close the tab before GitHub is next asked about its PR.
+    /// has a merged one it wasn't told of, since autopilot may close the tab
+    /// before GitHub is next asked about it again; with no PR, the landing
+    /// itself; with one not merged (back in the main clone having landed
+    /// nothing), nothing, its merge told when GitHub answers it.
     pub fn coordinator_landed(&mut self, tab: TabId) {
         if !Self::coordinator_on() {
             return;
@@ -371,7 +373,9 @@ impl Server {
         let (number, name) = (self.tab_number(tab), self.tab_label_without_pr_title(tab));
         let pr = self.facts.get(&tab).and_then(|f| f.pr.clone());
         match pr {
-            Some(pr) if self.coordinator.saved.told.contains(&pr.url) => {}
+            Some(pr)
+                if pr.state != PrState::Merged || self.coordinator.saved.told.contains(&pr.url) => {
+            }
             Some(pr) => {
                 self.coordinator.saved.tell(&pr.url);
                 self.coordinator_save();

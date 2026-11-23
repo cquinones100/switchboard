@@ -2,12 +2,13 @@
 //! reaches GitHub without asking, each checking in code what its skill
 //! only says, so text it read on GitHub can't steer it past them:
 //!
-//! - `coordinator-order <owner/repo#number> <1-4>`: gives the issue that
-//!   `priority:` label (`issues::set_priority`, as the Autopilot board's
-//!   Move up and Move down do), the order autopilot takes it in, on a
-//!   repository you can push to, changing nothing else of it; then tells
-//!   the server (`coordinator-ordered`), which puts it in autopilot's queue
-//!   as those do: at 1 first of all, the last given 1 first, else out of it.
+//! - `coordinator-order <owner/repo#number>... [--left <owner/repo#number>...]`:
+//!   gives Next's issues `priority: 1` and those that left Next
+//!   `priority: 4` (`issues::set_priority`, as the Autopilot board's Move up
+//!   and Move down do), on repositories you can push to, changing nothing
+//!   else of them; then tells the server (`coordinator-ordered`) in one go,
+//!   which puts Next's first in autopilot's queue in their order and
+//!   takes the others out.
 //! - `coordinator-post issue -C <clone> --title <title> --body-file <file>`
 //!   and `coordinator-post comment -C <clone> <number> --body-file <file>`:
 //!   files an issue (assigned to you) or comments on one, only on the
@@ -36,55 +37,87 @@ fn fail(what: &str, why: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
-/// `coordinator-order <owner/repo#number> <1-4>`.
+/// Issues by their repository and number.
+type Issues = Vec<(Repo, u64)>;
+
+/// Its arguments: Next's issues in order, and after `--left` those that
+/// left Next; at least one, every one an `<owner/repo#number>`.
+fn order_args(args: &[String]) -> Option<(Issues, Issues)> {
+    let (next, left) = match args.iter().position(|a| a == "--left") {
+        Some(at) => (&args[..at], &args[at + 1..]),
+        None => (args, &[][..]),
+    };
+    let parse = |refs: &[String]| -> Option<Issues> {
+        refs.iter()
+            .map(|r| crate::autopilot::issues::parse_reference(r))
+            .collect()
+    };
+    let (next, left) = (parse(next)?, parse(left)?);
+    (!next.is_empty() || !left.is_empty()).then_some((next, left))
+}
+
+/// `coordinator-order <owner/repo#number>... [--left <owner/repo#number>...]`.
 pub fn order_main(args: Vec<String>) -> ExitCode {
     const NAME: &str = "coordinator-order";
-    let usage = || {
-        eprintln!("usage: switchboard {NAME} <owner/repo#number> <1-4>");
-        ExitCode::from(2)
-    };
-    let [reference, priority] = args.as_slice() else {
-        return usage();
-    };
-    let Some(priority) = priority.parse::<u8>().ok().filter(|p| (1..=4).contains(p)) else {
-        return usage();
-    };
-    let Some((repo, number)) = crate::autopilot::issues::parse_reference(reference) else {
-        return fail(NAME, &format!("{reference} isn't <owner/repo#number>"));
+    use crate::autopilot::issues::{HIGHEST, LOWEST, set_priority};
+    let Some((next, left)) = order_args(&args) else {
+        eprintln!(
+            "usage: switchboard {NAME} <owner/repo#number>... [--left <owner/repo#number>...]"
+        );
+        return ExitCode::from(2);
     };
     let set = util::block_on(async {
-        pushable(&repo).await?;
-        crate::autopilot::issues::set_priority(&repo, number, priority).await?;
-        github::rest(
-            "GET",
-            &format!("/repos/{repo}/issues/{number}"),
-            None,
-            SOURCE,
-        )
-        .await
+        let mut checked: Vec<String> = Vec::new();
+        for (repo, _) in next.iter().chain(&left) {
+            if !checked.contains(&repo.to_string()) {
+                pushable(repo).await?;
+                checked.push(repo.to_string());
+            }
+        }
+        let mut first = Vec::new();
+        for (repo, number) in &next {
+            set_priority(repo, *number, HIGHEST).await?;
+            let issue = github::rest(
+                "GET",
+                &format!("/repos/{repo}/issues/{number}"),
+                None,
+                SOURCE,
+            )
+            .await?;
+            // The queue's item for it, as autopilot words an issue
+            // (`Issue::text`).
+            let title = issue
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            first.push(format!(
+                "{repo}#{number}: {}",
+                crate::worktree::one_line(title)
+            ));
+        }
+        for (repo, number) in &left {
+            set_priority(repo, *number, LOWEST).await?;
+        }
+        anyhow::Ok(first)
     });
-    let issue = match set {
-        Ok(issue) => issue,
+    let first = match set {
+        Ok(first) => first,
         Err(e) => return fail(NAME, &format!("{e:#}")),
     };
-    // The queue's item for it, as autopilot words an issue (`Issue::text`).
-    let title = issue
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let reference = format!("{repo}#{number}");
-    let text = format!("{reference}: {}", crate::worktree::one_line(title));
-    let told = socket::ask(&[
-        "coordinator-ordered",
-        &reference,
-        &priority.to_string(),
-        &text,
-    ]);
-    match told {
+    // Told at once, so autopilot never opens from half of the new order.
+    let mut asked = vec!["coordinator-ordered".to_string()];
+    asked.extend(first);
+    if !left.is_empty() {
+        asked.push("--left".into());
+        asked.extend(left.iter().map(|(repo, number)| format!("{repo}#{number}")));
+    }
+    let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
+    match socket::ask(&asked) {
         Ok((0, _, _)) => {
             println!(
-                "{reference}: {}",
-                crate::autopilot::issues::priority_label(priority)
+                "{} issue(s) first in autopilot's queue, in order; {} taken out",
+                next.len(),
+                left.len()
             );
             ExitCode::SUCCESS
         }
@@ -244,6 +277,24 @@ mod tests {
 
     fn args(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn order_takes_next_in_its_order_and_what_left_it() {
+        let (next, left) = order_args(&args(&["o/r#3", "o/r#1", "--left", "o/r#2"])).unwrap();
+        let named = |v: &Issues| {
+            v.iter()
+                .map(|(r, n)| format!("{r}#{n}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named(&next), ["o/r#3", "o/r#1"]);
+        assert_eq!(named(&left), ["o/r#2"]);
+        assert!(order_args(&args(&["--left", "o/r#2"])).is_some());
+        assert!(order_args(&args(&[])).is_none());
+        assert!(
+            order_args(&args(&["o/r#3", "1"])).is_none(),
+            "a priority is no issue"
+        );
     }
 
     #[test]

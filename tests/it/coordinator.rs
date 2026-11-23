@@ -352,12 +352,15 @@ fn an_autopilot_tab_s_pr_merging_is_typed_into_it() {
 #[test]
 fn coordinator_order_puts_next_s_issues_first_in_autopilot_s_queue_in_its_order() {
     let server = TestServer::start();
-    // Next is A (#3) then B (#1): given priority 1 from the bottom up, as
-    // the skill says, and C (#2), which left Next, given 4.
-    server.ok(&["coordinator-ordered", "o/r#2", "1", "o/r#2: C"]);
-    server.ok(&["coordinator-ordered", "o/r#1", "1", "o/r#1: B"]);
-    server.ok(&["coordinator-ordered", "o/r#3", "1", "o/r#3: A"]);
-    server.ok(&["coordinator-ordered", "o/r#2", "4", "o/r#2: C"]);
+    // C (#2) first, then Next as A (#3) and B (#1) with C left out of it.
+    server.ok(&["coordinator-ordered", "o/r#2: C"]);
+    server.ok(&[
+        "coordinator-ordered",
+        "o/r#3: A",
+        "o/r#1: B",
+        "--left",
+        "o/r#2",
+    ]);
     let mode: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(server.state.join("autopilot.json")).unwrap(),
     )
@@ -369,9 +372,6 @@ fn coordinator_order_puts_next_s_issues_first_in_autopilot_s_queue_in_its_order(
         .filter_map(|x| x["text"].as_str())
         .collect();
     assert_eq!(next, ["o/r#3: A", "o/r#1: B"]);
-    let (code, _, err) = server.run(&["coordinator-ordered", "o/r#2", "1", "o/r#5: X"]);
-    assert_ne!(
-        code, 0,
-        "a first line naming another issue is refused: {err}"
-    );
+    let (code, _, err) = server.run(&["coordinator-ordered", "not an issue"]);
+    assert_ne!(code, 0, "a line naming no issue is refused: {err}");
 }
