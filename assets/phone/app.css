@@ -669,3 +669,21 @@ body.refused p { color: var(--dim); }
 .menu-option.mc .go { color: var(--accent); font-weight: 700; }
 .box.options { top: 20%; max-height: 70%; overflow-y: auto; }
 .toast.hint { font-size: var(--fact); color: var(--text); }
+
+/* The Usage view: a limit a meter of the kit (board 184), its pace a tick. */
+.limit { display: grid; grid-template-columns: 1fr auto; column-gap: var(--s2); row-gap: var(--s1); padding: var(--s2) var(--edge); }
+.limit .name { font-weight: 700; }
+.limit .pct { font-weight: 700; }
+.limit .sub { grid-column: 1 / 3; color: var(--dim); font-size: var(--fact); }
+.limit .sub.needs { color: var(--yellow); }
+.meter { grid-column: 1 / 3; position: relative; height: 6px; border-radius: 3px; background: var(--line); }
+.meter .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--green); }
+.meter .fill.needs { background: var(--yellow); }
+.meter .fill.failed { background: var(--red); }
+.meter .tick { position: absolute; top: -4px; width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; background: var(--text); }
+.pct.passed { color: var(--green); }
+.pct.needs { color: var(--yellow); }
+.pct.failed { color: var(--red); }
+.spend { display: flex; justify-content: space-between; align-items: center; min-height: var(--tap); padding: 0 var(--edge); }
+.usage-tab { grid-template-columns: 1.5ch 1fr auto; }
+.usage-tab .when { font-size: var(--fact); color: var(--dim); align-self: center; }

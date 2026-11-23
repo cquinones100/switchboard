@@ -8,8 +8,11 @@
 //! `whole_run`), answering with what it says, which the phone shows as a
 //! toast. One the phone leaves out (`views::kind_of`), or no longer
 //! offered, is refused. Settings' `phone_views` off sends no views and
-//! refuses both. `phone::views` sorts what they give; this only reaches
-//! the server for it. New with the phone's panel.
+//! refuses both. The Usage view goes as its board's numbers
+//! (`views::usage_json`), kept worked out while the phone lists it, and
+//! refuses both commands: nothing on it acts. `phone::views` sorts what
+//! they give; this only reaches the server for it. New with the phone's
+//! panel.
 
 use std::time::{Duration, Instant};
 
@@ -24,6 +27,7 @@ use crate::mission::{Finish, Notice, NoticeLook, Ran, with_check};
 use crate::mux::input::{Key, KeyCode, Mods};
 use crate::mux::server::{Answer, Event, Opened, Reply, Server};
 use crate::settings;
+use crate::usage::serve::ViewKind;
 
 use super::serve::PhoneEvent;
 use super::views::{self, Kind};
@@ -56,10 +60,15 @@ struct Offered {
 
 impl Server {
     /// The views mission control shows that the phone lists, in the
-    /// phone's order: `None` while Settings' `phone_views` is off.
+    /// phone's order: `None` while Settings' `phone_views` is off. The
+    /// Usage view is worked out off the task only while wanted, so the
+    /// phone wants it as mission control does each time it draws it.
     fn phone_shown_views(&mut self) -> Option<Vec<View>> {
         if !settings::is_on("phone_views") {
             return None;
+        }
+        if settings::is_on(ViewKind::Usage.setting()) {
+            self.want_view(ViewKind::Usage);
         }
         let look = NoticeLook::every(views::SCREENFUL);
         let all = self.mission_views(false, false, false, &look);
@@ -156,9 +165,14 @@ impl Server {
             return Some(kept.clone());
         }
         let shown = self.phone_shown_views()?;
+        let pane_of = self.phone_pane_of();
+        let now = crate::util::now_ms().div_euclid(1000);
         let out: Vec<Value> = shown
             .iter()
             .map(|v| {
+                if v.id == ViewId::Usage {
+                    return views::usage_json(v, now, &pane_of);
+                }
                 let options = |item: &Item| {
                     self.phone_item_options(v, item)
                         .iter()
@@ -219,6 +233,13 @@ impl Server {
         let Some(view) = shown.into_iter().find(|v| v.key() == *view_key) else {
             return answer(reply, Reply::fail(GONE));
         };
+        // Usage only shows on the phone.
+        if view.id == ViewId::Usage {
+            return answer(
+                reply,
+                Reply::fail("Nothing on the Usage view acts from the phone."),
+            );
+        }
         let ran = match id {
             Some(id) => {
                 let Some(item) = view
