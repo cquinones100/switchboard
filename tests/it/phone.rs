@@ -3815,6 +3815,14 @@ const out = [];
   timers.splice(0).forEach((f) => f && f());
   swipe();
   out.push("off=" + of("panel-layer")[0].className + " list=" + list());
+  // The tab's views turned off while the panel shows: board 185's look again.
+  vm.runInContext("closePanel(); openTab('12')", ctx);
+  timers.splice(0).forEach((f) => f && f());
+  swipe();
+  await settle();
+  vm.runInContext("state.tabs[0].tab_views = null; drawPanel()", ctx);
+  timers.splice(0).forEach((f) => f && f());
+  out.push("gone=" + of("panel-layer")[0].className + " " + of("panel")[0].kids[0].text);
   console.log(out.join("\n"));
 })();
 "##;
@@ -3832,6 +3840,7 @@ const out = [];
             "note=‹Redrawtab 2 read=/api/tabs/12/ticket,/api/tabs/12/note",
             "none=0 list=Tab 3 · uncommittedNo PR, ticket or note yet.|Mission control|✕CI11 failing",
             "off=panel-layer list=✕CI11 failing",
+            "gone=panel-layer ›Mission control",
         ],
         "{stdout}"
     );

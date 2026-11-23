@@ -2088,6 +2088,13 @@ function drawPanel() {
     closeView();
     unwind();
   }
+  // The tab's views gone while it shows (turned off, or the tab closed):
+  // back to board 185's look once no view is over the list.
+  if (panelLayer.full && !tabViews() && !panelLayer.screen) {
+    panelLayer.full = false;
+    panelLayer.layer.className = "panel-layer";
+    panelLayer.panel.setAttribute("aria-label", "Mission control");
+  }
   const head = el(
     "div",
     { class: "head" },
@@ -2100,11 +2107,6 @@ function drawPanel() {
   fill(panelLayer.panel, head, viewList(), "", inside && panelLayer.panel.contains(panelLayer.screen) ? panelLayer.screen : null);
   if (!view) return;
   const top = tabbed ? tabViewHead(view) : viewHead(view);
-  // The tab's views gone while it shows (turned off, or the tab closed): back to board 185's look.
-  if (panelLayer.full && !tabViews() && !panelLayer.screen) {
-    panelLayer.full = false;
-    panelLayer.layer.className = "panel-layer";
-  }
   const items = tabbed ? tabViewBody(view) : viewItems(view);
   if (!panelLayer.screen) {
     const screen = el("div", { class: "panel-view", role: "dialog", "aria-label": view.title });
