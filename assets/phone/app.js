@@ -1575,6 +1575,9 @@ function composer() {
 }
 
 function toDrawer() {
+  // As openTab does, a view open over it closes first.
+  const overAView = history.state && history.state.view;
+  if (overAView) return closePanel(() => toDrawer());
   state.open = null;
   history.replaceState(null, "", "#");
   render();
@@ -2501,9 +2504,7 @@ async function openTapped(posted) {
     // A window opened for the push opened it from its address already.
     if (state.open !== tab) openTab(tab);
   } else {
-    state.open = null;
-    history.replaceState(null, "", "#");
-    render();
+    toDrawer();
   }
 }
 
