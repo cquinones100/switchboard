@@ -903,6 +903,11 @@ impl<N: Note> Editor<N> {
     fn make_change(&mut self, edit: impl FnOnce(&mut Doc<N>), outside: bool) -> bool {
         let before = self.snap();
         edit(&mut self.doc);
+        // Text changed from outside may leave the cursor past its line, or
+        // inside a character, where the next key would cut it.
+        if outside {
+            self.clamp();
+        }
         if before.text == self.doc.text {
             return false;
         }
@@ -4047,6 +4052,15 @@ mod tests {
         press(&mut e, "<Esc>");
         e.change_outside(|doc| doc.text = Text::from_lines(&["newer"]));
         assert!(e.undo.is_empty(), "nothing kept to undo");
+    }
+
+    #[test]
+    fn a_change_from_outside_keeps_the_cursor_on_a_character() {
+        let mut e = read_only(&["ab · cd"]);
+        e.go_to(0, 5);
+        e.change_outside(|doc| doc.text = Text::from_lines(&["a ·· cd"]));
+        assert!(e.doc.line(0).is_char_boundary(e.col()), "col {}", e.col());
+        press(&mut e, "w");
     }
 
     #[test]
