@@ -12,7 +12,7 @@ use crate::sidebar::model::{self, Rules, Stage, TabModel};
 use crate::ui::kit::{self, Mark, Tone};
 
 /// A tone as app.css names it: `.mark.<tone>` and `.label.<tone>`.
-fn tone_name(tone: Tone) -> &'static str {
+pub fn tone_name(tone: Tone) -> &'static str {
     match tone {
         Tone::Needs => "needs",
         Tone::Working => "working",

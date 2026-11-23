@@ -592,11 +592,124 @@ pub fn tabs(now_ms: i64) -> Vec<Value> {
                     "at": now_ms - ago * 60_000,
                 })),
                 "prompt": t.prompt.map(|p| p()),
+                "tab_views": tab_rows(t.pane),
             })
         })
         .collect();
     restage(&mut tabs, now_ms);
     tabs
+}
+
+/// The made-up PR of a tab with one, as the lookups would hold it, and
+/// the PR view's copy with its description and checks.
+fn made_up_pr(pane: u32) -> Option<(crate::facts::PrFacts, Value)> {
+    let (number, title, fail, pending, review) = match pane {
+        11 => (
+            142,
+            "Move the orders table to the new schema",
+            1,
+            0,
+            "CHANGES_REQUESTED",
+        ),
+        13 => (131, "Rate limit by token", 0, 1, "REVIEW_REQUIRED"),
+        _ => return None,
+    };
+    let facts = crate::facts::PrFacts {
+        number,
+        title: title.into(),
+        head: String::new(),
+        draft: false,
+        repo: "acme/api".into(),
+        url: format!("https://github.com/acme/api/pull/{number}"),
+        state: PrState::Open,
+        merge: None,
+        checks: Some(Checks {
+            pass: 4,
+            fail,
+            pending,
+        }),
+        review_decision: Some(review.into()),
+        additions: 120,
+        deletions: 40,
+    };
+    let check = |name: &str, status: &str, conclusion: &str| json!({ "__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion });
+    let mut checks = vec![
+        check("Formatting", "COMPLETED", "SUCCESS"),
+        check("Lint", "COMPLETED", "SUCCESS"),
+        check("Build", "COMPLETED", "SUCCESS"),
+        check("Docs", "COMPLETED", "SUCCESS"),
+    ];
+    if fail > 0 {
+        checks.push(check("Tests (Linux)", "COMPLETED", "FAILURE"));
+    }
+    if pending > 0 {
+        checks.push(check("Tests (macOS)", "IN_PROGRESS", ""));
+    }
+    let copy = json!({
+        "number": number,
+        "body": format!("{title}, in batches, so a large table never holds a lock for long.\n\n## Before this PR\n\nThe table was copied in one statement.\n\nSee the [runbook](https://example.com/runbook)."),
+        "last": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": { "nodes": checks } } } }] },
+    });
+    Some((facts, copy))
+}
+
+/// The made-up ticket of a tab with one, as the ticket view last read it.
+fn made_up_ticket(pane: u32) -> Option<(crate::views::ticket::Ticket, Value)> {
+    let (id, title) = match pane {
+        11 => ("ABC-142", "Orders table migration"),
+        12 => ("ABC-150", "Release checklist for 2.4"),
+        _ => return None,
+    };
+    let issue = json!({
+        "identifier": id,
+        "title": title,
+        "url": format!("https://linear.app/acme/issue/{id}"),
+        "description": format!("## Today\n\n{title} is done by hand.\n\n## What to build\n\n- Script it\n- Keep the old path working"),
+        "state": { "name": "In Progress", "type": "started" },
+    });
+    Some((crate::views::ticket::Ticket::Linear(id.into()), issue))
+}
+
+/// The made-up note of a tab with one, its file's name and its text.
+fn made_up_note(pane: u32) -> Option<(&'static str, &'static str)> {
+    match pane {
+        11 | 14 => Some((
+            "plans/Plan - Orders Migration.md",
+            "# Plan - Orders Migration\n\n## Steps\n\n- [x] Write the migration\n- [x] Batch the copy\n- [ ] Run it on staging\n- [ ] Swap the tables\n\n## Links\n\n- [the runbook](https://example.com/runbook)\n",
+        )),
+        _ => None,
+    }
+}
+
+/// What of its PR, ticket and note a made-up tab has, as the server's
+/// snapshot lists them (`phone::tab_views`).
+fn tab_rows(pane: u32) -> Value {
+    use crate::phone::tab_views;
+    let mut rows = Vec::new();
+    if let Some((facts, _)) = made_up_pr(pane) {
+        rows.push(tab_views::pr_row(facts.number, Some(&facts)));
+    }
+    if let Some((ticket, issue)) = made_up_ticket(pane) {
+        rows.push(tab_views::ticket_row(&ticket.short(), Some(&issue)));
+    }
+    if let Some((note, _)) = made_up_note(pane) {
+        rows.push(tab_views::note_row(note));
+    }
+    Value::Array(rows)
+}
+
+/// A made-up tab's PR, ticket or note as `phone-tab` answers it, by its
+/// pane's number and the kind; none for one it hasn't.
+pub fn tab_view(pane: &str, kind: &str) -> Option<Value> {
+    use crate::phone::tab_views;
+    let pane: u32 = pane.parse().ok()?;
+    match kind {
+        "pr" => made_up_pr(pane)
+            .map(|(f, copy)| tab_views::pr_json(f.number, Some(&f), Some(&copy), None)),
+        "ticket" => made_up_ticket(pane).map(|(t, issue)| tab_views::ticket_json(&t, Some(&issue))),
+        "note" => made_up_note(pane).map(|(note, text)| tab_views::note_json(note, text)),
+        _ => None,
+    }
 }
 
 /// The made-up tabs, as the preview has changed them, placed, marked and

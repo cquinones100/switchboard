@@ -2059,6 +2059,8 @@ class Node {
   constructor(tag) { this.tag = tag; this.kids = []; this.attrs = {}; this.on = {}; this.className = ""; this.style = {}; this.parent = null; this.value = ""; }
   append(...kids) { for (const k of kids) { k.parent = this; this.kids.push(k); } }
   replaceChildren(...kids) { this.kids = []; this.append(...kids); }
+  prepend(...kids) { for (const k of kids) k.parent = this; this.kids.unshift(...kids); }
+  get children() { return this.kids; }
   replaceWith(n) { const p = this.parent; if (p) { p.kids[p.kids.indexOf(this)] = n; n.parent = p; } }
   remove() { const p = this.parent; if (p) p.kids = p.kids.filter((k) => k !== this); this.parent = null; }
   setAttribute(k, v) { this.attrs[k] = v; }
@@ -2805,6 +2807,36 @@ mod preview_server {
         }
         assert_eq!(from, 0);
         assert!(asks(&earliest)[0].starts_with("Step 1:"), "{earliest}");
+    }
+
+    /// The made-up tabs carry what of their PR, ticket and note they have,
+    /// and the preview answers each from made-up data (boards 189 and 190).
+    #[test]
+    fn the_preview_answers_a_made_up_tabs_pr_ticket_and_note() {
+        let at = preview(&assets());
+        let tabs = json_of(at, "/api/tabs");
+        let tab = |pane: &str| -> Value {
+            tabs["tabs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["pane"] == pane)
+                .unwrap()["tab_views"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["kind"].clone())
+                .collect()
+        };
+        assert_eq!(tab("%11"), json!(["pr", "ticket", "note"]));
+        assert_eq!(tab("%13"), json!(["pr"]));
+        assert_eq!(tab("%14"), json!(["note"]));
+        assert_eq!(json_of(at, "/api/tabs/11/pr")["heading"], "PR #142");
+        assert_eq!(json_of(at, "/api/tabs/11/ticket")["heading"], "ABC-142");
+        assert_eq!(
+            json_of(at, "/api/tabs/14/note")["title"],
+            "Plan - Orders Migration"
+        );
     }
 
     /// The preview stamps app.js with its own build, as the phone server
@@ -3582,6 +3614,224 @@ console.log(out.join("\n"));
             "spend=Today$14.20|This week$80.50",
             "tabs=button:●2stable note IDs$6.00|div:○9closed one$3.00",
             "go=12 null",
+        ],
+        "{stdout}"
+    );
+}
+
+/// What of its PR, ticket and note the tab of `pane` has, as `watch` lists
+/// them for the phone's panel (`null` while its views are off).
+fn tab_views_of(stream: &mut UnixStream, pane: &str, want: Value) {
+    let pane = pane.to_string();
+    next_line(stream, |v| {
+        v["tabs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| t["pane"] == pane.as_str())
+            .is_some_and(|t| {
+                let kinds = t["tab_views"]
+                    .as_array()
+                    .map(|rows| json!(rows.iter().map(|r| r["kind"].clone()).collect::<Vec<_>>()));
+                kinds.unwrap_or(Value::Null) == want
+            })
+    });
+}
+
+/// `phone-tab`, which the phone's routes for a tab's PR, ticket and note
+/// ask (boards 189 and 190): from what the workspace holds and the copy
+/// each view last read, never a lookup; the note without its ID, refused
+/// while `phone_tab_note` is off (and left out of the tab's rows); every
+/// view refused for a pane not running Claude and while `phone_tab_views`
+/// is off, when the stream lists none.
+#[test]
+fn the_phone_reads_a_tabs_pr_ticket_and_note() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let plain = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pane = claude_pane(&server);
+    common::write_settings(
+        &server.home,
+        json!({ "phone": true, "phone_tab_note": true }),
+    );
+
+    // The copies M-v and M-i last read, and the tab's note.
+    let cache = server.home.join(".cache/switchboard");
+    std::fs::create_dir_all(cache.join("pr-view")).unwrap();
+    let check = |name: &str, conclusion: &str| json!({ "__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion });
+    let pr = json!({
+        "number": 41, "title": "Time the redraw", "url": "https://github.com/acme/notes/pull/41",
+        "state": "OPEN", "body": "Both fixture sets.",
+        "last": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": { "nodes": [
+            check("Clippy", "FAILURE"), check("Formatting", "SUCCESS"),
+        ] } } } }] },
+    });
+    std::fs::write(cache.join("pr-view/acme%notes#41.json"), pr.to_string()).unwrap();
+    let issues = cache.join("ticket-view/issues/acme/notes");
+    std::fs::create_dir_all(&issues).unwrap();
+    let issue = json!({ "number": 163, "title": "Time it on both", "body": "Today it reads one.", "state": "open" });
+    std::fs::write(issues.join("163.json"), issue.to_string()).unwrap();
+    std::fs::create_dir_all(server.home.join("Notes")).unwrap();
+    std::fs::write(
+        server.home.join("Notes/Redraw.md"),
+        "# Redraw\n- [ ] Time it\n<!-- note-id: n-0123456789ab -->\n",
+    )
+    .unwrap();
+
+    let mut stream = watch(&server);
+    tab_views_of(&mut stream, &pane, json!([]));
+    wait_until(&server, "the phone app on", || {
+        let (_, _, err) = server.run(&["phone-tab", "-t", &pane, "pr"]);
+        err.contains("no PR")
+    });
+
+    server.ok(&["set", "-t", &pane, "@tab_prs", "acme/notes#41"]);
+    server.ok(&["set", "-t", &pane, "@tab_prs_made", "acme/notes#41"]);
+    server.ok(&["set", "-t", &pane, "@tab_ticket", "acme/notes#163"]);
+    server.ok(&["set", "-t", &pane, "@tab_note", "Redraw.md"]);
+    tab_views_of(&mut stream, &pane, json!(["pr", "ticket", "note"]));
+
+    let read = |kind: &str| -> Value {
+        serde_json::from_str(&server.ok(&["phone-tab", "-t", &pane, kind])).unwrap()
+    };
+    let pr = read("pr");
+    assert_eq!(pr["heading"], "PR #41");
+    assert_eq!(pr["title"], "Time the redraw");
+    assert_eq!(pr["body"], "Both fixture sets.");
+    assert_eq!(pr["checks"]["said"], "1 of 2 failing");
+    assert_eq!(pr["checks"]["rows"][0]["name"], "Clippy");
+    let ticket = read("ticket");
+    assert_eq!(ticket["heading"], "Issue #163");
+    assert_eq!(ticket["body"], "Today it reads one.");
+    assert_eq!(ticket["chips"][0]["text"], "open");
+    let note = read("note");
+    assert_eq!(note["title"], "Redraw");
+    assert_eq!(note["body"], "# Redraw\n- ☐ Time it\n");
+
+    // A pane not running Claude has none of them.
+    let (code, _, err) = server.run(&["phone-tab", "-t", &plain, "pr"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("isn't running Claude"), "{err}");
+
+    // The note stays on the computer with phone_tab_note off.
+    common::write_settings(&server.home, json!({ "phone": true }));
+    tab_views_of(&mut stream, &pane, json!(["pr", "ticket"]));
+    let (code, _, err) = server.run(&["phone-tab", "-t", &pane, "note"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("note on the phone is off"), "{err}");
+
+    // With phone_tab_views off the stream lists none and nothing is read.
+    common::write_settings(
+        &server.home,
+        json!({ "phone": true, "phone_tab_views": false }),
+    );
+    tab_views_of(&mut stream, &pane, Value::Null);
+    let (code, _, err) = server.run(&["phone-tab", "-t", &pane, "pr"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("views on the phone are off"), "{err}");
+}
+
+/// A tab's own views in the panel (assets/phone/app.js, boards 189 and
+/// 190), run in Node over a page made of plain objects: the swipe from a
+/// channel's right edge opens the panel full screen, with no strip, on the
+/// first the tab has in the PR, ticket, note order, read from its route;
+/// ‹ shows the list with the tab's section on top, the view shown marked,
+/// and a row opens its view; a tab with none opens on the list saying so,
+/// and with its views off the swipe opens mission control's list beside
+/// the strip, as before; skipped without Node.
+#[test]
+fn the_swipe_opens_a_tabs_first_view_and_back_shows_the_list() {
+    let script = PRELUDE.to_string()
+        + r##"let popstate = null;
+const read = [];
+ctx.history = {
+  state: null,
+  replaceState() {},
+  pushState(s) { ctx.history.state = s; },
+  back() { ctx.history.state = null; popstate(); },
+};
+ctx.window.innerWidth = 400;
+ctx.window.addEventListener = (name, f) => { if (name === "popstate") popstate = f; };
+ctx.fetch = (path, opts) => {
+  if ((opts && opts.method === "POST") || !path.startsWith("/api/tabs/")) return new Promise(() => {});
+  read.push(path);
+  const kind = path.split("/").pop();
+  const data = {
+    ticket: { heading: "Issue #163", title: "Time it", chips: [{ text: "open", tone: "passed" }], body: "Today it reads one." },
+    note: { heading: "Redraw", title: "Redraw", body: "# Redraw" },
+  }[kind];
+  return Promise.resolve({ ok: true, status: 200, json: async () => data });
+};
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  const row = (kind, title, line) => ({ kind, title, line, mark: "◇", tone: "working" });
+  state.tabs = [
+    { index: 2, pane: "%12", name: "stable note IDs", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle",
+      tab_views: [row("ticket", "Ticket #163", "open"), row("note", "Note", "Redraw")] },
+    { index: 3, pane: "%13", name: "uncommitted", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle", tab_views: [] },
+    { index: 4, pane: "%14", name: "views off", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle", tab_views: null },
+  ];
+  state.views = [{ key: "ci", title: "CI", line: "1 failing", needs: 1, mark: "✕", tone: "failed", groups: [], acts: [] }];
+  state.open = "12";
+  render();
+  edgeSwipe();
+`, ctx);
+const of = (cls) => body.all((x) => x.className.split(" ").includes(cls));
+const settle = () => new Promise((r) => setImmediate(r));
+const swipe = () => {
+  const at = (x, type) => ({ type, timeStamp: 0, touches: type === "touchend" ? [] : [{ clientX: x, clientY: 300 }] });
+  app.fire("touchstart", at(395, "touchstart"));
+  app.fire("touchmove", at(380, "touchmove"));
+  app.fire("touchmove", at(100, "touchmove"));
+  app.fire("touchend", at(100, "touchend"));
+  timers.splice(0).forEach((f) => f && f());
+};
+const list = () => of("panel")[0].kids[1].kids.map((k) => k.text).join("|");
+const out = [];
+(async () => {
+  swipe();
+  await settle();
+  const screen = of("panel-view")[0];
+  out.push("layer=" + of("panel-layer")[0].className + " in=" + screen.parent.className + " head=" + screen.kids[0].text + " read=" + read.join(","));
+  out.push("body=" + screen.kids[1].text);
+  screen.all((x) => x.attrs["aria-label"] === "Back to the views")[0].fire("click");
+  timers.splice(0).forEach((f) => f && f());
+  out.push("views=" + of("panel-view").length + " list=" + list());
+  out.push("held=" + of("held").map((r) => r.attrs["data-tab-view"]).join(","));
+  body.all((x) => x.attrs["data-tab-view"] === "note")[0].fire("click");
+  await settle();
+  out.push("note=" + of("panel-view")[0].kids[0].text + " read=" + read.join(","));
+  vm.runInContext("closePanel(); openTab('13')", ctx);
+  timers.splice(0).forEach((f) => f && f());
+  swipe();
+  out.push("none=" + of("panel-view").length + " list=" + list());
+  vm.runInContext("closePanel(); openTab('14')", ctx);
+  timers.splice(0).forEach((f) => f && f());
+  swipe();
+  out.push("off=" + of("panel-layer")[0].className + " list=" + list());
+  console.log(out.join("\n"));
+})();
+"##;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "layer=panel-layer full in=panel head=‹Issue #163tab 2 read=/api/tabs/12/ticket",
+            "body=Time itopenToday it reads one.",
+            "views=0 list=Tab 2 · stable note IDs◇Ticket #163open◇NoteRedraw|Mission control|✕CI11 failing",
+            "held=ticket",
+            "note=‹Redrawtab 2 read=/api/tabs/12/ticket,/api/tabs/12/note",
+            "none=0 list=Tab 3 · uncommittedNo PR, ticket or note yet.|Mission control|✕CI11 failing",
+            "off=panel-layer list=✕CI11 failing",
         ],
         "{stdout}"
     );

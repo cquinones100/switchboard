@@ -2209,6 +2209,20 @@
     "default": true
   },
   {
+    "key": "phone_tab_views",
+    "category": "Phone app",
+    "label": "A tab's PR and ticket on the phone",
+    "description": "In a tab's channel, the swipe from the phone app's right edge opens the first the tab has of its PR, its ticket and its note full screen, read only, as the PR view (M-v) and the ticket view (M-i) draw them from what the workspace last read, with ‹ to the list of views, which lists them above mission control's. Needs Mission control on the phone. Off, the swipe opens mission control's list and the server sends the phone none of them",
+    "default": true
+  },
+  {
+    "key": "phone_tab_note",
+    "category": "Phone app",
+    "label": "A tab's note on the phone",
+    "description": "The tab's views on the phone include its note as M-e finds it (its plan first), its Markdown rendered as the channel renders Claude's replies, so its words reach your phone over your tailnet. Off, the phone shows no tab's note and the server refuses one",
+    "default": false
+  },
+  {
     "key": "phone_haptics",
     "category": "Phone app",
     "label": "Buzz the phone",

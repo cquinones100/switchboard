@@ -43,7 +43,8 @@ const state = {
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
   haptics: true, // whether the app buzzes (Settings' phone_haptics), from the stream
   views: null, // mission control's views for the panel, from the stream; null while Settings' phone_views is off
-  panel: null, // { view }: the panel showing, on a view's items (its key) or the list (null)
+  panel: null, // { view, shown }: the panel showing, on a view's items (its key, `tab:<kind>` for the tab's own) or the list (null), and the tab's view shown last
+  tabView: null, // { key, data, error }: the tab's view read for the panel, its key the pane's number and its kind
   refreshed: {}, // when PRs and CI were last asked again from the panel, by view
 };
 
@@ -1941,6 +1942,15 @@ function render(stick) {
 // first where the option says so. A swipe right, or a tap on the dimmed
 // strip at its left, puts it away. Off with Settings' phone_views, the
 // stream carries no views and none of it shows.
+//
+// A tab's own views (boards 189 and 190): on a channel whose tab the stream
+// gives `tab_views` (Settings' phone_tab_views, null while it is off), the
+// panel is full screen, with no strip, and the swipe opens it on the
+// first the tab has of its PR, its ticket and its note, read only, as
+// `phone-tab` answers them; ‹ (a swipe right from its left edge, or the
+// phone's back) goes to the list, which lists the tab's section above
+// mission control's views, and a swipe right on the list puts it away.
+// A tab with none of them opens on the list, its section saying so.
 
 const EDGE = 24; // px from the right edge a swipe starts the panel from
 const REFRESH_MS = 60000; // the least time between asking PRs or CI again
@@ -1960,11 +1970,29 @@ function hinted(set) {
 }
 
 const viewOf = (key) => (state.views || []).find((v) => v.key === key);
+const isTabView = (key) => typeof key === "string" && key.startsWith("tab:");
+const openTabNow = () => (state.open ? state.tabs.find((t) => number(t) === state.open) || null : null);
+
+// The open tab's views as the stream lists them, PR, ticket and note in
+// that order, only those it has; null with no tab open or with them off.
+function tabViews() {
+  const t = openTabNow();
+  return t && Array.isArray(t.tab_views) ? t.tab_views : null;
+}
+
+const tabRowOf = (key) => (tabViews() || []).find((r) => "tab:" + r.kind === key);
+
+// The first the open tab has, which the swipe opens the panel on.
+function firstTabView() {
+  const rows = tabViews();
+  return rows && rows[0] ? "tab:" + rows[0].kind : null;
+}
 
 // The panel put away, and the history step an open view added taken back
 // before `then` runs, so a tab it opens is named on the page's own step.
 function closePanel(then) {
   state.panel = null;
+  state.tabView = null;
   if (panelLayer) {
     const { layer, panel } = panelLayer;
     panelLayer = null;
@@ -2011,20 +2039,29 @@ function slidePanel(layer, panel, opens, then) {
   }, lasts);
 }
 
+// Full screen, with no strip, on a channel whose tab has its views on.
 function panelLayerNode() {
+  const full = !!tabViews();
   const strip = el("div", { class: "panel-strip", onclick: () => closePanel() });
-  const panel = el("div", { class: "panel", role: "dialog", "aria-label": "Mission control" });
-  const layer = el("div", { class: "panel-layer" }, strip, panel);
+  const panel = el("div", { class: "panel", role: "dialog", "aria-label": full ? "Views" : "Mission control" });
+  const layer = el("div", { class: "panel-layer" + (full ? " full" : "") }, strip, panel);
   panelSwipe(panel, 0, () => closePanel(), () => slidePanel(panelLayer.layer, panel, true));
-  return { layer, panel, strip, screen: null };
+  return { layer, panel, strip, screen: null, full };
 }
 
-// Opened from ⋯ or a swipe that went far enough: slid in from where it is.
+// Opened from ⋯ (on the list) or a swipe that went far enough (on the
+// view it drew as it came in): slid in from where it is; a tab's view a
+// step in the page's history, as one tapped in the list is.
 function openPanel(from) {
   if (!state.views) return;
   hinted(true);
   if (state.menu) closeMenu();
-  state.panel = { view: null };
+  const first = from && state.panel ? state.panel.view : null;
+  state.panel = { view: first, shown: first };
+  if (first) {
+    if (typeof history.pushState === "function") history.pushState({ view: first }, "");
+    loadTabView(first);
+  }
   if (!panelLayer) {
     panelLayer = from || panelLayerNode();
     if (!from) {
@@ -2044,8 +2081,10 @@ function openPanel(from) {
 // keeping where it was scrolled to as the stream redraws them.
 function drawPanel() {
   if (!panelLayer || !state.panel) return;
-  const view = state.panel.view && viewOf(state.panel.view);
-  if (state.panel.view && !view) {
+  const key = state.panel.view;
+  const tabbed = isTabView(key);
+  const view = key && (tabbed ? tabRowOf(key) : viewOf(key));
+  if (key && !view) {
     closeView();
     unwind();
   }
@@ -2053,27 +2092,38 @@ function drawPanel() {
     "div",
     { class: "head" },
     el("button", { class: "icon", "aria-label": "Close mission control", onclick: () => closePanel() }, "›"),
-    el("span", { class: "title" }, "Mission control"),
+    el("span", { class: "title" }, panelLayer.full ? "Views" : "Mission control"),
   );
-  fill(panelLayer.panel, head, viewList(), "");
+  // A view of a full-screen panel is in it, so it moves with the swipe that
+  // brings the panel in.
+  const inside = panelLayer.full && panelLayer.screen;
+  fill(panelLayer.panel, head, viewList(), "", inside && panelLayer.panel.contains(panelLayer.screen) ? panelLayer.screen : null);
   if (!view) return;
+  const top = tabbed ? tabViewHead(view) : viewHead(view);
+  const items = tabbed ? tabViewBody(view) : viewItems(view);
   if (!panelLayer.screen) {
     const screen = el("div", { class: "panel-view", role: "dialog", "aria-label": view.title });
     panelSwipe(screen, EDGE, () => back(), () => slideView(screen, true));
     panelLayer.screen = screen;
-    panelLayer.layer.append(screen);
-    fill(screen, viewHead(view), viewItems(view), view.key);
-    slideView(screen, true, true);
+    (panelLayer.full ? panelLayer.panel : panelLayer.layer).append(screen);
+    fill(screen, top, items, key);
+    // The view the swipe opens the panel on comes in with it.
+    if (state.panel.view !== state.panel.coming) slideView(screen, true, true);
     return;
   }
-  fill(panelLayer.screen, viewHead(view), viewItems(view), view.key);
+  fill(panelLayer.screen, top, items, key);
 }
 
-function fill(node, head, list, key) {
+// `keep`, a view open in the panel, stays where it is, never taken out
+// and put back, which would lose where it was scrolled to.
+function fill(node, head, list, key, keep) {
   const old = node.querySelector(".panel-list");
   const kept = old && old.viewKey === key ? old.scrollTop : 0;
   list.viewKey = key;
-  node.replaceChildren(head, list);
+  if (keep) {
+    for (const k of [...node.children]) if (k !== keep) k.remove();
+    node.prepend(head, list);
+  } else node.replaceChildren(head, list);
   list.scrollTop = kept;
 }
 
@@ -2129,6 +2179,26 @@ function viewHead(view) {
 // when nothing does.
 function viewList() {
   const list = el("div", { class: "panel-list drawer" + (state.live ? "" : " off") });
+  const rows = tabViews();
+  if (rows) {
+    const t = openTabNow();
+    const group = el("div", { class: "group tab-views" }, el("div", { class: "label " + hue(t) }, el("span", {}, "Tab " + t.index + " · " + t.name), el("span", {})));
+    if (!rows.length) group.append(el("div", { class: "empty" }, "No PR, ticket or note yet."));
+    for (const r of rows) {
+      const key = "tab:" + r.kind;
+      group.append(
+        el(
+          "button",
+          { class: "row view-row" + (state.panel && state.panel.shown === key ? " held" : ""), "data-tab-view": r.kind, onclick: () => openView(key) },
+          el("span", { class: "mark " + (r.tone || "idle") }, r.mark || "○"),
+          el("span", { class: "name" }, r.title),
+          el("span", {}),
+          el("span", { class: "sub" }, r.line),
+        ),
+      );
+    }
+    list.append(group, el("div", { class: "group" }, el("div", { class: "label idle" }, el("span", {}, "Mission control"), el("span", {}))));
+  }
   if (!state.views.length) list.append(el("div", { class: "empty" }, "No view of mission control's shows now."));
   for (const v of state.views) {
     list.append(
@@ -2149,6 +2219,11 @@ function openView(key) {
   state.panel.view = key;
   // A step in the page's history, so the phone's back gesture closes it.
   if (typeof history.pushState === "function") history.pushState({ view: key }, "");
+  if (isTabView(key)) {
+    state.panel.shown = key;
+    loadTabView(key);
+    return;
+  }
   drawPanel();
   // PRs and CI read again as they open, at most once a minute, so they are
   // current while the computer's lookups pause with you away.
@@ -2159,6 +2234,82 @@ function openView(key) {
     state.refreshed[key] = Date.now();
     api("/api/views/" + encodeURIComponent(key) + "/act", { label: again.label }).catch(() => {});
   }
+}
+
+// The tab's view of `key` read from the computer, "Loading…" meanwhile,
+// kept while the stream redraws the panel; drawn once it answers if it
+// still shows.
+async function loadTabView(key) {
+  const n = state.open;
+  const kind = key.replace(/^tab:/, "");
+  const at = n + ":" + kind;
+  if (!(state.tabView && state.tabView.key === at && state.tabView.data)) state.tabView = { key: at, data: null, error: "" };
+  drawPanel();
+  try {
+    const data = await api("/api/tabs/" + n + "/" + kind);
+    if (state.tabView && state.tabView.key === at) state.tabView = { key: at, data, error: "" };
+  } catch (e) {
+    if (state.tabView && state.tabView.key === at) state.tabView.error = String(e.message || e);
+  }
+  if (state.panel && state.panel.view === key) drawPanel();
+}
+
+// A tab's view's head: ‹ to the list, its name, and its tab as a chip.
+function tabViewHead(row) {
+  const t = openTabNow();
+  const read = state.tabView && state.tabView.data;
+  return el(
+    "div",
+    { class: "head" },
+    el("button", { class: "icon", "aria-label": "Back to the views", onclick: () => back() }, "‹"),
+    el("span", { class: "title" }, (read && read.heading) || row.title),
+    t ? el("span", { class: "chip" }, "tab " + t.index) : null,
+  );
+}
+
+const CHIP_OF_TONE = { passed: "g", needs: "y", working: "b", failed: "r", landing: "m" };
+
+// Its Markdown as the channel renders Claude's replies.
+const rendered = (text) => (md ? markdown(text) : el("div", { class: "body" }, text));
+
+// A tab's PR, ticket or note as its view on the phone draws it (board
+// 189), read only: its title (a link to it, opening on the phone), its
+// state as chips, a PR's checks, the failing and running ones by name, and
+// its text.
+function tabViewBody(row) {
+  const list = el("div", { class: "panel-list tab-view" + (state.live ? "" : " off") });
+  const tv = state.tabView;
+  if (tv && tv.error) {
+    list.append(el("div", { class: "empty refused" }, tv.error));
+    return list;
+  }
+  const read = tv && tv.data;
+  if (!read) {
+    list.append(el("div", { class: "empty" }, "Loading…"));
+    return list;
+  }
+  const kind = row.kind;
+  if (kind !== "note" && read.title) {
+    const title = read.url ? el("a", { href: read.url, target: "_blank", rel: "noopener noreferrer" }, read.title) : read.title;
+    list.append(el("div", { class: "tv-title" }, title));
+  }
+  if (read.chips && read.chips.length) {
+    list.append(el("div", { class: "tv-chips" }, read.chips.map((c) => el("span", { class: "chip " + (CHIP_OF_TONE[c.tone] || "") }, c.text))));
+  }
+  if (read.checks) {
+    const checks = el("div", { class: "group" }, el("div", { class: "label " + read.checks.tone }, el("span", {}, "Checks"), el("span", {}, read.checks.said)));
+    for (const c of read.checks.rows) {
+      checks.append(el("div", { class: "tv-check" }, el("span", { class: "mark " + c.tone }, c.mark), el("span", { class: "name" }, c.name)));
+    }
+    list.append(checks);
+  }
+  const text = el("div", { class: "group tv-text" });
+  if (kind === "pr") text.append(el("div", { class: "label idle" }, el("span", {}, "Description"), el("span", {})));
+  if (read.body) text.append(rendered(read.body));
+  else if (kind === "pr") text.append(el("div", { class: "empty" }, "No description."));
+  else text.append(el("div", { class: "empty" }, "Not read on the computer yet: M-i there reads it."));
+  list.append(text);
+  return list;
 }
 
 const TONE_OF_GROUP = (items) => (items[0] && items[0].tone) || "idle";
@@ -2395,6 +2546,9 @@ function panelSwipe(panel, within, away, stay) {
     if (e.touches.length !== 1) return (s = null);
     const t = e.touches[0];
     if (within && t.clientX > within) return (s = null);
+    // A view inside the panel follows its own swipe, not the panel's.
+    const screen = panelLayer && panelLayer.screen;
+    if (screen && screen !== panel && screen.contains(e.target)) return (s = null);
     s = { x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, decided: false };
   }, { passive: true });
   panel.addEventListener("touchmove", (e) => {
@@ -2450,7 +2604,9 @@ function edgeSwipe() {
       edge.opening = panelLayerNode();
       edge.opening.panel.style.transform = "translateX(100%)";
       edge.opening.strip.style.opacity = "0";
-      state.panel = { view: null };
+      // A tab's first view comes in with the panel, the list under it.
+      const first = firstTabView();
+      state.panel = { view: first, coming: first };
       panelLayer = edge.opening;
       drawPanel();
       document.body.append(edge.opening.layer);

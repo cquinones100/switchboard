@@ -79,6 +79,8 @@
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up
+//! phone-tab [-t pane] pr|ticket|note    a Claude pane's tab's PR, ticket
+//!                                        or note as JSON (src/phone)
 //! phone-pair <device>                    a box asking for the code the
 //!                                        phone shows, which pairs it
 //! tip <name> | tip seen <name> | tip reset
@@ -138,6 +140,7 @@ pub const NAMES: &[&str] = &[
     "phone-pair",
     "phone-item",
     "phone-view",
+    "phone-tab",
     "ready",
     "tip",
     "press",
@@ -267,6 +270,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "phone-view",
         "phone-view <view> <label>: from switchboard phone, the option of <view>'s own menu (m) labeled <label>, run as phone-item runs an item's",
+    ),
+    (
+        "phone-tab",
+        "phone-tab [-t pane] <pr|ticket|note>: from switchboard phone, the PR, ticket or note of the tab of a pane running Claude as JSON, read only, from what the workspace holds and the copy its view last read; refused for a pane not running Claude, for one the tab hasn't, while phone_views or phone_tab_views is off, and for the note while phone_tab_note is off",
     ),
     (
         "phone-pair",
@@ -596,8 +603,8 @@ impl Server {
             // connection.
             "watch" => Err("watch takes nothing".into()),
             // Answered by `Server::handle`, once the option has run.
-            "phone-item" | "phone-view" => {
-                Err("phone-item and phone-view are answered as they run".into())
+            "phone-item" | "phone-view" | "phone-tab" => {
+                Err(format!("{name} is answered as it runs"))
             }
             "phone-pair" => match rest.first() {
                 Some(device) => self.phone_pair_ask(device),
@@ -735,6 +742,23 @@ impl Server {
             return Err("the coordinator is in no tab: name the tab with -t".into());
         }
         Ok(self.panes[&pane].tab)
+    }
+
+    /// `phone-tab`'s kind and pane, from its arguments and the pane that
+    /// asked, which `Server::handle` answers off its task.
+    pub(crate) fn phone_tab_args(
+        &self,
+        rest: &[String],
+        pane: Option<&str>,
+    ) -> Result<(String, PaneId), String> {
+        let caller = pane
+            .and_then(|p| p.parse::<PaneId>().ok())
+            .filter(|p| self.panes.contains_key(p));
+        let a = Args::parse(rest, "t")?;
+        let [kind] = a.rest.as_slice() else {
+            return Err("phone-tab takes pr, ticket or note".into());
+        };
+        Ok((kind.clone(), self.pane_from(&a, caller)?))
     }
 
     fn target_pane(&self, rest: &[String], caller: Option<PaneId>) -> Result<PaneId, String> {

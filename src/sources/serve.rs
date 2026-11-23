@@ -1030,6 +1030,31 @@ impl Server {
         std::fs::metadata(github_file()).is_ok_and(|m| m.len() > 0)
     }
 
+    /// A Linear ticket as the Tickets view's lookup last read it, by its
+    /// identifier: none until it has answered, or for a ticket it doesn't
+    /// list.
+    pub(crate) fn ticket_held(&self, id: &str) -> Option<&Value> {
+        self.sources
+            .kept
+            .ticket_issues
+            .iter()
+            .flatten()
+            .find(|i| i.get("identifier").and_then(Value::as_str) == Some(id))
+    }
+
+    /// A PR's description as the PR board's lookup last read it, by its
+    /// URL: none until it has answered, or for a PR it doesn't list.
+    pub(crate) fn pr_body_held(&self, url: &str) -> Option<String> {
+        let board = self.sources.views.get(PRS)?;
+        board
+            .items
+            .iter()
+            .find(|i| !url.is_empty() && i.data.get("url").and_then(Value::as_str) == Some(url))
+            .and_then(|i| i.data.get("body").and_then(Value::as_str))
+            .filter(|b| !b.is_empty())
+            .map(str::to_string)
+    }
+
     /// What the lookups last said of one of a tab's PRs, with Settings'
     /// `github` on.
     pub fn tab_pr_facts(&self, pr: &crate::tabs::prs::TabPr) -> Option<&crate::facts::PrFacts> {

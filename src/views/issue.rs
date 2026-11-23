@@ -239,7 +239,7 @@ pub async fn fetch(repo: &Repo, number: u64) -> Result<Value, String> {
     Ok(issue)
 }
 
-fn cache_file(repo: &Repo, number: u64) -> std::path::PathBuf {
+pub(crate) fn cache_file(repo: &Repo, number: u64) -> std::path::PathBuf {
     paths::cache_dir()
         .join("ticket-view")
         .join("issues")
