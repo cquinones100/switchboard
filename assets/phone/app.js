@@ -2548,9 +2548,9 @@ function followKeyboard() {
   const viewport = window.visualViewport;
   const keyboardOpen = Math.round(viewport.height) < window.innerHeight;
   const root = document.documentElement;
-  const standalone =
-    (typeof navigator !== "undefined" && navigator.standalone === true) ||
-    (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
+  // navigator.standalone is iOS's alone, so another system's home-screen
+  // app, whose window is shorter than its screen for its own bars, keeps it.
+  const standalone = typeof navigator !== "undefined" && navigator.standalone === true;
   const upright = window.innerHeight >= window.innerWidth;
   const screenHeight = standalone && (upright ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height));
   root.classList.toggle("clipped", standalone && window.innerHeight < screenHeight);
