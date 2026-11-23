@@ -764,11 +764,18 @@ function drawer() {
   if (screen && screen.contains(box)) {
     const old = screen.querySelector(".drawer");
     const kept = old ? old.scrollTop : 0;
+    // The heading or row with the keyboard's focus keeps it in the list drawn
+    // again, so Enter on a heading can fold and unfold it in turn.
+    const had = document.activeElement;
+    const focused = old && had && old.contains(had) && had.getAttribute ? ["data-stage", "data-pane"].find((k) => had.getAttribute(k) !== null) : null;
+    const key = focused ? "[" + focused + "=\"" + had.getAttribute(focused) + "\"]" : null;
     screen.querySelector(".head").replaceWith(head);
     screen.querySelector(".offline-slot").replaceWith(offline);
     if (old) old.replaceWith(list);
     else screen.append(list);
     list.scrollTop = kept;
+    const again = key && list.querySelector(key);
+    if (again) again.focus({ preventScroll: true });
     return;
   }
   app.replaceChildren(drawerScreen({ box, head, offline, list }));
