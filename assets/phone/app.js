@@ -90,6 +90,9 @@ function buildHeader() {
 async function askWorkerBuild() {
   const worker = navigator.serviceWorker && navigator.serviceWorker.controller;
   const answer = worker ? await askWorker(worker, { build: true }).catch(() => ({})) : {};
+  // A worker that was replaced while it was asked answers for nothing: the
+  // ask the change started says what controls the page now.
+  if (worker !== (navigator.serviceWorker && navigator.serviceWorker.controller)) return;
   workerBuild = worker ? String(answer.build || "unknown") : "none";
   redrawBuildLine();
 }
@@ -101,6 +104,15 @@ async function readServerBuild() {
   if (!me || !me.build || !state.me) return;
   state.me.build = me.build;
   redrawBuildLine();
+}
+
+// From the page's first moment, since a new worker can take over before the
+// page has asked the computer anything.
+if (typeof navigator !== "undefined" && navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    askWorkerBuild().catch(() => {});
+    readServerBuild();
+  });
 }
 
 function redrawBuildLine() {
@@ -2254,6 +2266,7 @@ async function reconnect(posted) {
   render();
   setTimeout(render, RECONNECTING_MS + 100);
   listen();
+  askWorkerBuild().catch(() => {});
   readServerBuild();
   try {
     const r = await api("/api/tabs");
@@ -2352,10 +2365,6 @@ window.addEventListener("online", cameBack);
 async function offerPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
   const registration = await navigator.serviceWorker.register("/sw.js");
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    askWorkerBuild();
-    readServerBuild();
-  });
   navigator.serviceWorker.addEventListener("message", (event) => {
     // Read the tabs again first, since a page that slept holds old ones; the
     // tab is taken from what the worker keeps, so it opens once.

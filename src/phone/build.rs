@@ -105,7 +105,15 @@ impl Seen {
             seen.remove(device);
             return None;
         }
-        let key = format!("{page} {worker} {server}");
+        // Keyed on the old builds the device still runs, whichever side runs
+        // them: reopening the app brings the page up first and the worker a
+        // moment later, which is the same change catching up.
+        let mut old: Vec<&str> = [page, worker]
+            .into_iter()
+            .filter(|b| *b != "none" && *b != server)
+            .collect();
+        old.dedup();
+        let key = format!("{} {server}", old.join(" "));
         if seen.get(device) == Some(&key) {
             return None;
         }
@@ -173,6 +181,11 @@ mod tests {
         assert_eq!(seen.note("phone", "page=new", "new"), None);
         assert_eq!(seen.note("phone", "page=new worker=old", "new"), None);
         assert!(seen.note("tablet", "page=new worker=old", "new").is_some());
+        // Resumed across a restart with both old, then reopened: the page is
+        // new before the worker is, which is the same change.
+        assert!(seen.note("ipad", "page=old worker=old", "new").is_some());
+        assert_eq!(seen.note("ipad", "page=new worker=old", "new"), None);
+        assert_eq!(seen.note("ipad", "page=new worker=new", "new"), None);
         // Caught up, then behind again: said again.
         assert_eq!(seen.note("phone", "page=new worker=new", "new"), None);
         assert!(seen.note("phone", "page=new worker=old", "new").is_some());
