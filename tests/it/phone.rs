@@ -1174,11 +1174,12 @@ for (const prompt of [null, { free: true }]) {
     }
 }
 
-/// The composer's bar (assets/phone/app.css's `.composer`) pads its text box
-/// at the sides alone, so the bar is the text box's height, and the screen
-/// leaves out the home-indicator inset while the keyboard is open.
+/// The composer's bar (assets/phone/app.css's `.composer`) gives its text box
+/// 8 pt above and below, the home-indicator inset overlapping the space below
+/// rather than adding to it (the channel's screen leaving the inset to it), and
+/// 8 pt alone while the keyboard is open, where the screen leaves out the inset.
 #[test]
-fn the_composer_is_its_text_boxs_height() {
+fn the_composer_spaces_its_text_box_evenly() {
     let css = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.css"),
     )
@@ -1190,11 +1191,21 @@ fn the_composer_is_its_text_boxs_height() {
         let body = &css[start..];
         body[..body.find('}').unwrap()].to_string()
     };
-    assert!(
-        rule(".composer").contains("padding: 0 var(--s2);"),
-        "{}",
-        rule(".composer")
-    );
+    for (selector, declaration) in [
+        (".composer", "padding: var(--s2);"),
+        (
+            ".composer",
+            "padding-bottom: max(var(--s2), env(safe-area-inset-bottom) - var(--s2));",
+        ),
+        (".keyboard .composer", "padding-bottom: var(--s2);"),
+        (".screen.channel-screen", "padding-bottom: 0;"),
+    ] {
+        assert!(
+            rule(selector).contains(declaration),
+            "{selector}: {}",
+            rule(selector)
+        );
+    }
     assert!(
         rule(".keyboard .screen").contains("padding-bottom: 0;"),
         "{}",
