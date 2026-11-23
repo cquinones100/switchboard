@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-24 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-25 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -343,6 +343,10 @@ The relay's DM, threads and Home tab.
 - [185. Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen, and from Mission control in a channel's ⋯ menu: a swipe in shows Landing, Autopilot, PRs, CI and Notifications with what needs you counted; a tap on one shows its items in its groups; a tap on an item opens its menu, less what needs the computer's screen](https://cquinones100.github.io/switchboard/design/185.html)
 - [186. PRs and CI in the phone's right panel: the PR board's columns as groups, CI's runs with what fails first; a failing run's menu leads with Start a CI loop…, and an option ending in … asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
 - [187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is](https://cquinones100.github.io/switchboard/design/187.html)
+
+## Proposal: stepping over a prompt's questions on the phone
+
+- [188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it, a swipe across the card steps; going back shows the answer given, and Submit reviews every answer](https://cquinones100.github.io/switchboard/design/188.html)
 
 ## Proposal: a tab's own views on the phone
 

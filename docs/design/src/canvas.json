@@ -745,6 +745,10 @@
       "title": "187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is",
       "page": "design"
     },
+    "PhoneQuestionSteps.dc.html": {
+      "title": "188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it, a swipe across the card steps; going back shows the answer given, and Submit reviews every answer",
+      "page": "design"
+    },
     "PhoneTabViews.dc.html": {
       "title": "189. A tab's own views on the phone: a swipe left from a channel's right edge opens a full-screen panel on the first the tab has of its PR, its ticket and its note (the note only while phone_tab_note is on, off by default), each read only as the computer's view draws it; ‹ goes to the list of views, which gains the tab's section above mission control's",
       "page": "design"
