@@ -667,7 +667,8 @@ fn pane_of(tab: &Value) -> String {
 }
 
 /// A channel's last turns, or with `?before=<offset>` the turns before
-/// the earliest it shows (`turns::window`): its messages, the offset the
+/// the earliest it shows (`turns::window`), `&until=<ms>` the time of the
+/// earliest message it shows, which the looks merged in come before: its messages, the offset the
 /// next earlier read ends at (`from`), whether there is anything before
 /// it (`earlier`), and which conversation they are of, a new one in the
 /// pane (`/clear`) having nothing of the last.
@@ -681,7 +682,8 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>, uri: Ur
         )
         .into_response();
     };
-    let before = before_of(&uri);
+    let before = query_number(&uri, "before");
+    let until = query_number(&uri, "until");
     let conversation = file
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -690,7 +692,7 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>, uri: Ur
     let shown: Vec<looks::Look> = serde_json::from_value(tab["looks"].clone()).unwrap_or_default();
     let (messages, from, earlier) = tokio::task::spawn_blocking(move || {
         let w = turns::window(&file, before);
-        let messages = looks::merge(w.messages, &shown, w.from, w.earlier, w.until);
+        let messages = looks::merge(w.messages, &shown, w.from, w.earlier, until);
         (messages, w.from, w.earlier)
     })
     .await
@@ -720,12 +722,12 @@ async fn turns_of(State(app): State<Arc<App>>, Path(pane): Path<String>, uri: Ur
     .into_response()
 }
 
-/// A turns request's `before`, the byte offset its turns end at; none
-/// for the last turns.
-pub fn before_of(uri: &Uri) -> Option<u64> {
+/// A number in a request's query, as a turns request's `before` (the
+/// byte offset its turns end at) and `until`; none where it isn't given.
+pub fn query_number<T: std::str::FromStr>(uri: &Uri, key: &str) -> Option<T> {
     uri.query()?
         .split('&')
-        .find_map(|pair| pair.strip_prefix("before="))?
+        .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))?
         .parse()
         .ok()
 }

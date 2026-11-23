@@ -959,10 +959,12 @@ async function loadEarlier() {
   const n = state.open;
   if (!n || !state.turnsLoaded || !state.earlier || state.loadingEarlier) return;
   const { from, conversation } = state;
+  // The looks shown from the earliest time shown on are already shown.
+  const shownAt = state.messages.find((m) => m.at && m.offset !== undefined);
   state.loadingEarlier = true;
   render();
   try {
-    const r = await api("/api/tabs/" + n + "/turns?before=" + from);
+    const r = await api("/api/tabs/" + n + "/turns?before=" + from + (shownAt ? "&until=" + shownAt.at : ""));
     if (state.open !== n || state.from !== from || state.conversation !== conversation) return;
     state.messages = (r.messages || []).concat(state.messages);
     state.from = r.from || 0;

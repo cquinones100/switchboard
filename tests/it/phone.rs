@@ -590,7 +590,7 @@ let latest = { messages: turns(20, 40), from: 200, earlier: true, conversation: 
 const asked = [];
 ctx.fetch = (path) => {
   asked.push(path);
-  const body = path.endsWith("before=200") ? { messages: turns(0, 20), from: 0, earlier: false, conversation: "c" } : latest;
+  const body = path.includes("before=200") ? { messages: turns(0, 20), from: 0, earlier: false, conversation: "c" } : latest;
   return Promise.resolve({ status: 200, ok: true, json: async () => body });
 };
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -630,7 +630,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
             "opened=40 ask 20 at 2000",
             "above=\"\"",
             "above=Loading earlier…",
-            "asked=/api/tabs/5/turns /api/tabs/5/turns?before=200",
+            "asked=/api/tabs/5/turns /api/tabs/5/turns?before=200&until=200",
             "loaded=80 ask 0 at 2000",
             "above=Start of the conversation",
             "kept=82 ask 0",

@@ -588,7 +588,7 @@ async fn turns_of(
         .get(&format!("%{n}"))
         .cloned()
         .unwrap_or_default();
-    let (messages, from) = window(&all, super::web::before_of(&uri));
+    let (messages, from) = window(&all, super::web::query_number(&uri, "before"));
     axum::Json(json!({
         "messages": messages,
         "from": from,

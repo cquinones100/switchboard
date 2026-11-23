@@ -85,9 +85,10 @@ pub fn message(look: &Look) -> Message {
 /// time, each after the messages written before it ran, with that
 /// message's offset (the window's `from` before them all). A look from
 /// before the first message of a window with turns before it (`earlier`)
-/// belongs to those turns, and one from when the message the window ends
-/// before was said or later (`until`) to the turns after, so each is left
-/// out.
+/// belongs to those turns, and one from the first time the turns after it
+/// show on (`until`, which the app sends) to those, so each is left out;
+/// a window with turns before it and no message that says when takes
+/// none, the next window back taking them.
 pub fn merge(
     mut messages: Vec<Message>,
     looks: &[Look],
@@ -98,6 +99,9 @@ pub fn merge(
     let first = earlier
         .then(|| messages.iter().map(|m| m.at).find(|at| *at != 0))
         .flatten();
+    if earlier && first.is_none() {
+        return messages;
+    }
     for look in looks {
         if first.is_some_and(|first| look.at < first) || until.is_some_and(|u| look.at >= u) {
             continue;
@@ -184,6 +188,12 @@ mod tests {
         let merged = merge(messages, &[look(25, 1, false)], 10, false, Some(30));
         assert_eq!(merged.len(), 3);
         assert_eq!((merged[2].who, merged[2].offset), ("look", 20));
+        // Turns before it and no time to tell them by: the next window back takes it.
+        let untimed = vec![said("tool", "Bash: ls", 0)];
+        assert_eq!(
+            merge(untimed.clone(), &[look(5, 1, false)], 10, true, Some(30)),
+            untimed
+        );
     }
 
     #[test]

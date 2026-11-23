@@ -82,9 +82,6 @@ pub struct Window {
     pub messages: Vec<Message>,
     pub from: u64,
     pub earlier: bool,
-    /// When the message the window ends before was said, where it ends
-    /// before one that says.
-    pub until: Option<i64>,
 }
 
 /// The messages in a stretch of a transcript that starts at a line, `base`
@@ -260,7 +257,6 @@ pub fn window(file: &Path, before: Option<u64>) -> Window {
         messages: Vec::new(),
         from: 0,
         earlier: false,
-        until: None,
     })
 }
 
@@ -320,42 +316,7 @@ fn read_window<F: Read + Seek>(
         messages,
         from,
         earlier: from > 0,
-        until: until(f, size, end, chunk, bound, images_dir),
     })
-}
-
-/// When the first message from `end` on that says when was said, where
-/// the window ends before one: a look shown from then on belongs to the
-/// turns after the window. Read forward a chunk at a time, no more than
-/// `bound` bytes, past lines that say no time (a tool's output).
-fn until<F: Read + Seek>(
-    f: &mut F,
-    size: u64,
-    end: u64,
-    chunk: u64,
-    bound: u64,
-    images_dir: &Path,
-) -> Option<i64> {
-    let mut buf: Vec<u8> = Vec::new();
-    // The bytes from `end` read so far, the whole lines among them parsed.
-    let mut parsed = 0;
-    while buf.len() as u64 <= bound && end + (buf.len() as u64) < size {
-        f.seek(SeekFrom::Start(end + buf.len() as u64)).ok()?;
-        f.take(chunk).read_to_end(&mut buf).ok()?;
-        let whole = buf
-            .iter()
-            .rposition(|b| *b == b'\n')
-            .map_or(parsed, |i| i + 1);
-        let at = parse(&buf[parsed..whole], end + parsed as u64, images_dir)
-            .into_iter()
-            .map(|m| m.at)
-            .find(|at| *at != 0);
-        if at.is_some() {
-            return at;
-        }
-        parsed = whole;
-    }
-    None
 }
 
 #[cfg(test)]
@@ -525,7 +486,6 @@ mod tests {
         assert_eq!(&bytes[w.from as usize..][..20], br#"{"type":"user","mess"#);
         assert_eq!(w.messages.last().unwrap().text, "reply 29");
         assert_eq!(w.messages.iter().filter(|m| m.who == "tool").count(), 20);
-        assert_eq!(w.until, None);
     }
 
     #[test]
@@ -538,8 +498,6 @@ mod tests {
         assert_eq!(before.from, 0);
         assert!(!before.earlier);
         assert_eq!(before.messages.last().unwrap().text, "reply 9");
-        // Ending before an untimed message, it has no time to end by.
-        assert_eq!(before.until, None);
         assert_eq!(read(&bytes, Some(0), 4096, BOUND).messages, []);
     }
 
@@ -567,19 +525,5 @@ mod tests {
         assert_eq!(asks(&w), Vec::<String>::new());
         assert!(w.earlier);
         assert!(w.from < long.len() as u64);
-    }
-
-    #[test]
-    fn a_window_ending_on_an_untimed_line_ends_by_the_next_timed_one() {
-        let lines = [
-            r#"{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"ask"}}"#.to_string(),
-            format!(r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t","content":"{}"}}]}}}}"#, "x".repeat(10_000)),
-            r#"{"type":"assistant","timestamp":"2026-01-01T00:01:00Z","message":{"content":[{"type":"text","text":"done"}]}}"#.to_string(),
-        ];
-        let bytes = (lines.join("\n") + "\n").into_bytes();
-        let before = lines[0].len() as u64 + 1;
-        let w = read(&bytes, Some(before), 4096, BOUND);
-        assert_eq!(w.until, Some(1_767_225_660_000));
-        assert_eq!(asks(&w), ["ask"]);
     }
 }
