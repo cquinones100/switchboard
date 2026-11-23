@@ -932,11 +932,17 @@ function markdown(text) {
 // row, the reply after its last tool call left open. The newest turn of a
 // working tab has no final reply yet, so all of it folds, and its row shows
 // the latest step. A turn with no tool calls has no row; one opened shows
-// its steps after the row.
+// its steps after the row. A turn ended by `switchboard respawn` keeps the
+// text before that call open as its reply, after the row.
 // What starts a turn: what you said, or what another tab's Claude sent,
-// both shown; or a subagent's report back (`turn`), which starts one
-// but isn't drawn.
-const starts = (m) => m.who === "you" || m.who === "tab" || m.who === "turn";
+// both shown; Claude Code's wake-up for a finished background task
+// (`task`), shown as a dim line; or a subagent's report back (`turn`),
+// which starts one but isn't drawn.
+const starts = (m) => m.who === "you" || m.who === "tab" || m.who === "task" || m.who === "turn";
+// A turn that ends by running `switchboard respawn` (queue-and-clean's
+// last step) ends its session there, so the text written just before that
+// call is the turn's reply.
+const respawns = (m) => m.who === "tool" && /^Bash: (.*\s)?switchboard respawn\b/.test(m.text);
 
 function turns(messages, working) {
   const groups = [];
@@ -966,8 +972,11 @@ function turns(messages, working) {
     const rest = turn.slice(opened);
     const last = rest.map((m) => m.who).lastIndexOf("tool");
     if (last < 0) return [...said, ...rest];
-    const unanswered = working && g === groups.length - 1;
-    const steps = unanswered ? rest : rest.slice(0, last + 1);
+    let replied = last;
+    while (respawns(rest[last]) && replied > 0 && rest[replied - 1].who === "claude") replied -= 1;
+    const reply = rest.slice(replied, last);
+    const unanswered = !reply.length && working && g === groups.length - 1;
+    const steps = unanswered ? rest : [...rest.slice(0, replied), ...rest.slice(last, last + 1)];
     // The pictures Claude showed stay in sight with the steps folded.
     const looks = steps.filter((m) => m.who === "look");
     const key = keys[g];
@@ -979,7 +988,7 @@ function turns(messages, working) {
       count: steps.filter((m) => m.who === "tool").length,
       latest: unanswered ? steps[steps.length - 1].text : "",
     };
-    return [...said, row, ...(open ? steps : looks), ...rest.slice(steps.length)];
+    return [...said, row, ...(open ? steps : looks), ...reply, ...(unanswered ? [] : rest.slice(last + 1))];
   });
 }
 
@@ -1011,6 +1020,7 @@ function stepsRow(m) {
 function message(m, i, all) {
   if (m.who === "steps") return stepsRow(m);
   if (m.who === "tool") return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, m.text));
+  if (m.who === "task") return el("div", { class: "msg" }, el("span"), el("div", { class: "task" }, m.text));
   const prev = all[i - 1];
   // One header over messages in a row only from the same sender: two
   // tabs' messages in a row each keep theirs (board 182). A look is

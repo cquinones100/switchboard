@@ -362,6 +362,7 @@ button {
 .msg .more { grid-column: 2; justify-self: start; color: var(--accent); text-align: left; min-height: var(--tap); }
 .tool { grid-column: 2; color: var(--dim); font-size: var(--fact); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool::before { content: "▸ "; color: var(--faint); }
+.task { grid-column: 2; color: var(--dim); font-size: var(--fact); }
 /* A turn's steps folded into one row (app.js's `turns`), a tap opening them. */
 .msg .steps { grid-column: 2; justify-self: stretch; color: var(--dim); font-size: var(--fact); text-align: left; min-height: var(--tap); white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .msg .steps .latest { color: var(--faint); }
