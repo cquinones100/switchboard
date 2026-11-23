@@ -2710,11 +2710,21 @@ async function start() {
 // keyboard shortens, against the window, which it leaves alone. While it is
 // open, the page takes the visual viewport's top and height, so it ends at
 // the keyboard's top; iOS scrolls the visual viewport as a field takes the
-// focus, so its scroll moves the page too.
+// focus, so its scroll moves the page too. A home-screen app on iOS 26
+// draws under the status bar yet shows only a window of the screen less the
+// status bar's height, cutting off the home indicator's inset below it
+// (WebKit bug 301994), so there the page is marked clipped and leaves the
+// inset out.
 function followKeyboard() {
   const viewport = window.visualViewport;
   const keyboardOpen = Math.round(viewport.height) < window.innerHeight;
   const root = document.documentElement;
+  // navigator.standalone is iOS's alone, so another system's home-screen
+  // app, whose window is shorter than its screen for its own bars, keeps it.
+  const standalone = typeof navigator !== "undefined" && navigator.standalone === true;
+  const upright = window.innerHeight >= window.innerWidth;
+  const screenHeight = standalone && (upright ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height));
+  root.classList.toggle("clipped", standalone && window.innerHeight < screenHeight);
   root.classList.toggle("keyboard", keyboardOpen);
   if (keyboardOpen) {
     root.style.setProperty("--viewport-top", viewport.offsetTop + "px");
@@ -2727,6 +2737,7 @@ function followKeyboard() {
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", followKeyboard);
   window.visualViewport.addEventListener("scroll", followKeyboard);
+  window.addEventListener("resize", followKeyboard);
   followKeyboard();
 }
 

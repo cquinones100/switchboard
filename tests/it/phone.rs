@@ -1573,7 +1573,7 @@ fn the_composer_spaces_its_text_box_evenly() {
         (".composer", "padding: var(--s2);"),
         (
             ".composer",
-            "padding-bottom: max(var(--s2), env(safe-area-inset-bottom) - var(--s2));",
+            "padding-bottom: max(var(--s2), var(--inset-bottom) - var(--s2));",
         ),
         (".keyboard .composer", "padding-bottom: var(--s2);"),
         (".screen.channel-screen", "padding-bottom: 0;"),
@@ -1644,6 +1644,48 @@ console.log("closed again=" + classes.has("keyboard") + " " + app());
         ],
         "{stdout}"
     );
+}
+
+/// A home-screen app cut short above the home indicator (assets/phone/app.js's
+/// `followKeyboard`): marked clipped while the window is shorter than the
+/// screen's upright side, and not once it reaches it, run in Node over a
+/// stand-in window; skipped without Node.
+#[test]
+fn a_home_screen_app_cut_short_is_marked_clipped() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const classes = new Set();
+const vars = new Map();
+const viewport = { height: 873, offsetTop: 0, addEventListener() {} };
+const win = { addEventListener: () => {}, innerWidth: 430, innerHeight: 873, visualViewport: viewport };
+const ctx = vm.createContext({
+  document: {
+    getElementById: () => null,
+    addEventListener: () => {},
+    documentElement: {
+      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+      style: { setProperty: (k, v) => vars.set(k, v), removeProperty: (k) => vars.delete(k) },
+    },
+  },
+  navigator: { standalone: true },
+  screen: { width: 430, height: 932 },
+  window: win,
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+console.log("short=" + classes.has("clipped"));
+win.innerHeight = 932;
+viewport.height = 932;
+vm.runInContext("followKeyboard()", ctx);
+console.log("whole=" + classes.has("clipped"));
+"#;
+    let Some(stdout) = run_app_js(script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines, ["short=true", "whole=false"], "{stdout}");
 }
 
 /// What the phone's Close tab asks of the server: a Claude tab closed and

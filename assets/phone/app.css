@@ -6,6 +6,9 @@
    mark and chip, send lighting up, a press darkening) is color, so nothing
    reflows mid-animation. */
 :root {
+  /* The home indicator's inset, none where iOS cuts the page short above it
+     (app.js's `followKeyboard`). */
+  --inset-bottom: env(safe-area-inset-bottom);
   --bg: #11121a;
   --sunk: #0b0c12;
   --surface: #1b1e29;
@@ -108,13 +111,13 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* The page is sized to the screen, not to html's 100%, which a home-screen
-   app gets as the screen less the status bar's height. With the keyboard up,
-   it follows the visual viewport (app.js's `followKeyboard`), so it ends at
-   the keyboard's top. It is body that is fixed, not #app: a fixed element
-   stacks what it holds apart, and the held row in #app has to show over the
-   menu's veil, which is body's. */
+/* The page is fixed to the window; with the keyboard up, it follows the
+   visual viewport (app.js's `followKeyboard`), so it ends at the keyboard's
+   top. It is body that is fixed, not #app: a fixed element stacks what it
+   holds apart, and the held row in #app has to show over the menu's veil,
+   which is body's. */
 body { position: fixed; inset: 0; height: auto; }
+.clipped { --inset-bottom: 0px; }
 .keyboard body { top: var(--viewport-top); bottom: auto; height: var(--viewport-height); }
 
 #app { height: 100%; position: relative; overflow: hidden; }
@@ -125,7 +128,7 @@ body { position: fixed; inset: 0; height: auto; }
   flex-direction: column;
   height: 100%;
   padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--inset-bottom);
   background: var(--bg);
 }
 /* The keyboard covers the home indicator, so its inset would only stand
@@ -417,7 +420,7 @@ body { position: fixed; inset: 0; height: auto; }
   gap: var(--s2);
   padding: var(--s2);
   /* The home indicator's inset overlaps the spacing below the controls. */
-  padding-bottom: max(var(--s2), env(safe-area-inset-bottom) - var(--s2));
+  padding-bottom: max(var(--s2), var(--inset-bottom) - var(--s2));
   border-top: 1px solid var(--line);
   background: var(--bg);
 }
@@ -486,7 +489,7 @@ body { position: fixed; inset: 0; height: auto; }
   background: #000;
   display: grid;
   place-items: center;
-  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  padding: env(safe-area-inset-top) 0 var(--inset-bottom);
   overflow: hidden;
   /* Its pinch and drag are app.js's own, the one zoom in the app. */
   touch-action: none;
@@ -534,7 +537,7 @@ body { position: fixed; inset: 0; height: auto; }
   z-index: 12;
   left: var(--edge);
   right: var(--edge);
-  bottom: calc(80px + env(safe-area-inset-bottom));
+  bottom: calc(80px + var(--inset-bottom));
   display: flex;
   align-items: center;
   min-height: var(--tap);
@@ -604,7 +607,7 @@ body.refused p { color: var(--dim); }
 .box.sheet {
   left: var(--s2);
   right: var(--s2);
-  bottom: calc(var(--s2) + env(safe-area-inset-bottom));
+  bottom: calc(var(--s2) + var(--inset-bottom));
   max-height: calc(100% - 2 * var(--s2));
   overflow-y: auto;
   padding: 0 var(--s4) var(--s4);
@@ -659,7 +662,7 @@ body.refused p { color: var(--dim); }
   background: var(--bg);
   border-left: 1px solid var(--line);
   padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--inset-bottom);
   box-shadow: -12px 0 28px rgba(0, 0, 0, 0.45);
   touch-action: pan-y;
 }
