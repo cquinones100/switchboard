@@ -349,6 +349,24 @@ impl Server {
         self.usage.views.get(&kind).cloned().unwrap_or_default()
     }
 
+    /// The phone's panel lists a view: it is worked out again when it
+    /// hasn't been within `every`, a slower pace than mission control
+    /// showing it keeps, since the phone app follows the server whether or
+    /// not a phone has it open.
+    pub(crate) fn usage_keep_within(&mut self, kind: ViewKind, every: Duration) {
+        if !settings::is_on(kind.setting()) || self.usage_in_flight(kind) {
+            return;
+        }
+        let due = self
+            .usage
+            .asked
+            .get(&kind)
+            .is_none_or(|at| at.elapsed() >= every);
+        if due {
+            self.usage_refresh(kind);
+        }
+    }
+
     fn usage_wanted(&self, kind: ViewKind, now: Instant) -> bool {
         // M-o's picker lists Reopen with the view turned off too.
         (kind == ViewKind::Reopen || settings::is_on(kind.setting()))
@@ -385,7 +403,13 @@ impl Server {
     }
 
     fn usage_set_view(&mut self, kind: ViewKind, data: ViewData) {
-        let changed = self.usage.views.get(&kind) != Some(&data);
+        // When it was worked out alone changes nothing drawn.
+        let changed = self.usage.views.get(&kind).is_none_or(|was| {
+            ViewData {
+                at: data.at,
+                ..was.clone()
+            } != data
+        });
         self.usage.views.insert(kind, data);
         if changed {
             self.usage_redraw();

@@ -9,7 +9,7 @@
 //! toast. One the phone leaves out (`views::kind_of`), or no longer
 //! offered, is refused. Settings' `phone_views` off sends no views and
 //! refuses both. The Usage view goes as its board's numbers
-//! (`views::usage_json`), kept worked out while the phone lists it, and
+//! (`views::usage_json`), worked out again at most once a minute for it, and
 //! refuses both commands: nothing on it acts. `phone::views` sorts what
 //! they give; this only reaches the server for it. New with the phone's
 //! panel.
@@ -36,6 +36,10 @@ use super::views::{self, Kind};
 /// worked out again, so a burst of changes builds them once.
 pub(crate) const VIEWS_EVERY: Duration = Duration::from_secs(1);
 
+/// The longest the Usage view the phone lists goes before it is worked
+/// out again: its limits and spend move by the minute.
+const USAGE_EVERY: Duration = Duration::from_secs(60);
+
 /// What the server says when a tap names something that has gone.
 const GONE: &str = "That has changed since the menu opened.";
 
@@ -61,15 +65,14 @@ struct Offered {
 impl Server {
     /// The views mission control shows that the phone lists, in the
     /// phone's order: `None` while Settings' `phone_views` is off. The
-    /// Usage view is worked out off the task only while wanted, so the
-    /// phone wants it as mission control does each time it draws it.
+    /// Usage view is worked out off the task at most every `USAGE_EVERY`
+    /// for the phone, which the phone app follows whether or not a phone
+    /// has it open.
     fn phone_shown_views(&mut self) -> Option<Vec<View>> {
         if !settings::is_on("phone_views") {
             return None;
         }
-        if settings::is_on(ViewKind::Usage.setting()) {
-            self.want_view(ViewKind::Usage);
-        }
+        self.usage_keep_within(ViewKind::Usage, USAGE_EVERY);
         let look = NoticeLook::every(views::SCREENFUL);
         let all = self.mission_views(false, false, false, &look);
         Some(
