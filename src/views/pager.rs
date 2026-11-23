@@ -196,6 +196,9 @@ pub struct Pager {
     vim: Editor,
     /// How a yank reaches the clipboard.
     copy: fn(&str) -> Result<(), String>,
+    /// Vim's column from before a new layout, until its cursor is put back
+    /// on its line in it (`put_cursor_back`).
+    kept_col: Option<usize>,
     /// What the prompt line says for a moment ("Pattern not found").
     note: Option<String>,
     /// The page being read, which o opens.
@@ -262,6 +265,7 @@ impl Pager {
                 vim
             },
             copy: |text| crate::platform::copy(text).map_err(|e| e.to_string()),
+            kept_col: None,
             note: None,
             url: None,
             pictures: None,
@@ -359,6 +363,9 @@ impl Pager {
         let lines: Vec<String> = self.doc.lines.iter().map(|l| l.plain()).collect();
         let text = Text::from_lines(&lines);
         let first = self.vim.doc.text.lines() == [""];
+        // The column from before any new layout, which a move onto the
+        // cursor's line in it keeps, whatever the text Vim held then.
+        let col = self.kept_col.unwrap_or(self.vim.col());
         if text != self.vim.doc.text {
             // The text laid out again (a resize, a picture arriving, a new
             // copy read) taken in as a change from outside, so the marks
@@ -369,9 +376,9 @@ impl Pager {
             }
             self.vim.change_outside(|doc| doc.text = text);
         }
-        if first || self.vim.row() != self.cursor {
+        if first || self.vim.row() != self.cursor || col != self.vim.col() {
             // A new view opens on its line's text, past its margin.
-            let col = match self.vim.col() {
+            let col = match col {
                 0 => lines
                     .get(self.cursor)
                     .map_or(0, |l| l.len() - l.trim_start().len()),
@@ -499,6 +506,10 @@ impl Pager {
     /// Laid out at the pane's width, and again a column narrower when it
     /// runs past the screen with no panel beside it, for the scroll bar.
     fn lay_out(&mut self) {
+        // Vim's column, kept until its cursor is put back on its line.
+        if self.has_cursor() {
+            self.kept_col.get_or_insert(self.vim.col());
+        }
         self.bar = false;
         self.lay_out_at_width();
         let overflows = crate::ui::kit::has_scrollbar(self.doc.lines.len(), self.body());
@@ -508,7 +519,9 @@ impl Pager {
             self.cols += 1;
             self.bar = true;
         }
-        // Vim reads the text as it is now drawn, whatever laid it out again.
+        // Vim reads the text as it is now drawn, whatever laid it out
+        // again; its cursor goes to the cursor's line once that is found
+        // in the new layout (`put_cursor_back`), with its column.
         self.vim_follow_layout();
     }
 
@@ -677,6 +690,7 @@ impl Pager {
         self.cursor = self.snap(at.map_or(self.top, |a| self.doc.line_at(a)));
         self.show_cursor();
         self.vim_follow_layout();
+        self.kept_col = None;
     }
 
     /// The first row of the picture line `i` is a row of, or `i`.
@@ -1120,6 +1134,7 @@ impl Pager {
     /// size), else read-only Vim's; None for one neither takes, which the
     /// rest of `key` does as less's.
     fn vim_key(&mut self, key: KeyEvent) -> Option<Act> {
+        self.kept_col = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let idle = self.vim.mode == Mode::Normal && self.vim.no_keys();
         if idle {
@@ -1313,6 +1328,7 @@ impl Pager {
     }
 
     pub fn mouse(&mut self, mouse: MouseEvent) -> Act {
+        self.kept_col = None;
         if let Some(menu) = &mut self.menu {
             let came = menu.mouse(mouse);
             return self.menu_came(came);
@@ -2329,6 +2345,20 @@ mod tests {
         assert_eq!(pager.vim.mode, Mode::Normal, "the selection ended");
         press(&mut pager, "'a");
         assert!(cursor_line(&pager).contains(marked.trim().split(' ').next().unwrap()));
+    }
+
+    #[test]
+    fn a_new_layout_keeps_the_cursor_s_column_on_its_line() {
+        let text = format!("{}\n\n```\nfoo bar baz\n```", "word ".repeat(30));
+        let mut pager = Pager::new(markdown(&text), 100, 20).with_cursor(true);
+        press(&mut pager, "/baz");
+        pager.key(key(KeyCode::Enter));
+        let line = cursor_line(&pager);
+        let at = pager.vim.col();
+        assert_eq!(Some(at), line.find("baz"));
+        pager.resize(40, 20);
+        assert_eq!(cursor_line(&pager), line, "the same line");
+        assert_eq!(pager.vim.col(), at, "and column");
     }
 
     #[test]
