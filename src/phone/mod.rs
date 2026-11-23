@@ -2,6 +2,8 @@
 //! messaging your Claude tabs from your phone, served from this binary on
 //! your tailnet alone. The server's side is `serve`, the commands it asks
 //! over the socket.
+#[cfg(feature = "net")]
+pub mod build;
 pub mod cli;
 pub mod config;
 pub mod drawer;

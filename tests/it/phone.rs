@@ -1016,6 +1016,43 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
 /// The drawer's search (assets/phone/app.js's `groups`), run in Node over
 /// tabs as the phone reads them; skipped without Node.
+/// The drawer ends on the app's build, short, and says the worker is behind
+/// while its build isn't the page's; every request names both builds.
+#[test]
+fn the_drawer_ends_on_the_build_and_says_when_the_worker_is_behind() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const source = fs.readFileSync(process.argv[1], "utf8").replace('const BUILD = "dev";', 'const BUILD = "1a2b3c4d5e6f";');
+const ctx = vm.createContext({
+  Node: class Node {},
+  document: { getElementById: () => null, addEventListener: () => {}, createElement: (tag) => ({ tag, children: [], className: "", setAttribute() {}, append(...k) { this.children.push(...k); } }), createTextNode: (text) => ({ text }) },
+  window: { addEventListener: () => {} },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(source, ctx);
+const line = (worker) => vm.runInContext(`
+  workerBuild = ${JSON.stringify(worker)};
+  ((l) => l.className + "=" + l.children.map((c) => c.text).join("") + "|" + buildHeader()["X-Switchboard-Build"])(buildLine());
+`, ctx);
+for (const worker of [null, "none", "1a2b3c4d5e6f", "9f8e7d6c5b4a"]) console.log(line(worker));
+"#;
+    let Some(out) = run_app_js(script) else {
+        return;
+    };
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        [
+            "build-line=build 1a2b3c4|page=1a2b3c4d5e6f",
+            "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=none",
+            "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
+            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+        ],
+        "{out}"
+    );
+}
+
 #[test]
 fn the_drawers_search_keeps_the_tabs_matching_in_their_groups() {
     // The page's own globals stood in for, its start left waiting on a
@@ -2418,6 +2455,18 @@ mod preview_server {
         assert_eq!(tabs["tabs"].as_array().unwrap().len(), 20);
         let turns = json_of(at, "/api/tabs/13/turns");
         assert!(!turns["messages"].as_array().unwrap().is_empty());
+    }
+
+    /// The preview stamps app.js with its own build, as the phone server
+    /// stamps app.js and sw.js.
+    #[test]
+    fn the_preview_stamps_the_app_with_its_builds_commit() {
+        let at = preview(&assets());
+        let (status, app) = http(at, "GET", "/app.js", None);
+        assert_eq!(status, 200);
+        let stamp = format!("const BUILD = \"{}", env!("SWITCHBOARD_COMMIT"));
+        assert!(app.contains(&stamp), "{}", &app[..app.len().min(600)]);
+        assert!(!app.contains("const BUILD = \"dev\";"));
     }
 
     #[test]

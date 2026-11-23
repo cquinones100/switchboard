@@ -407,6 +407,16 @@ async fn app_file(State(preview): State<Arc<Preview>>, name: &'static str) -> Re
             with_inset_variables(&String::from_utf8_lossy(&bytes)),
         )
             .into_response(),
+        // Stamped with the preview's own build, as the phone server stamps it.
+        Ok(bytes) if name == "app.js" => {
+            let clone = preview.dir.parent().and_then(Path::parent);
+            let build = super::build::of(clone);
+            (
+                [(header::CONTENT_TYPE, kind)],
+                super::build::stamped(&String::from_utf8_lossy(&bytes), &build),
+            )
+                .into_response()
+        }
         Ok(bytes) => ([(header::CONTENT_TYPE, kind)], bytes).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "Not here").into_response(),
     }

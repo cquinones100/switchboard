@@ -8,6 +8,10 @@
 // wait over the composer and go with the message, kept on the computer first.
 "use strict";
 
+// The commit of the build serving the page, put in as it is served
+// (src/phone/build.rs).
+const BUILD = "dev";
+
 const app = document.getElementById("app");
 const state = {
   me: null,
@@ -73,10 +77,36 @@ function buzz() {
   label.remove();
 }
 
+// The controlling service worker's build: "none" while no worker controls
+// the page, "unknown" for one too old to answer, null until it answers.
+let workerBuild = null;
+
+// Each request says which builds the page and its worker are, so the
+// computer's log says when a phone runs one from before a restart.
+function buildHeader() {
+  return { "X-Switchboard-Build": "page=" + BUILD + (workerBuild ? " worker=" + workerBuild : "") };
+}
+
+async function askWorkerBuild() {
+  const worker = navigator.serviceWorker && navigator.serviceWorker.controller;
+  const answer = worker ? await askWorker(worker, { build: true }).catch(() => ({})) : {};
+  workerBuild = worker ? String(answer.build || "unknown") : "none";
+  const line = app.querySelector(".build-line");
+  if (line) line.replaceWith(buildLine());
+}
+
+// The dim line at the end of the drawer: the app's build, short, or, while
+// the worker running isn't the page's, how to take up the new one.
+function buildLine() {
+  const workerBehind = workerBuild && workerBuild !== "none" && workerBuild !== BUILD;
+  const short = BUILD.split("+").map((c) => c.slice(0, 7)).join("+");
+  return el("div", { class: "build-line" + (workerBehind ? " behind" : "") }, workerBehind ? "worker behind, close and reopen the app" : "build " + short);
+}
+
 async function api(path, body) {
   const res = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...buildHeader() },
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: "same-origin",
   });
@@ -501,6 +531,7 @@ function drawerList() {
     }
     list.append(g);
   }
+  list.append(buildLine());
   return list;
 }
 
@@ -1255,7 +1286,7 @@ function full() {
 async function upload(n, file) {
   const res = await fetch("/api/tabs/" + n + "/image", {
     method: "POST",
-    headers: { "Content-Type": file.type || "application/octet-stream" },
+    headers: { "Content-Type": file.type || "application/octet-stream", ...buildHeader() },
     body: file,
     credentials: "same-origin",
   });
@@ -2243,7 +2274,9 @@ function tabsRead() {
   openTapped(posted);
 }
 
-function askTapped(worker) {
+// The worker's answer to `message`, on a port of its own; {} when it gives
+// none in two seconds.
+function askWorker(worker, message) {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     const done = (answer) => {
@@ -2253,13 +2286,13 @@ function askTapped(worker) {
     };
     const timer = setTimeout(done, 2000);
     channel.port1.onmessage = (event) => done(event.data);
-    worker.postMessage({ tapped: true }, [channel.port2]);
+    worker.postMessage(message, [channel.port2]);
   });
 }
 
 async function openTapped(posted) {
   const worker = navigator.serviceWorker && navigator.serviceWorker.controller;
-  const kept = worker ? await askTapped(worker).catch(() => ({})) : {};
+  const kept = worker ? await askWorker(worker, { tapped: true }).catch(() => ({})) : {};
   // The tap a message named when the worker kept none (it couldn't, or an
   // older worker doesn't answer).
   const tapped = kept.tab ? kept : posted || {};
@@ -2300,6 +2333,7 @@ window.addEventListener("online", cameBack);
 async function offerPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
   const registration = await navigator.serviceWorker.register("/sw.js");
+  navigator.serviceWorker.addEventListener("controllerchange", () => askWorkerBuild());
   navigator.serviceWorker.addEventListener("message", (event) => {
     // Read the tabs again first, since a page that slept holds old ones; the
     // tab is taken from what the worker keeps, so it opens once.
@@ -2326,7 +2360,10 @@ async function offerPush() {
   } }, "Notify me when a tab waits on me");
   const drawerEnd = () => {
     const d = app.querySelector(".drawer");
-    if (d && !d.contains(ask)) d.append(ask);
+    if (!d || d.contains(ask)) return;
+    const line = d.querySelector(".build-line");
+    if (line) d.insertBefore(ask, line);
+    else d.append(ask);
   };
   drawerEnd();
   new MutationObserver(drawerEnd).observe(app, { childList: true, subtree: true });
@@ -2349,8 +2386,9 @@ async function reach() {
 }
 
 async function start() {
+  if (workerBuild === null) askWorkerBuild().catch(() => {});
   try {
-    const res = await fetch("/api/me", { credentials: "same-origin" });
+    const res = await fetch("/api/me", { credentials: "same-origin", headers: buildHeader() });
     if (!res.ok) return refused("Not for this device", "This page answers one person's devices alone.");
     state.me = await res.json();
   } catch (_) {
