@@ -32,11 +32,18 @@ static KINDS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     vec![
         (
             "pr",
-            Regex::new(&format!(r"(?m){AT}gh\s+pr\s+create\b")).expect("a regex"),
+            // land-lock open-pr pushes and opens the PR in one.
+            Regex::new(&format!(
+                r"(?m){AT}(?:gh\s+pr\s+create|switchboard\s+land-lock\s+open-pr)\b"
+            ))
+            .expect("a regex"),
         ),
         (
             "push",
-            Regex::new(&format!(r"(?m){AT}{GIT}push\b")).expect("a regex"),
+            Regex::new(&format!(
+                r"(?m){AT}(?:{GIT}push|switchboard\s+land-lock\s+open-pr)\b"
+            ))
+            .expect("a regex"),
         ),
         (
             "commit",
@@ -106,7 +113,7 @@ pub fn milestone_kinds(command: &str) -> Vec<&'static str> {
 /// A command that never ran says nothing about a commit or a push in it:
 /// one a hook blocked, one you declined, or one the shell couldn't parse.
 static NOTHING_RAN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^PreToolUse:\S+ hook error|doesn't want to proceed|^\(eval\):\d+: (?:unmatched|parse error)|^(?:zsh|bash|sh): (?:-c: )?(?:line \d+: )?(?:syntax error|parse error)").expect("a regex")
+    Regex::new(r"(?m)^PreToolUse:\S+ hook error|^why: |doesn't want to proceed|^\(eval\):\d+: (?:unmatched|parse error)|^(?:zsh|bash|sh): (?:-c: )?(?:line \d+: )?(?:syntax error|parse error)").expect("a regex")
 });
 
 /// The ways `milestone_line` begins a failure's line.
@@ -432,6 +439,10 @@ mod tests {
         assert_eq!(milestone_kinds("cd w; git commit -am fix"), ["commit"]);
         assert_eq!(milestone_kinds("x=$(git push 2>&1)"), ["push"]);
         assert_eq!(milestone_kinds("gh pr create --fill"), ["pr"]);
+        assert_eq!(
+            milestone_kinds("switchboard land-lock open-pr --title x --body-file b.md"),
+            ["pr", "push"]
+        );
         assert!(
             milestone_kinds("cat > notes.md <<'EOF'\ngit push\ngh pr create\nEOF").is_empty(),
             "a heredoc's body is text"

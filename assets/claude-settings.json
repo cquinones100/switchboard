@@ -46,6 +46,7 @@
       "Bash(switchboard land-lock landed *)",
       "Bash(switchboard land-lock autolanded *)",
       "Bash(switchboard land-lock push)",
+      "Bash(switchboard land-lock open-pr *)",
       "Bash(switchboard land-lock squash *)",
       "Bash(switchboard land-lock test)",
       "Bash(switchboard land-lock test --base *)",

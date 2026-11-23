@@ -23,7 +23,10 @@
 //!   `hooks/` by `plugin::files`): a `tool.check` hook, which Claude Code
 //!   runs as it decides whether a call may run, in subagents too, with its
 //!   own verdict to hand. It allows one of the asset's `switchboard`
-//!   commands that the instructions name (`every_turn`), as one simple
+//!   commands that the instructions name (`every_turn`), and the landing's
+//!   own, `switchboard land-lock open-pr` and `item-done` (`LANDING`),
+//!   which queue-and-clean runs on a turn that read its skill rather than
+//!   started it, where its `allowed-tools` don't apply, each as one simple
 //!   command, only when that verdict is the plain ask of a call no rule,
 //!   hook, check or limit decided, so a rule of yours, a read outside the
 //!   working directories or an organization's limit still decides, and
@@ -108,13 +111,35 @@ pub fn every_turn() -> Vec<String> {
         .collect()
 }
 
+/// The asset's rules the module allows besides `every_turn`: the landing's
+/// own, which `/queue-and-clean` runs, often on a turn that read its skill
+/// rather than started it, where auto mode's classifier would otherwise
+/// judge a command that pushes and opens a PR (`land-lock open-pr`, which
+/// checks in code that the tab lands without asking and its review came
+/// back clean) or one that comments on an issue and removes a worktree
+/// (`item-done`). The module takes each only with the options
+/// queue-and-clean gives it (`SHAPES` in permissions.js), never
+/// `item-done`'s worktree path or `--checked-in`, whose branch it takes on
+/// trust.
+const LANDING: &[&str] = &[
+    "Bash(switchboard item-done *)",
+    "Bash(switchboard land-lock open-pr *)",
+];
+
+/// Every rule the module allows: `every_turn`'s and `LANDING`.
+fn allowed() -> Vec<String> {
+    let mut all = every_turn();
+    all.extend(LANDING.iter().map(|r| r.to_string()));
+    all
+}
+
 /// The module as the plugin holds it: `SOURCE` with its lists filled in.
 pub fn module() -> String {
     let list = |rules: Vec<String>| serde_json::to_string(&rules).unwrap_or_else(|_| "[]".into());
     SOURCE
         .replacen(
             ALLOW_LINE,
-            &format!("const ALLOW = {};", list(every_turn())),
+            &format!("const ALLOW = {};", list(allowed())),
             1,
         )
         .replacen(
@@ -203,6 +228,12 @@ mod tests {
         let module = module();
         assert!(!module.contains(ALLOW_LINE) && !module.contains(DENY_LINE));
         assert!(module.contains(r#""Bash(switchboard tabs)""#));
+        assert!(module.contains(r#""Bash(switchboard item-done *)""#));
+        assert!(module.contains(r#""Bash(switchboard land-lock open-pr *)""#));
+        let allow = rules("allow");
+        for rule in LANDING {
+            assert!(allow.iter().any(|r| r == rule), "{rule} isn't the asset's");
+        }
         assert!(module.contains(r#""Read(.env)""#) && module.contains(r#""Bash(git pull)""#));
         assert!(module.contains("['switchboard', 'setting', SETTING]"));
         assert!(module.contains("const SETTING = 'pane_permissions';"));
@@ -337,6 +368,51 @@ mod tests {
             ("switchboard tabs\nrm x", false),
             ("switchboard show a\\ b", false),
             ("switchboard codex-review", false),
+            (
+                "switchboard item-done --says 'Make the hook allow it.' --close-issue",
+                true,
+            ),
+            (
+                "switchboard item-done --says 'Done.' --hash abc1234 --without-asking",
+                true,
+            ),
+            ("switchboard item-done", false),
+            (
+                "switchboard land-lock open-pr --title 'Allow item-done in auto mode' --body-file /tmp/body.md",
+                true,
+            ),
+            (
+                "switchboard land-lock open-pr --title 'x' --body-file b.md --draft",
+                false,
+            ),
+            (
+                "switchboard land-lock open-pr --title 'x' --body-file b.md && git push -f",
+                false,
+            ),
+            ("switchboard land-lock push", false),
+            (
+                r"switchboard item-done --says 'Keep the tab'\''s note.' --close-issue",
+                true,
+            ),
+            (
+                "switchboard item-done --says \"Keep the tab's note.\" --merged-pr-head abc --hash abc1234",
+                true,
+            ),
+            ("switchboard item-done --says 'Done.' --hash", false),
+            ("switchboard item-done --says 'Done.' /tmp/other", false),
+            (
+                "switchboard item-done --says 'Done.' --checked-in main",
+                false,
+            ),
+            ("switchboard item-done --says 'Done.' --hash=abc", false),
+            (r"switchboard show a\'b", true),
+            (r"switchboard show a\", false),
+            (
+                "switchboard item-done --says 'Done.' --close-issue && rm -rf x",
+                false,
+            ),
+            ("cd x && switchboard item-done --says 'Done.'", false),
+            ("switchboard item-done --says \"$(id)\"", false),
             ("git status", false),
         ];
         let deny = [

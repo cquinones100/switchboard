@@ -1,7 +1,8 @@
 //! The pull requests a Claude session opens or looks at, read from its
 //! own tool calls as they end: Claude Code hands every `PostToolUse` to the
 //! server (`switchboard hook`), with the command and what it printed, so a
-//! Bash call running `gh pr create` or `gh pr view` gives the PRs whose
+//! Bash call running `gh pr create` (or `switchboard land-lock open-pr`,
+//! which runs it) or `gh pr view` gives the PRs whose
 //! addresses its output carries, from any branch, worktree or repository,
 //! which the tab then follows (`tabs::prs`). New code, with nothing of the tmux version's before it.
 //!
@@ -36,8 +37,12 @@ pub struct Opened {
 /// The PRs a `PostToolUse` hook's JSON says its call opened or looked at,
 /// each once, in the order its output gave them.
 pub fn opened(payload: &Value) -> Vec<Opened> {
-    static GH_PR: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?:^|[\s;&|(`])gh\s+pr\s+(?:create|view)\b").unwrap());
+    static GH_PR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?:^|[\s;&|(`])(?:gh\s+pr\s+(?:create|view)|switchboard\s+land-lock\s+open-pr)\b",
+        )
+        .unwrap()
+    });
     static URL: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^(?:url:\s*)?https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$").unwrap()
     });
@@ -48,8 +53,10 @@ pub fn opened(payload: &Value) -> Vec<Opened> {
         .pointer("/tool_input/command")
         .and_then(Value::as_str)
         .unwrap_or("");
-    static CREATE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?:^|[\s;&|(`])gh\s+pr\s+create\b").unwrap());
+    static CREATE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?:^|[\s;&|(`])(?:gh\s+pr\s+create|switchboard\s+land-lock\s+open-pr)\b")
+            .unwrap()
+    });
     if !GH_PR.is_match(command) {
         return Vec::new();
     }
@@ -142,6 +149,11 @@ mod tests {
             "Creating pull request for web-142 into main in acme/web-app\n\nhttps://github.com/acme/web-app/pull/2040\n",
         );
         assert_eq!(opened(&made), vec![by_create("acme", "web-app", 2040)]);
+        let landed = bash(
+            "switchboard land-lock open-pr --title 'Map' --body-file /tmp/b.md",
+            "#12345\nhttps://github.com/acme/web-app/pull/12345\n",
+        );
+        assert_eq!(opened(&landed), vec![by_create("acme", "web-app", 12345)]);
     }
 
     #[test]
