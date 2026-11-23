@@ -627,8 +627,8 @@ impl Server {
                         "usage: switchboard coordinator-ordered <owner/repo#number: title>... [--left <owner/repo#number>...]",
                     );
                 }
-                self.autopilot_issues_queued(first.to_vec(), left);
-                Ok(Reply::ok(""))
+                self.autopilot_issues_queued(first.to_vec(), left)
+                    .map(|()| Reply::ok(""))
             }
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
             "save" => super::persist::save_now(self)

@@ -1336,9 +1336,9 @@ impl Server {
             move |server, client, done| match done {
                 Ok(()) => {
                     if to == super::issues::HIGHEST {
-                        server.autopilot_issues_queued(vec![text], &[]);
+                        let _ = server.autopilot_issues_queued(vec![text], &[]);
                     } else {
-                        server
+                        let _ = server
                             .autopilot_issues_queued(Vec::new(), std::slice::from_ref(&reference));
                     }
                     server.mission_note(client, format!("{reference} is priority {to}"));
@@ -1356,7 +1356,11 @@ impl Server {
     /// again, once, so nothing is opened from half of a new order. The
     /// board's Move up and Move down, and the coordinator's
     /// `coordinator-order` (`coordinator-ordered`), end here.
-    pub fn autopilot_issues_queued(&mut self, first: Vec<String>, out: &[String]) {
+    pub fn autopilot_issues_queued(
+        &mut self,
+        first: Vec<String>,
+        out: &[String],
+    ) -> Result<(), String> {
         let named: Vec<String> = first
             .iter()
             .filter_map(|t| super::issues::reference_in(t))
@@ -1376,13 +1380,20 @@ impl Server {
             });
             mode.next.splice(0..0, front);
         });
-        match written {
-            Ok(mode) => self.autopilot.mode = mode,
-            Err(e) => eprintln!("autopilot: couldn't write its queue: {e}"),
-        }
+        let written = match written {
+            Ok(mode) => {
+                self.autopilot.mode = mode;
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("autopilot: couldn't write its queue: {e}");
+                Err(format!("couldn't write autopilot's queue: {e}"))
+            }
+        };
         super::issues::forget(&paths::state_dir());
         self.autopilot.pilot.reset();
         self.autopilot_tick();
+        written
     }
 
     /// Whether `tab`'s landing pushed or merged, which a tab merely back in
@@ -2206,9 +2217,17 @@ impl Server {
                     mode.skipped.push(done);
                 }
             }
-            // An item put next is next no more once it lands.
-            mode.next
-                .retain(|x| x.note != landed.note || x.text != landed.item);
+            // An item put next is next no more once it lands; an issue
+            // whatever note it was put next under, as `next_here` reads it.
+            let issue_of = |text: &str| {
+                super::issues::reference_in(text).map(|(r, n)| format!("{r}#{n}").to_lowercase())
+            };
+            let landed_issue = issue_of(&landed.item);
+            mode.next.retain(|x| {
+                let same_item = x.note == landed.note && x.text == landed.item;
+                let same_issue = landed_issue.is_some() && issue_of(&x.text) == landed_issue;
+                !same_item && !same_issue
+            });
             mode.landed.push(landed);
         });
         match written {
