@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Mission control's views in the phone app's drawer</title>
+<title>Mission control's views in a panel the phone app opens from its right edge, as the drawer of tabs opens from its left, with no button on the screen</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -274,11 +274,13 @@ const composer = (sx, y, text, placeholder, live) => {
 // THE PROMPT CARD: what Claude waits on, under its newest turn, in the needs-you tone; each option a button, its words dim under it.
 const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: 'needs', title, right, edge: 'y', rightTone: 'y' });
 
-// MISSION CONTROL'S VIEWS ON THE PHONE, from board 184's kit: the drawer gains a row of views under its search, Tabs first
-// (the drawer as it is), then Landing, Autopilot, PRs, CI and Notifications, each while its setting is on. Choosing one
-// puts that view's items in the drawer's list, in the groups mission control files them under, from the same items the
-// server builds for it; the search filters them as / does. A tap on an item opens its menu; ⋯ in the drawer's head opens the
-// view's own menu (m's). The row scrolls sideways; the list slides with it.
+// MISSION CONTROL'S VIEWS ON THE PHONE, from board 184's kit: a panel that comes in from the right edge, as the drawer of tabs
+// comes in from the left, with no button of its own on the screen. A swipe left from the right edge, on a channel or on the
+// drawer, slides it in over what is there, following the finger; a swipe right, or a tap on what still shows at its left, puts
+// it away. It opens on the list of views, Landing, Autopilot, PRs, CI and Notifications, each while its setting is on, each
+// with what needs you in it counted; a tap on one slides its items in, in the groups mission control files them under, from
+// the same items the server builds for it, with ‹ back to the list. A tap on an item opens its menu; ⋯ opens the view's own
+// menu (m's). The first time the app opens with the panel unseen, a toast says to swipe from the right edge for it.
 const C = { bg: '#11121a', surface: '#1b1e29', raised: '#20243a', chosen: '#262b40', line: '#3a3f52', text: '#c9cdd9', dim: '#8d93a8', faint: '#565b6e', accent: '#5fd7ff', ink: '#11131a', yellow: '#f2c56b', ybg: '#3a3220', green: '#7fd18b', gbg: '#1d3a2a', blue: '#82aaff', bbg: '#20304f', red: '#ff8a94', claude: '#d97757', you: '#5f9fd7' };
 const PT = (pt) => pt / 22, Wd = (pt) => pt / 10.4;
 // TEXT AS AN IMAGE, so it sits on the controls drawn as images: one color, one size, vertically centered in its box.
@@ -328,26 +330,25 @@ const header = (sx, y, title, chip) => {
   K(sx, y + PT(48), 36, 0.06, 'background:' + C.line);
 };
 
-// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
-// right edge, faded, as it scrolls.
-const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
-const viewRow = (sx, y, chosen, none) => {
-  let x = sx + 1.5;
-  const at = VIEWS.findIndex((v) => v[0] === chosen);
-  if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
-  for (const [name, c] of VIEWS.slice(Math.max(0, at - 1))) {
-    const n = name === none ? '' : c, words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
-    if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
-    btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
-    x += w + Wd(8);
-  }
+// THE PANEL'S HEAD: 48 pt, a filled icon button at each end as the channel's header: › to put the panel away on the list
+// (‹ back to the list on a view), the title, and ⋯ for the view's own menu.
+const pHead = (x, w, left, title, more) => {
+  icon(x + 0.4, 3, left, 'fill');
+  tx(x + 5.4, 3, w - 11, PT(44), title, C.text, 12, true);
+  if (more) icon(x + w - 0.4 - Wd(44), 3, '⋯', 'fill');
+  K(x, 3 + PT(48), w, 0.06, 'background:' + C.line);
 };
-// THE DRAWER'S HEAD: the workspace's name, live, and ⋯ for the chosen view's own menu; then the search, then the views.
-const dHead = (sx, chosen, placeholder, none) => {
-  tx(sx + 1, 3, 20, PT(44), 'Switchboard  studio', C.text, 12, true); chipK(sx + 22, 3.45, 'live', C.green, C.gbg);
-  icon(sx + 35.6 - Wd(44), 3, '⋯', 'fill');
-  field(sx + 1.5, 5.6, 33, '', placeholder);
-  viewRow(sx, 8.2, chosen, none);
+// THE LIST OF VIEWS: a row each, 56 pt as a tab's: the mark of what most needs you in it, its name, what it holds in a line,
+// and what needs you counted at the right, in its tone; none when nothing does.
+const VIEWS = [['landing', 'Landing', 'train 14 · 2 queued', '', 'm'], ['needs', 'Autopilot', '1 waiting · 1 working', '1', 'y'], ['failed', 'PRs', '1 with changes asked', '1', 'r'], ['failed', 'CI', '1 failing · 1 running', '1', 'r'], ['needs', 'Notifications', '5 today', '5', 'y']];
+const viewList = (x, w, held) => {
+  let y = 7;
+  for (const [st, name, sub, n, tone] of VIEWS) {
+    const bg = name === held ? row(x, y, w, 2, true) : '';
+    mark(x + 2, y, st, bg); put(x + 4, y, name, 't', 'b', bg); put(x + 4, y + 1, sub, 'd', '', bg);
+    if (n) R(x + w - 2, y, n, tone, 'b', bg);
+    y += 3;
+  }
 };
 // AN ITEM: as a tab's row (board 184's, 56 pt): its mark, its title 16 pt, what it says 12 pt dim under it, a fact at the right.
 const vItem = (sx, y, st, title, sub, right, rt, held) => {
@@ -355,8 +356,8 @@ const vItem = (sx, y, st, title, sub, right, rt, held) => {
   mark(sx + 2, y, st, bg); put(sx + 4, y, title, 't', held ? 'b' : '', bg);
   put(sx + 4, y + 1, sub, 'd', '', bg); if (right) R(sx + 34, y, right, rt || 'd', '', bg);
 };
-// A MENU: board 184's box, rising from the screen's foot over a dimmed drawer; its head the item, × at its right; each option
-// a 44 pt row; one that ends something in red. Options that need the computer's screen are left out.
+// A MENU: board 184's box, rising from the screen's foot over the dimmed panel (from its head, for ⋯); its head the item,
+// × at its right; each option a 44 pt row; one that ends something in red; one ending in … asks first.
 const vMenu = (sx, title, opts, top) => {
   K(sx, 2, 36, 42, 'background:#05060acc');
   const h = PT(44) * (opts.length + 1) + 0.4, y = top || 43.4 - h;
@@ -366,24 +367,30 @@ const vMenu = (sx, title, opts, top) => {
   opts.forEach(([o, kind], i) => tx(sx + 2.6, y + PT(44) * (i + 1) + 0.2, 31, PT(44), o, kind === 'danger' ? C.red : C.text, 12));
 };
 
-// 1. THE DRAWER: the views under the search, Tabs chosen, so the list is the tabs as today (cut short here).
-{ const sx = phone(8, 'The drawer: views under search', '1');
-  dHead(sx, 'Tabs', 'Search tabs');
-  let y = 11;
-  label(sx + 1, y, 'Needs you', 'y', 2, sx + 34); y++;
-  rowK(sx, y, 'needs', 2, 'stable note IDs', 'Bash: git push origin main', false); y += 2;
-  rowK(sx, y, 'needs', 6, 'review PR 41', 'asks: which fixture?', false); y += 3;
-  label(sx + 1, y, 'Working', 'b', 2, sx + 34); y++;
-  rowK(sx, y, 'working', 1, 'planning', 'Monitor: fork parity', false); y += 2;
-  rowK(sx, y, 'working', 3, 'M-d uncommitted', 'Edit diffview.lua', false); y += 3;
-  label(sx + 1, y, 'Landing', 'm', 2, sx + 34); y++;
-  rowK(sx, y, 'landing', 5, 'benchmark harness', 'testing in train 14', false); y += 2;
-  rowK(sx, y, 'landing', 7, 'fork parity fixture', 'testing in train 14', false); }
+// 1. MID-SWIPE: a finger drawing in from the right edge of tab 6's channel; the panel follows it over the channel, dimmed.
+{ const sx = phone(8, 'A swipe in from the right edge', '0');
+  icon(sx + 0.4, 3, '☰', 'fill'); K(sx, 3 + PT(48), 10, 0.06, 'background:' + C.line);
+  K(sx + 1, 6.95, Wd(28), PT(28), 'border-radius:50%;background:' + C.claude);
+  T(sx + 4, 7, ['Claude', 't', 'b'], ['  9:38', 'd']);
+  put(sx + 4, 8, 'I read both fixture sets in the', 't'); put(sx + 4, 9, 'PR. The redraw test can time', 't'); put(sx + 4, 10, 'either.', 't');
+  K(sx, 2, 10, 42, 'background:#05060a88');
+  const px = sx + 10, pw = 26;
+  fill(px, 2, pw, 42, '1');
+  K(px - 0.4, 2, 0.4, 42, 'background:linear-gradient(90deg,transparent,#0008)');
+  pHead(px, pw, '›', 'Mission control', false);
+  viewList(px, pw);
+  K(sx + 31, 22, 3, PT(44), 'border-radius:50%;background:#e8e8ee33;border:1px solid #e8e8ee88');
+  tx(sx + 25, 24.4, 9, 1, '← swipe', C.dim, 10, false, 'flex-end'); }
 
-// 2. LANDING: what lands, as mission control's Landing view files it: the train under test, the queue in its order, what landed.
-{ const sx = phone(46, 'Landing, chosen', '1');
-  dHead(sx, 'Landing', 'Search Landing');
-  let y = 11;
+// 2. THE PANEL, OPEN: the list of views.
+{ const sx = phone(46, 'The panel: the views', '1');
+  pHead(sx, 36, '›', 'Mission control', false);
+  viewList(sx, 36, 'Landing'); }
+
+// 3. LANDING: what lands, as mission control's Landing view files it: the train under test, the queue in its order, what landed.
+{ const sx = phone(84, 'A tap on Landing', '1');
+  pHead(sx, 36, '‹', 'Landing', true);
+  let y = 7;
   label(sx + 1, y, 'Train 14 · testing', 'b', 2, sx + 34); y++;
   vItem(sx, y, 'working', '#88 benchmark harness', 'tab 5 · 6 checks running', '4m', 'b'); y += 2;
   vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 7 · 6 checks running', '4m', 'b'); y += 3;
@@ -393,30 +400,16 @@ const vMenu = (sx, title, opts, top) => {
   label(sx + 1, y, 'Landed today', 'g', 1, sx + 34); y++;
   vItem(sx, y, 'passed', '#86 redraw timing', 'train 13 · merged 9:12', '✓', 'g'); }
 
-// 3. AUTOPILOT: its items as its view files them, what waits on you first.
-{ const sx = phone(84, 'Autopilot, chosen', '1');
-  dHead(sx, 'Autopilot', 'Search Autopilot');
-  let y = 11;
-  label(sx + 1, y, 'Waiting on you', 'y', 1, sx + 34); y++;
-  vItem(sx, y, 'needs', 'Fold the drawer groups', 'tab 9 · asks which order', 'Q', 'y'); y += 3;
-  label(sx + 1, y, 'Working', 'b', 1, sx + 34); y++;
-  vItem(sx, y, 'working', 'Retry a failed upload', 'tab 10 · Edit upload.rs', '12m', 'b'); y += 3;
-  label(sx + 1, y, 'Next up', 'd', 2, sx + 34); y++;
-  vItem(sx, y, 'idle', 'Show the reminder time', 'priority 1', '', ''); y += 2;
-  vItem(sx, y, 'idle', 'Name the train on its card', 'priority 2', '', ''); y += 3;
-  label(sx + 1, y, 'Blocked', 'r', 1, sx + 34); y++;
-  vItem(sx, y, 'failed', 'Sync the phone settings', 'after: Retry a failed upload', '', ''); }
-
-// 4. AN ITEM'S MENU: a tap on #93 in Landing opens its menu, mission control's for it, less what needs the computer's
-// screen; Go to tab opens the tab's channel, the link opens and copies on the phone, the rest run on the computer, one ending in … asking first.
+// 4. AN ITEM'S MENU: a tap on #93 opens mission control's menu for it, less what needs the computer's screen; Go to tab opens
+// the tab's channel, the link opens and copies on the phone, the rest run on the computer, one ending in … asking first.
 { const sx = phone(122, 'A tap on #93: its menu', '1');
-  dHead(sx, 'Landing', 'Search Landing');
-  let y = 11;
+  pHead(sx, 36, '‹', 'Landing', true);
+  let y = 7;
   label(sx + 1, y, 'Train 14 · testing', 'b', 2, sx + 34); y++;
   vItem(sx, y, 'working', '#88 benchmark harness', 'tab 5 · 6 checks running', '4m', 'b'); y += 2;
   vItem(sx, y, 'working', '#91 fork parity fixture', 'tab 7 · 6 checks running', '4m', 'b'); y += 3;
   label(sx + 1, y, 'In the queue', 'm', 2, sx + 34); y++;
-  vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · next train', '1st', 'm', true); y += 2;
+  vItem(sx, y, 'queued', '#93 stable note IDs', 'tab 2 · next train', '1st', 'm', true);
   vMenu(sx, '#93 stable note IDs', [['Go to tab 2'], ['Move it down in the merge queue'], ['Open the PR'], ['Copy its link'], ['Take it out of the merge queue…', 'danger']]); }
 // ─────────────────────────────────────────────────────────────────────────────
 

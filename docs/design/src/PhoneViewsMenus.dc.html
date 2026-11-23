@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Notifications on the phone, and each view's own menu from ⋯ in the drawer's head (m's actions over all it shows); a view with nothing to show says so in its own words</title>
+<title>Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), a view with nothing to show, and the toast that says the first time where the panel is</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -274,11 +274,13 @@ const composer = (sx, y, text, placeholder, live) => {
 // THE PROMPT CARD: what Claude waits on, under its newest turn, in the needs-you tone; each option a button, its words dim under it.
 const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: 'needs', title, right, edge: 'y', rightTone: 'y' });
 
-// MISSION CONTROL'S VIEWS ON THE PHONE, from board 184's kit: the drawer gains a row of views under its search, Tabs first
-// (the drawer as it is), then Landing, Autopilot, PRs, CI and Notifications, each while its setting is on. Choosing one
-// puts that view's items in the drawer's list, in the groups mission control files them under, from the same items the
-// server builds for it; the search filters them as / does. A tap on an item opens its menu; ⋯ in the drawer's head opens the
-// view's own menu (m's). The row scrolls sideways; the list slides with it.
+// MISSION CONTROL'S VIEWS ON THE PHONE, from board 184's kit: a panel that comes in from the right edge, as the drawer of tabs
+// comes in from the left, with no button of its own on the screen. A swipe left from the right edge, on a channel or on the
+// drawer, slides it in over what is there, following the finger; a swipe right, or a tap on what still shows at its left, puts
+// it away. It opens on the list of views, Landing, Autopilot, PRs, CI and Notifications, each while its setting is on, each
+// with what needs you in it counted; a tap on one slides its items in, in the groups mission control files them under, from
+// the same items the server builds for it, with ‹ back to the list. A tap on an item opens its menu; ⋯ opens the view's own
+// menu (m's). The first time the app opens with the panel unseen, a toast says to swipe from the right edge for it.
 const C = { bg: '#11121a', surface: '#1b1e29', raised: '#20243a', chosen: '#262b40', line: '#3a3f52', text: '#c9cdd9', dim: '#8d93a8', faint: '#565b6e', accent: '#5fd7ff', ink: '#11131a', yellow: '#f2c56b', ybg: '#3a3220', green: '#7fd18b', gbg: '#1d3a2a', blue: '#82aaff', bbg: '#20304f', red: '#ff8a94', claude: '#d97757', you: '#5f9fd7' };
 const PT = (pt) => pt / 22, Wd = (pt) => pt / 10.4;
 // TEXT AS AN IMAGE, so it sits on the controls drawn as images: one color, one size, vertically centered in its box.
@@ -328,26 +330,25 @@ const header = (sx, y, title, chip) => {
   K(sx, y + PT(48), 36, 0.06, 'background:' + C.line);
 };
 
-// VIEWS: one 44 pt pill each, 8 pt apart, the chosen one lit; its count of what needs you after its name, none when nothing does. The row runs off the
-// right edge, faded, as it scrolls.
-const VIEWS = [['Tabs', '2'], ['Landing', ''], ['Autopilot', '1'], ['PRs', '1'], ['CI', '1'], ['Notifications', '5']];
-const viewRow = (sx, y, chosen, none) => {
-  let x = sx + 1.5;
-  const at = VIEWS.findIndex((v) => v[0] === chosen);
-  if (at > 1) { K(sx, y, 1.5, PT(44), 'background:linear-gradient(90deg,' + C.bg + ',transparent)'); x -= 1; }
-  for (const [name, c] of VIEWS.slice(Math.max(0, at - 1))) {
-    const n = name === none ? '' : c, words = n ? name + '  ' + n : name, w = [...words].length * 0.85 + 3;
-    if (x + w > sx + 36) { K(x, y, sx + 36 - x, PT(44), 'border-radius:999px 0 0 999px;background:linear-gradient(90deg,' + C.raised + ',transparent)'); break; }
-    btn(x, y, w, words, name === chosen ? 'lit' : 'plain', true);
-    x += w + Wd(8);
-  }
+// THE PANEL'S HEAD: 48 pt, a filled icon button at each end as the channel's header: › to put the panel away on the list
+// (‹ back to the list on a view), the title, and ⋯ for the view's own menu.
+const pHead = (x, w, left, title, more) => {
+  icon(x + 0.4, 3, left, 'fill');
+  tx(x + 5.4, 3, w - 11, PT(44), title, C.text, 12, true);
+  if (more) icon(x + w - 0.4 - Wd(44), 3, '⋯', 'fill');
+  K(x, 3 + PT(48), w, 0.06, 'background:' + C.line);
 };
-// THE DRAWER'S HEAD: the workspace's name, live, and ⋯ for the chosen view's own menu; then the search, then the views.
-const dHead = (sx, chosen, placeholder, none) => {
-  tx(sx + 1, 3, 20, PT(44), 'Switchboard  studio', C.text, 12, true); chipK(sx + 22, 3.45, 'live', C.green, C.gbg);
-  icon(sx + 35.6 - Wd(44), 3, '⋯', 'fill');
-  field(sx + 1.5, 5.6, 33, '', placeholder);
-  viewRow(sx, 8.2, chosen, none);
+// THE LIST OF VIEWS: a row each, 56 pt as a tab's: the mark of what most needs you in it, its name, what it holds in a line,
+// and what needs you counted at the right, in its tone; none when nothing does.
+const VIEWS = [['landing', 'Landing', 'train 14 · 2 queued', '', 'm'], ['needs', 'Autopilot', '1 waiting · 1 working', '1', 'y'], ['failed', 'PRs', '1 with changes asked', '1', 'r'], ['failed', 'CI', '1 failing · 1 running', '1', 'r'], ['needs', 'Notifications', '5 today', '5', 'y']];
+const viewList = (x, w, held) => {
+  let y = 7;
+  for (const [st, name, sub, n, tone] of VIEWS) {
+    const bg = name === held ? row(x, y, w, 2, true) : '';
+    mark(x + 2, y, st, bg); put(x + 4, y, name, 't', 'b', bg); put(x + 4, y + 1, sub, 'd', '', bg);
+    if (n) R(x + w - 2, y, n, tone, 'b', bg);
+    y += 3;
+  }
 };
 // AN ITEM: as a tab's row (board 184's, 56 pt): its mark, its title 16 pt, what it says 12 pt dim under it, a fact at the right.
 const vItem = (sx, y, st, title, sub, right, rt, held) => {
@@ -355,8 +356,8 @@ const vItem = (sx, y, st, title, sub, right, rt, held) => {
   mark(sx + 2, y, st, bg); put(sx + 4, y, title, 't', held ? 'b' : '', bg);
   put(sx + 4, y + 1, sub, 'd', '', bg); if (right) R(sx + 34, y, right, rt || 'd', '', bg);
 };
-// A MENU: board 184's box, rising from the screen's foot over a dimmed drawer; its head the item, × at its right; each option
-// a 44 pt row; one that ends something in red. Options that need the computer's screen are left out.
+// A MENU: board 184's box, rising from the screen's foot over the dimmed panel (from its head, for ⋯); its head the item,
+// × at its right; each option a 44 pt row; one that ends something in red; one ending in … asks first.
 const vMenu = (sx, title, opts, top) => {
   K(sx, 2, 36, 42, 'background:#05060acc');
   const h = PT(44) * (opts.length + 1) + 0.4, y = top || 43.4 - h;
@@ -368,9 +369,9 @@ const vMenu = (sx, title, opts, top) => {
 
 // 1. NOTIFICATIONS: the history mission control's Notifications view shows, newest first; a tap opens its item's menu in
 // the view it came from, as mission control's does.
-{ const sx = phone(8, 'Notifications, chosen', '1');
-  dHead(sx, 'Notifications', 'Search Notifications');
-  let y = 11;
+{ const sx = phone(8, 'Notifications', '1');
+  pHead(sx, 36, '‹', 'Notifications', true);
+  let y = 7;
   label(sx + 1, y, 'Today', 'd', 5, sx + 34); y++;
   vItem(sx, y, 'failed', 'CI failed on #90', 'Clippy (Linux x86_64)', '3m', 'r'); y += 2;
   vItem(sx, y, 'needs', 'Tab 6 asks', 'which fixture?', '9m', 'y'); y += 2;
@@ -378,28 +379,35 @@ const vMenu = (sx, title, opts, top) => {
   vItem(sx, y, 'reminder', 'Tab 8: handoff', 'your reminder came due', '1h', 'y'); y += 2;
   vItem(sx, y, 'comment', 'Review asked on #87', 'theme the picker', '1d', 'd'); }
 
-// 2. A VIEW'S OWN MENU: ⋯ in the drawer's head opens what m opens in mission control, its actions over all it shows.
+// 2. A VIEW'S OWN MENU: ⋯ in the panel's head opens what m opens in mission control, its actions over all it shows.
 { const sx = phone(46, '⋯ on CI: the view\'s own menu', '1');
-  dHead(sx, 'CI', 'Search CI');
-  let y = 11;
+  pHead(sx, 36, '‹', 'CI', true);
+  let y = 7;
   label(sx + 1, y, 'Failing', 'r', 1, sx + 34); y++;
   vItem(sx, y, 'failed', '#90 Clippy (Linux x86_64)', 'split the parser · 1 of 6', '3m', 'r');
   vMenu(sx, 'CI', [['Read CI again now'], ["Re-run main's failed jobs…"]], 3); }
 
-// 3. THE TABS VIEW'S OWN MENU, the same way.
-{ const sx = phone(84, '⋯ on Tabs', '1');
-  dHead(sx, 'Tabs', 'Search tabs');
-  let y = 11;
-  label(sx + 1, y, 'Needs you', 'y', 2, sx + 34); y++;
-  rowK(sx, y, 'needs', 2, 'stable note IDs', 'Bash: git push origin main', false);
-  vMenu(sx, 'Tabs', [['Go to the next tab that needs you'], ['Close every merged tab…']], 3); }
-
-// 4. A VIEW WITH NOTHING, OR NOT SET UP: its own words, as mission control says them, in the list's place.
-{ const sx = phone(122, 'A view with nothing to show', '1');
-  dHead(sx, 'PRs', 'Search PRs', 'PRs');
+// 3. A VIEW WITH NOTHING: mission control's own words in the list's place.
+{ const sx = phone(84, 'A view with nothing to show', '1');
+  pHead(sx, 36, '‹', 'PRs', true);
   tx(sx + 2, 13, 32, 1.2, 'No open PRs of yours.', C.dim, 12, false, 'center');
   tx(sx + 2, 15, 32, 1.2, 'A view whose setting is off', C.faint, 11, false, 'center');
-  tx(sx + 2, 16, 32, 1.2, 'leaves the row of views.', C.faint, 11, false, 'center'); }
+  tx(sx + 2, 16, 32, 1.2, 'is left out of the list of views.', C.faint, 11, false, 'center'); }
+
+// 4. THE FIRST TIME: the drawer as it is, with nothing added, and a toast over its foot saying where the views are.
+{ const sx = phone(122, 'The first time: a toast', '1');
+  tx(sx + 1, 3, 20, PT(44), 'Switchboard  studio', C.text, 12, true); chipK(sx + 29, 3.45, 'live', C.green, C.gbg);
+  field(sx + 1.5, 5.4, 33, '', 'Search tabs');
+  let y = 8;
+  label(sx + 1, y, 'Needs you', 'y', 2, sx + 34); y++;
+  rowK(sx, y, 'needs', 2, 'stable note IDs', 'Bash: git push origin main', false); y += 2;
+  rowK(sx, y, 'needs', 6, 'review PR 41', 'asks: which fixture?', false); y += 3;
+  label(sx + 1, y, 'Working', 'b', 1, sx + 34); y++;
+  rowK(sx, y, 'working', 1, 'planning', 'Monitor: fork parity', false); y += 3;
+  label(sx + 1, y, 'Landing', 'm', 2, sx + 34); y++;
+  rowK(sx, y, 'landing', 5, 'benchmark harness', 'testing in train 14', false); y += 2;
+  rowK(sx, y, 'landing', 7, 'fork parity fixture', 'testing in train 14', false);
+  K(sx + 1.5, 40.2, 33, PT(44), 'border-radius:12px;background:' + C.raised); tx(sx + 2.7, 40.2, 30, PT(44), '← Swipe from the right for mission control', C.text, 9); }
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
