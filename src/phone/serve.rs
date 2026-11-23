@@ -934,7 +934,9 @@ impl Server {
                             util::read_json(crate::views::issue::cache_file(repo, *number))
                         }
                         Ticket::Linear(id) => util::read_json(crate::views::ticket::cache_file(id)),
-                        Ticket::Project(_) => None,
+                        Ticket::Project(id) => {
+                            util::read_json(crate::views::project::cache_file(id))
+                        }
                     });
                     Ok(tab_views::ticket_json(&ticket, copy.as_ref()))
                 }))

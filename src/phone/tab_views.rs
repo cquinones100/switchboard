@@ -215,10 +215,21 @@ pub fn pr_json(
     if let Some((words, tone)) = review(pr.review.as_deref()) {
         chips.push(chip(words, tone));
     }
-    // By name the failing and running ones, the passed ones on one line.
+    // By name the failing and running ones, the passed ones on one line,
+    // from the PR view's copy while it counts them as the lookups do: an
+    // older copy would name none of the ones failing now.
     let listed = copy
         .map(crate::views::pr::checks_listed)
         .unwrap_or_default();
+    let count = |m: Mark| listed.iter().filter(|(k, _)| *k == m).count() as u64;
+    let agrees = pr.checks.is_none_or(|(pass, fail, pending)| {
+        (
+            count(Mark::Passed),
+            count(Mark::Failed),
+            count(Mark::Pending),
+        ) == (pass, fail, pending)
+    });
+    let listed = if agrees { listed } else { Vec::new() };
     let mut rows: Vec<Value> = listed
         .iter()
         .filter(|(m, _)| *m != Mark::Passed)
@@ -310,6 +321,13 @@ pub fn ticket_json(ticket: &Ticket, copy: Option<&Value>) -> Value {
             text("body"),
             text("html_url").or_else(|| ticket.url()),
         ),
+        // A project's copy is the project view's: its name and status.
+        Ticket::Project(_) => (
+            ticket.shown(),
+            copy.and_then(|c| linear_state(&json!({ "state": c.get("status") }))),
+            text("content").or_else(|| text("description")),
+            text("url"),
+        ),
         _ => (
             ticket.shown(),
             copy.and_then(linear_state),
@@ -319,7 +337,7 @@ pub fn ticket_json(ticket: &Ticket, copy: Option<&Value>) -> Value {
     };
     json!({
         "heading": heading,
-        "title": text("title").unwrap_or_default(),
+        "title": text("title").or_else(|| text("name")).unwrap_or_default(),
         "url": url,
         "chips": state.map(|(words, mark)| vec![chip(&words, mark.look().1)]).unwrap_or_default(),
         "body": body,
@@ -381,7 +399,7 @@ mod tests {
             state: PrState::Open,
             merge: None,
             checks: Some(Checks {
-                pass: 5,
+                pass: 2,
                 fail: 1,
                 pending: 0,
             }),
@@ -421,7 +439,7 @@ mod tests {
         let v = pr_json(41, Some(&facts()), Some(&copy), Some("the board's"));
         assert_eq!(v["title"], "Time the redraw");
         assert_eq!(v["body"], "Time it on both fixtures.");
-        assert_eq!(v["checks"]["said"], "1 of 6 failing");
+        assert_eq!(v["checks"]["said"], "1 of 3 failing");
         let rows: Vec<&str> = v["checks"]["rows"]
             .as_array()
             .unwrap()
@@ -436,6 +454,18 @@ mod tests {
             .map(|c| c["text"].as_str().unwrap())
             .collect();
         assert_eq!(chips, ["open", "changes asked"]);
+        // A copy counting otherwise than the lookups names none of them.
+        let mut newer = facts();
+        newer.checks = Some(Checks {
+            pass: 1,
+            fail: 2,
+            pending: 0,
+        });
+        let v = pr_json(41, Some(&newer), Some(&copy), None);
+        assert_eq!(
+            (v["checks"]["said"].as_str(), v["checks"]["rows"].clone()),
+            (Some("2 of 3 failing"), json!([]))
+        );
         // Another PR's copy is left out, the board's description taken.
         let v = pr_json(42, Some(&facts()), Some(&copy), Some("the board's"));
         assert_eq!(v["body"], "the board's");

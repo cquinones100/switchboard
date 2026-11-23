@@ -2100,6 +2100,11 @@ function drawPanel() {
   fill(panelLayer.panel, head, viewList(), "", inside && panelLayer.panel.contains(panelLayer.screen) ? panelLayer.screen : null);
   if (!view) return;
   const top = tabbed ? tabViewHead(view) : viewHead(view);
+  // The tab's views gone while it shows (turned off, or the tab closed): back to board 185's look.
+  if (panelLayer.full && !tabViews() && !panelLayer.screen) {
+    panelLayer.full = false;
+    panelLayer.layer.className = "panel-layer";
+  }
   const items = tabbed ? tabViewBody(view) : viewItems(view);
   if (!panelLayer.screen) {
     const screen = el("div", { class: "panel-view", role: "dialog", "aria-label": view.title });
@@ -2279,11 +2284,12 @@ const rendered = (text) => (md ? markdown(text) : el("div", { class: "body" }, t
 function tabViewBody(row) {
   const list = el("div", { class: "panel-list tab-view" + (state.live ? "" : " off") });
   const tv = state.tabView;
+  const read = tv && tv.data;
+  // A read that failed says so, over the copy read before when there is one.
   if (tv && tv.error) {
     list.append(el("div", { class: "empty refused" }, tv.error));
-    return list;
+    if (!read) return list;
   }
-  const read = tv && tv.data;
   if (!read) {
     list.append(el("div", { class: "empty" }, "Loading…"));
     return list;
