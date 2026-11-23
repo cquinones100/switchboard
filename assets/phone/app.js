@@ -1331,7 +1331,7 @@ function channel(stick) {
     const head = el("div", { class: "head" });
     const box = composer();
     const whole = el("div");
-    shown = { open: state.open, screen: el("div", { class: "screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole };
+    shown = { open: state.open, screen: el("div", { class: "screen channel-screen" }, head, list, box, whole), head, list, messages, drawn: null, count: 0, arrived: null, now, cardKey: "", composer: box, full: whole };
     swipeable(shown.screen);
     app.replaceChildren(shown.screen);
   }

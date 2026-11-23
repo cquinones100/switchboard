@@ -32,7 +32,7 @@
   /* Sizes (board 184). */
   --tap: 44px; /* anything pressed, every way */
   --chip: 24px;
-  --head: 48px;
+  --head: 52px; /* a 44 control with 4 above and below */
   --row: 56px;
   --thumb: 64px;
   --thumb-x: 24px;
@@ -122,6 +122,9 @@ button {
 /* The keyboard covers the home indicator, so its inset would only stand
    between the composer and the keyboard; iOS keeps the inset either way. */
 .keyboard .screen { padding-bottom: 0; }
+/* A tab's channel leaves the inset to its composer, which lets it overlap
+   the composer's spacing below its controls rather than add to it. */
+.screen.channel-screen { padding-bottom: 0; }
 /* The screen going while the next slides over it (app.js's `slide`). */
 .screen.going { position: absolute; inset: 0; pointer-events: none; }
 /* Anything leaving (a box, a toast, a thumbnail, an explainer) takes no tap. */
@@ -217,7 +220,7 @@ button {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  padding: 2px var(--s1);
+  padding: var(--s1);
   border-bottom: 1px solid var(--line);
   min-height: var(--head);
 }
@@ -384,10 +387,13 @@ button {
   display: flex;
   align-items: flex-end;
   gap: var(--s2);
-  padding: 0 var(--s2);
+  padding: var(--s2);
+  /* The home indicator's inset overlaps the spacing below the controls. */
+  padding-bottom: max(var(--s2), env(safe-area-inset-bottom) - var(--s2));
   border-top: 1px solid var(--line);
   background: var(--bg);
 }
+.keyboard .composer { padding-bottom: var(--s2); }
 .composing { border-top: 1px solid var(--line); background: var(--bg); }
 .composing .composer { border-top: 0; }
 .composing .error { color: var(--red); padding: 6px var(--edge) 0; font-size: var(--fact); }
