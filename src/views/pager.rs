@@ -364,15 +364,12 @@ impl Pager {
         if text != self.vim.doc.text {
             // The text laid out again (a resize, a picture arriving, a new
             // copy read) taken in as a change from outside, so the marks
-            // follow their lines and a selection, the search and the
-            // register stay.
-            let mode = self.vim.mode;
+            // follow their lines and the search and the register stay; a
+            // selection ends, its start being a place in the old layout.
+            if matches!(self.vim.mode, Mode::Visual { .. }) {
+                self.vim.leave_visual();
+            }
             self.vim.change_outside(|doc| doc.text = text);
-            self.vim.mode = mode;
-            let last = lines.len().saturating_sub(1);
-            let row = self.vim.anchor.0.min(last);
-            let col = self.vim.anchor.1.min(lines.get(row).map_or(0, String::len));
-            self.vim.anchor = (row, col);
         }
         if first || self.vim.row() != self.cursor {
             // A new view opens on its line's text, past its margin.
@@ -382,9 +379,7 @@ impl Pager {
                     .map_or(0, |l| l.len() - l.trim_start().len()),
                 col => col,
             };
-            let mode = self.vim.mode;
             self.vim.go_to(self.cursor, col);
-            self.vim.mode = mode;
         }
         self.vim.folds = PictureRows {
             closed: (0..self.doc.lines.len())
@@ -2314,21 +2309,13 @@ mod tests {
     }
 
     #[test]
-    fn a_mark_and_a_selection_outlive_a_new_layout() {
+    fn a_mark_outlives_a_new_layout_and_a_selection_ends_with_it() {
         let mut pager = Pager::new(markdown(&long_text()), 100, 20).with_cursor(true);
         press(&mut pager, "}jma");
         let marked = cursor_line(&pager);
         press(&mut pager, "Gv");
         pager.resize(60, 20);
-        assert!(
-            matches!(pager.vim.mode, Mode::Visual { .. }),
-            "still selecting"
-        );
-        assert_eq!(
-            pager.key(key(KeyCode::Esc)),
-            Act::Redraw,
-            "Esc leaves the selection"
-        );
+        assert_eq!(pager.vim.mode, Mode::Normal, "the selection ended");
         press(&mut pager, "'a");
         assert!(cursor_line(&pager).contains(marked.trim().split(' ').next().unwrap()));
     }

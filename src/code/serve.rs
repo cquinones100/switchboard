@@ -109,20 +109,22 @@ impl Server {
         pane: PaneId,
         arg: String,
     ) {
-        let mut pane = self.work_pane(tab, pane);
-        // The file read before goes, the pane it stood in for (or, beside
-        // it, the tab's pane) taking the new one.
-        if let Some(old) = self.marked_in(tab, CODE_VIEW) {
-            let parked = self.parked_of(old);
-            self.kill_pane(old);
-            if old == pane {
-                match parked.or_else(|| self.tabs.get(&tab).map(|t| t.active)) {
-                    Some(p) if self.panes.contains_key(&p) => pane = p,
-                    _ => return,
-                }
-            }
-        }
+        let pane = self.work_pane(tab, pane);
         let command = vec![crate::views::exe(), "code".into(), arg];
+        // A file read before is replaced in its own pane, beside the pane or
+        // in its place, so viewers never stack and the pane it stands in
+        // for stays where it is.
+        if let Some(old) = self.marked_in(tab, CODE_VIEW) {
+            match self.replace_program(old, Some(command)) {
+                Ok(()) => {
+                    if let Some(slot) = self.panes.get_mut(&old) {
+                        slot.opts.insert(CODE_VIEW.into(), "1".into());
+                    }
+                }
+                Err(e) => self.say(Some(client), &format!("Couldn't open the file: {e}")),
+            }
+            return;
+        }
         let opened = match self.clear_beside(tab) {
             Some((lone, width)) => {
                 self.open_in_place_keeping(lone, "code", command, None, Some(width))
