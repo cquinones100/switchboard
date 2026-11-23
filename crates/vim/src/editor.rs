@@ -842,7 +842,11 @@ impl<N: Note> Editor<N> {
             return None;
         }
         let before = group.text.clone();
-        self.undo.push(group);
+        // Read-only, the text before a change from outside is kept for no
+        // undo, so it isn't kept at all.
+        if !self.read_only {
+            self.undo.push(group);
+        }
         self.redo.clear();
         if typed {
             self.record_change();
@@ -4033,6 +4037,16 @@ mod tests {
         let mut e = read_only(CODE);
         e.ex("%s/fn/FN/g");
         assert_eq!(e.doc.text.lines(), CODE, ":s changed nothing");
+    }
+
+    #[test]
+    fn read_only_keeps_no_text_from_before_a_change_from_outside() {
+        let mut e = read_only(CODE);
+        press(&mut e, "v");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["new"]));
+        press(&mut e, "<Esc>");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["newer"]));
+        assert!(e.undo.is_empty(), "nothing kept to undo");
     }
 
     #[test]
