@@ -3158,6 +3158,57 @@ fn m_w_on_a_sidebar_row_asks_to_close_that_tab() {
     wait_list(&server, "the second tab closed", |l| tabs(l).len() == 1);
 }
 
+// M-w from the sidebar leaves the cursor on the row below the closed tab,
+// that tab in front, or on the row above when it was the last; no keeps it
+// where it was.
+#[test]
+fn m_w_from_the_sidebar_leaves_the_cursor_on_the_next_row() {
+    let server = start(json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.wait_text("3 third");
+    let name_in_front = |l: &Value| tabs(l)[in_front(l)]["name"].clone();
+    // From the first, so closing the second alone would go back to it.
+    client.type_text(&format!("{ALT}1"));
+    wait_list(&server, "the first in front", |l| in_front(l) == 0);
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    let list = wait_list(&server, "the second in front", |l| {
+        name_in_front(l) == "second"
+    });
+    cursor_drawn_on_front(&mut client, &list, false);
+
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("Close tab 2"))
+    });
+    let list = wait_list(&server, "the second still in front", |l| {
+        focused(l) && name_in_front(l) == "second"
+    });
+    cursor_drawn_on_front(&mut client, &list, false);
+
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("\r");
+    let list = wait_list(&server, "the second closed, the third in front", |l| {
+        tabs(l).len() == 2 && focused(l) && name_in_front(l) == "third"
+    });
+    cursor_drawn_on_front(&mut client, &list, false);
+
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 3");
+    client.type_text("\r");
+    let list = wait_list(&server, "the third closed, the first in front", |l| {
+        tabs(l).len() == 1 && focused(l) && in_front(l) == 0
+    });
+    cursor_drawn_on_front(&mut client, &list, false);
+}
+
 // M-O goes to the notifications: the Notifications window in front, from a
 // tab and from mission control.
 #[test]

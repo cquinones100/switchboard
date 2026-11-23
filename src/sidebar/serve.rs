@@ -1636,8 +1636,9 @@ impl Server {
             return (true, true);
         }
         // M-w on a tab's row closes that tab, after asking, the sidebar
-        // keeping the focus; on a group's line, or a tab a search leaves
-        // out, it does nothing.
+        // keeping the focus and its cursor going to the row below, else
+        // above; on a group's line, or a tab a search leaves out, it does
+        // nothing.
         if *action == Action::CloseHere && settings::is_on("close_tab_from_claude") {
             if let Some(Owner::Tab(tab)) = self
                 .sidebar
@@ -1646,7 +1647,10 @@ impl Server {
                 .and_then(|s| s.cursor.clone())
                 && self.sidebar_order(&session).contains(&tab)
             {
-                self.close_tab_from_key(client, tab);
+                let order = self.sidebar_order(&session);
+                self.close_tab_from_key_then(client, tab, move |server| {
+                    server.sidebar_land_after_close(&session, tab, &order);
+                });
             }
             return (true, true);
         }
@@ -1806,6 +1810,28 @@ impl Server {
             && self.session(session).is_some_and(|s| s.current != tab)
         {
             self.select_tab(session, tab);
+        }
+        self.dirty_session(session);
+    }
+
+    /// Once M-w from the sidebar has closed a tab: the cursor onto the tab
+    /// that was below it among `order` (the tabs listed as M-w was pressed,
+    /// a folded group's passed over), else the one above, passing over tabs
+    /// gone since, brought to the front as j and k bring one.
+    fn sidebar_land_after_close(&mut self, session: &str, closed: TabId, order: &[TabId]) {
+        let Some(at) = order.iter().position(|t| *t == closed) else {
+            return;
+        };
+        let listed = self.sidebar_order(session);
+        let below = order[at + 1..].iter();
+        let above = order[..at].iter().rev();
+        let Some(&land) = below.chain(above).find(|t| listed.contains(t)) else {
+            return;
+        };
+        self.sidebar.side(session).cursor = Some(Owner::Tab(land));
+        if self.sidebar.focused(session) && self.session(session).is_some_and(|s| s.current != land)
+        {
+            self.select_tab(session, land);
         }
         self.dirty_session(session);
     }

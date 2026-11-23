@@ -1351,6 +1351,16 @@ impl Server {
     /// `confirm-before kill-window`, the programs running in its panes
     /// listed under the question.
     pub fn close_tab(&mut self, client: ClientId, tab: TabId) {
+        self.close_tab_then(client, tab, |_| {});
+    }
+
+    /// As `close_tab`, running `closed` once a yes has closed the tab.
+    fn close_tab_then(
+        &mut self,
+        client: ClientId,
+        tab: TabId,
+        closed: impl FnOnce(&mut Server) + Send + 'static,
+    ) {
         if !self.tabs.contains_key(&tab) {
             return;
         }
@@ -1368,6 +1378,7 @@ impl Server {
             move |server, _, yes| {
                 if yes && server.tabs.contains_key(&tab) {
                     server.kill_tab(tab);
+                    closed(server);
                 }
             },
         );
@@ -1461,10 +1472,22 @@ impl Server {
     /// M-w on a tab's sidebar row, or in its Claude pane: the tab, asked as
     /// the prefix's `&` asks, or at once with confirm_close off.
     pub fn close_tab_from_key(&mut self, client: ClientId, tab: TabId) {
+        self.close_tab_from_key_then(client, tab, |_| {});
+    }
+
+    /// As `close_tab_from_key`, running `closed` once the tab has
+    /// closed.
+    pub fn close_tab_from_key_then(
+        &mut self,
+        client: ClientId,
+        tab: TabId,
+        closed: impl FnOnce(&mut Server) + Send + 'static,
+    ) {
         if setting_on("confirm_close") {
-            self.close_tab(client, tab);
+            self.close_tab_then(client, tab, closed);
         } else if self.tabs.contains_key(&tab) {
             self.kill_tab(tab);
+            closed(self);
         }
     }
 
