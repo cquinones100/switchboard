@@ -313,7 +313,7 @@ button {
 
 /* ── A tab's channel ── */
 .channel { flex: 1; overflow-y: auto; padding: var(--s3) 0 var(--s2); }
-.msg { display: grid; grid-template-columns: var(--avatar) 1fr; column-gap: 10px; padding: 6px var(--edge); }
+.msg { display: grid; grid-template-columns: var(--avatar) minmax(0, 1fr); column-gap: 10px; padding: 6px var(--edge); }
 .avatar {
   width: var(--avatar);
   height: var(--avatar);
@@ -334,8 +334,8 @@ button {
 .msg .body { grid-column: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg .body.folded { max-height: 12.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
 /* A reply's Markdown (app.js's `markdown`): code on the composer's raised
-   background, a code block and a table scrolling sideways rather than
-   wrapping or squeezing their columns. */
+   background, a code block's lines and a table's cells wrapping at any
+   character, so nothing in a channel is wider than the screen. */
 .msg .md { white-space: normal; min-width: 0; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
@@ -348,22 +348,22 @@ button {
 .md em { font-style: italic; }
 .md a { color: var(--accent); text-decoration: underline; }
 .md code { background: var(--raised); border-radius: var(--code); padding: 1px var(--s1); overflow-wrap: anywhere; }
-.md pre { background: var(--raised); border-radius: var(--code); padding: var(--s2) 10px; overflow-x: auto; white-space: pre; }
-.md pre code { background: none; padding: 0; overflow-wrap: normal; }
+.md pre { background: var(--raised); border-radius: var(--code); padding: var(--s2) 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md pre code { background: none; padding: 0; }
 .md blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--dim); }
 .md hr { border: 0; border-top: 1px solid var(--line); }
-.md .table { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--code); }
-.md table { border-collapse: collapse; min-width: 100%; }
-.md th, .md td { padding: var(--s1) var(--s2); text-align: left; vertical-align: top; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.md .table { overflow: hidden; border: 1px solid var(--line); border-radius: var(--code); }
+.md table { border-collapse: collapse; width: 100%; }
+.md th, .md td { padding: var(--s1) var(--s2); text-align: left; vertical-align: top; white-space: normal; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
 .md tr:last-child td { border-bottom: 0; }
 .md th { background: var(--raised); font-weight: 700; }
 .md .center { text-align: center; }
 .md .right { text-align: right; }
 .msg .more { grid-column: 2; justify-self: start; color: var(--accent); text-align: left; min-height: var(--tap); }
-.tool { grid-column: 2; color: var(--dim); font-size: var(--fact); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool { grid-column: 2; color: var(--dim); font-size: var(--fact); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool::before { content: "▸ "; color: var(--faint); }
 /* A turn's steps folded into one row (app.js's `turns`), a tap opening them. */
-.msg .steps { grid-column: 2; justify-self: stretch; color: var(--dim); font-size: var(--fact); text-align: left; min-height: var(--tap); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.msg .steps { grid-column: 2; justify-self: stretch; color: var(--dim); font-size: var(--fact); text-align: left; min-height: var(--tap); white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .msg .steps .latest { color: var(--faint); }
 .doing { color: var(--dim); padding: var(--s1) var(--edge); font-size: var(--fact); }
 

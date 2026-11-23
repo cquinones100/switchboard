@@ -869,8 +869,8 @@ const md = typeof markdownit === "function" ? markdownit({ html: false, linkify:
 if (md) md.linkify.set({ fuzzyLink: false, fuzzyEmail: false });
 
 // The page's elements for a reply's Markdown, built from markdown-it's
-// tokens with `el`, every piece of text a text node: a table in a box that
-// scrolls sideways, and a link only for http and https, opening in the
+// tokens with `el`, every piece of text a text node: a table in a box, its
+// cells wrapping to the screen's width, and a link only for http and https, opening in the
 // browser and shown by its text; any other link is its text alone. Its
 // `lines` are the lines it shows (a paragraph, a heading, a list item, a
 // table row, a line of code), for the fold.
@@ -1473,8 +1473,8 @@ function fold(card, wasTall, gone) {
 // under the channel once the touch moves right more than up or down, the
 // channel following the finger. Let go past a third of the screen's width,
 // or flicked right, it opens the drawer as ☰ does; otherwise it slides back.
-// A touch in the composer's field, its tray of images, a reply's table or
-// code block or an image shown whole is theirs.
+// A touch in the composer's field, its tray of images or an image shown
+// whole is theirs.
 const SWIPE_DECIDES = 10; // px moved before a touch counts as sideways or not
 const SWIPE_FLICK = 0.5; // px a millisecond rightward that open the drawer however far it went
 const SWIPE_FLICK_MS = 100; // a flick lets go within this of its last move
@@ -1486,7 +1486,7 @@ function swipeable(screen) {
     // A second finger mid-swipe sends the channel back, as a cancel does.
     if (swipe && swipe.under) return end({ type: "touchcancel" });
     swipe = null;
-    if (e.touches.length !== 1 || e.target.closest("textarea, .tray, pre, .table, .full")) return;
+    if (e.touches.length !== 1 || e.target.closest("textarea, .tray, .full")) return;
     const t = e.touches[0];
     swipe = { screen, x: t.clientX, y: t.clientY, dx: 0, at: e.timeStamp, speed: 0, under: null, wanted: null };
   }, { passive: true });

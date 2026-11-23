@@ -737,8 +737,8 @@ console.log("no tools=" + said());
 /// width, or flicked, opens the drawer and clears the address's tab; a short
 /// one, or a quick one held still before letting go, or one a second finger
 /// joins, on the channel or the drawer, slides back, leaving the tab open; one moving mostly down, or
-/// starting in the composer's field, its tray of images or a reply's code
-/// block, changes nothing; and a
+/// starting in the composer's field or its tray of images, changes nothing,
+/// while one starting on a reply's code block moves the channel; and a
 /// redraw asked for mid-swipe is drawn once as it ends, leaving only the
 /// screen it ended on; skipped without Node.
 #[test]
@@ -779,11 +779,14 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
   console.log("tray=" + swipe([[20, 500], [80, 500], [300, 500]], 100, shot) + " " + screens());
   touch("touchend", 0, 0, 400, shot);
   vm.runInContext(`state.chosen = []; render();`, ctx);
-  // A reply's code block, which scrolls sideways.
+  // A reply's code block, which wraps rather than scrolling, so a swipe
+  // starting on it moves the channel, sliding back once let go short.
   const pre = new Node("pre");
   app.querySelector(".messages").append(pre);
-  console.log("code=" + swipe([[20, 200], [80, 200], [300, 200]], 100, pre) + " " + screens());
-  touch("touchend", 0, 0, 400, pre);
+  console.log("code=" + swipe([[20, 200], [40, 204], [100, 206]], 200, pre) + " " + screens());
+  touch("touchend", 0, 0, 800, pre);
+  await slid();
+  console.log("code back=" + vm.runInContext("state.open", ctx) + " " + screens());
   pre.remove();
   // A short swipe, with the stream and another caller asking for redraws.
   drawn = 0;
@@ -838,7 +841,8 @@ const slid = () => new Promise((done) => setTimeout(done, 300));
             "down=false,false channel",
             "field=false,false channel",
             "tray=false,false channel",
-            "code=false,false channel",
+            "code=true,true drawer,channel",
+            "code back=5 channel",
             "short=true,true drawer,channel translateX(80px)",
             "held=0 ⠹ Edit app.js",
             r#"back=5 channel drawn 1 ⠹ Bash: cargo test """#,

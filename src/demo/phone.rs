@@ -34,7 +34,7 @@ struct Tab {
     turns: &'static [(&'static str, &'static str, &'static [&'static str], i64)],
 }
 
-const LONG_REPLY: &str = "## What changed\n\nThe rate limiter now keys on the **API token** rather than the client's address, so two services behind one proxy no longer share a budget.\n\n1. `limits.rs` reads the token from the `Authorization` header.\n2. A request with no token falls back to the address, as before.\n3. The budget is kept in Redis under `limit:<token>`, expiring after a minute.\n\n## Tests\n\n- `limits::a_token_has_its_own_budget`\n- `limits::no_token_falls_back_to_the_address`\n- `limits::the_budget_resets_after_a_minute`\n\nAll 214 tests pass. The load test held 1,200 requests a second with the p99 at 41 ms, against 38 ms before.\n\n```rust\nlet key = token.map_or_else(|| format!(\"limit:{addr}\"), |t| format!(\"limit:{t}\"));\n```\n\n## Left for you\n\nThe dashboards still group by address: Sam owns them, so I left a note in the PR rather than changing them.";
+const LONG_REPLY: &str = "## What changed\n\nThe rate limiter now keys on the **API token** rather than the client's address, so two services behind one proxy no longer share a budget.\n\n1. `limits.rs` reads the token from the `Authorization` header.\n2. A request with no token falls back to the address, as before.\n3. The budget is kept in Redis under `limit:<token>`, expiring after a minute.\n\n## Tests\n\n- `limits::a_token_has_its_own_budget`\n- `limits::no_token_falls_back_to_the_address`\n- `limits::the_budget_resets_after_a_minute`\n\nAll 214 tests pass. The load test held 1,200 requests a second with the p99 at 41 ms, against 38 ms before.\n\n```rust\nlet key = token.map_or_else(|| format!(\"limit:{addr}\"), |t| format!(\"limit:{t}\"));\nlet budget = Budget::new(settings.requests_per_minute.unwrap_or(DEFAULT_REQUESTS_PER_MINUTE), Duration::from_secs(settings.window_seconds.unwrap_or(60)), redis.clone(), metrics.counter(\"rate_limit\"));\n```\n\n| Route | Before | After | p99 | Budget key |\n| --- | --- | --- | --- | --- |\n| `/v1/orders/{order_id}/line_items` | 38 ms | 41 ms | 41 ms | `limit:<token>` |\n| `/v1/search?q=` | 22 ms | 23 ms | 25 ms | `limit:<address>` |\n\n## Left for you\n\nThe dashboards still group by address: Sam owns them, so I left a note in the PR rather than changing them.";
 
 const TABS: &[Tab] = &[
     Tab {
@@ -103,6 +103,12 @@ const TABS: &[Tab] = &[
             ),
             ("tool", "Edit src/limits.rs", &[], 40),
             ("tool", "Bash: cargo test", &[], 12),
+            (
+                "tool",
+                "Bash: REDIS_URL=redis://127.0.0.1:6379/2 RATE_LIMIT_REQUESTS_PER_MINUTE=1200 RATE_LIMIT_WINDOW_SECONDS=60 cargo run --release --bin load-test -- --target http://127.0.0.1:8080/v1/orders/ord_7f3a9c2e/line_items --concurrency 64 --duration 120s --header \"Authorization: Bearer test_token_for_the_load_test\" --report target/load-test/rate-limit-by-token.json",
+                &[],
+                8,
+            ),
             ("claude", LONG_REPLY, &[], 4),
         ],
     },
