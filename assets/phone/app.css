@@ -629,3 +629,41 @@ body.refused p { color: var(--dim); }
 @keyframes nudge-out { to { opacity: 0; transform: translateY(calc(-1 * var(--nudge))); } }
 @keyframes grow { from { opacity: 0; transform: scale(var(--pop)); } }
 @keyframes shrink { to { opacity: 0; transform: scale(var(--pop)); } }
+
+/* ── Mission control's panel (boards 185 to 187): swiped in from the right
+   edge over a dimmed strip, its views a 56 row each, a view's items under
+   mission control's groups, in its tones ── */
+.panel-layer { position: fixed; inset: 0; z-index: 9; }
+.panel-strip { position: absolute; inset: 0; background: rgba(11, 12, 18, 0.6); }
+.panel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  left: var(--tap);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: -12px 0 28px rgba(0, 0, 0, 0.45);
+  touch-action: pan-y;
+}
+.panel .head > .title:nth-child(2) { padding-left: 0; }
+.panel-list { padding-top: var(--s3); }
+.view-row, .item-row { grid-template-columns: 1.5ch 1fr auto; }
+.view-row .sub, .item-row .sub { grid-column: 2 / 4; }
+.view-row .name, .item-row .name { font-weight: 700; }
+.view-row .count { font-weight: 700; }
+.item-row .when { font-size: var(--fact); color: var(--dim); align-self: center; }
+.count.needs, .when.needs { color: var(--yellow); }
+.count.failed, .when.failed { color: var(--red); }
+.count.working, .when.working { color: var(--blue); }
+.count.landing, .when.landing { color: var(--magenta); }
+.count.passed, .when.passed { color: var(--green); }
+.panel .empty.refused { color: var(--red); }
+.menu-option.mc { display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); margin-bottom: var(--s1); }
+.menu-option.mc .go { color: var(--accent); font-weight: 700; }
+.box.options { top: 20%; max-height: 70%; overflow-y: auto; }
+.toast.hint { font-size: var(--fact); color: var(--text); }

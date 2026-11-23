@@ -9,6 +9,7 @@ pub mod guard;
 pub mod images;
 pub mod log;
 pub mod looks;
+pub mod mission;
 pub mod pairing;
 #[cfg(feature = "net")]
 pub mod preview;
@@ -17,5 +18,6 @@ pub mod push;
 pub mod serve;
 pub mod tailnet;
 pub mod turns;
+pub mod views;
 #[cfg(feature = "net")]
 pub mod web;

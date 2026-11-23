@@ -517,6 +517,21 @@ fn add_hand_offs(out: &mut Vec<Choice>, handoff: Option<Handoff>, ctx: &Ctx<'_>)
     out.push(choice(key, "Paste it into a tab", Do::PasteToTab(h)));
 }
 
+/// The yes/no question mission control asks before an option that changes
+/// something it can't take back (a PR taken out of the merge queue, a
+/// worktree out of the landing queue), which the phone asks too before it
+/// sends the option; `None` for one done without asking.
+pub fn question(act: &Do) -> Option<String> {
+    match act {
+        Do::PrLeave { number, .. } => Some(format!("Take #{number} out of the merge queue?")),
+        Do::LeaveQueue(_) => Some("Take it out of the landing queue?".into()),
+        Do::Autopilot(crate::autopilot::Act::Priority(text, to)) => {
+            crate::autopilot::issues::priority_question(text, *to)
+        }
+        _ => None,
+    }
+}
+
 /// One option: the key that takes it at once, its label, and what it does.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {

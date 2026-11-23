@@ -199,6 +199,23 @@ pub fn of(id: Option<&ViewId>, items: &[Item], shown: &[Item], f: &Facts) -> Vec
     out
 }
 
+/// The yes/no question mission control asks before a view's own option
+/// that starts something it can't take back, which the phone asks too
+/// before it sends the option; `None` for one done without asking.
+pub fn question(act: &Whole) -> Option<String> {
+    match act {
+        Whole::Do(act) => super::choices::question(act),
+        Whole::RerunMain(runs) => {
+            let n = runs.len();
+            Some(format!(
+                "Run the failed jobs of {n} default branch run{} again on GitHub?",
+                if n == 1 { "" } else { "s" }
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// "Shape a new ticket…" naming where it is filed.
 pub fn shape_label(source: Option<&str>) -> String {
     match source {

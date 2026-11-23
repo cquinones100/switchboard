@@ -1855,7 +1855,7 @@ const out = [];
         [
             "menu=Mark seen,Pin it,Remind me,Close tab open=null buzzes=1",
             "asks=true posted=0",
-            "answers=Close*,No",
+            "answers=No,Close*",
             "no=0 menu=null",
             "closed=/api/tabs/4/close tabs=3",
             "working=Pin it,Remind me,Close tab buzzes=1",
@@ -2787,4 +2787,158 @@ console.log("answered=" + vibrated.length);
         ],
         "{out}"
     );
+}
+
+/// Mission control's panel (assets/phone/app.js, boards 185 to 187), run in
+/// Node over a page made of plain objects: a channel's ⋯ leads with
+/// Mission control, which opens the panel on its views with what needs you
+/// counted; a view's items show under its groups, an item's menu lists
+/// what the computer sent, an option that asks does so with No at the left
+/// and Yes lit at the right before it posts, Go to tab opens that tab's
+/// channel, and a menu whose options changed is closed; skipped without
+/// Node.
+#[test]
+fn the_mission_control_panel_lists_views_and_runs_their_options() {
+    let script = PRELUDE.to_string()
+        + r##"vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = [
+    { index: 2, pane: "%12", name: "stable note IDs", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle" },
+  ];
+  const take = { label: "Take it out of the merge queue", shown: "Take it out of the merge queue…", ask: "Take #93 out of the merge queue?" };
+  state.views = [
+    { key: "landing", title: "Landing", line: "1 in the queue", needs: 0, groups: [
+      { title: "In the queue", items: [
+        { id: "q93", title: "#93 stable note IDs", detail: "tab 2 · next train", mark: "▲", tone: "landing",
+          options: [{ label: "Go to tab 2", shown: "Go to tab 2", go: "%12" }, take] },
+      ] },
+    ], acts: [] },
+    { key: "ci", title: "CI", line: "1 failing", needs: 1, mark: "✕", tone: "failed", groups: [], acts: [], empty: "Nothing is running." },
+  ];
+  state.open = "12";
+  render();
+`, ctx);
+const text = (n) => n.text;
+const options = () => body.all((x) => x.attrs.role === "menuitem").map(text);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const out = [];
+(async () => {
+  app.all((x) => x.attrs["aria-label"] === "Tab 2's menu")[0].fire("click");
+  out.push("menu=" + options().join(","));
+  button("Mission control›").fire("click");
+  const rows = () => body.all((x) => x.attrs["data-view"]).map((r) => r.attrs["data-view"] + ":" + r.text);
+  out.push("views=" + rows().join("|"));
+  body.all((x) => x.attrs["data-view"] === "landing")[0].fire("click");
+  out.push("items=" + body.all((x) => x.attrs["data-item"]).map(text).join("|"));
+  body.all((x) => x.attrs["data-item"] === "q93")[0].fire("click");
+  out.push("options=" + options().join(","));
+  button("Take it out of the merge queue…").fire("click");
+  const answers = body.all((x) => x.className === "answers")[0].kids.map((k) => k.text + (k.className.includes("lit") ? "*" : ""));
+  out.push("asks=" + body.text.includes("Take #93 out of the merge queue? [Y/n]") + " answers=" + answers.join(",") + " posted=" + posted.length);
+  button("Yes").fire("click");
+  await new Promise((r) => setImmediate(r));
+  out.push("posted=" + posted.join(","));
+  // A menu whose options the computer changed is closed.
+  body.all((x) => x.attrs["data-item"] === "q93")[0].fire("click");
+  vm.runInContext("state.views[0].groups[0].items[0].options.pop(); staleMenu();", ctx);
+  out.push("stale=" + vm.runInContext("state.menu", ctx));
+  body.all((x) => x.attrs["data-item"] === "q93")[0].fire("click");
+  button("Go to tab 2").fire("click");
+  out.push("go=" + vm.runInContext("state.open + ' ' + state.panel", ctx));
+  console.log(out.join("\n"));
+})();
+"##;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "menu=Mission control›,Pin it,Remind me,Close tab",
+            "views=landing:○Landing1 in the queue|ci:✕CI11 failing",
+            "items=▲#93 stable note IDstab 2 · next train",
+            "options=Go to tab 2,Take it out of the merge queue…",
+            "asks=true answers=No,Yes* posted=0",
+            "posted=/api/views/landing/item",
+            "stale=null",
+            "go=12 null",
+        ],
+        "{stdout}"
+    );
+}
+
+/// The notification a tab's `ready` makes, as the phone's stream carries
+/// it in its Notifications view, with the stream it came in.
+fn ready_notice(server: &TestServer) -> (UnixStream, Value) {
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let tab = server.list()["sessions"][0]["tabs"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["ready", "-t", &tab, "Diff"]);
+    let mut stream = watch(server);
+    let notice = |v: &Value| -> Option<Value> {
+        let view = v["views"]
+            .as_array()?
+            .iter()
+            .find(|v| v["key"] == "notifications")?
+            .clone();
+        view["groups"]
+            .as_array()?
+            .iter()
+            .flat_map(|g| g["items"].as_array().cloned().unwrap_or_default())
+            .find(|i| i["options"].as_array().is_some_and(|o| !o.is_empty()))
+    };
+    let line = next_line(&mut stream, |v| notice(v).is_some());
+    (stream, notice(&line).unwrap())
+}
+
+/// Mission control's views in the phone's stream (src/phone/mission.rs):
+/// the Notifications view's items, each with the options of its mission
+/// control menu the phone keeps, while Settings' `phone_views` is on, and
+/// no views with it off; and the commands a tap sends, which run a kept
+/// option and refuse one the phone leaves out or never offered.
+#[test]
+fn the_stream_carries_mission_controls_views_and_their_options_run() {
+    let server = TestServer::start();
+    let (mut stream, item) = ready_notice(&server);
+    let labels: Vec<&str> = item["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["label"].as_str().unwrap())
+        .collect();
+    assert!(labels.contains(&"Dismiss it"), "{item}");
+    // Going to a tab running no Claude has no channel on the phone.
+    assert!(!labels.iter().any(|l| l.starts_with("Go to tab")), "{item}");
+    let id = item["id"].as_str().unwrap();
+
+    // What mission control offers that the phone leaves out (its tab,
+    // which has no channel), and what neither offers, are refused.
+    let (code, _, err) = server.run(&["phone-item", "notifications", id, "Go to tab 2"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("computer's screen"), "{err}");
+    let (code, _, err) = server.run(&["phone-item", "notifications", "gone", "Dismiss it"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("changed"), "{err}");
+
+    // A kept option runs, and the notification is gone from the view.
+    let said = server.ok(&["phone-item", "notifications", id, "Dismiss it"]);
+    assert_eq!(said.trim(), "Dismissed.");
+    let id = id.to_string();
+    next_line(&mut stream, |v| {
+        v["views"].as_array().is_some() && !v.to_string().contains(&id)
+    });
+
+    // Off, no views, and a tap is refused.
+    common::write_settings(&server.home, json!({ "phone_views": false }));
+    let off = next_line(&mut stream, |v| v["views"].is_null());
+    assert!(off["tabs"].is_array());
+    let (code, _, err) = server.run(&["phone-view", "ci", "Read CI again now"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("off"), "{err}");
 }

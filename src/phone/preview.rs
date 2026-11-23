@@ -93,6 +93,8 @@ pub fn assets_dir(dir: &Path) -> Result<PathBuf, String> {
 /// The made-up workspace.
 struct Data {
     tabs: Vec<Value>,
+    /// Mission control's views, as the panel lists them.
+    views: Vec<Value>,
     turns: HashMap<String, Vec<Value>>,
     /// The images the app sent, by the name answered.
     images: HashMap<String, (Vec<u8>, &'static str)>,
@@ -109,6 +111,7 @@ impl Data {
         let now = crate::util::now_ms();
         Data {
             tabs: made_up::tabs(now),
+            views: made_up::views(now),
             turns: made_up::turns(now).into_iter().collect(),
             images: HashMap::new(),
             live: true,
@@ -170,6 +173,7 @@ impl Data {
     fn snapshot(&self) -> Value {
         json!({
             "tabs": self.tabs,
+            "views": self.views,
             "live": self.live,
             "close": true,
             "reminders": true,
@@ -314,6 +318,8 @@ fn routes(preview: Arc<Preview>) -> Router {
         .route("/api/tabs/{pane}/close", post(close))
         .route("/api/tabs/{pane}/remind", post(remind))
         .route("/api/tabs/{pane}/pin", post(pin))
+        .route("/api/views/{view}/item", post(view_item))
+        .route("/api/views/{view}/act", post(view_act))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
         .layer(middleware::from_fn_with_state(
             preview.clone(),
@@ -797,6 +803,85 @@ async fn remind(
 }
 
 /// A tab pinned, or, with `pin` false, unpinned.
+/// What the server says when an option names something that has gone.
+const CHANGED: &str = "That has changed since the menu opened.";
+
+/// An option of a made-up item's menu, by the item's ID and its label, as
+/// the server refuses one it no longer offers or that the phone does
+/// itself; one that takes the item away ("Take it out…", "Dismiss it")
+/// takes it out of its view, and any other only says it ran.
+async fn view_item(
+    State(preview): State<Arc<Preview>>,
+    UrlPath(view): UrlPath<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let (id, label) = (text_of(&body, "id"), text_of(&body, "label"));
+    preview.change(|d| {
+        if !d.live {
+            return offline();
+        }
+        let Some(v) = d.views.iter_mut().find(|v| v["key"] == view.as_str()) else {
+            return refused(StatusCode::CONFLICT, CHANGED);
+        };
+        let groups = v["groups"]
+            .as_array_mut()
+            .map(Vec::as_mut_slice)
+            .unwrap_or_default();
+        for group in groups {
+            let Some(items) = group["items"].as_array_mut() else {
+                continue;
+            };
+            let Some(at) = items.iter().position(|i| i["id"] == id.as_str()) else {
+                continue;
+            };
+            let option = items[at]["options"]
+                .as_array()
+                .and_then(|o| o.iter().find(|o| o["label"] == label.as_str()).cloned());
+            let Some(option) = option else {
+                return refused(StatusCode::CONFLICT, CHANGED);
+            };
+            if ["go", "open", "copy"]
+                .iter()
+                .any(|k| option.get(*k).is_some())
+            {
+                return refused(StatusCode::CONFLICT, "The phone does that one itself.");
+            }
+            if label.starts_with("Take it out") || label.starts_with("Dismiss") {
+                items.remove(at);
+            }
+            return said(format!("{label}: done (made up)"));
+        }
+        refused(StatusCode::CONFLICT, CHANGED)
+    })
+}
+
+/// An option of a made-up view's own menu, by its label.
+async fn view_act(
+    State(preview): State<Arc<Preview>>,
+    UrlPath(view): UrlPath<String>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let label = text_of(&body, "label");
+    preview.change(|d| {
+        if !d.live {
+            return offline();
+        }
+        let offered = d
+            .views
+            .iter()
+            .find(|v| v["key"] == view.as_str())
+            .and_then(|v| v["acts"].as_array())
+            .and_then(|a| a.iter().find(|o| o["label"] == label.as_str()));
+        match offered {
+            None => refused(StatusCode::CONFLICT, CHANGED),
+            Some(o) if o.get("open").is_some() => {
+                refused(StatusCode::CONFLICT, "The phone does that one itself.")
+            }
+            Some(_) => said(format!("{label}: done (made up)")),
+        }
+    })
+}
+
 async fn pin(
     State(preview): State<Arc<Preview>>,
     UrlPath(n): UrlPath<String>,

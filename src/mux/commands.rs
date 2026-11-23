@@ -135,6 +135,8 @@ pub const NAMES: &[&str] = &[
     "pin",
     "watch",
     "phone-pair",
+    "phone-item",
+    "phone-view",
     "ready",
     "tip",
     "press",
@@ -252,6 +254,14 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "watch",
         "watch: every Claude tab's state, last turn and waiting prompt, a line of JSON now and each time they change, until the reader hangs up",
+    ),
+    (
+        "phone-item",
+        "phone-item <view> <id> <label>: from switchboard phone, the option of mission control's menu for the item <id> of <view> (landing, autopilot, prs, ci, notifications) labeled <label>, run with no client and answered with what it says once done; refused for one the phone leaves out (it needs the computer's screen) or no longer offered, and while phone_views is off",
+    ),
+    (
+        "phone-view",
+        "phone-view <view> <label>: from switchboard phone, the option of <view>'s own menu (m) labeled <label>, run as phone-item runs an item's",
     ),
     (
         "phone-pair",
@@ -576,6 +586,10 @@ impl Server {
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.
             "watch" => Err("watch takes nothing".into()),
+            // Answered by `Server::handle`, once the option has run.
+            "phone-item" | "phone-view" => {
+                Err("phone-item and phone-view are answered as they run".into())
+            }
             "phone-pair" => match rest.first() {
                 Some(device) => self.phone_pair_ask(device),
                 None => Err("phone-pair takes the device asking".into()),
