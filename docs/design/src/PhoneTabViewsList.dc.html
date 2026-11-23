@@ -283,7 +283,9 @@ const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: '
 // On a channel this takes the right-edge swipe board 185 gave mission control's list, which is one ‹ away; on a tab with
 // none of the three, the swipe opens the list. A note reaches the phone only while Settings' phone_tab_note is on, off by
 // default, an exception to notes staying on the computer that CLAUDE.md names; with it off, the tab's section has no Note,
-// and the panel opens on its PR or ticket.
+// and the panel opens on its PR or ticket, or, with neither, on the list, as for a tab with none. The tab's views are
+// Settings' phone_tab_views, on by default, within phone_views: with phone_tab_views off the swipe opens the list as board
+// 185 draws it, and with phone_views off there is no panel at all. The build widens CLAUDE.md's phone rule to these views.
 const C = { bg: '#11121a', surface: '#1b1e29', raised: '#20243a', chosen: '#262b40', line: '#3a3f52', text: '#c9cdd9', dim: '#8d93a8', faint: '#565b6e', accent: '#5fd7ff', ink: '#11131a', yellow: '#f2c56b', ybg: '#3a3220', green: '#7fd18b', gbg: '#1d3a2a', blue: '#82aaff', bbg: '#20304f', red: '#ff8a94', claude: '#d97757', you: '#5f9fd7' };
 const PT = (pt) => pt / 22, Wd = (pt) => pt / 10.4;
 // TEXT AS AN IMAGE, so it sits on the controls drawn as images: one color, one size, vertically centered in its box.
