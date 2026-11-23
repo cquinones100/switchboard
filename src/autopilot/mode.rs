@@ -513,11 +513,14 @@ impl Mode {
 }
 
 impl Mode {
-    /// The items of its note put next in its queue, by their first lines.
+    /// The items of its note put next in its queue, by their first lines,
+    /// and the issues put next whatever note was worked then: an issue's
+    /// place is its repository's, so one the coordinator put next before
+    /// autopilot started on a note still leads.
     pub fn next_here(&self) -> Vec<String> {
         self.next
             .iter()
-            .filter(|x| x.note == self.note_id)
+            .filter(|x| x.note == self.note_id || super::issues::reference_in(&x.text).is_some())
             .map(|x| x.text.clone())
             .collect()
     }
@@ -741,12 +744,17 @@ mod tests {
                     note: "n-ffffffffffff".into(),
                     text: "Elsewhere".into(),
                 },
+                // An issue put next before autopilot worked this note.
+                Skipped {
+                    note: String::new(),
+                    text: "o/r#3: An issue".into(),
+                },
             ];
         })
         .unwrap();
         let mode = Mode::read(&dir);
-        assert_eq!(mode.next.len(), 2);
-        assert_eq!(mode.next_here(), ["Here"]);
+        assert_eq!(mode.next.len(), 3);
+        assert_eq!(mode.next_here(), ["Here", "o/r#3: An issue"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

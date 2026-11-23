@@ -370,5 +370,8 @@ fn coordinator_order_puts_next_s_issues_first_in_autopilot_s_queue_in_its_order(
         .collect();
     assert_eq!(next, ["o/r#3: A", "o/r#1: B"]);
     let (code, _, err) = server.run(&["coordinator-ordered", "o/r#2", "1", "o/r#5: X"]);
-    assert_ne!(code, 0, "a first line naming another issue is refused: {err}");
+    assert_ne!(
+        code, 0,
+        "a first line naming another issue is refused: {err}"
+    );
 }
