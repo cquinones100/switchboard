@@ -617,6 +617,9 @@ pub fn restage(tabs: &mut Vec<Value>, now_ms: i64) {
         .filter_map(|(stage, m)| {
             let at = models.iter().position(|x| std::ptr::eq(x, m))?;
             let mut tab = tabs[at].clone();
+            // A working tab with no question takes Stop, as the server
+            // tells the phone (`stoppable`).
+            tab["stoppable"] = json!(tab["state"] == "working" && tab["prompt"].is_null());
             tab.as_object_mut()?
                 .extend(crate::phone::drawer::fields(m, stage, &r));
             Some(tab)

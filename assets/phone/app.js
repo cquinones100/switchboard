@@ -1553,11 +1553,13 @@ function composer() {
     return !!(tab && tab.prompt && tab.prompt.free);
   };
   const ready = () => field.value.trim() !== "" || (!free() && state.chosen.length > 0);
-  // While the tab's Claude works, an empty composer's button is Stop (■),
-  // and Send again once there is something to send, which queues it.
+  // While the tab's Claude works and Esc would stop it (the computer's
+  // `stoppable`: nothing asked, no dialog, its view not scrolled back), an
+  // empty composer's button is Stop (■), and Send again once there is
+  // something to send, which queues it.
   const stopping = () => {
     const tab = current();
-    return !!(tab && tab.state === "working" && !tab.prompt && !ready());
+    return !!(tab && tab.stoppable && !tab.prompt && !ready());
   };
   const light = () => {
     const stop = stopping();

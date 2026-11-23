@@ -588,7 +588,7 @@ ctx.fetch = (path, opts) => {
   if (opts && opts.method === "POST") posted.push(path + " " + opts.body);
   return Promise.resolve({ ok: true, status: 200, json: async () => ({ said: "Stopped tab 2 phone" }) });
 };
-const tab = (state) => ({ pane: "%5", index: 2, name: "phone", state, wait: "", turn: { prompt: "go" } });
+const tab = (state, stoppable = state === "working") => ({ pane: "%5", index: 2, name: "phone", state, stoppable, wait: "", turn: { prompt: "go" } });
 vm.runInContext(`
   state.me = { paired: true, computer: "mac" };
   listen();
@@ -621,6 +621,9 @@ const out = [];
   out.push("sent=" + posted[posted.length - 1]);
   update(tab("idle"));
   out.push("idle=" + look());
+  // Working where Esc wouldn't stop it (scrolled back, say): Send.
+  update(tab("working", false));
+  out.push("unstoppable=" + look());
   console.log(out.join("\n"));
 })();
 "##]
@@ -639,6 +642,7 @@ const out = [];
             "typed=➤ Send",
             r#"sent=/api/tabs/5/message {"text":"after that, run the tests","images":[]}"#,
             "idle=➤ Send",
+            "unstoppable=➤ Send",
         ],
         "{stdout}"
     );
@@ -1936,7 +1940,9 @@ fn the_phone_stops_a_working_claude_with_esc() {
 
     server.ok(&["set", "-t", &pane, "@agent_state", "working"]);
     let mut stream = watch(&server);
-    next_line(&mut stream, |v| v["tabs"][0]["state"] == "working");
+    next_line(&mut stream, |v| {
+        v["tabs"][0]["state"] == "working" && v["tabs"][0]["stoppable"] == true
+    });
     let said = server.ok(&["stop", "-t", &pane, "-s", "phone"]);
     assert!(said.starts_with("Stopped tab 1 "), "{said}");
     wait_until(&server, "Esc pressed in the pane", || {

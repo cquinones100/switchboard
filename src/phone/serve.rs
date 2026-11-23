@@ -285,21 +285,18 @@ impl Server {
         Ok(Reply::ok(format!("Closed tab {n} {name}\n")))
     }
 
-    /// `stop`: Esc pressed in a pane's Claude, which stops its turn as Esc
-    /// at the computer does; refused for a pane not running Claude, for one
-    /// whose Claude isn't working and for one asking a permission or showing
-    /// a dialog, which Esc would answer instead. `from` names who asked, for the log.
-    pub(crate) fn phone_stop(&mut self, pane: PaneId, from: Option<&str>) -> Result<Reply, String> {
-        self.phone_claude_pane(pane)?;
+    /// Whether Esc in a Claude pane would stop its turn, else why not: the
+    /// one test `stop` refuses by and `watch` tells the phone (`stoppable`),
+    /// so the phone offers ■ exactly when the server takes it.
+    fn phone_stoppable(&self, pane: PaneId) -> Result<(), String> {
         if self.agents.state(pane) != Some(crate::agent::State::Working) {
             return Err("its Claude isn't working".into());
         }
         // A permission auto mode asks while still working, or a dialog,
         // which Esc would refuse or close rather than stop the turn. A
         // prompt counts as `watch` sends the phone one, while the pane is
-        // marked asked, so Stop is refused exactly while the phone shows its
-        // card in place of ■, and a numbered list in Claude's own words,
-        // with nothing asked, leaves it allowed.
+        // marked asked, so a numbered list in Claude's own words, with
+        // nothing asked, leaves it allowed.
         let prompt_shown = self.phone_asking(pane) && self.phone_prompt_of(pane).is_some();
         if prompt_shown || self.phone_dialog(pane) {
             return Err("its Claude is asking something: answer it first".into());
@@ -311,6 +308,16 @@ impl Server {
                 "its Claude's view is scrolled back: scroll it down at the computer first".into(),
             );
         }
+        Ok(())
+    }
+
+    /// `stop`: Esc pressed in a pane's Claude, which stops its turn as Esc
+    /// at the computer does; refused for a pane not running Claude, for one
+    /// whose Claude isn't working and for one asking a permission or showing
+    /// a dialog, which Esc would answer instead. `from` names who asked, for the log.
+    pub(crate) fn phone_stop(&mut self, pane: PaneId, from: Option<&str>) -> Result<Reply, String> {
+        self.phone_claude_pane(pane)?;
+        self.phone_stoppable(pane)?;
         let tab = self.panes[&pane].tab;
         self.press(
             pane,
@@ -752,6 +759,7 @@ impl Server {
                         "at": turn.at,
                     })),
                     "prompt": prompt,
+                    "stoppable": self.phone_stoppable(pane).is_ok(),
                 });
                 if let Some(tab) = tab.as_object_mut() {
                     tab.extend(drawer::fields(t, stage, &r));
