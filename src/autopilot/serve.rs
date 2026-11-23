@@ -1380,20 +1380,18 @@ impl Server {
             });
             mode.next.splice(0..0, front);
         });
-        let written = match written {
-            Ok(mode) => {
-                self.autopilot.mode = mode;
-                Ok(())
-            }
+        match written {
+            Ok(mode) => self.autopilot.mode = mode,
             Err(e) => {
+                // Not read again, so nothing opens from the labels alone.
                 eprintln!("autopilot: couldn't write its queue: {e}");
-                Err(format!("couldn't write autopilot's queue: {e}"))
+                return Err(format!("couldn't write autopilot's queue: {e}"));
             }
-        };
+        }
         super::issues::forget(&paths::state_dir());
         self.autopilot.pilot.reset();
         self.autopilot_tick();
-        written
+        Ok(())
     }
 
     /// Whether `tab`'s landing pushed or merged, which a tab merely back in

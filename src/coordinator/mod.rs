@@ -240,10 +240,17 @@ impl Coordinator {
 /// The hash of the `coordinate` skill as the build reads it (the clone's,
 /// else what the binary carries), to tell a session given another.
 pub fn skill_hash() -> String {
-    let text = crate::assets::skills()
-        .into_iter()
-        .find(|(path, _)| path == "coordinate/SKILL.md")
-        .map(|(_, bytes)| bytes)
+    const FILE: &str = "coordinate/SKILL.md";
+    // The one file, never every skill's, since this runs on the server's
+    // task.
+    let text = crate::assets::dir()
+        .and_then(|dir| std::fs::read(dir.join("skills").join(FILE)).ok())
+        .or_else(|| {
+            crate::setup::skills::FILES
+                .iter()
+                .find(|(path, _)| *path == FILE)
+                .map(|(_, bytes)| bytes.to_vec())
+        })
         .unwrap_or_default();
     crate::tabs::color::sha256(&text)
         .iter()
