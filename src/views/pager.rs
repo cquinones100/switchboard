@@ -1208,7 +1208,11 @@ impl Pager {
         }
         let at = if forward { from + 1 } else { from };
         let act = self.find(at, forward);
-        self.vim.go_to(self.cursor, 0);
+        // Where the view found it; a search that found nothing leaves the
+        // cursor where it was, as Vim's does.
+        if self.cursor != from {
+            self.vim.go_to(self.cursor, 0);
+        }
         act
     }
 
@@ -2331,6 +2335,16 @@ mod tests {
     fn a_column_inside_a_wide_character_is_measured_from_its_start() {
         assert_eq!(width_to("a\u{E0B6}b", 2), 1);
         assert_eq!(width_to("a\u{E0B6}b", 4), 2);
+    }
+
+    #[test]
+    fn a_search_that_finds_nothing_leaves_the_cursor_where_it_was() {
+        let mut pager = Pager::new(markdown("Some words here"), 40, 10).with_cursor(true);
+        press(&mut pager, "w");
+        let at = (pager.cursor, pager.vim.col());
+        press(&mut pager, "/zzz");
+        pager.key(key(KeyCode::Enter));
+        assert_eq!((pager.cursor, pager.vim.col()), at);
     }
 
     #[test]
