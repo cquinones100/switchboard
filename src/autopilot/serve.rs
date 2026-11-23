@@ -2066,10 +2066,11 @@ impl Server {
                 self.land_as_set(tab);
             }
             self.dirty_tab(tab);
-            if let Mark::Landed(..) = mark
-                && let Some(m) = mine.iter().find(|m| m.tab == tab)
-            {
-                self.autopilot_keep_landed(m);
+            if let Mark::Landed(..) = mark {
+                if let Some(m) = mine.iter().find(|m| m.tab == tab) {
+                    self.autopilot_keep_landed(m);
+                }
+                self.coordinator_landed(tab);
             }
         }
     }

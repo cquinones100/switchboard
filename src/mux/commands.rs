@@ -145,8 +145,6 @@ pub const NAMES: &[&str] = &[
     "autopilot-board",
     "autopilot-pause",
     "slot-report",
-    "coordinator-close",
-    "coordinator-open-tab",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -305,14 +303,6 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "slot-report",
         "slot-report wait|hold <kind> <pid> [index cap child] -- command | done <pid>: from the cargo, npm and pnpm stand-ins, a command in the calling pane waiting for, holding or letting go a slot in the queue for heavy work",
-    ),
-    (
-        "coordinator-close",
-        "coordinator-close <tab>: the coordinator closing a tab (its number, or @<id>) whose PR has merged, as GitHub last answered; refuses any other tab, and autopilot's",
-    ),
-    (
-        "coordinator-open-tab",
-        "coordinator-open-tab -c <dir> <owner/repo#number>: from switchboard coordinator-open once GitHub says the issue may be taken, the coordinator opening a tab in the background running wt --issue on that issue in dir, once the tab it opened last has made its worktree; prints the tab's number",
     ),
 ];
 
@@ -492,8 +482,6 @@ impl Server {
                 self.kill_pane(p);
                 Reply::ok("")
             }),
-            "coordinator-close" => self.cmd_coordinator_close(rest),
-            "coordinator-open-tab" => self.cmd_coordinator_open(rest),
             "kill-tab" => Args::parse(rest, "ts").and_then(|a| match a.value('s') {
                 Some(from) => {
                     let pane = self.pane_from(&a, caller)?;

@@ -1,15 +1,15 @@
 //! The coordinator: one interactive Claude Code session the server keeps
 //! running in a pane that belongs to no tab, so it shows in no tab bar,
 //! sidebar group or mission control card, and keeps the work moving while
-//! you work in the tabs: it closes a tab once its PR has merged, opens the
-//! next ready issues of its note one at a time, keeps that note, and files
-//! issues after a leak-check. Its instructions are the `coordinate` skill
+//! you work in the tabs: it sets the order autopilot (src/autopilot), the
+//! one thing that opens and closes work tabs, takes its note's issues in,
+//! keeps that note, and files issues after a leak-check. Its instructions are the `coordinate` skill
 //! (assets/skills/coordinate), its permissions a settings file of its own
 //! passed with `--settings` as it starts, never a line in yours. New, with
 //! no tmux-version file behind it.
 //!
 //! It is woken only by events, each typed into its session as a line: a
-//! tab's PR merged, a tab finished or started waiting on you, its note
+//! tab's PR merged or an autopilot tab landed, a tab finished or started waiting on you, its note
 //! changed outside its own edits; a message from another tab reaches it as
 //! any tab's Claude, by its address in `switchboard tabs`, and you write to
 //! it in its pane (M-C). The events wait while it works, while it waits on
@@ -58,10 +58,6 @@ pub const FAILED_WITHIN: std::time::Duration = std::time::Duration::from_secs(15
 /// How long after you last typed in it events still wait, so none is typed
 /// into a message you are writing.
 pub const HELD_AFTER_TYPING: std::time::Duration = std::time::Duration::from_secs(60);
-/// The longest the tab it opened last holds the next open back while it
-/// hasn't made its worktree: a `wt` that failed leaves the tab at a shell
-/// in the folder it opened in for good.
-pub const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// The columns the side panel needs to take it; narrower, it goes over the
 /// tab's right half.
 pub const LEAST_COLUMNS: u16 = 50;
@@ -80,6 +76,8 @@ pub enum Wake {
     Finished { tab: usize, name: String },
     /// A tab's Claude started waiting on you.
     Waiting { tab: usize, name: String },
+    /// An autopilot tab landed with no PR known to merge.
+    Landed { tab: usize, name: String },
     /// Its note changed outside its own edits.
     NoteChanged { note: String },
 }
@@ -94,6 +92,7 @@ impl Wake {
                 number,
                 url,
             } => format!("[switchboard] Tab {tab} ({name}): PR #{number} merged, {url}"),
+            Wake::Landed { tab, name } => format!("[switchboard] Tab {tab} ({name}) landed"),
             Wake::Finished { tab, name } => format!("[switchboard] Tab {tab} ({name}) finished"),
             Wake::Waiting { tab, name } => {
                 format!("[switchboard] Tab {tab} ({name}) is waiting on you")
@@ -138,11 +137,6 @@ pub struct Coordinator {
     /// Whether it is editing its note now (an Edit or Write of it begun and
     /// not yet ended), while which a change is its own.
     pub editing_note: bool,
-    /// The tab it last opened for an issue, which must have its worktree
-    /// before it opens the next (`coordinator-open`), the folder it
-    /// opened in, and when, so a `wt` that failed holds the next at most
-    /// `OPEN_WAIT`.
-    pub opened: Option<(TabId, PathBuf, Instant)>,
     /// What is kept in `state.json`.
     pub saved: Saved,
     /// The note's title its running session was given its permissions for:
@@ -151,7 +145,7 @@ pub struct Coordinator {
 }
 
 /// What an upgrade hands over beside its pane (`Handover::coordinator_state`):
-/// the events still waiting and the tab it opened last, with its folder.
+/// the events still waiting.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Handed {
     #[serde(default)]
@@ -159,8 +153,6 @@ pub struct Handed {
     /// Whether its session had started, before which nothing is typed.
     #[serde(default)]
     pub ready: bool,
-    #[serde(default)]
-    pub opened: Option<(TabId, PathBuf)>,
 }
 
 impl Coordinator {
@@ -169,10 +161,6 @@ impl Coordinator {
         Handed {
             pending: self.pending.clone(),
             ready: self.ready,
-            opened: self
-                .opened
-                .as_ref()
-                .map(|(tab, dir, _)| (*tab, dir.clone())),
         }
     }
 }
@@ -307,9 +295,9 @@ pub fn command(shell: &str, model: &str, settings: &Path, resume: Option<&str>) 
     command
 }
 
-/// The permissions its session alone gets, beside yours: closing a tab
-/// whose PR merged and opening an issue's tab (both through commands that
-/// refuse anything else), naming a tab, listing the tabs, reading the
+/// The permissions its session alone gets, beside yours: setting the order
+/// autopilot takes an issue in (through a command that changes nothing but
+/// its priority label, on a repository you can push to), naming a tab, listing the tabs, reading the
 /// settings it follows and the shape skill's file, the leak-check,
 /// filing and commenting on issues through `coordinator-post` (which posts
 /// only to a repository of yours, a body from `posts_dir`, after a clean
@@ -324,12 +312,12 @@ pub fn permissions(note: &Path, posts: &Path) -> Value {
         "permissions": {
             "allow": [
                 "Bash(switchboard tabs)",
-                "Bash(switchboard coordinator-close *)",
-                "Bash(switchboard coordinator-open *)",
+                "Bash(switchboard coordinator-order *)",
                 "Bash(switchboard set -t * @tab_name *)",
                 "Bash(switchboard skill-path shape)",
                 "Bash(switchboard setting coordinator_note)",
                 "Bash(switchboard setting coordinator_shape_model)",
+                "Bash(switchboard setting autopilot)",
                 "Bash(switchboard leak-check --file *)",
                 "Bash(switchboard coordinator-post *)",
                 "Bash(gh issue view *)",
@@ -495,6 +483,14 @@ mod tests {
         assert!(allow.contains(&"Bash(switchboard coordinator-post *)"));
         assert!(!allow.iter().any(|r| r.starts_with("Bash(gh issue create")));
         assert!(!allow.iter().any(|r| r.contains("kill-tab")));
+        assert!(allow.contains(&"Bash(switchboard coordinator-order *)"));
+        assert!(
+            !allow
+                .iter()
+                .any(|r| r.contains("coordinator-open") || r.contains("coordinator-close")),
+            "autopilot alone opens and closes work tabs: {allow:?}"
+        );
+        assert!(!allow.iter().any(|r| r.starts_with("Bash(gh issue edit")));
         assert!(
             p["permissions"]["deny"]
                 .as_array()

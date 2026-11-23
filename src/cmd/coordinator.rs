@@ -2,12 +2,10 @@
 //! reaches GitHub without asking, each checking in code what its skill
 //! only says, so text it read on GitHub can't steer it past them:
 //!
-//! - `coordinator-open -c <dir> <owner/repo#number>`: asks GitHub whether
-//!   the issue may be taken by autopilot's rule (open, assigned to you, and
-//!   opened by you or labeled for autopilot by you or a writer,
-//!   `issues::coordinator_may_open`), then has the server open its tab
-//!   (`coordinator-open-tab`), which refuses while the last one hasn't
-//!   made its worktree.
+//! - `coordinator-order <owner/repo#number> <1-4>`: gives the issue that
+//!   `priority:` label (`issues::set_priority`, as the Autopilot board's
+//!   Move up and Move down do), the order autopilot takes it in, on a
+//!   repository you can push to, changing nothing else of it.
 //! - `coordinator-post issue -C <clone> --title <title> --body-file <file>`
 //!   and `coordinator-post comment -C <clone> <number> --body-file <file>`:
 //!   files an issue (assigned to you) or comments on one, only on the
@@ -26,7 +24,6 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 
 use crate::integrations::github::{self, Repo};
-use crate::mux::socket;
 use crate::util;
 
 const SOURCE: &str = "coordinator";
@@ -36,51 +33,46 @@ fn fail(what: &str, why: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
-/// `coordinator-open -c <dir> <owner/repo#number>`.
-pub fn open_main(args: Vec<String>) -> ExitCode {
-    const NAME: &str = "coordinator-open";
-    let [c, dir, reference] = args.as_slice() else {
-        eprintln!("usage: switchboard {NAME} -c <dir> <owner/repo#number>");
-        return ExitCode::from(2);
+/// `coordinator-order <owner/repo#number> <1-4>`.
+pub fn order_main(args: Vec<String>) -> ExitCode {
+    const NAME: &str = "coordinator-order";
+    let usage = || {
+        eprintln!("usage: switchboard {NAME} <owner/repo#number> <1-4>");
+        ExitCode::from(2)
     };
-    if c != "-c" {
-        eprintln!("usage: switchboard {NAME} -c <dir> <owner/repo#number>");
-        return ExitCode::from(2);
-    }
+    let [reference, priority] = args.as_slice() else {
+        return usage();
+    };
+    let Some(priority) = priority.parse::<u8>().ok().filter(|p| (1..=4).contains(p)) else {
+        return usage();
+    };
     let Some((repo, number)) = crate::autopilot::issues::parse_reference(reference) else {
         return fail(NAME, &format!("{reference} isn't <owner/repo#number>"));
     };
-    let dir = PathBuf::from(dir);
-    if !dir.is_dir() {
-        return fail(NAME, &format!("{} isn't a folder", dir.display()));
-    }
-    let label = crate::repos::issue_label_known(&dir);
-    let may = util::block_on(crate::autopilot::issues::coordinator_may_open(
-        &repo,
-        number,
-        label.as_deref(),
-    ));
-    if let Err(why) = may {
-        return fail(NAME, &why);
-    }
-    let dir = dir.canonicalize().unwrap_or(dir);
-    let reference = format!("{repo}#{number}");
-    match socket::ask(&[
-        "coordinator-open-tab",
-        "-c",
-        &dir.to_string_lossy(),
-        &reference,
-    ]) {
-        Ok((0, out, _)) => {
-            print!("{out}");
+    let set = util::block_on(async {
+        pushable(&repo).await?;
+        crate::autopilot::issues::set_priority(&repo, number, priority).await
+    });
+    match set {
+        Ok(()) => {
+            println!(
+                "{repo}#{number}: {}",
+                crate::autopilot::issues::priority_label(priority)
+            );
             ExitCode::SUCCESS
-        }
-        Ok((code, _, err)) => {
-            eprint!("{err}");
-            ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Err(e) => fail(NAME, &format!("{e:#}")),
     }
+}
+
+/// Refuses a repository you can't push to, so nothing changes on someone
+/// else's.
+async fn pushable(repo: &Repo) -> anyhow::Result<()> {
+    let about = github::rest("GET", &format!("/repos/{repo}"), None, SOURCE).await?;
+    if about.pointer("/permissions/push") != Some(&Value::Bool(true)) {
+        anyhow::bail!("{repo} isn't a repository you can push to");
+    }
+    Ok(())
 }
 
 /// What `coordinator-post` posts.
@@ -172,10 +164,7 @@ pub fn post_main(args: Vec<String>) -> ExitCode {
             .map_err(|e| anyhow::anyhow!("{} has no origin: {e}", clone.display()))?;
         let repo: Repo = github::parse_remote(origin.trim())
             .ok_or_else(|| anyhow::anyhow!("{}'s origin isn't on GitHub", clone.display()))?;
-        let about = github::rest("GET", &format!("/repos/{repo}"), None, SOURCE).await?;
-        if about.pointer("/permissions/push") != Some(&Value::Bool(true)) {
-            anyhow::bail!("{repo} isn't a repository you can push to");
-        }
+        pushable(&repo).await?;
         match &post {
             Post::Issue { title } => {
                 let me = github::rest("GET", "/user", None, SOURCE).await?;
