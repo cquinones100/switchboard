@@ -688,7 +688,17 @@ impl Pager {
         if !self.has_cursor() {
             return;
         }
-        self.cursor = self.snap(at.map_or(self.top, |a| self.doc.line_at(a)));
+        // On the line it was on, a blank one or a rule included, as Vim's
+        // motions leave it; on a picture's first row; a view without one
+        // before on the first stop.
+        self.cursor = match at {
+            Some(a) => self.picture_start(
+                self.doc
+                    .line_at(a)
+                    .min(self.doc.lines.len().saturating_sub(1)),
+            ),
+            None => self.snap(self.top),
+        };
         self.show_cursor();
         self.vim_follow_layout();
         self.kept_col = None;
@@ -2378,6 +2388,18 @@ mod tests {
         press(&mut pager, "0");
         pager.resize(40, 20);
         assert_eq!(pager.vim.col(), 0);
+    }
+
+    #[test]
+    fn a_new_layout_leaves_the_cursor_on_a_blank_line_it_was_on() {
+        let mut pager = Pager::new(markdown(&long_text()), 100, 20).with_cursor(true);
+        press(&mut pager, "}");
+        assert!(cursor_line(&pager).trim().is_empty());
+        pager.resize(100, 18);
+        assert!(
+            cursor_line(&pager).trim().is_empty(),
+            "still on the blank line"
+        );
     }
 
     #[test]
