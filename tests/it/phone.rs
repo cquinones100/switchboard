@@ -1165,8 +1165,9 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     );
 }
 
-/// The drawer ends on the app's build, short, and says which of the page
-/// and its worker is behind the server's build; every request names both.
+/// The drawer ends on the app's build, short, says it is updating while the
+/// page or its worker isn't the server's build, and which is behind once
+/// the update failed; every request names both.
 #[test]
 fn the_drawer_ends_on_the_build_and_says_when_the_worker_is_behind() {
     let script = r#"
@@ -1177,18 +1178,39 @@ const ctx = vm.createContext({
   Node: class Node {},
   document: { getElementById: () => ({ querySelector: () => null }), addEventListener: () => {}, createElement: (tag) => ({ tag, children: [], className: "", setAttribute() {}, append(...k) { this.children.push(...k); } }), createTextNode: (text) => ({ text }) },
   window: { addEventListener: () => {} },
+  history: { replaceState: (_, __, url) => console.log("address=" + url) },
+  location: { reload: () => console.log("reloaded") },
   fetch: () => new Promise(() => {}),
+  setTimeout,
+  clearTimeout,
   console,
 });
 vm.runInContext(source, ctx);
-const line = ([worker, server]) => vm.runInContext(`
+const line = ([worker, server, failed]) => vm.runInContext(`
   workerBuild = ${JSON.stringify(worker)};
   state.me = { build: ${JSON.stringify(server)} };
+  failedFor = ${JSON.stringify(failed || null)};
   ((l) => l.className + "=" + l.children.map((c) => c.text).join("") + "|" + buildHeader()["X-Switchboard-Build"])(buildLine());
 `, ctx);
-// [the worker's build, the server's]; a server older than the page names none.
-for (const c of [[null, "1a2b3c4d5e6f"], ["none", "1a2b3c4d5e6f"], ["1a2b3c4d5e6f", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "1a2b3c4d5e6f"], ["unknown", "1a2b3c4d5e6f"], ["9f8e7d6c5b4a", "9f8e7d6c5b4a"], ["1a2b3c4d5e6f", "9f8e7d6c5b4a"], ["9f8e7d6c5b4a", undefined]]) console.log(line(c));
-// A page left open across a restart reads the server's build again.
+// [the worker's build, the server's, the build an update to failed]; a
+// server older than the page names none.
+for (const c of [
+  [null, "1a2b3c4d5e6f"],
+  ["none", "1a2b3c4d5e6f"],
+  ["1a2b3c4d5e6f", "1a2b3c4d5e6f"],
+  ["9f8e7d6c5b4a", "1a2b3c4d5e6f"],
+  ["unknown", "1a2b3c4d5e6f"],
+  ["9f8e7d6c5b4a", "9f8e7d6c5b4a"],
+  ["1a2b3c4d5e6f", "9f8e7d6c5b4a"],
+  ["9f8e7d6c5b4a", undefined],
+  ["9f8e7d6c5b4a", "1a2b3c4d5e6f", "1a2b3c4d5e6f"],
+  ["unknown", "1a2b3c4d5e6f", "1a2b3c4d5e6f"],
+  ["9f8e7d6c5b4a", "9f8e7d6c5b4a", "9f8e7d6c5b4a"],
+  ["1a2b3c4d5e6f", "9f8e7d6c5b4a", "9f8e7d6c5b4a"],
+]) console.log(line(c));
+// A page left open across a restart reads the server's build again and,
+// with no worker controlling it, reloads on the drawer.
+vm.runInContext(`workerBuild = "none"; failedFor = null; state.me = { build: "1a2b3c4d5e6f" };`, ctx);
 ctx.fetch = async () => ({ status: 200, ok: true, json: async () => ({ paired: true, build: "9f8e7d6c5b4a" }) });
 vm.runInContext("readServerBuild()", ctx).then(() => console.log("server=" + vm.runInContext("state.me.build", ctx)));
 "#;
@@ -1201,14 +1223,136 @@ vm.runInContext("readServerBuild()", ctx).then(() => console.log("server=" + vm.
             "build-line=build 1a2b3c4|page=1a2b3c4d5e6f",
             "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=none",
             "build-line=build 1a2b3c4|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
+            "build-line=Updating to 1a2b3c4…|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "build-line=Updating to 1a2b3c4…|page=1a2b3c4d5e6f worker=unknown",
+            "build-line=Updating to 9f8e7d6…|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "build-line=Updating to 9f8e7d6…|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
+            "build-line=Updating to 1a2b3c4…|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
             "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
             "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=unknown",
             "build-line behind=app behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
             "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=1a2b3c4d5e6f",
-            "build-line behind=worker behind, close and reopen the app|page=1a2b3c4d5e6f worker=9f8e7d6c5b4a",
+            "address=#",
+            "reloaded",
             "server=9f8e7d6c5b4a",
         ],
         "{out}"
+    );
+}
+
+/// A channel's page (CHANNEL_PAGE) with a service worker controlling it
+/// whose registration counts `update()`s, `controllerchange` in
+/// `swListeners`, and each reload recorded with the address it reloaded.
+/// Its MessageChannel hands the worker a port that answers at once.
+fn page_with_a_worker() -> String {
+    let stand_in = r##"
+const swListeners = {};
+const registration = { updates: 0, installing: null, waiting: null, active: null, async update() { this.updates++; this.installing = {}; } };
+// The worker answers its build, "dev" as the page's, on the port it is sent.
+const serviceWorker = { controller: { postMessage: (message, ports) => ports && ports[0].reply({ build: "dev" }) }, addEventListener: (k, f) => { swListeners[k] = f; }, getRegistration: async () => registration };
+const reloads = [];
+"##;
+    let page = CHANNEL_PAGE
+        .replace(
+            "  EventSource:",
+            "  MessageChannel: class { constructor() { const port1 = { close() {} }; this.port1 = port1; this.port2 = { reply: (data) => port1.onmessage({ data }) }; } },\n  EventSource:",
+        )
+        .replace(
+            "navigator: { vibrate: () => buzzes++ },",
+            "navigator: { vibrate: () => buzzes++, serviceWorker },",
+        )
+        .replace(
+            "location: { hash: \"\" },",
+            "location: { hash: \"\", reload: () => reloads.push(addresses[addresses.length - 1]) },",
+        );
+    assert!(
+        page.contains("serviceWorker }")
+            && page.contains("reloads.push")
+            && page.contains("MessageChannel")
+    );
+    [stand_in, &page, r##"
+const tab = { pane: "%5", index: 2, name: "phone", state: "idle", turn: { prompt: "go" } };
+const update = (build) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [tab], build }) });
+const tick = () => new Promise((r) => setTimeout(r, 0));
+vm.runInContext(`
+  state.me = { paired: true, computer: "mac", build: "dev" };
+  workerBuild = "dev";
+  listen();
+  state.open = "5";
+`, ctx);
+"##]
+    .concat()
+}
+
+/// A new build on the stream (assets/phone/app.js's `catchUp`) asks the
+/// browser for the new worker, says it is updating, and, as the new worker
+/// takes over, reloads the page on the tab it had open; skipped without
+/// Node.
+#[test]
+fn a_new_build_on_the_stream_updates_the_worker_and_reloads_on_the_open_tab() {
+    let script = [&page_with_a_worker(), r##"
+(async () => {
+  update("dev");
+  await tick();
+  console.log("same build=" + registration.updates);
+  update("new");
+  await tick();
+  console.log("new build=" + registration.updates + " " + vm.runInContext("buildLine().textContent", ctx));
+  update("new");
+  await tick();
+  console.log("again=" + registration.updates + " reloads=" + reloads.length);
+  swListeners.controllerchange();
+  console.log("reloaded=" + reloads.join(" "));
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            "same build=0",
+            "new build=1 Updating to new…",
+            "again=1 reloads=0",
+            "reloaded=#5",
+        ],
+        "{stdout}"
+    );
+}
+
+/// A new worker taking over while the composer holds a draft waits to
+/// reload until the draft is cleared; skipped without Node.
+#[test]
+fn an_update_waits_for_a_draft_in_the_composer_to_be_cleared() {
+    let script = [
+        &page_with_a_worker(),
+        r##"
+(async () => {
+  update("dev");
+  const field = app.querySelector(".composer textarea");
+  field.value = "half a thought";
+  field.dispatchEvent(new Event("input"));
+  update("new");
+  await tick();
+  swListeners.controllerchange();
+  console.log("drafting=" + reloads.length);
+  update("new");
+  console.log("redrawn=" + reloads.length);
+  field.value = "";
+  field.dispatchEvent(new Event("input"));
+  console.log("cleared=" + reloads.join(" "));
+})();
+"##,
+    ]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["drafting=0", "redrawn=0", "cleared=#5"],
+        "{stdout}"
     );
 }
 

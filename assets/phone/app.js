@@ -100,21 +100,143 @@ async function askWorkerBuild() {
   if (worker !== (navigator.serviceWorker && navigator.serviceWorker.controller)) return;
   workerBuild = worker ? String(answer.build || "unknown") : "none";
   redrawBuildLine();
+  catchUp();
 }
 
 // The server's build read again, for a page left open while Switchboard
 // restarted on a new one: as it comes back and as a new worker takes over.
 async function readServerBuild() {
   const me = await api("/api/me").catch(() => null);
-  if (!me || !me.build || !state.me) return;
-  state.me.build = me.build;
+  if (me && me.build) serverBuildIs(me.build);
+}
+
+// The server's build as `/api/me` or the stream names it.
+function serverBuildIs(build) {
+  if (!state.me) return;
+  state.me.build = build;
   redrawBuildLine();
+  catchUp();
+}
+
+// ── Updating itself to the computer's build ──
+// A home-screen app on iOS stays alive in the background for days, so the
+// page takes up a new build by itself rather than waiting to be reopened:
+// finding the server's build differs (as it comes back, or from the
+// stream), it asks the browser for the new worker, which takes over as it
+// installs (sw.js), and then reloads on the tab it had open, its panel or
+// view closed. With no worker controlling the page (the preview serves
+// none), or its worker already the server's build, it reloads without
+// one. The reload waits while something would be lost (`busy`). The build
+// it reloaded for is kept for the page's session, so a reload that brought
+// the old page back says the app is behind rather than reloading again.
+const RELOADED = "switchboard-reloaded-for";
+const UPDATE_MS = 30000; // how long a new worker has to take over
+let updatingTo = null; // the server's build an update is under way to
+let failedFor = null; // the server's build an update to failed
+let reloadWanted = false;
+let updateTimer = null;
+
+// The build the page reloaded for, kept for its session; `set` keeps
+// another, null forgets it.
+function reloadedFor(set) {
+  try {
+    if (set === null) sessionStorage.removeItem(RELOADED);
+    else if (set) sessionStorage.setItem(RELOADED, set);
+    return sessionStorage.getItem(RELOADED);
+  } catch (_) {
+    return null;
+  }
+}
+
+const serverBuild = () => (state.me && state.me.build) || null;
+const pageBehind = () => !!serverBuild() && BUILD !== serverBuild();
+const workerBehind = () => !!workerBuild && workerBuild !== "none" && workerBuild !== (serverBuild() || BUILD);
+
+// As the page starts on the server's build: a reload that brought the same
+// old page back failed, and one that took it up is forgotten.
+function startedOn(server) {
+  const reloaded = reloadedFor();
+  if (!reloaded) return;
+  reloadedFor(null);
+  if (reloaded === server && BUILD !== server) failedFor = server;
+}
+
+async function catchUp() {
+  const server = serverBuild();
+  if (!pageBehind() && !workerBehind()) {
+    updatingTo = null;
+    failedFor = null;
+    return;
+  }
+  if (updatingTo === server || failedFor === server) return;
+  const sw = typeof navigator !== "undefined" && navigator.serviceWorker;
+  const controller = sw && sw.controller;
+  // A worker that hasn't said its build yet: its answer comes back here.
+  if (controller && workerBuild === null) return;
+  updatingTo = server;
+  redrawBuildLine();
+  if (!controller || !workerBehind()) return reloadWhenFree();
+  const failed = () => {
+    if (updatingTo !== server) return;
+    updatingTo = null;
+    failedFor = server;
+    redrawBuildLine();
+  };
+  try {
+    const registration = await sw.getRegistration();
+    if (!registration) return failed();
+    await registration.update();
+    const isNewWorker = !!(registration.installing || registration.waiting) || registration.active !== sw.controller;
+    if (!isNewWorker) return failed();
+  } catch (_) {
+    return failed();
+  }
+  clearTimeout(updateTimer);
+  updateTimer = setTimeout(failed, UPDATE_MS);
+}
+
+// A new worker took over: the page reloads when it is behind; a page that
+// is the server's build only needed the worker.
+function workerTookOver() {
+  clearTimeout(updateTimer);
+  if (!pageBehind() || failedFor === serverBuild()) return;
+  updatingTo = serverBuild();
+  redrawBuildLine();
+  reloadWhenFree();
+}
+
+// What a reload would lose: words or photos in the composer, a prompt with
+// options ticked, or a menu or question open.
+function busy() {
+  const field = app.querySelector(".composer textarea");
+  const drafting = (!!field && field.value.trim() !== "") || state.chosen.length > 0;
+  const tab = current();
+  const prompt = tab && tab.prompt;
+  const partlyAnswered = !!prompt && !!prompt.multi && prompt.options.some((o) => o.checked);
+  return drafting || partlyAnswered || !!state.menu;
+}
+
+function reloadWhenFree() {
+  reloadWanted = true;
+  reloadIfFree();
+}
+
+// Asked as the page redraws, as the composer changes and as the app comes
+// back, so the reload comes as soon as nothing holds it. The page's history
+// step is put back to the tab alone, so it opens with no view over it.
+function reloadIfFree() {
+  if (!reloadWanted || busy()) return;
+  reloadWanted = false;
+  reloadedFor(serverBuild());
+  history.replaceState(null, "", "#" + (state.open || ""));
+  location.reload();
 }
 
 // From the page's first moment, since a new worker can take over before the
 // page has asked the computer anything.
 if (typeof navigator !== "undefined" && navigator.serviceWorker) {
   navigator.serviceWorker.addEventListener("controllerchange", () => {
+    workerTookOver();
     askWorkerBuild().catch(() => {});
     readServerBuild();
   });
@@ -125,17 +247,16 @@ function redrawBuildLine() {
   if (line) line.replaceWith(buildLine());
 }
 
-// The dim line at the end of the drawer: the app's build, short, or, while
-// the worker or the page isn't the server's build (the page's, from a server
-// that names none), which is behind and how to take up the new one. A new
-// worker takes over an open page as it installs, so either can be behind.
+// The dim line at the end of the drawer: the app's build, short; while the
+// worker or the page isn't the server's build (the page's, from a server
+// that names none), that it is updating to it, or, once the update failed,
+// which is behind and how to take up the new one.
 function buildLine() {
-  const server = state.me && state.me.build;
-  const workerBehind = !!workerBuild && workerBuild !== "none" && workerBuild !== (server || BUILD);
-  const pageBehind = !!server && BUILD !== server;
-  const short = BUILD.split("+").map((c) => c.slice(0, 7)).join("+");
-  const behind = workerBehind ? "worker" : pageBehind ? "app" : null;
-  return el("div", { class: "build-line" + (behind ? " behind" : "") }, behind ? behind + " behind, close and reopen the app" : "build " + short);
+  const shorten = (build) => build.split("+").map((c) => c.slice(0, 7)).join("+");
+  const behind = workerBehind() ? "worker" : pageBehind() ? "app" : null;
+  const failed = !!behind && failedFor === (serverBuild() || BUILD);
+  const text = !behind ? "build " + shorten(BUILD) : failed ? behind + " behind, close and reopen the app" : "Updating to " + shorten(serverBuild() || BUILD) + "…";
+  return el("div", { class: "build-line" + (failed ? " behind" : "") }, text);
 }
 
 async function api(path, body) {
@@ -1593,6 +1714,8 @@ function composer() {
     fit();
   };
   field.addEventListener("input", resize);
+  // A draft cleared lets a held update reload.
+  field.addEventListener("input", reloadIfFree);
   // Images pasted join the ones + chose; the clipboard's text, if any, still
   // pastes as the browser would. A prompt's own answer takes no images.
   field.addEventListener("paste", (e) => {
@@ -1927,6 +2050,7 @@ function render(stick) {
   }
   if (state.open) channel(stick);
   else drawer();
+  reloadIfFree();
 }
 
 // ── Mission control's panel (boards 185 to 187) ──
@@ -2693,6 +2817,7 @@ function listen() {
     state.reminders = data.reminders !== false;
     state.remindTimes = data.remind_times || state.remindTimes;
     state.views = data.views || null;
+    if (data.build && state.me && data.build !== state.me.build) serverBuildIs(data.build);
     if (state.menu && state.menu.panel) staleMenu();
     else if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
     if (!state.views) closePanel();
@@ -2804,6 +2929,7 @@ async function openTapped(posted) {
 // couldn't reach the computer as it opened.
 function cameBack() {
   if (document.visibilityState === "hidden") return;
+  reloadIfFree();
   if (state.me && state.me.paired) reconnect();
   else if (state.unreached) reach();
 }
@@ -2885,6 +3011,7 @@ async function start() {
     return;
   }
   state.unreached = false;
+  startedOn(state.me.build);
   if (!state.me.paired) {
     if (state.me.revoked) {
       refused("This phone was unpaired", "Its pairing was taken away on the computer. Pair it again to carry on.");
@@ -2913,6 +3040,7 @@ async function start() {
   // once the tabs are read.
   wantTapped();
   if (hasTabs) tabsRead();
+  catchUp();
 }
 
 // The keyboard open, marked on the page so the screen leaves out the
