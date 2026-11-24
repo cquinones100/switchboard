@@ -133,6 +133,7 @@ const RELOADED = "switchboard-reloaded-for";
 const UPDATE_MS = 30000; // how long a new worker has to take over
 let updatingTo = null; // the server's build an update is under way to
 let failedFor = null; // the server's build an update to failed
+let reloadFailedFor = null; // the build a reload brought the old page back for, which coming back never tries again
 let reloadWanted = false;
 let updateTimer = null;
 
@@ -158,7 +159,7 @@ function startedOn(server) {
   const reloaded = reloadedFor();
   if (!reloaded) return;
   reloadedFor(null);
-  if (reloaded === server && BUILD !== server) failedFor = server;
+  if (reloaded === server && BUILD !== server) failedFor = reloadFailedFor = server;
 }
 
 async function catchUp() {
@@ -2957,6 +2958,10 @@ async function openTapped(posted) {
 // couldn't reach the computer as it opened.
 function cameBack() {
   if (document.visibilityState === "hidden") return;
+  // An update that failed (the computer out of reach as it was asked) is
+  // tried again as the app comes back, but for a reload that brought the
+  // old page back, which would only loop.
+  if (failedFor !== reloadFailedFor) failedFor = null;
   reloadIfFree();
   if (state.me && state.me.paired) reconnect();
   else if (state.unreached) reach();
