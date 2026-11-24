@@ -1097,15 +1097,14 @@ fn direct_now(path: &Path, data: &Map<String, Value>) {
 }
 
 /// Whether GitHub's failure to answer for a repository says it isn't there
-/// for you: no repository in its answer, GraphQL's not found, or one an
-/// organization's sign-in keeps the token out of.
+/// for you: no repository in its answer, one GitHub can't resolve, or one an
+/// organization's sign-in or the token's grants keep it out of.
 fn gone(error: &str) -> bool {
     [
         "didn't answer",
         "Could not resolve to a Repository",
-        "NOT_FOUND",
-        "FORBIDDEN",
         "SAML",
+        "Resource not accessible",
     ]
     .iter()
     .any(|w| error.contains(w))
@@ -1149,9 +1148,9 @@ pub fn migrate_lands() -> Option<String> {
         }
     };
     let mut asked = std::collections::HashMap::new();
-    // With GitHub not to be asked, whether a repository's CI runs on trains
-    // can't be told, so a computer whose queue was on waits until it can.
-    if !settings::is_on("github") && queue_was_on {
+    // With GitHub not to be asked, how a repository can land through a PR
+    // can't be told, so all but `direct` waits until it can.
+    if !settings::is_on("github") {
         direct_now(&path, &data);
         return None;
     }
@@ -1188,18 +1187,19 @@ pub fn migrate_lands() -> Option<String> {
             return None;
         }
     }
-    let said = match lands_migrated(&data, &guessed, queue_was_on, &|repo| {
-        asked.get(&repo.to_lowercase()).cloned()
+    // Worked out on the file as it is now, after GitHub's answers, so a
+    // change made to it meanwhile is kept.
+    let mut said = Vec::new();
+    let setup = |repo: &str| asked.get(&repo.to_lowercase()).cloned();
+    if let Err(e) = change_file(&path, |d| {
+        if let Some((out, set)) = lands_migrated(d, &guessed, queue_was_on, &setup) {
+            *d = out;
+            said = set;
+        }
     }) {
-        Some((out, set)) => match change_file(&path, |d| *d = out) {
-            Ok(()) => set,
-            Err(e) => {
-                eprintln!("repos.json: can't carry landing over to lands: {e}");
-                return None;
-            }
-        },
-        None => Vec::new(),
-    };
+        eprintln!("repos.json: can't carry landing over to lands: {e}");
+        return None;
+    }
     let mut dropped = false;
     for f in &setting_files {
         let Some(Value::Object(mut mine)) = util::read_json(f) else {
