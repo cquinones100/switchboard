@@ -1249,6 +1249,14 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
         "moving into it leaves it as written"
     );
     assert!(!app.modified(), "still nothing to save");
+    keys(&mut app, "5Gdd");
+    assert_eq!(
+        lines(&app)[2..4],
+        ["| a   | bbbb |", "| --- | ---- |"],
+        "the rows left after the last one is deleted"
+    );
+    keys(&mut app, "u");
+    assert_eq!(lines(&app)[2], "| a | bbbb |", "put back as written");
     keys(&mut app, "3Gllx");
     assert_eq!(
         lines(&app)[2],

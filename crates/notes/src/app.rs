@@ -4114,8 +4114,12 @@ impl App {
             // opened: a table only read, or put back as it was, stays as
             // written.
             let row = self.editor.doc.row;
+            // Rows deleted from a table's end leave the cursor under it.
+            let shorter = self.editor.doc.text.len() < text_before.len();
             self.editor.tidy(|doc| {
-                table::align(doc, row);
+                if !table::align(doc, row) && shorter && row > 0 {
+                    table::align(doc, row - 1);
+                }
             });
             self.editor.clamp();
         }
