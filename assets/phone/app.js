@@ -209,7 +209,8 @@ function workerTookOver() {
 }
 
 // What a reload would lose: words or photos in the composer, a prompt with
-// options ticked, a menu or question open, or a request under way.
+// options ticked, a menu or question open, a request under way, or what
+// one said when it ended (a toast, or the channel's error).
 // Sends, answers and other requests that change something, under way: a
 // reload would cut them off, so it waits for them, and is asked again after.
 let sending = 0;
@@ -229,7 +230,8 @@ function busy() {
   const tab = current();
   const prompt = tab && tab.prompt;
   const partlyAnswered = !!prompt && !!prompt.multi && prompt.options.some((o) => o.checked);
-  return drafting || partlyAnswered || !!state.menu || sending > 0;
+  const saying = toasts > 0 || !!state.error;
+  return drafting || partlyAnswered || !!state.menu || sending > 0 || saying;
 }
 
 function reloadWhenFree() {
@@ -429,10 +431,18 @@ async function pair() {
   setTimeout(look, 1500);
 }
 
+// Toasts showing, which hold an update's reload until they are read.
+let toasts = 0;
+
 function toast(text, failed, hint) {
   const t = el("div", { class: "toast" + (hint ? " hint" : "") }, hint ? null : failed ? el("span", { class: "bad" }, "✕") : el("span", { class: "ok" }, "✓"), text);
   document.body.append(t);
-  setTimeout(() => leave(t), 3000);
+  toasts++;
+  setTimeout(() => {
+    leave(t);
+    toasts--;
+    reloadIfFree();
+  }, 3000);
 }
 
 // ── Motion (board 184): the timings are app.css's variables ──
