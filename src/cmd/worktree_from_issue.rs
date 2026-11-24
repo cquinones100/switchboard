@@ -13,8 +13,10 @@
 //! repository is taken. In a tab autopilot opened, the same search autopilot
 //! takes issues from decides, which guards against anyone queuing work for
 //! your tabs: only an open issue assigned to you and carrying autopilot's
-//! label, opened by you or labeled by someone with write access, is started,
-//! by the queue's rules for its body. Its title and body go into the prompt
+//! label, opened by you or labeled by someone with write access and not
+//! edited since by anyone without it, is started, by the queue's rules for
+//! its body, with the body that search vetted: one changed since then fails
+//! the start, to be judged again. Its title and body go into the prompt
 //! as data, inside `<issue>` tags, with its link. The branch is
 //! `issue/<number>-<slug>`, its worktree `issue-<number>-<slug>`, and the
 //! issue it is for is kept in its git config (`branch.<branch>.wtnIssue`,
@@ -80,27 +82,44 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     let label = label.unwrap_or_default();
     // A request that fails says nothing of the issue, so it fails the start,
     // which autopilot tries again; only an answer without it refuses it.
-    let (repo, found) = issues::wait_for(async {
+    let (repo, found, passed) = issues::wait_for(async {
         let repo = github::repo_of(&root).await?;
         if let Some(w) = wanted.as_ref().filter(|w| !w.same(&repo)) {
             anyhow::bail!("{w}#{number} isn't an issue of {repo}, this clone's repository");
         }
         if !by_autopilot {
             let found = issues::open_issue(&repo, number).await?;
-            return anyhow::Ok((repo, found));
+            return anyhow::Ok((repo, found, None));
         }
-        let found = issues::fetch(&repo, &label).await?;
+        let (found, passed) = issues::fetch_judged(&repo, &label).await?;
+        let passed = passed
+            .into_iter()
+            .find(|(n, _)| *n == number)
+            .map(|(_, why)| why);
         // The search's index can lag a label taken off or an issue closed,
-        // so the issue found is asked about itself.
+        // so the issue found is asked about itself; its body must be the one
+        // the search vetted, since an edit since then wasn't judged.
         let found = match found.into_iter().find(|i| i.number == number) {
-            Some(i) => issues::still_stands(&repo, number, &label)
-                .await?
-                .map(|body| Issue { body, ..i }),
+            Some(i) => {
+                let body = issues::still_stands(&repo, number, &label).await?;
+                if body
+                    .as_deref()
+                    .is_some_and(|b| !issues::same_body(b, &i.body))
+                {
+                    anyhow::bail!(edited_since(&repo, number));
+                }
+                body.map(|_| i)
+            }
             None => None,
         };
-        anyhow::Ok((repo, found))
+        anyhow::Ok((repo, found, passed))
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        if by_autopilot {
+            issues::forget(&paths::state_dir());
+        }
+        e.to_string()
+    })?;
     // By hand, any open issue starts, Claude asking about what it leaves
     // open; the queue's rules are for what autopilot takes.
     let Some(issue) = found else {
@@ -109,6 +128,9 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         // skip it, and the queue's read is forgotten so it is read afresh.
         if by_autopilot {
             issues::forget(&paths::state_dir());
+            if let Some(why) = passed {
+                return Err(format!("autopilot passes over {repo}#{number}: {why}"));
+            }
             return Err(format!(
                 "{repo}#{number} isn't an open issue assigned to you and labeled \"{label}\" by you or someone with write access"
             ));
@@ -227,6 +249,10 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
                 "{repo}#{number} no longer stands as autopilot's work"
             ));
         }
+        if stands.is_some_and(|b| !issues::same_body(&b, &issue.body)) {
+            issues::forget(&paths::state_dir());
+            return Err(edited_since(&repo, number));
+        }
         let id = issues::claim_id().map_err(|e| e.to_string())?;
         let claimed = issues::wait_for(issues::claim(
             &repo,
@@ -287,6 +313,14 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         target,
     );
     hand_over(given, &root, &path, &start, target, prompt, &making)
+}
+
+/// Why a start fails whose issue's body changed after autopilot's search
+/// read it.
+fn edited_since(repo: &github::Repo, number: u64) -> String {
+    format!(
+        "{repo}#{number}'s body was edited since autopilot read it; it is judged again before it starts"
+    )
 }
 
 /// What Claude is told about the issue: where it is, its title and body as

@@ -3,8 +3,11 @@
 //! (`Mode::source`): its open issues assigned to you and carrying its
 //! `issueLabel` there (none taken while it isn't set), each taken only when you opened it or the label was added by
 //! you or someone with write access to the repository, so nobody outside
-//! it can queue work for your tabs by opening an issue. No tmux-version
-//! file is behind it.
+//! it can queue work for your tabs by opening an issue; and one you didn't
+//! open only while nobody without write access has edited its body since
+//! that label was added (`passed_over`), so its author can't rewrite what a
+//! writer labeled. Adding the label again after reading the edit takes it.
+//! No tmux-version file is behind it.
 //!
 //! An issue is ready as a planned note item is: its body is its plan. It
 //! joins the queue as an item of its own (`item_of`), whose first line is
@@ -284,6 +287,11 @@ pub struct Found {
     pub author: String,
     /// Who last added the label, as its timeline says.
     pub labeler: Option<String>,
+    /// When that label was added (ISO 8601, as GitHub gives it).
+    pub labeled_at: Option<String>,
+    /// The body's edits, each when it was made and by whom (none for a
+    /// deleted account).
+    pub edits: Vec<(String, Option<String>)>,
     /// The issues its body names as blocking it, whose state the search
     /// doesn't give (`blockers_named`).
     pub named: Vec<String>,
@@ -311,22 +319,39 @@ pub fn read_answer(repo: &Repo, data: &Value, label: &str) -> (String, Vec<Found
                 .iter()
                 .filter_map(|n| {
                     let number = n.get("number").and_then(Value::as_u64)?;
-                    let labeler = n
+                    let labeled = n
                         .pointer("/timelineItems/nodes")
                         .and_then(Value::as_array)
                         .and_then(|events| {
-                            events
-                                .iter()
-                                .rev()
-                                .find(|e| {
-                                    e.pointer("/label/name")
-                                        .and_then(Value::as_str)
-                                        .is_some_and(|l| l.eq_ignore_ascii_case(label))
-                                })
-                                .and_then(|e| e.pointer("/actor/login"))
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
+                            events.iter().rev().find(|e| {
+                                e.pointer("/label/name")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|l| l.eq_ignore_ascii_case(label))
+                            })
                         });
+                    let labeler = labeled
+                        .and_then(|e| e.pointer("/actor/login"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let labeled_at = labeled
+                        .and_then(|e| e.get("createdAt"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let edits = n
+                        .pointer("/userContentEdits/nodes")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|e| {
+                            Some((
+                                e.get("editedAt")?.as_str()?.to_string(),
+                                e.pointer("/editor/login")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                            ))
+                        })
+                        .collect();
                     let labels = n
                         .pointer("/labels/nodes")
                         .and_then(Value::as_array)
@@ -367,6 +392,8 @@ pub fn read_answer(repo: &Repo, data: &Value, label: &str) -> (String, Vec<Found
                         },
                         author: text(n, "/author/login"),
                         labeler,
+                        labeled_at,
+                        edits,
                     })
                 })
                 .collect()
@@ -375,38 +402,74 @@ pub fn read_answer(repo: &Repo, data: &Value, label: &str) -> (String, Vec<Found
     (viewer, found)
 }
 
-/// Whether an issue may be taken: you opened it, or the label was added by
-/// you or by one of `writers` (those with write access); never one whose
-/// labeler can't be told.
+/// Whether an issue may be taken: none of `passed_over`'s reasons holds.
 pub fn takeable(found: &Found, viewer: &str, writers: &HashSet<String>) -> bool {
-    let same = |who: &str| !who.is_empty() && who.eq_ignore_ascii_case(viewer);
-    if same(&found.author) {
-        return true;
-    }
-    found
-        .labeler
-        .as_deref()
-        .is_some_and(|l| same(l) || writers.contains(&l.to_lowercase()))
+    passed_over(found, viewer, writers).is_none()
 }
 
-/// The labelers whose access must be asked about: those of issues neither
-/// opened nor labeled by `viewer`, each once, lowercase.
+/// Why an issue isn't taken, or `None` when it is: you opened it, or the
+/// label was added by you or by one of `writers` (those with write access)
+/// and nobody else has edited its body since; never one whose labeler, or
+/// an editor since, can't be told.
+pub fn passed_over(found: &Found, viewer: &str, writers: &HashSet<String>) -> Option<String> {
+    let same = |who: &str| !who.is_empty() && who.eq_ignore_ascii_case(viewer);
+    if same(&found.author) {
+        return None;
+    }
+    let trusted = |who: &str| same(who) || writers.contains(&who.to_lowercase());
+    let Some(labeler) = found.labeler.as_deref() else {
+        return Some("who added its label can't be told".into());
+    };
+    if !trusted(labeler) {
+        return Some(format!(
+            "its label was added by {labeler}, who has no write access to the repository"
+        ));
+    }
+    let editor = edited_since_labeled(found).find(|e| !e.is_some_and(trusted))?;
+    Some(format!(
+        "its body was edited by {}, who has no write access to the repository, after its label was added; add the label again to take it",
+        editor.unwrap_or("a deleted account")
+    ))
+}
+
+/// Who edited an issue's body once its label was added, an edit with no
+/// label time (or at the same moment) counting as after it.
+fn edited_since_labeled(found: &Found) -> impl Iterator<Item = Option<&str>> {
+    let at = found.labeled_at.as_deref().unwrap_or_default();
+    found
+        .edits
+        .iter()
+        .filter(move |(when, _)| when.as_str() >= at)
+        .map(|(_, who)| who.as_deref())
+}
+
+/// Those whose access must be asked about: the labelers of issues not
+/// opened by `viewer`, and whoever edited their bodies after the label, but
+/// `viewer`, each once, lowercase.
 fn to_ask(found: &[Found], viewer: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for f in found {
-        let Some(l) = &f.labeler else { continue };
-        let l = l.to_lowercase();
-        if f.author.eq_ignore_ascii_case(viewer) || l == viewer.to_lowercase() || out.contains(&l) {
+        if f.author.eq_ignore_ascii_case(viewer) {
             continue;
         }
-        // A login as GitHub allows them, which keeps anything else out of
-        // the path; a bot's (`name[bot]`) is never asked about, so never
-        // taken.
-        // (an Enterprise Managed User's carries `_<shortcode>`)
-        if l.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            out.push(l);
+        let Some(labeler) = &f.labeler else { continue };
+        for who in std::iter::once(Some(labeler.as_str())).chain(edited_since_labeled(f)) {
+            let Some(who) = who.map(str::to_lowercase) else {
+                continue;
+            };
+            if who == viewer.to_lowercase() || out.contains(&who) {
+                continue;
+            }
+            // A login as GitHub allows them, which keeps anything else out
+            // of the path; a bot's (`name[bot]`) is never asked about, so
+            // never taken.
+            // (an Enterprise Managed User's carries `_<shortcode>`)
+            if who
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                out.push(who);
+            }
         }
     }
     out
@@ -421,8 +484,9 @@ const QUERY: &str = "query($q: String!, $first: Int!, $after: String) {
         number title body url
         author { login }
         timelineItems(itemTypes: [LABELED_EVENT], last: 100) {
-          nodes { ... on LabeledEvent { label { name } actor { login } } }
+          nodes { ... on LabeledEvent { label { name } actor { login } createdAt } }
         }
+        userContentEdits(last: 100) { nodes { editedAt editor { login } } }
         labels(first: 50) { nodes { name } }
         comments(last: 50) { nodes { body createdAt author { login } } }
         blockedBy(first: 25) { nodes { number state repository { nameWithOwner } } }
@@ -770,6 +834,12 @@ pub use crate::repos::label_ok;
 
 /// The issues of `repo` autopilot may take now, asked of GitHub.
 pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
+    Ok(fetch_judged(repo, label).await?.0)
+}
+
+/// `fetch`'s issues, and those of the search it passed over, each with
+/// why (`passed_over`).
+pub async fn fetch_judged(repo: &Repo, label: &str) -> Result<(Vec<Issue>, Vec<(u64, String)>)> {
     if !label_ok(label) {
         return Err(anyhow!("the issue label \"{label}\" can't be searched for"));
     }
@@ -798,9 +868,12 @@ pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
             writers.insert(login);
         }
     }
-    let taken: Vec<Found> = found
+    let (taken, passed): (Vec<Found>, Vec<Found>) = found
         .into_iter()
-        .filter(|f| takeable(f, &viewer, &writers))
+        .partition(|f| takeable(f, &viewer, &writers));
+    let passed = passed
+        .iter()
+        .filter_map(|f| Some((f.issue.number, passed_over(f, &viewer, &writers)?)))
         .collect();
     let named: Vec<String> = taken.iter().flat_map(|f| f.named.clone()).collect();
     // Their state unread, every one named holds its issue, so the rest of
@@ -829,7 +902,7 @@ pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
             );
         }
     }
-    Ok(taken)
+    Ok((taken, passed))
 }
 
 /// `issue` with the issues its body names (`named`) that are `open`
@@ -1049,6 +1122,12 @@ pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<Optio
             .unwrap_or_default()
             .to_string()
     }))
+}
+
+/// Whether two of an issue's bodies, as the search and the issue itself
+/// give them, are the same text, whatever their line endings.
+pub fn same_body(a: &str, b: &str) -> bool {
+    a.replace("\r\n", "\n").trim() == b.replace("\r\n", "\n").trim()
 }
 
 /// Issue `number` of `repo` while it is open, whoever it is assigned to
@@ -1530,6 +1609,79 @@ mod tests {
             .map(|f| f.issue.number)
             .collect();
         assert_eq!(taken, vec![3, 4, 6]);
+    }
+
+    /// An issue an outsider opened and a writer labeled at 10:00, with
+    /// `events` more label events and `edits` of its body.
+    fn edited(number: u64, events: Value, edits: Value) -> Value {
+        let mut labeled = vec![json!({ "label": { "name": "autopilot" },
+            "actor": { "login": "writer" }, "createdAt": "2026-01-01T10:00:00Z" })];
+        labeled.extend(events.as_array().cloned().unwrap_or_default());
+        json!({ "number": number, "title": "t", "body": "b", "url": "u",
+                "author": { "login": "outsider" },
+                "timelineItems": { "nodes": labeled },
+                "userContentEdits": { "nodes": edits } })
+    }
+
+    #[test]
+    fn an_issue_edited_after_its_label_by_someone_without_write_access_is_passed_over() {
+        let by = |who: Option<&str>, at: &str| match who {
+            Some(who) => json!({ "editedAt": at, "editor": { "login": who } }),
+            None => json!({ "editedAt": at, "editor": null }),
+        };
+        let data = json!({
+            "viewer": { "login": "me" },
+            "search": { "nodes": [
+                // Edited by its author after the label.
+                edited(1, json!([]), json!([by(Some("outsider"), "2026-01-01T11:00:00Z")])),
+                // The same, labeled again by a writer after the edit.
+                edited(2, json!([{ "label": { "name": "autopilot" }, "actor": { "login": "writer" },
+                                   "createdAt": "2026-01-01T12:00:00Z" }]),
+                       json!([by(Some("outsider"), "2026-01-01T11:00:00Z")])),
+                // Edited after the label by you and by a writer only.
+                edited(3, json!([]), json!([by(Some("Me"), "2026-01-01T11:00:00Z"),
+                                            by(Some("writer"), "2026-01-01T11:30:00Z")])),
+                // Edited by its author only before the label.
+                edited(4, json!([]), json!([by(Some("outsider"), "2026-01-01T09:00:00Z")])),
+                // Edited after the label by a deleted account.
+                edited(5, json!([]), json!([by(None, "2026-01-01T11:00:00Z")])),
+                // Yours, edited after the label by anyone.
+                { "number": 6, "title": "t", "body": "b", "url": "u", "author": { "login": "me" },
+                  "timelineItems": { "nodes": [] },
+                  "userContentEdits": { "nodes": [by(Some("outsider"), "2026-01-01T11:00:00Z")] } }
+            ] }
+        });
+        let (viewer, found) = read_answer(&repo(), &data, "autopilot");
+        assert_eq!(found[1].labeled_at.as_deref(), Some("2026-01-01T12:00:00Z"));
+        assert_eq!(to_ask(&found, &viewer), vec!["writer", "outsider"]);
+        let writers: HashSet<String> = ["writer".to_string()].into();
+        let taken: Vec<u64> = found
+            .iter()
+            .filter(|f| takeable(f, &viewer, &writers))
+            .map(|f| f.issue.number)
+            .collect();
+        assert_eq!(taken, vec![2, 3, 4, 6]);
+        assert_eq!(
+            passed_over(&found[0], &viewer, &writers).as_deref(),
+            Some(
+                "its body was edited by outsider, who has no write access to the repository, after its label was added; add the label again to take it"
+            )
+        );
+        assert!(
+            passed_over(&found[4], &viewer, &writers)
+                .is_some_and(|why| why.contains("a deleted account"))
+        );
+        // An outsider's label says so too.
+        assert_eq!(
+            passed_over(&found[0], &viewer, &HashSet::new()).as_deref(),
+            Some("its label was added by writer, who has no write access to the repository")
+        );
+    }
+
+    #[test]
+    fn bodies_are_the_same_whatever_their_line_endings() {
+        assert!(same_body("a\r\nb\r\n", "a\nb"));
+        assert!(!same_body("a\nb", "a\nc"));
     }
 
     #[test]
