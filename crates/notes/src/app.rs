@@ -4985,18 +4985,18 @@ impl App {
                     if to != from || matches!(self.editor.mode, Mode::Visual { .. }) {
                         let (mut from, mut to) = (from, to);
                         if self.editor.mode == Mode::Insert {
-                            let row = self.editor.doc.row;
-                            let line = self.editor.line();
+                            let lines = self.editor.doc.text.lines();
                             self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
                             self.after_insert();
                             // Both ends carried across the table leaving
-                            // Insert mode lined up.
-                            let now = self.editor.doc.line(row);
-                            if now != line {
-                                for end in [&mut from, &mut to] {
-                                    if end.0 == row {
-                                        end.1 = table::carry(&line, &now, end.1);
-                                    }
+                            // Insert mode lined up, on whichever of its
+                            // rows they are.
+                            for end in [&mut from, &mut to] {
+                                let now = self.editor.doc.line(end.0);
+                                if let Some(line) = lines.get(end.0)
+                                    && now != *line
+                                {
+                                    end.1 = table::carry(line, &now, end.1);
                                 }
                             }
                         }
