@@ -209,18 +209,23 @@ function workerTookOver() {
 }
 
 // What a reload would lose: words or photos in the composer, a prompt with
-// options ticked, a menu or question open, a request under way, or what
-// one said when it ended (a toast, or the channel's error).
+// options ticked, a menu or question open, a request under way or just
+// ended, or a toast showing.
 // Sends, answers and other requests that change something, under way: a
-// reload would cut them off, so it waits for them, and is asked again after.
+// reload would cut them off, so it waits for them, and for a moment after,
+// so what one said as it ended (an error under the card) can be read, and is
+// asked again then.
+const SAID_MS = 3000;
 let sending = 0;
 async function whileSending(work) {
   sending++;
   try {
     return await work();
   } finally {
-    sending--;
-    setTimeout(reloadIfFree, 0);
+    setTimeout(() => {
+      sending--;
+      reloadIfFree();
+    }, SAID_MS);
   }
 }
 
@@ -230,8 +235,7 @@ function busy() {
   const tab = current();
   const prompt = tab && tab.prompt;
   const partlyAnswered = !!prompt && !!prompt.multi && prompt.options.some((o) => o.checked);
-  const saying = toasts > 0 || !!state.error;
-  return drafting || partlyAnswered || !!state.menu || sending > 0 || saying;
+  return drafting || partlyAnswered || !!state.menu || sending > 0 || toasts > 0;
 }
 
 function reloadWhenFree() {

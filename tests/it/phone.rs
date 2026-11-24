@@ -1377,6 +1377,8 @@ fn an_update_waits_for_a_message_being_sent() {
   console.log("sending=" + reloads.length + " " + JSON.stringify(field.value));
   arrive();
   for (let i = 0; i < 5; i++) await tick();
+  console.log("just sent=" + reloads.length);
+  await new Promise((r) => setTimeout(r, 3100));
   console.log("sent=" + reloads.join(" "));
 })();
 "##]
@@ -1386,7 +1388,7 @@ fn an_update_waits_for_a_message_being_sent() {
     };
     assert_eq!(
         stdout.lines().collect::<Vec<_>>(),
-        [r#"sending=0 """#, "sent=#5"],
+        [r#"sending=0 """#, "just sent=0", "sent=#5"],
         "{stdout}"
     );
 }
