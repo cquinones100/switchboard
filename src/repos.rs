@@ -1010,19 +1010,39 @@ pub fn migrated_mark() -> PathBuf {
     paths::state_dir().join("repos-lands-migrated")
 }
 
+/// The way the old settings come to for one repository: `direct` where its
+/// `landing` was `direct`; through a PR otherwise, by Switchboard's merge
+/// queue where `pr_merge_queue` was on and GitHub says its CI runs on
+/// `ci/train-*`, by GitHub's merge queue where its default branch has one,
+/// else by auto-merge.
+pub fn way_of_old(old: Option<&str>, queue_was_on: bool, setup: Option<&Setup>) -> Way {
+    match (old, setup) {
+        (Some("direct"), _) => Way::Direct,
+        (_, Some(s)) if queue_was_on && s.train_ci && !s.merge_queue => Way::SwitchboardQueue,
+        (_, Some(s)) if s.merge_queue => Way::GithubQueue,
+        _ => Way::AutoMerge,
+    }
+}
+
 /// What carrying `landing` and `pr_merge_queue` over to `lands` does to
-/// repos.json: a repository set to `landing: direct` gets `direct`; one
-/// set to `landing: pr`, or with an entry and no `landing`, gets
-/// `switchboard-queue` where `queue_was_on` and `trains(repo)` says its CI
-/// runs on `ci/train-*`, else `auto-merge`; `landing` is dropped from
-/// every entry. A `lands` already set stays. What it set, by repository, in
-/// the file's order; `None` when it changes nothing.
+/// repos.json: every entry with no `lands`, and each repository the old
+/// guess had worked out (`guessed`, its key and what it found, which counts
+/// as its `landing`), gets the way `way_of_old` gives, `setup` saying what
+/// GitHub says of it; `landing` is dropped from every entry. A `lands`
+/// already set stays. What it set, by repository, in the file's order;
+/// `None` when it changes nothing.
 pub fn lands_migrated(
     data: &Map<String, Value>,
+    guessed: &[(String, String)],
     queue_was_on: bool,
-    trains: &dyn Fn(&str) -> bool,
+    setup: &dyn Fn(&str) -> Option<Setup>,
 ) -> Option<(Map<String, Value>, Vec<WaySet>)> {
     let mut out = data.clone();
+    for (key, _) in guessed {
+        if !out.keys().any(|k| k.eq_ignore_ascii_case(key)) {
+            out.insert(key.clone(), json!({}));
+        }
+    }
     let mut set = Vec::new();
     let mut changed = false;
     for (repo, entry) in out.iter_mut() {
@@ -1034,11 +1054,12 @@ pub fn lands_migrated(
         if entry.contains_key("lands") {
             continue;
         }
-        let way = match old.as_ref().and_then(Value::as_str) {
-            Some("direct") => Way::Direct,
-            _ if queue_was_on && trains(repo) => Way::SwitchboardQueue,
-            _ => Way::AutoMerge,
-        };
+        let worked_out = guessed
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(repo))
+            .map(|(_, l)| l.as_str());
+        let old = old.as_ref().and_then(Value::as_str).or(worked_out);
+        let way = way_of_old(old, queue_was_on, setup(repo).as_ref());
         entry.insert("lands".into(), json!(way.key()));
         set.push((repo.clone(), way));
         changed = true;
@@ -1046,14 +1067,16 @@ pub fn lands_migrated(
     changed.then_some((out, set))
 }
 
-/// Carries repos.json's `landing` and Settings' `pr_merge_queue` over to
+/// Carries repos.json's `landing`, the old guess kept in the state
+/// directory's `repos-landing.json` and Settings' `pr_merge_queue` over to
 /// `lands`, once, as a new build's server first starts (`lands_migrated`),
 /// the file before kept as `repos.json.bak`, and drops `pr_merge_queue`
-/// from this computer's settings and the synced ones. Whether a
-/// repository's CI runs on trains is asked of GitHub (`ask_setup`) only
-/// where the queue was on. What it says it did, in one message; `None`
-/// when there was nothing to carry over. Asks GitHub, so off the server's
-/// task.
+/// from this computer's settings and the synced ones and the old guess.
+/// GitHub is asked of each repository on it (`ask_setup`) with the github
+/// setting on; when it can't answer, nothing changes and the next start
+/// tries again, so a moment offline never settles a way. What it says it
+/// did, in one message; `None` when there was nothing to carry over or it
+/// waits to try again. Asks GitHub, so off the server's task.
 pub fn migrate_lands() -> Option<String> {
     let mark = migrated_mark();
     if mark.exists() {
@@ -1066,38 +1089,58 @@ pub fn migrate_lands() -> Option<String> {
     let queue_was_on = setting_files.iter().any(|f| {
         util::read_json(f).and_then(|v| v.get("pr_merge_queue").cloned()) == Some(Value::Bool(true))
     });
+    let guess_file = paths::state_dir().join("repos-landing.json");
+    let guessed: Vec<(String, String)> = util::read_json_object(&guess_file)
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v.get("landing")?.as_str()?.to_string())))
+        .collect();
     let path = file();
-    let said = match read_file(&path) {
-        // A file that can't be read is left, and asked about again next start.
+    // A file that can't be read is left, and tried again next start.
+    let data = match read_file(&path) {
+        Ok(data) => data,
         Err(e) => {
             eprintln!("repos.json: can't carry landing over to lands: {e}");
             return None;
         }
-        Ok(data) => {
-            let now = util::now_ms();
-            let trains = |repo: &str| {
-                settings::is_on("github")
-                    && ask_setup(repo, now)
-                        .inspect(|s| remember_setup(&setup_file(), repo, s))
-                        .is_ok_and(|s| s.train_ci)
-            };
-            match lands_migrated(&data, queue_was_on, &trains) {
-                Some((out, set)) => match change_file(&path, |d| *d = out) {
-                    Ok(()) => Some(set),
-                    Err(e) => {
-                        eprintln!("repos.json: can't carry landing over to lands: {e}");
-                        return None;
-                    }
-                },
-                None => None,
+    };
+    let mut asked = std::collections::HashMap::new();
+    if settings::is_on("github") {
+        let now = util::now_ms();
+        let repos = data.keys().chain(guessed.iter().map(|(k, _)| k));
+        for repo in repos.filter(|r| github::parse_name_with_owner(r).is_some()) {
+            match ask_setup(repo, now) {
+                Ok(s) => {
+                    remember_setup(&setup_file(), repo, &s);
+                    asked.insert(repo.to_lowercase(), s);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "repos.json: GitHub didn't say how {repo} can land ({e}); carrying landing over to lands next start"
+                    );
+                    return None;
+                }
             }
         }
+    }
+    let said = match lands_migrated(&data, &guessed, queue_was_on, &|repo| {
+        asked.get(&repo.to_lowercase()).cloned()
+    }) {
+        Some((out, set)) => match change_file(&path, |d| *d = out) {
+            Ok(()) => set,
+            Err(e) => {
+                eprintln!("repos.json: can't carry landing over to lands: {e}");
+                return None;
+            }
+        },
+        None => Vec::new(),
     };
+    let mut dropped = false;
     for f in &setting_files {
         let Some(Value::Object(mut mine)) = util::read_json(f) else {
             continue;
         };
         if mine.shift_remove("pr_merge_queue").is_some() {
+            dropped = true;
             let _ = util::write_atomic(f, format!("{}\n", util::json_pretty(&Value::Object(mine))));
         }
     }
@@ -1105,10 +1148,13 @@ pub fn migrate_lands() -> Option<String> {
         let _ = std::fs::create_dir_all(dir);
     }
     let _ = util::write_atomic(&mark, format!("{}\n", util::now_ms()));
-    // The answers the old guess kept a day, which nothing reads now.
-    let _ = std::fs::remove_file(paths::state_dir().join("repos-landing.json"));
-    let set = said.filter(|s| !s.is_empty())?;
-    let lines: Vec<String> = set
+    let _ = std::fs::remove_file(&guess_file);
+    if said.is_empty() {
+        return dropped.then(|| {
+            "Each repository now lands one way, chosen in Settings' Repositories, which replaces the pr_merge_queue setting. No repository had a way to carry over, so each lands nothing until you choose.".to_string()
+        });
+    }
+    let lines: Vec<String> = said
         .iter()
         .map(|(repo, way)| format!("{repo}: {}", way.label()))
         .collect();
@@ -1119,6 +1165,8 @@ pub fn migrate_lands() -> Option<String> {
     ))
 }
 
+/// The repository at `dir`: its `owner/name` on GitHub, its worktree's top,
+/// and what it is known by here.
 fn repository_at(dir: &Path) -> Option<(Option<String>, PathBuf, String)> {
     let top = PathBuf::from(worktree::git_at(dir, &["rev-parse", "--show-toplevel"]).ok()?);
     let repo = repo_at(dir);
@@ -1662,8 +1710,18 @@ mod tests {
             "acme/set": { "landing": "pr", "lands": "github-queue" },
         });
         let data = data.as_object().unwrap();
-        let trains = |repo: &str| repo == "acme/trains" || repo == "acme/plain";
-        let (out, set) = lands_migrated(data, true, &trains).unwrap();
+        let guessed = vec![
+            ("acme/guessed".to_string(), "direct".to_string()),
+            ("acme/queued".to_string(), "pr".to_string()),
+        ];
+        let setup = |repo: &str| {
+            Some(Setup {
+                train_ci: repo == "acme/trains" || repo == "acme/plain",
+                merge_queue: repo == "acme/queued",
+                ..Setup::default()
+            })
+        };
+        let (out, set) = lands_migrated(data, &guessed, true, &setup).unwrap();
         assert_eq!(
             out["acme/direct"],
             json!({ "test": "make", "lands": "direct" })
@@ -1675,14 +1733,23 @@ mod tests {
             json!({ "lands": "github-queue" }),
             "a way set stays"
         );
-        assert_eq!(set.len(), 3);
-        let (off, _) = lands_migrated(data, false, &trains).unwrap();
+        assert_eq!(
+            out["acme/guessed"],
+            json!({ "lands": "direct" }),
+            "the old guess counts"
+        );
+        assert_eq!(
+            out["acme/queued"]["lands"], "github-queue",
+            "GitHub's queue where it has one"
+        );
+        assert_eq!(set.len(), 5);
+        let (off, _) = lands_migrated(data, &[], false, &setup).unwrap();
         assert_eq!(
             off["acme/trains"]["lands"], "auto-merge",
             "the queue was off"
         );
         assert_eq!(
-            lands_migrated(&out, true, &trains),
+            lands_migrated(&out, &[], true, &setup),
             None,
             "a second time changes nothing"
         );

@@ -1238,7 +1238,7 @@ fn queue_and_clean_lands_the_one_way_landing_names_and_nothing_when_none_is_set(
     let text = fs::read_to_string(skills_dir().join("queue-and-clean/SKILL.md")).unwrap();
     let how = section(&text, "How it lands");
     assert!(
-        how.contains("switchboard landing --json --start <worktree>")
+        how.contains("switchboard landing --start <worktree>")
             && how.contains("lands nothing yet")
             && how.contains("stop there"),
         "the way is kept on the branch, and nothing lands with none set"
