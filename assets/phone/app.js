@@ -195,25 +195,40 @@ async function catchUp() {
   updateTimer = setTimeout(failed, UPDATE_MS);
 }
 
-// A new worker took over: the page reloads when it is behind; a page that
-// is the server's build only needed the worker.
+// A new worker took over: the page reloads when it is behind, even after
+// the update was given up on, since a late takeover still brings the new
+// build; a page that is the server's build only needed the worker.
 function workerTookOver() {
   clearTimeout(updateTimer);
-  if (!pageBehind() || failedFor === serverBuild()) return;
+  failedFor = null;
+  if (!pageBehind()) return;
   updatingTo = serverBuild();
   redrawBuildLine();
   reloadWhenFree();
 }
 
 // What a reload would lose: words or photos in the composer, a prompt with
-// options ticked, or a menu or question open.
+// options ticked, a menu or question open, or a request under way.
+// Sends, answers and other requests that change something, under way: a
+// reload would cut them off, so it waits for them, and is asked again after.
+let sending = 0;
+async function whileSending(work) {
+  sending++;
+  try {
+    return await work();
+  } finally {
+    sending--;
+    setTimeout(reloadIfFree, 0);
+  }
+}
+
 function busy() {
   const field = app.querySelector(".composer textarea");
   const drafting = (!!field && field.value.trim() !== "") || state.chosen.length > 0;
   const tab = current();
   const prompt = tab && tab.prompt;
   const partlyAnswered = !!prompt && !!prompt.multi && prompt.options.some((o) => o.checked);
-  return drafting || partlyAnswered || !!state.menu;
+  return drafting || partlyAnswered || !!state.menu || sending > 0;
 }
 
 function reloadWhenFree() {
@@ -259,7 +274,12 @@ function buildLine() {
   return el("div", { class: "build-line" + (failed ? " behind" : "") }, text);
 }
 
-async function api(path, body) {
+// A request of the computer; one that changes something holds a reload.
+function api(path, body) {
+  return body === undefined ? request(path) : whileSending(() => request(path, body));
+}
+
+async function request(path, body) {
   const res = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
     headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...buildHeader() },
@@ -763,6 +783,8 @@ function closeMenu() {
   menuLayer = null;
   document.removeEventListener("keydown", menuKeys);
   if (!state.open) drawer();
+  // After what closed it has started its request, which then holds it.
+  setTimeout(reloadIfFree, 0);
 }
 
 function menuKeys(e) {
@@ -1049,6 +1071,7 @@ function title(tab) {
 function drop(i) {
   URL.revokeObjectURL(state.chosen[i].url);
   state.chosen.splice(i, 1);
+  setTimeout(reloadIfFree, 0);
 }
 
 async function openTab(n) {
@@ -1625,7 +1648,9 @@ function choice(p, o, i, waiting) {
 // that changes nothing else still lets the next tap through.
 const promptKey = (p) => p.id + ":" + p.options.map((o) => (o.checked ? 1 : 0)).join("");
 
-async function answer(reply) {
+const answer = (reply) => whileSending(() => answerNow(reply));
+
+async function answerNow(reply) {
   state.error = "";
   const tab = current();
   const p = tab && tab.prompt;
@@ -1732,6 +1757,9 @@ function composer() {
     const text = field.value.trim();
     if (stopping()) return askStop(state.open);
     if (!ready()) return;
+    await whileSending(() => sendNow(text));
+  });
+  const sendNow = async (text) => {
     const answering = free();
     send.disabled = true;
     state.error = "";
@@ -1762,7 +1790,7 @@ function composer() {
     } finally {
       send.disabled = false;
     }
-  });
+  };
   let tray = el("div");
   let trayShown = new Set();
   let error = el("div");

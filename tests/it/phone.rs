@@ -1356,6 +1356,41 @@ fn an_update_waits_for_a_draft_in_the_composer_to_be_cleared() {
     );
 }
 
+/// A draft sent while an update waits on it holds the reload until the
+/// message has gone, so the reload never cuts it off; skipped without Node.
+#[test]
+fn an_update_waits_for_a_message_being_sent() {
+    let script = [&page_with_a_worker(), r##"
+(async () => {
+  update("dev");
+  const field = app.querySelector(".composer textarea");
+  field.value = "half a thought";
+  field.dispatchEvent(new Event("input"));
+  update("new");
+  await tick();
+  swListeners.controllerchange();
+  let arrive;
+  ctx.fetch = () => new Promise((r) => { arrive = () => r({ ok: true, status: 200, json: async () => ({}) }); });
+  app.querySelector(".composer button.send").click();
+  await tick();
+  update("new");
+  console.log("sending=" + reloads.length + " " + JSON.stringify(field.value));
+  arrive();
+  for (let i = 0; i < 5; i++) await tick();
+  console.log("sent=" + reloads.join(" "));
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [r#"sending=0 """#, "sent=#5"],
+        "{stdout}"
+    );
+}
+
 /// The drawer's search (assets/phone/app.js's `groups`), run in Node over
 /// tabs as the phone reads them; skipped without Node.
 #[test]
