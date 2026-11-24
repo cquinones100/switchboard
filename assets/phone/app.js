@@ -231,8 +231,51 @@ function sayingOf(tab) {
 function doing(tab) {
   if (tab.state === "waiting") return tab.prompt ? "asks: " + tab.prompt.question : tab.wait || "waiting on you";
   if (tab.state === "done") return "finished " + ago(tab.since ? tab.since * 1000 : 0);
-  if (tab.state === "working" || tab.state === "background") return tab.wait || (tab.turn && tab.turn.prompt) || "working";
+  if (tab.state === "working" || tab.state === "background") {
+    if (tab.wait) return tab.wait;
+    const [step, worked] = stepOf(tab);
+    return worked ? step + " · " + worked : step;
+  }
   return "idle " + ago(tab.since ? tab.since * 1000 : 0).replace(" ago", "");
+}
+
+// A working tab's step, its tool and argument as the server's `Doing` holds
+// them ("Bash: cargo test", "Read: src/phone/turns.rs"), else "working", and how long it has worked
+// this turn ("12m"), empty for a tab whose turn has ended (in the
+// background) or isn't known; never the prompt that started the turn,
+// which the channel already shows above.
+function stepOf(tab) {
+  const d = tab.doing;
+  const step = d && d.tool ? (d.arg ? d.tool + ": " + d.arg : d.tool) : "working";
+  const at = tab.state === "working" && tab.turn && tab.turn.at;
+  return [step, at ? span(Date.now() - at) : ""];
+}
+
+// How long a stretch of milliseconds is, as the desktop says it
+// (switchboard-ui's `text::span`): <1m, 12m, 1h12m, 2d3h.
+function span(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const two = (big, bigUnit, small, smallUnit) => big + bigUnit + (small ? small + smallUnit : "");
+  if (s < 60) return "<1m";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return two(Math.floor(s / 3600), "h", Math.floor((s % 3600) / 60), "m");
+  return two(Math.floor(s / 86400), "d", Math.floor((s % 86400) / 3600), "h");
+}
+
+// The channel's working line: what the tab waits on, else its step cut to
+// the line's end, then how long it has worked.
+function workingLine(tab) {
+  if (tab.wait) return el("div", { class: "doing" }, spinner(), " " + tab.wait);
+  const [step, worked] = stepOf(tab);
+  const time = worked ? el("span", { class: "worked" }, " · " + worked) : null;
+  // Kept counting between snapshots, which a long tool call may send none of.
+  if (time) time.at = tab.turn.at;
+  return el("div", { class: "doing stepping" }, spinner(), el("span", { class: "step" }, " " + step), time);
+}
+if (typeof setInterval === "function") {
+  setInterval(() => {
+    for (const node of document.querySelectorAll(".worked")) if (node.at) node.textContent = " · " + span(Date.now() - node.at);
+  }, 15000);
 }
 
 // ── Pairing (board 168) and refusals (board 169) ──
@@ -1786,7 +1829,7 @@ function channel(stick) {
   const cardKey = tab.prompt ? "prompt:" + tab.prompt.id : newCard ? "answered" : "";
   const oldCard = shown.now.querySelector(".card");
   const wasTall = oldCard ? oldCard.getBoundingClientRect().height : 0;
-  shown.now.replaceChildren(...[newCard, working ? el("div", { class: "doing" }, spinner(), " " + doing(tab)) : null].filter(Boolean));
+  shown.now.replaceChildren(...[newCard, working ? workingLine(tab) : null].filter(Boolean));
   if (moves && kept && newCard && cardKey !== shown.cardKey) {
     const folds = cardKey === "answered" && shown.cardKey && shown.cardKey.startsWith("prompt:") && wasTall;
     if (folds) shown.folding = { at: Date.now(), wasTall };

@@ -125,6 +125,17 @@ pub fn remind_times(now: &jiff::Zoned) -> Vec<Value> {
         .collect()
 }
 
+/// The tool call a working pane is on, as the phone's working line names
+/// it: its tool, its argument's first line (a command, a path, a pattern)
+/// and when it started, in seconds.
+fn doing_json(doing: &crate::agent::Doing) -> Value {
+    json!({
+        "tool": doing.tool,
+        "arg": doing.arg.lines().next().unwrap_or(""),
+        "since": doing.since,
+    })
+}
+
 /// What a message said, cut to fit the log's line.
 fn short(text: &str) -> String {
     let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -692,8 +703,8 @@ impl Server {
 
     /// Every Claude tab in the sidebar's groups and order: its group, badge
     /// and words as the sidebar has them (`drawer::fields`), its repository
-    /// and branch (for the drawer's search), what it waits on, its last
-    /// turn, and the prompt it shows while waiting; and mission control's
+    /// and branch (for the drawer's search), what it waits on, the tool
+    /// call it is on (`doing_json`), its last turn, and the prompt it shows while waiting; and mission control's
     /// views the phone's panel lists (`phone_views`), none while Settings'
     /// `phone_views` is off.
     pub(crate) fn phone_snapshot(&self, views: Option<Value>) -> Value {
@@ -761,6 +772,7 @@ impl Server {
                         "reply": turn.reply,
                         "at": turn.at,
                     })),
+                    "doing": t.doing.as_ref().map(doing_json),
                     "prompt": prompt,
                     "stoppable": self.phone_stoppable(pane).is_ok(),
                     "tab_views": self.phone_tab_rows(t.id),
@@ -968,6 +980,20 @@ mod tests {
         let cut = short(&long);
         assert_eq!(cut.chars().count(), SAID_WIDTH);
         assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn a_working_panes_tool_call_reads_as_its_tool_first_line_and_start() {
+        let doing = crate::agent::Doing {
+            tool: "Bash".into(),
+            arg: "cargo test phone\n  --all".into(),
+            since: 1_700_000_000,
+            call: "toolu_1".into(),
+        };
+        assert_eq!(
+            doing_json(&doing),
+            json!({"tool": "Bash", "arg": "cargo test phone", "since": 1_700_000_000})
+        );
     }
 
     #[test]

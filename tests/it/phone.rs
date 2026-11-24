@@ -573,6 +573,49 @@ console.log("chip=" + app.querySelector(".head .chip").textContent);
     );
 }
 
+/// A working tab's channel ends on its step and how long it has worked this
+/// turn (assets/phone/app.js's `workingLine`), "working" between steps,
+/// what it waits on while it waits, and never the prompt that started the
+/// turn, which the drawer's words leave out too; run in Node over a page of
+/// its own, skipped without Node.
+#[test]
+fn a_working_tabs_line_shows_its_step_and_time_never_its_prompt() {
+    let script = [CHANNEL_PAGE, r##"
+const prompt = "Work on this GitHub issue, the phone's working line";
+const tab = (extra) => ({ pane: "%5", index: 2, name: "phone", state: "working", turn: { prompt, at: Date.now() - 12 * 60000 - 5000 }, ...extra });
+const update = (t) => source.onmessage({ data: JSON.stringify({ live: true, tabs: [t] }) });
+vm.runInContext(`state.me = { paired: true, computer: "mac" }; listen(); state.open = "5";`, ctx);
+const line = () => app.querySelector(".doing").textContent;
+update(tab({ doing: { tool: "Bash", arg: "cargo test phone", since: 1 } }));
+console.log("step=" + line());
+update(tab({ doing: { tool: "Read", arg: "src/phone/turns.rs", since: 1 }, turn: { prompt, at: Date.now() - 75 * 60000 } }));
+console.log("later=" + line());
+update(tab({ doing: null }));
+console.log("between=" + line());
+update(tab({ doing: null, wait: "Waiting for a build slot" }));
+console.log("waits=" + line());
+console.log("drawer=" + vm.runInContext("sayingOf(" + JSON.stringify(tab({ doing: { tool: "Grep", arg: "doing", since: 1 } })) + ")", ctx));
+console.log("prompt shown=" + app.textContent.includes(prompt));
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "step=⠹ Bash: cargo test phone · 12m",
+            "later=⠹ Read: src/phone/turns.rs · 1h15m",
+            "between=⠹ working · 12m",
+            "waits=⠹ Waiting for a build slot",
+            "drawer=Grep: doing · 12m",
+            "prompt shown=false",
+        ],
+        "{stdout}"
+    );
+}
+
 /// A working tab's composer (assets/phone/app.js's `composer`), run in
 /// Node over a page of its own: empty, its button is Stop (■), which asks
 /// first and stops the turn only on Stop; with words typed it is Send
