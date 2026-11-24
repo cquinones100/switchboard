@@ -196,6 +196,14 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - run: cargo fmt --all --check
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-deny
+      - name: Check the dependencies for RustSec advisories
+        # In this job, which every run but a tested push to main has, so a
+        # lock holding a crate with an advisory fails one of the checks main
+        # requires. deny.toml names the advisories allowed.
+        run: cargo deny --locked check advisories
 
   clippy:
     name: Clippy (Linux x86_64)
