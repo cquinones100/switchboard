@@ -1302,6 +1302,22 @@ fn going_to_and_back_from_a_link_in_a_table_written_unpadded_leaves_it_as_writte
 }
 
 #[test]
+fn text_pasted_into_a_table_in_normal_mode_lines_its_text_up() {
+    let (_dir, mut store) = temp("table-paste");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\n| a | bb |\n|---|---|\n| c | d |\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "3Gll");
+    app.paste("long");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| along | bb  |", "| ----- | --- |", "| c     | d   |"]
+    );
+}
+
+#[test]
 fn moving_into_a_table_written_unpadded_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));

@@ -3073,6 +3073,7 @@ impl App {
             _ => {}
         }
         self.editor.change(|doc| {
+            let before = doc.text.clone();
             match act {
                 FormatAct::Paragraph(style) => format::paragraph(doc, first, last, style),
                 FormatAct::Monospaced => format::monospaced(doc, first, last),
@@ -3096,7 +3097,7 @@ impl App {
             }
             // The table edited lined up in the text, as a key's change
             // does; typing pads it as Insert mode ends.
-            if typing.is_none() {
+            if typing.is_none() && doc.text != before {
                 let row = doc.row;
                 table::align(doc, row);
             }
@@ -4547,6 +4548,8 @@ impl App {
                 self.editor.clipboard = keep;
                 self.editor.type_text(&text);
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
+                // Typed and Insert mode left, as a key's typing is.
+                self.after_insert();
             }
             Mode::Normal => {
                 // Pasted in Normal mode: after the cursor, as typed there.
@@ -4559,6 +4562,8 @@ impl App {
                 self.editor.insert_at(after);
                 self.editor.type_text(&text);
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
+                // Typed and Insert mode left, as a key's typing is.
+                self.after_insert();
             }
         }
         if self.editor.end().is_some() || self.editor.is_typing() {
