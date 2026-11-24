@@ -1228,7 +1228,141 @@ fn a_mark_on_an_item_goes_with_it_as_ticking_sorts_it_down() {
 }
 
 #[test]
-fn a_table_lined_up_as_the_cursor_moves_into_it_is_no_change_to_visit() {
+fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
+    let (_dir, mut store) = temp("table-unpadded");
+    let first = store.create("", Some("Alpha"));
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    let body = "# Alpha\n\n| a | bbbb |\n|---|---|\n| cccccc | d |\n";
+    write(&first, body);
+    app.open_note(&first, false, false);
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |"],
+        "the text as it was written"
+    );
+    assert!(!app.modified(), "nothing to save");
+    keys(&mut app, "G");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |"],
+        "moving into it leaves it as written"
+    );
+    assert!(!app.modified(), "still nothing to save");
+    keys(&mut app, "5Gdd");
+    assert_eq!(
+        lines(&app)[2..4],
+        ["| a   | bbbb |", "| --- | ---- |"],
+        "the rows left after the last one is deleted"
+    );
+    keys(&mut app, "u");
+    assert_eq!(lines(&app)[2], "| a | bbbb |", "put back as written");
+    keys(&mut app, "3Gllx");
+    assert_eq!(
+        lines(&app)[2],
+        "|        | bbbb |",
+        "a change pads the table"
+    );
+    keys(&mut app, "u");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |"],
+        "a change undone puts it back as written"
+    );
+    let shown = screen(&mut app).join("\n");
+    for row in [
+        "│ a      │ bbbb │",
+        "├────────┼──────┤",
+        "│ cccccc │ d    │",
+    ] {
+        assert!(shown.contains(row), "{row} in:\n{shown}");
+    }
+    assert_eq!(
+        crate::id::body_of(&fs::read_to_string(&first).unwrap()),
+        crate::id::body_of(body),
+        "the file has its table as written, given only its ID"
+    );
+}
+
+#[test]
+fn going_to_and_back_from_a_link_in_a_table_written_unpadded_leaves_it_as_written() {
+    let (_dir, mut store) = temp("table-jump");
+    let first = store.create("", Some("Alpha"));
+    write(
+        &first,
+        "# Alpha\n\n| a | bbbb |\n|---|---|\n| [[Beta]] | d |\n",
+    );
+    let second = store.create("", Some("Beta"));
+    write(&second, "# Beta\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "5GfB<CR>");
+    assert_eq!(app.current_path(), Some(second.as_path()));
+    keys(&mut app, "<C-o>");
+    assert_eq!(app.current_path(), Some(first.as_path()));
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| [[Beta]] | d |"],
+        "back in the table, nothing edited"
+    );
+    assert!(!app.modified(), "nothing to save");
+}
+
+#[test]
+fn text_pasted_into_a_table_in_normal_mode_lines_its_text_up() {
+    let (_dir, mut store) = temp("table-paste");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\n| a | bb |\n|---|---|\n| c | d |\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "3Gll");
+    app.paste("long");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| along | bb  |", "| ----- | --- |", "| c     | d   |"]
+    );
+}
+
+#[test]
+fn deleting_a_line_under_a_table_leaves_the_table_as_written() {
+    let (_dir, mut store) = temp("table-under");
+    let first = store.create("", Some("Alpha"));
+    write(
+        &first,
+        "# Alpha\n\n| a | bbbb |\n|---|---|\n| cccccc | d |\n\ntext\n",
+    );
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "6Gdd");
+    keys(&mut app, "2Gdd");
+    assert_eq!(
+        lines(&app)[1..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |", "text"],
+        "nor above it"
+    );
+}
+
+#[test]
+fn a_substitution_over_the_note_lines_up_the_table_it_edits() {
+    let (_dir, mut store) = temp("table-subst");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\n| a | b |\n|---|---|\n| c | d |\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "gg:%s/c/cccc/<CR>");
+    assert_eq!(app.editor.doc.row, 0, "the cursor away from the table");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a    | b   |", "| ---- | --- |", "| cccc | d   |"]
+    );
+}
+
+#[test]
+fn moving_into_a_table_written_unpadded_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));
     write(&first, "# Alpha\n\none\n");

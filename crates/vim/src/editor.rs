@@ -328,6 +328,8 @@ pub struct Editor<N: Note = ()> {
     /// The text an outside change left during a step nothing had been typed
     /// into yet, so the step ending there isn't a change of the person's.
     outside_only: Option<Text>,
+    /// The key under way undid or redid (`went_through_history`).
+    through_history: bool,
     /// The text the marks and the change list were last carried to, so an
     /// edit is followed once whatever made it (`catch_up`).
     seen: Text,
@@ -514,6 +516,7 @@ impl<N: Note> Editor<N> {
             change_at: None,
             change_between: false,
             outside_only: None,
+            through_history: false,
             top: 0,
             height: 20,
             center: false,
@@ -823,6 +826,7 @@ impl<N: Note> Editor<N> {
 
     /// Before a key: a change it starts is remembered from here.
     pub fn begin(&mut self) {
+        self.through_history = false;
         if self.group.is_none() && self.idle() {
             self.group = Some(self.snap());
             self.outside_only = None;
@@ -881,10 +885,15 @@ impl<N: Note> Editor<N> {
     }
 
     /// `change` for a change the person didn't make here (a file changed
-    /// from outside, the tables lined up as a note opens), which the change
-    /// list leaves out.
+    /// from outside), which the change list leaves out.
     pub fn change_outside(&mut self, edit: impl FnOnce(&mut Doc<N>)) -> bool {
         self.make_change(edit, true)
+    }
+
+    /// Whether the key since `begin` was an undo or a redo, which puts
+    /// text back rather than changing it.
+    pub fn went_through_history(&self) -> bool {
+        self.through_history
     }
 
     /// The app's own tidying (a table lined up, empty markers dropped):
@@ -930,10 +939,23 @@ impl<N: Note> Editor<N> {
     }
 
     pub fn undo(&mut self) -> bool {
-        // Undoing isn't a change of its own.
-        self.group = None;
+        // What is being typed (easy mode's Cmd-Z mid-word) is a step of its
+        // own, undone first, as C-o breaks it; undoing isn't a change of
+        // its own.
+        self.through_history = true;
+        let typed = self.typed_in_step();
+        if let Some(group) = self.group.take()
+            && group.text != self.doc.text
+        {
+            self.undo.push(group);
+            self.redo.clear();
+            if typed {
+                self.record_change();
+            }
+        }
         let Some(snap) = self.undo.pop() else {
             self.say("Already at oldest change");
+            self.typing_goes_on();
             return false;
         };
         let now = self.snap();
@@ -943,18 +965,41 @@ impl<N: Note> Editor<N> {
             ..now
         });
         self.put_back(snap);
+        self.typing_goes_on();
         true
     }
 
     pub fn redo(&mut self) -> bool {
-        self.group = None;
+        self.through_history = true;
+        // What is being typed is newer than anything undone: kept as a step
+        // of its own, with nothing left to redo over it.
+        let typed = self.typed_in_step();
+        if let Some(group) = self.group.take()
+            && group.text != self.doc.text
+        {
+            self.undo.push(group);
+            self.redo.clear();
+            if typed {
+                self.record_change();
+            }
+        }
         let Some(snap) = self.redo.pop() else {
             self.say("Already at newest change");
+            self.typing_goes_on();
             return false;
         };
         self.undo.push(self.snap());
         self.put_back(snap);
+        self.typing_goes_on();
         true
+    }
+
+    /// After an undo or redo while typing (easy mode's Cmd-Z and
+    /// Cmd-Shift-Z): what is typed next is a step of its own, as after C-o.
+    fn typing_goes_on(&mut self) {
+        if self.is_typing() {
+            self.group = Some(self.snap());
+        }
     }
 
     // ── The cursor ────────────────────────────────────────────────────────

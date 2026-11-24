@@ -686,6 +686,10 @@ pub struct Look {
     /// Text drawn before the line (a heading's ▾).
     pub before: Option<(&'static str, Hl)>,
     pub row_bg: Option<Hl>,
+    /// (at, columns, fill): `columns` of `fill` drawn before byte `at`,
+    /// none of them the text's own (a table's cells padded to their
+    /// column), left out where the line shows raw.
+    pub pads: Vec<(usize, usize, &'static str)>,
 }
 
 impl Look {
@@ -826,6 +830,21 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
             }
         }
         out.push(look);
+    }
+    // Each table's cells padded to their column as they show, whatever
+    // spaces its text has.
+    let mut row = 0;
+    while row < lines.len() {
+        if !matches!(kinds[row], Kind::Table { .. }) {
+            row += 1;
+            continue;
+        }
+        let first = row;
+        while row < lines.len() && matches!(kinds[row], Kind::Table { .. }) {
+            row += 1;
+        }
+        let rows: Vec<&str> = lines[first..row].iter().map(AsRef::as_ref).collect();
+        table::pad(&rows, &mut out[first..row]);
     }
     out
 }
@@ -1290,15 +1309,16 @@ pub fn cells(
     let mut hls: Vec<(usize, usize, Hl, u16)> = look.hls.clone();
     hls.extend(extra.iter().map(|&(s, e, h)| (s, e, h, 300)));
     hls.sort_by_key(|h| h.3);
-    let style_at = |b: usize| {
+    let style_in = |hls: &[(usize, usize, Hl, u16)], b: usize| {
         let mut style = Style::new();
-        for (s, e, hl, _) in &hls {
+        for (s, e, hl, _) in hls {
             if b >= *s && b < *e {
                 style = style.patch(hl.style(light));
             }
         }
         style
     };
+    let style_at = |b: usize| style_in(&hls, b);
     let mut out = Vec::new();
     if let Some((text, hl)) = look.before {
         for g in text.graphemes(true) {
@@ -1316,6 +1336,20 @@ pub fn cells(
     for (at, g) in line.grapheme_indices(true) {
         if at < skip_to {
             continue;
+        }
+        if !raw {
+            for &(_, columns, fill) in look.pads.iter().filter(|p| p.0 == at) {
+                // The bar's own look, never a selection's or a match's,
+                // which act on bytes and padding stands for none.
+                let style = style_in(&look.hls, at);
+                out.extend((0..columns).map(|_| Cell {
+                    text: fill.to_string(),
+                    style,
+                    col: None,
+                    len: 0,
+                    width: 1,
+                }));
+            }
         }
         if !raw
             && let Some(&(s, e, with)) = look

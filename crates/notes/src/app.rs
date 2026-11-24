@@ -1242,8 +1242,6 @@ impl App {
             self.editor.top = top;
             self.editor.clamp();
         }
-        // Its tables lined up, as one change.
-        self.editor.change_outside(table::align_all);
         if self.modified() {
             self.save_due = Some(Instant::now() + AUTOSAVE);
         }
@@ -2952,7 +2950,11 @@ impl App {
                 if let Some(url) = typed(&outcome) {
                     let url = url.trim().to_string();
                     if !url.is_empty() && url != "https://" {
-                        self.editor.change(|doc| format::link(doc, selection, &url));
+                        self.editor.change(|doc| {
+                            let before = doc.text.lines();
+                            format::link(doc, selection, &url);
+                            table::line_up_edited(doc, &before);
+                        });
                         self.changed();
                     }
                 }
@@ -3014,11 +3016,27 @@ impl App {
         self.editor.is_typing().then_some(self.editor.doc.col)
     }
 
+    /// Out of Insert and Visual mode for a Format choice, the column typed
+    /// at carried across the table that leaving Insert mode lined up.
+    fn leave_modes_for(&mut self, from: &mut FormatFrom) {
+        let row = self.editor.doc.row;
+        let line = self.editor.line();
+        self.leave_modes();
+        if let Some(col) = from.typing_col
+            && self.editor.doc.row == row
+        {
+            let now = self.editor.line();
+            if now != line {
+                from.typing_col = Some(table::carry_typing(&line, &now, col));
+            }
+        }
+    }
+
     /// The Format menu, from where the cursor or the selection is.
     fn open_menu(&mut self) {
         let typing = self.typing_col();
-        let from = self.format_from(typing);
-        self.leave_modes();
+        let mut from = self.format_from(typing);
+        self.leave_modes_for(&mut from);
         self.push(
             Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
             Then::Format(from),
@@ -3074,26 +3092,36 @@ impl App {
             }
             _ => {}
         }
-        self.editor.change(|doc| match act {
-            FormatAct::Paragraph(style) => format::paragraph(doc, first, last, style),
-            FormatAct::Monospaced => format::monospaced(doc, first, last),
-            FormatAct::Character(style) => format::character(doc, style, sel, typing),
-            FormatAct::Tick => {
-                format::toggle_check(doc, first);
+        let goes_on_typing = act.typing() && sel.is_none();
+        self.editor.change(|doc| {
+            let before = doc.text.clone();
+            match act {
+                FormatAct::Paragraph(style) => format::paragraph(doc, first, last, style),
+                FormatAct::Monospaced => format::monospaced(doc, first, last),
+                FormatAct::Character(style) => format::character(doc, style, sel, typing),
+                FormatAct::Tick => {
+                    format::toggle_check(doc, first);
+                }
+                FormatAct::SortChecked => format::sort_checked(doc, first),
+                FormatAct::UncheckAll => format::uncheck_all(doc),
+                FormatAct::DeleteChecked => format::delete_checked(doc),
+                FormatAct::Table => table::insert(doc),
+                FormatAct::AddRow => table::add_row(doc, first),
+                FormatAct::AddColumn => table::add_column(doc),
+                FormatAct::DeleteRow => table::delete_row(doc),
+                FormatAct::DeleteColumn => table::delete_column(doc),
+                FormatAct::Link
+                | FormatAct::PasteImage
+                | FormatAct::WorkOnItem
+                | FormatAct::DiagramCode
+                | FormatAct::AttachNote => {}
             }
-            FormatAct::SortChecked => format::sort_checked(doc, first),
-            FormatAct::UncheckAll => format::uncheck_all(doc),
-            FormatAct::DeleteChecked => format::delete_checked(doc),
-            FormatAct::Table => table::insert(doc),
-            FormatAct::AddRow => table::add_row(doc, first),
-            FormatAct::AddColumn => table::add_column(doc),
-            FormatAct::DeleteRow => table::delete_row(doc),
-            FormatAct::DeleteColumn => table::delete_column(doc),
-            FormatAct::Link
-            | FormatAct::PasteImage
-            | FormatAct::WorkOnItem
-            | FormatAct::DiagramCode
-            | FormatAct::AttachNote => {}
+            // The table edited lined up in the text, as a key's change
+            // does; one only beside the change stays as written, and typing
+            // pads it as Insert mode ends.
+            if !goes_on_typing && doc.insert.is_none() {
+                table::line_up_edited(doc, &before.lines());
+            }
         });
         self.take_insert();
         if act.typing() && sel.is_none() && self.editor.mode != Mode::Insert {
@@ -3129,8 +3157,14 @@ impl App {
         };
         let grab = self.grab;
         let mut result = Ok(String::new());
+        // Typing, the table lines up as Insert mode ends.
+        let typing = self.editor.is_typing();
         self.editor.change(|doc| {
+            let before = doc.text.lines();
             result = images::paste(doc, &path, &|f| grab(f));
+            if !typing {
+                table::line_up_edited(doc, &before);
+            }
         });
         match result {
             Ok(_) => self.changed(),
@@ -3625,6 +3659,13 @@ impl App {
                     _ => self.editor.search_for(&text, kind == '/'),
                 }
                 self.editor.prompt_done();
+                if self.editor.idle() && self.editor.doc.text != before {
+                    // An Ex command's change (`:s`) lines up the table it
+                    // edited, as a key's does.
+                    let lines = before.lines();
+                    self.editor.tidy(|doc| table::line_up_edited(doc, &lines));
+                    self.editor.clamp();
+                }
                 if self.editor.end().is_some() || self.editor.doc.text != before {
                     self.changed();
                 }
@@ -3836,8 +3877,8 @@ impl App {
     fn palette_here(&mut self) -> (Vec<palette::Command>, PaletteFrom) {
         let from_list = self.focus == Focus::List && self.list_shown;
         let typing = self.typing_col();
-        let format = self.format_from(typing);
-        self.leave_modes();
+        let mut format = self.format_from(typing);
+        self.leave_modes_for(&mut format);
         let commands = self.palette_commands(from_list);
         let from = PaletteFrom {
             list: from_list,
@@ -4073,6 +4114,7 @@ impl App {
         }
         let mode_before = self.editor.mode;
         let text_before = self.editor.doc.text.clone();
+        let note_before = self.open.as_ref().map(|o| o.path.clone());
         if self.editor.is_typing() {
             // The note's own typing keys (Tab, Enter in a list) move the
             // column j and k keep as the editor's do.
@@ -4089,11 +4131,17 @@ impl App {
             && !self.editor.one_command();
         if stopped_typing {
             self.after_insert();
-        } else if self.editor.mode == Mode::Normal && self.editor.idle() {
-            let row = self.editor.doc.row;
-            self.editor.tidy(|doc| {
-                table::align(doc, row);
-            });
+        } else if self.editor.mode == Mode::Normal
+            && self.editor.idle()
+            && self.editor.doc.text != text_before
+            && !self.editor.went_through_history()
+            && self.open.as_ref().map(|o| &o.path) == note_before.as_ref()
+        {
+            // A change, not a motion, an undo, a redo or another note
+            // opened: a table only read, or put back as it was, stays as
+            // written.
+            let before = text_before.lines();
+            self.editor.tidy(|doc| table::line_up_edited(doc, &before));
             self.editor.clamp();
         }
         if let Some(before) = self.editor.end() {
@@ -4532,6 +4580,8 @@ impl App {
                 self.editor.clipboard = keep;
                 self.editor.type_text(&text);
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
+                // Typed and Insert mode left, as a key's typing is.
+                self.after_insert();
             }
             Mode::Normal => {
                 // Pasted in Normal mode: after the cursor, as typed there.
@@ -4544,6 +4594,8 @@ impl App {
                 self.editor.insert_at(after);
                 self.editor.type_text(&text);
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
+                // Typed and Insert mode left, as a key's typing is.
+                self.after_insert();
             }
         }
         if self.editor.end().is_some() || self.editor.is_typing() {
@@ -4931,9 +4983,22 @@ impl App {
                     let from = (from.0, if from.1 == usize::MAX { 0 } else { from.1 });
                     let to = (pos.0, pos.1.unwrap_or(0));
                     if to != from || matches!(self.editor.mode, Mode::Visual { .. }) {
+                        let (mut from, mut to) = (from, to);
                         if self.editor.mode == Mode::Insert {
+                            let lines = self.editor.doc.text.lines();
                             self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
                             self.after_insert();
+                            // Both ends carried across the table leaving
+                            // Insert mode lined up, on whichever of its
+                            // rows they are.
+                            for end in [&mut from, &mut to] {
+                                let now = self.editor.doc.line(end.0);
+                                if let Some(line) = lines.get(end.0)
+                                    && now != *line
+                                {
+                                    end.1 = table::carry(line, &now, end.1);
+                                }
+                            }
                         }
                         self.editor.select(from, to);
                         self.press = Some(((from.0, from.1), true));
@@ -5263,8 +5328,8 @@ impl App {
         let b = easy::BUTTONS[index];
         self.focus = Focus::Note;
         let typing = self.typing_col();
-        let from = self.format_from(typing);
-        self.leave_modes();
+        let mut from = self.format_from(typing);
+        self.leave_modes_for(&mut from);
         match b.item.and_then(menu::by_label) {
             None => self.push(
                 Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
