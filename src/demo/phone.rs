@@ -671,7 +671,6 @@ fn made_up_ticket(pane: u32) -> Option<(crate::views::ticket::Ticket, Value)> {
     Some((crate::views::ticket::Ticket::Linear(id.into()), issue))
 }
 
-/// The made-up note of a tab with one, its file's name and its text.
 /// The tool call a made-up working tab is on, as the server sends it
 /// (`phone::serve`'s `doing_json`): its tool, its argument's first line and
 /// when it started, in seconds.
@@ -686,6 +685,7 @@ fn doing_of(pane: u32, now_ms: i64) -> Value {
     }
 }
 
+/// The made-up note of a tab with one, its file's name and its text.
 fn made_up_note(pane: u32) -> Option<(&'static str, &'static str)> {
     match pane {
         11 | 14 => Some((
