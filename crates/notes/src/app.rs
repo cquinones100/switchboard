@@ -3119,7 +3119,7 @@ impl App {
             // The table edited lined up in the text, as a key's change
             // does; one only beside the change stays as written, and typing
             // pads it as Insert mode ends.
-            if typing.is_none() && !goes_on_typing && doc.insert.is_none() {
+            if !goes_on_typing && doc.insert.is_none() {
                 table::line_up_edited(doc, &before.lines());
             }
         });

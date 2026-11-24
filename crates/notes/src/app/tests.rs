@@ -1346,6 +1346,22 @@ fn deleting_a_line_under_a_table_leaves_the_table_as_written() {
 }
 
 #[test]
+fn a_substitution_over_the_note_lines_up_the_table_it_edits() {
+    let (_dir, mut store) = temp("table-subst");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\n| a | b |\n|---|---|\n| c | d |\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "gg:%s/c/cccc/<CR>");
+    assert_eq!(app.editor.doc.row, 0, "the cursor away from the table");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a    | b   |", "| ---- | --- |", "| cccc | d   |"]
+    );
+}
+
+#[test]
 fn moving_into_a_table_written_unpadded_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));

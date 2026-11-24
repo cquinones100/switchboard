@@ -154,19 +154,23 @@ pub fn edited(before: &[String], lines: &[String], row: usize) -> bool {
     true
 }
 
-/// After a change made from `before`, the table it edited lined up: the
-/// cursor's, or, rows deleted from a table's end leaving the cursor under
-/// it, the one above. A table only beside the change stays as written.
+/// After a change made from `before`, every table it edited lined up,
+/// wherever the cursor is (`:%s`, a linewise change begun above one, rows
+/// deleted from a table's end). A table only beside the change stays as
+/// written.
 pub fn line_up_edited(doc: &mut Doc, before: &[String]) {
     let lines = doc.text.lines();
-    let row = doc.row;
-    let at = if bounds(&lines, row).is_some() || row == 0 {
-        row
-    } else {
-        row - 1
-    };
-    if edited(before, &lines, at) {
-        align(doc, at);
+    let mut row = 0;
+    while row < lines.len() {
+        match bounds(&lines, row) {
+            Some((_, last)) => {
+                if edited(before, &lines, row) {
+                    align(doc, row);
+                }
+                row = last + 1;
+            }
+            None => row += 1,
+        }
     }
 }
 
@@ -219,7 +223,18 @@ fn carried(old: &str, new: &str, col: usize) -> usize {
         return (end_new + (col - end)).min(new.len());
     };
     let Some(&next) = bars.get(k + 1) else {
-        return (from + (col - bars[k])).min(new.len());
+        // A last cell with no closing bar: through its text, as below.
+        let start = |line: &str, bar: usize| {
+            let cell = &line[bar + 1..];
+            bar + 1 + (cell.len() - cell.trim_start().len())
+        };
+        let (s, s_new) = (start(old, bars[k]), start(new, from));
+        return if col < s {
+            (from + 1 + (col - bars[k] - 1)).min(s_new)
+        } else {
+            s_new + (col - s)
+        }
+        .min(new.len());
     };
     // The text of a cell, its spaces around it left out.
     let text = |line: &str, a: usize, b: usize| {
