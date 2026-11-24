@@ -326,6 +326,14 @@ fn made_up_ids_pass_in_tests_and_the_docs_placeholders_anywhere() {
     );
     assert!(
         kinds(
+            "Fixes CVE-2026-1234, RUSTSEC-2026-0592 and GHSA-4433-2x9w-596c",
+            false
+        )
+        .is_empty(),
+        "public security advisories"
+    );
+    assert!(
+        kinds(
             ".a { color: #202124; } .b { background: \"#000000\" }",
             false
         )
