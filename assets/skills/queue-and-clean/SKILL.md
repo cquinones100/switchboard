@@ -334,8 +334,8 @@ while :; do
   info=$(gh pr view <number> --json state,headRefOid --jq '[.state, .headRefOid] | @tsv') || { sleep 60; continue; }
   IFS=$'\t' read -r state head <<<"$info"
   case "$state" in MERGED) echo merged; exit 0 ;; CLOSED) echo closed; exit 0 ;; esac
-  status=$(switchboard land-lock pr-status <number>) || { sleep 60; continue; }
-  case "$status" in merged) ;; dropped*|held*) echo "$status"; exit 0 ;; none) echo dequeued; exit 0 ;; esac
+  queue_state=$(switchboard land-lock pr-status <number>) || { sleep 60; continue; }
+  case "$queue_state" in merged) ;; dropped*|held*) echo "$queue_state"; exit 0 ;; none) echo dequeued; exit 0 ;; esac
   [ "$head" != "$queued" ] && { echo moved; exit 0; }
   sleep 60
 done

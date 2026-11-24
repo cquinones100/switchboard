@@ -1261,6 +1261,45 @@ fn queue_and_clean_uses_switchboard_s_merge_queue_only_with_its_setting_on() {
     assert!(watch.contains("Go to \"Fixing\""), "a dropped PR is fixed");
 }
 
+// Claude Code's Bash tool runs the user's shell, zsh on a Mac, where `status`
+// and `pipestatus` are read-only and `argv` and `path` are tied to the
+// arguments and `PATH`, so a skill's script assigning to one fails there
+// (`read-only variable: status`) while it works in bash.
+#[test]
+fn no_skill_script_assigns_to_a_name_zsh_reserves() {
+    fn markdown_in(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if entry.file_name() != "node_modules" {
+                    markdown_in(&path, found);
+                }
+            } else if path.extension().is_some_and(|e| e == "md") {
+                found.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    markdown_in(&skills_dir(), &mut files);
+    let assignment = regex::Regex::new(
+        r"(?:^|[\s;&|({])(?:(?:local|export|typeset|declare|readonly)\s+)?(status|pipestatus|argv|path)(?:\[[^\]]*\])?\+?=",
+    )
+    .unwrap();
+    let mut found = Vec::new();
+    for file in &files {
+        let text = fs::read_to_string(file).unwrap();
+        let mut in_block = false;
+        for (n, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("```") {
+                in_block = !in_block;
+            } else if in_block && let Some(m) = assignment.captures(line) {
+                found.push(format!("{}:{}: {}", file.display(), n + 1, &m[1]));
+            }
+        }
+    }
+    assert!(found.is_empty(), "assigned in a skill's script: {found:?}");
+}
+
 // A tab that lands without asking skips the deploy and the test without asking
 // wherever the repository has neither, not only in autopilot's tabs, so a
 // merge in a repository with no deploy asks nothing.
