@@ -182,10 +182,10 @@ const TABS: &[Tab] = &[
         repo: "api",
         branch: "abc-138-paging",
         state: "working",
-        wait: Some("Bash: cargo test search"),
+        wait: None,
         minutes_ago: 1,
         prompt: None,
-        shape: plain,
+        shape: |t, _| t.activity = Some("Run the search tests".into()),
         turns: &[
             (
                 "you",
@@ -591,6 +591,7 @@ pub fn tabs(now_ms: i64) -> Vec<Value> {
                     "reply": last_claude.map(|(_, reply, ..)| *reply),
                     "at": now_ms - ago * 60_000,
                 })),
+                "doing": doing_of(t.pane, now_ms),
                 "prompt": t.prompt.map(|p| p()),
                 "tab_views": tab_rows(t.pane),
             })
@@ -671,6 +672,20 @@ fn made_up_ticket(pane: u32) -> Option<(crate::views::ticket::Ticket, Value)> {
 }
 
 /// The made-up note of a tab with one, its file's name and its text.
+/// The tool call a made-up working tab is on, as the server sends it
+/// (`phone::serve`'s `doing_json`): its tool, its argument's first line and
+/// when it started, in seconds.
+fn doing_of(pane: u32, now_ms: i64) -> Value {
+    match pane {
+        16 => json!({
+            "tool": "Bash",
+            "arg": "cargo test search::page -- --nocapture",
+            "since": now_ms / 1000 - 40,
+        }),
+        _ => Value::Null,
+    }
+}
+
 fn made_up_note(pane: u32) -> Option<(&'static str, &'static str)> {
     match pane {
         11 | 14 => Some((

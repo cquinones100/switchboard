@@ -383,6 +383,10 @@ body { position: fixed; inset: 0; height: auto; }
 .msg .steps { grid-column: 2; justify-self: stretch; color: var(--dim); font-size: var(--fact); text-align: left; min-height: var(--tap); white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .msg .steps .latest { color: var(--faint); }
 .doing { color: var(--dim); padding: var(--s1) var(--edge); font-size: var(--fact); }
+/* A step on one line, cut at its end, with how long the tab has worked kept after it. */
+.doing.stepping { display: flex; min-width: 0; }
+.doing.stepping > * { flex: none; white-space: pre; }
+.doing.stepping > .step { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── The prompt card ── */
 .card {
