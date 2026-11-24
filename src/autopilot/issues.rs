@@ -337,20 +337,25 @@ pub fn read_answer(repo: &Repo, data: &Value, label: &str) -> (String, Vec<Found
                         .and_then(|e| e.get("createdAt"))
                         .and_then(Value::as_str)
                         .map(str::to_string);
+                    // The history GitHub keeps, and the newest edit as the
+                    // issue itself gives it, which holds however many edits
+                    // the history's page leaves out.
+                    let edit = |e: &Value, at: &str| {
+                        Some((
+                            e.get(at)?.as_str()?.to_string(),
+                            e.pointer("/editor/login")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        ))
+                    };
                     let edits = n
                         .pointer("/userContentEdits/nodes")
                         .and_then(Value::as_array)
                         .map(Vec::as_slice)
                         .unwrap_or_default()
                         .iter()
-                        .filter_map(|e| {
-                            Some((
-                                e.get("editedAt")?.as_str()?.to_string(),
-                                e.pointer("/editor/login")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_string),
-                            ))
-                        })
+                        .filter_map(|e| edit(e, "editedAt"))
+                        .chain(edit(n, "lastEditedAt"))
                         .collect();
                     let labels = n
                         .pointer("/labels/nodes")
@@ -481,12 +486,13 @@ const QUERY: &str = "query($q: String!, $first: Int!, $after: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on Issue {
-        number title body url
+        number title body url lastEditedAt
         author { login }
+        editor { login }
         timelineItems(itemTypes: [LABELED_EVENT], last: 100) {
           nodes { ... on LabeledEvent { label { name } actor { login } createdAt } }
         }
-        userContentEdits(last: 100) { nodes { editedAt editor { login } } }
+        userContentEdits(first: 100) { nodes { editedAt editor { login } } }
         labels(first: 50) { nodes { name } }
         comments(last: 50) { nodes { body createdAt author { login } } }
         blockedBy(first: 25) { nodes { number state repository { nameWithOwner } } }
@@ -1645,6 +1651,13 @@ mod tests {
                 edited(4, json!([]), json!([by(Some("outsider"), "2026-01-01T09:00:00Z")])),
                 // Edited after the label by a deleted account.
                 edited(5, json!([]), json!([by(None, "2026-01-01T11:00:00Z")])),
+                // Its newest edit, by its author, beyond the history's page.
+                { "number": 7, "title": "t", "body": "b", "url": "u",
+                  "author": { "login": "outsider" },
+                  "lastEditedAt": "2026-01-01T11:00:00Z", "editor": { "login": "outsider" },
+                  "timelineItems": { "nodes": [{ "label": { "name": "autopilot" },
+                      "actor": { "login": "writer" }, "createdAt": "2026-01-01T10:00:00Z" }] },
+                  "userContentEdits": { "nodes": [] } },
                 // Yours, edited after the label by anyone.
                 { "number": 6, "title": "t", "body": "b", "url": "u", "author": { "login": "me" },
                   "timelineItems": { "nodes": [] },
