@@ -239,8 +239,8 @@ function doing(tab) {
   return "idle " + ago(tab.since ? tab.since * 1000 : 0).replace(" ago", "");
 }
 
-// A working tab's step, as its folded steps name one ("Bash: cargo test",
-// "Read: src/phone/turns.rs"), else "working", and how long it has worked
+// A working tab's step, its tool and argument as the server's `Doing` holds
+// them ("Bash: cargo test", "Read: src/phone/turns.rs"), else "working", and how long it has worked
 // this turn ("12m"), empty for a tab whose turn has ended (in the
 // background) or isn't known; never the prompt that started the turn,
 // which the channel already shows above.
@@ -267,13 +267,15 @@ function span(ms) {
 function workingLine(tab) {
   if (tab.wait) return el("div", { class: "doing" }, spinner(), " " + tab.wait);
   const [step, worked] = stepOf(tab);
-  return el(
-    "div",
-    { class: "doing stepping" },
-    spinner(),
-    el("span", { class: "step" }, " " + step),
-    worked ? el("span", { class: "worked" }, " · " + worked) : null,
-  );
+  const time = worked ? el("span", { class: "worked" }, " · " + worked) : null;
+  // Kept counting between snapshots, which a long tool call may send none of.
+  if (time) time.at = tab.turn.at;
+  return el("div", { class: "doing stepping" }, spinner(), el("span", { class: "step" }, " " + step), time);
+}
+if (typeof setInterval === "function") {
+  setInterval(() => {
+    for (const node of document.querySelectorAll(".worked")) if (node.at) node.textContent = " · " + span(Date.now() - node.at);
+  }, 15000);
 }
 
 // ── Pairing (board 168) and refusals (board 169) ──
