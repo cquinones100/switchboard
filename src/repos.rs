@@ -151,8 +151,6 @@ pub const REVIEWS: [&str; 2] = ["review-loop", "none"];
 /// Where a direct landing's tests can run: in the worktree, or in the
 /// repository's CI.
 pub const TEST_IN: [&str; 2] = ["here", "ci"];
-/// Where a repository's work can be kept, its `tickets`.
-pub const TICKETS: [&str; 3] = ["github", "linear", "notes"];
 /// An answer worked out is kept this long, in ms.
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -248,7 +246,11 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
     let automatic = (key == "landing" && value.as_str() == Some("automatic"))
         || (key == "tickets" && value.as_str() == Some("unset"));
     let automatic = automatic || (key == "issueLabel" && value.as_str() == Some(""));
-    let tickets_ok = (key == "tickets" && value.as_str().is_some_and(|v| TICKETS.contains(&v)))
+    let tickets_ok = (key == "tickets"
+        && value
+            .as_str()
+            .and_then(crate::tickets::Kept::parse)
+            .is_some())
         || (key == "issueLabel" && value.as_str().is_some_and(label_ok));
     if !automatic && !tickets_ok && !valid(key, &value) {
         return Err(
@@ -432,7 +434,7 @@ pub fn steps_at(dir: &Path) -> Result<Steps, String> {
 }
 
 /// Where the work of the repository at `dir` is kept, its `tickets` (one
-/// of `TICKETS`), by the key `landing_with` reads its entry under, else by
+/// of `tickets::Kept`'s keys), by the key `landing_with` reads its entry under, else by
 /// origin's URL as its config writes it; `None` when it isn't set, and an
 /// error when repos.json can't be read. Runs git, so off the server's task.
 pub fn tickets_at(dir: &Path) -> Result<Option<String>, String> {
@@ -448,7 +450,7 @@ pub fn tickets_at(dir: &Path) -> Result<Option<String>, String> {
 
 /// `tickets_at` from the files alone, origin read from git's config file
 /// and a repos.json that can't be read taken as empty, so no process starts:
-/// what M-i and autopilot read on the server's task (`views::ticket::of_dir`,
+/// what M-i and autopilot read on the server's task (`tickets::kept_known`,
 /// `autopilot::mode::source_of`).
 pub fn tickets_known(dir: &Path) -> Option<String> {
     let data = read_safely();
@@ -549,7 +551,7 @@ pub fn tickets_of(entry: &Map<String, Value>) -> Option<String> {
     entry
         .get("tickets")
         .and_then(Value::as_str)
-        .filter(|v| TICKETS.contains(v))
+        .filter(|v| crate::tickets::Kept::parse(v).is_some())
         .map(str::to_string)
 }
 

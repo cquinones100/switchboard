@@ -33,12 +33,12 @@ use serde_json::Value;
 use super::search::{self, Found, Source};
 use super::search_box::SearchBox;
 use super::shown::{self, Shown};
-use super::ticket::Ticket;
-use super::{Command, ViewsEvent, page, seen, ticket};
+use super::{Command, ViewsEvent, page, seen};
 use crate::integrations::{github, linear};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{Direction, PaneId, TabId};
 use crate::net::{self, ErrorKind};
+use crate::tickets::{self, Kept, Ticket};
 use crate::ui::{Outcome, PickItem, Picker};
 use crate::{links, paths, settings, util};
 
@@ -74,26 +74,6 @@ pub(crate) fn exe() -> String {
         .unwrap_or_else(|| "switchboard".into())
 }
 
-/// Linear's workspace for a ticket's link: `LINEAR_WORKSPACE`, else
-/// linear.json's `linearWorkspace`, as linear-ticket.sh read it.
-fn linear_workspace() -> Option<String> {
-    std::env::var("LINEAR_WORKSPACE")
-        .ok()
-        .filter(|w| !w.trim().is_empty())
-        .or_else(|| {
-            util::read_json_object(crate::files::file("linear.json"))
-                .get("linearWorkspace")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .map(|w| w.trim().to_string())
-        .filter(|w| {
-            !w.is_empty()
-                && w.chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        })
-}
-
 fn is_readable(url: &str) -> bool {
     shown::safe(url) && (url.starts_with("file://") || links::host_of(url).is_some())
 }
@@ -111,24 +91,6 @@ fn rows(found: &[Shown]) -> Vec<PickItem> {
         .iter()
         .map(|f| PickItem::new(f.row(), f.url.clone()))
         .collect()
-}
-
-/// The service whose list M-i's picker offers, by the repository's ticket
-/// provider (repos.json's `tickets`): GitHub's issues with `github`,
-/// Linear's tickets and projects with `linear` or none set.
-/// What M-i and "Choose this tab's ticket or project…" say in a
-/// repository whose tickets are GitHub's while GitHub is off: said each
-/// time, not once as a tip, since the key still works for Linear's
-/// tickets elsewhere and would otherwise do nothing without a word.
-const ISSUES_OFF: &str =
-    "This repository keeps its tickets as GitHub issues, and GitHub is off in Settings.";
-
-fn picker_service(provider: Option<&str>) -> &'static str {
-    if provider == Some("github") {
-        "github"
-    } else {
-        "linear"
-    }
 }
 
 impl Server {
@@ -484,11 +446,11 @@ impl Server {
         // keeps the branch's issue from opening, and comes last, so the keys
         // say its service is off rather than that there is none.
         let chosen = self.chosen_ticket(tab);
-        if let Some(on) = chosen.clone().filter(|c| settings::is_on(c.service())) {
+        if let Some(on) = chosen.clone().filter(|c| c.source().is_on()) {
             return Some(on);
         }
-        let provider = crate::repos::tickets_known(dir);
-        self.tab_ticket_by(tab, dir, provider.as_deref()).or(chosen)
+        let kept = tickets::kept_known(dir);
+        self.tab_ticket_by(tab, dir, kept).or(chosen)
     }
 
     /// The ticket or project chosen for a tab, kept as `@tab_ticket`.
@@ -501,29 +463,29 @@ impl Server {
         self.tabs.get(&tab)?.opts.get(TAB_TICKET)
     }
 
-    /// `tab_ticket_at` from the branch and names alone, by the provider
-    /// given.
+    /// `tab_ticket_at` from the branch and names alone, by where the
+    /// repository keeps its work.
     fn tab_ticket_by(
         &self,
         tab: TabId,
         dir: &std::path::Path,
-        provider: Option<&str>,
+        kept: Option<Kept>,
     ) -> Option<Ticket> {
         let t = self.tabs.get(&tab)?;
-        let mut found = ticket::of_dir_all(dir, provider);
+        let mut found = tickets::of_dir_all(dir, kept);
         found.extend(
             t.opts
                 .get("@tab_name")
-                .and_then(|n| ticket::in_name(n))
-                .or_else(|| ticket::in_name(&t.name)),
+                .and_then(|n| tickets::in_name(n))
+                .or_else(|| tickets::in_name(&t.name)),
         );
-        // The label shown counts only for a repository keeping its work in
-        // Linear, whose kind it names; a name you gave counts whatever it is.
+        // The label shown counts only as a ticket of the repository's own
+        // source, whose kind it names; a name you gave counts whatever it is.
         found.extend(
-            ticket::in_name(&self.tab_label_without_pr_title(tab))
-                .filter(|_| provider == Some("linear")),
+            kept.and_then(Kept::source)
+                .and_then(|s| s.in_name(&self.tab_label_without_pr_title(tab))),
         );
-        ticket::first_on(found)
+        tickets::first_on(found)
     }
 
     /// The Linear ticket a tab's work is on, for what reads Linear's
@@ -540,11 +502,11 @@ impl Server {
             let t = self.tabs.get(&tab)?;
             t.opts
                 .get("@tab_name")
-                .and_then(|n| ticket::id_in_name(n))
-                .or_else(|| ticket::id_in_name(&t.name))
-                .or_else(|| ticket::id_in_name(&self.tab_label_without_pr_title(tab)))
+                .and_then(|n| tickets::linear::id_in_name(n))
+                .or_else(|| tickets::linear::id_in_name(&t.name))
+                .or_else(|| tickets::linear::id_in_name(&self.tab_label_without_pr_title(tab)))
         };
-        ticket::id_for_dir(dir)
+        tickets::linear::id_for_dir(dir)
             .or_else(|| self.chosen_ticket(tab).and_then(linear))
             .or_else(names)
     }
@@ -563,31 +525,33 @@ impl Server {
         let t = self.tabs.get(&tab)?;
         // One chosen of a service turned off stands aside, as it does for M-i.
         if let Some(chosen) = t.opts.get(TAB_TICKET).and_then(|v| Ticket::parse(v))
-            && settings::is_on(chosen.service())
+            && chosen.source().is_on()
         {
             return Some(chosen.short());
         }
         let branch = self
             .tab_path(tab)
             .and_then(|d| self.tab_names.names.branch(d));
-        if let Some(number) = branch.and_then(ticket::issue_number_of_branch)
-            && settings::is_on("github")
-        {
-            return Some(format!("#{number}"));
-        }
-        if !settings::is_on("linear") {
-            return None;
-        }
-        branch
-            .and_then(ticket::linear_in_branch)
-            .or_else(|| {
+        let on: Vec<tickets::Source> = tickets::Source::ALL
+            .into_iter()
+            .filter(|s| s.is_on())
+            .collect();
+        // The branch first, by each source on, then the names.
+        let in_branch = || {
+            on.iter()
+                .find_map(|s| branch.and_then(|b| s.short_in_branch(b)))
+        };
+        let in_names = || {
+            on.iter().find_map(|s| {
                 t.opts
                     .get("@tab_name")
-                    .and_then(|n| ticket::in_name(n))
-                    .or_else(|| ticket::in_name(&t.name))
-                    .or_else(|| ticket::in_name(&self.tab_label_without_pr_title(tab)))
+                    .and_then(|n| s.in_name(n))
+                    .or_else(|| s.in_name(&t.name))
+                    .or_else(|| s.in_name(&self.tab_label_without_pr_title(tab)))
+                    .map(|found| found.short())
             })
-            .map(|found| found.short())
+        };
+        in_branch().or_else(in_names)
     }
 
     /// M-i: the tab's ticket in Claude's place, or closed; with none
@@ -603,28 +567,28 @@ impl Server {
             self.close_ticket_view(open);
             return;
         }
-        // The picker lists the repository's ticket provider's: GitHub's
-        // issues with `github`, Linear's tickets otherwise. One of a service
-        // turned off counts as none when that provider can offer a choice.
-        let service = picker_service(crate::repos::tickets_known(&dir).as_deref());
+        // The picker lists the tickets of the repository's source
+        // (`tickets::picks_from`). One of a source turned off counts as
+        // none when that source can offer a choice.
+        let source = tickets::picks_from(tickets::kept_known(&dir));
         let picker_on = settings::is_on("ticket_picker");
-        let picks = settings::is_on(service) && picker_on;
+        let picks = source.is_on() && picker_on;
         let found = self
             .tab_ticket_at(tab, &dir)
-            .filter(|f| settings::is_on(f.service()) || !picks);
+            .filter(|f| f.source().is_on() || !picks);
         let Some(found) = found else {
             if picks {
                 self.choose_ticket(client, tab, true);
-            } else if picker_on && service == "github" {
-                self.say(Some(client), ISSUES_OFF);
+            } else if let Some(said) = source.off_said().filter(|_| picker_on) {
+                self.say(Some(client), said);
             } else {
-                let words = ticket::none_words(&dir, "No ticket or GitHub issue for this tab");
+                let words = tickets::none_words(&dir, "No ticket or GitHub issue for this tab");
                 self.say(Some(client), &words);
             }
             return;
         };
-        if !settings::is_on(found.service()) {
-            self.service_off(client, found.service());
+        if !found.source().is_on() {
+            self.service_off(client, found.source().key());
             return;
         }
         // Beside the work, never in Notes' place.
@@ -670,11 +634,8 @@ impl Server {
                 .or_else(|| server.tab_path(tab).map(std::path::Path::to_path_buf))
         };
         let work = live(self);
-        let service = picker_service(
-            work.as_deref()
-                .and_then(crate::repos::tickets_known)
-                .as_deref(),
-        );
+        let source = tickets::picks_from(work.as_deref().and_then(tickets::kept_known));
+        let words = source.choosing();
         let dir = work.clone();
         let moved_on = move |server: &mut Server, client: ClientId| {
             let now = live(server);
@@ -689,31 +650,26 @@ impl Server {
             moved
         };
         let moved_on_again = moved_on.clone();
-        let issues = service == "github";
-        // With its service off, the provider isn't asked: only a choice
-        // made before can be let go.
-        let ask = settings::is_on(service);
+        // With its source off, the source isn't asked: only a choice made
+        // before can be let go.
+        let ask = source.is_on();
         if ask {
-            let getting = if issues {
-                "Getting the repository's open issues…"
-            } else {
-                "Getting your tickets…"
-            };
-            self.say(Some(client), getting);
+            self.say(Some(client), words.getting);
         } else if self.chosen_ticket_kept(tab).is_none() {
-            if issues {
-                self.say(Some(client), ISSUES_OFF);
-            } else {
-                self.service_off(client, service);
+            match source.off_said() {
+                Some(said) => self.say(Some(client), said),
+                None => self.service_off(client, source.key()),
             }
             return;
         }
         self.off_task(
             client,
-            move || match (ask, dir) {
-                (true, Some(dir)) if issues => util::block_on(ticket::open_issues_at(&dir)),
-                (true, _) if !issues => util::block_on(ticket::yours()),
-                _ => Ok(ticket::Lists::default()),
+            move || {
+                if ask {
+                    util::block_on(source.yours(dir.as_deref()))
+                } else {
+                    Ok(tickets::Lists::default())
+                }
             },
             move |server, client, found| {
                 server.unsay(client);
@@ -735,12 +691,7 @@ impl Server {
                         lists.found
                     }
                     Ok(_) => {
-                        let none = if issues {
-                            "GitHub has no open issues in this repository."
-                        } else {
-                            "Linear has no tickets or projects of yours."
-                        };
-                        server.say(Some(client), none);
+                        server.say(Some(client), words.none);
                         return;
                     }
                     // Said at the top of the picker, which still lets the
@@ -750,11 +701,7 @@ impl Server {
                         Vec::new()
                     }
                     Err(e) => {
-                        let what = if issues {
-                            "the open issues"
-                        } else {
-                            "your tickets"
-                        };
+                        let what = words.list;
                         server.say(Some(client), &format!("Couldn't get {what}.\n\n{e}"));
                         return;
                     }
@@ -770,7 +717,7 @@ impl Server {
                     .collect();
                 // Named by the tab's number, since Linear may answer after
                 // you've gone to another tab.
-                let what = if issues { "issue" } else { "ticket or project" };
+                let what = words.one;
                 let title = format!("Tab {}'s {what}", server.tab_number(tab));
                 let mut picker = Picker::new(title, items).keep_order();
                 if let Some(why) = why_empty {
@@ -792,8 +739,8 @@ impl Server {
                         }
                         // Its service turned off while the picker was open
                         // takes nothing from it.
-                        if let Some(c) = chosen.as_ref().filter(|c| !settings::is_on(c.service())) {
-                            server.service_off(client, c.service());
+                        if let Some(c) = chosen.as_ref().filter(|c| !c.source().is_on()) {
+                            server.service_off(client, c.source().key());
                             return;
                         }
                         // A view showing the ticket before closes, so none shows
@@ -833,7 +780,7 @@ impl Server {
                                 t.opts.remove(TAB_TICKET);
                                 server
                                     .tab_ticket_at(tab, &dir)
-                                    .filter(|t| settings::is_on(t.service()))
+                                    .filter(|t| t.source().is_on())
                             });
                             // With nothing to show, a parked view is left to
                             // its tool, never a shell standing in its marks.
@@ -1033,7 +980,7 @@ impl Server {
         // else the tab's ticket view.
         let shown_in = |view: PaneId| {
             let arg = self.panes.get(&view)?.opts.get(TICKET_ID)?;
-            Ticket::parse(arg).filter(|t| settings::is_on(t.service()))
+            Ticket::parse(arg).filter(|t| t.source().is_on())
         };
         // A link view reading a ticket opens the link it reads, in the
         // workspace it names.
@@ -1062,53 +1009,39 @@ impl Server {
                 .find_map(shown_in)
         });
         let Some(found) = shown.or_else(|| self.tab_ticket_at(tab, &dir)) else {
-            let words = ticket::none_words(&dir, "No ticket or GitHub issue for this tab");
+            let words = tickets::none_words(&dir, "No ticket or GitHub issue for this tab");
             self.say(Some(client), &words);
             return;
         };
-        if !settings::is_on(found.service()) {
-            self.service_off(client, found.service());
+        if !found.source().is_on() {
+            self.service_off(client, found.source().key());
             return;
         }
-        match found {
-            Ticket::Linear(id) => self.open_ticket_id(client, id),
-            Ticket::Issue { .. } => {
-                if let Some(url) = found.url() {
-                    self.open_link(client, url);
-                }
-            }
-            Ticket::Project(id) => {
-                let tx = self.tx.clone();
-                tokio::spawn(async move {
-                    match super::project::url(&id).await {
-                        Ok(Some(url)) => Server::open_link_later(&tx, client, url),
-                        Ok(None) => {
-                            Server::say_later(&tx, client, format!("Linear has no link for {id}."))
-                        }
-                        Err(e) => {
-                            Server::say_later(&tx, client, format!("Can't open {id}.\n\n{e}"))
-                        }
-                    }
-                });
-            }
-        }
+        self.open_ticket_link(client, found);
     }
 
-    /// A Linear ticket by its ID in the browser: at the workspace's link
-    /// when one is written down, else where Linear says it is (M-l, and
-    /// M-p's "Open a Linear ticket in the browser by ID").
+    /// A Linear ticket by its ID in the browser (M-p's "Open a Linear
+    /// ticket in the browser by ID"), as M-l opens one.
     pub(crate) fn open_ticket_id(&mut self, client: ClientId, id: String) {
-        if let Some(workspace) = linear_workspace() {
-            self.open_link(client, format!("https://linear.app/{workspace}/issue/{id}"));
+        self.open_ticket_link(client, Ticket::Linear(id));
+    }
+
+    /// A ticket in the browser: at its link when it is known without
+    /// asking (`Ticket::link_now`), else where its source says it is.
+    fn open_ticket_link(&mut self, client: ClientId, found: Ticket) {
+        if let Some(url) = found.link_now() {
+            self.open_link(client, url);
             return;
         }
-        // No workspace written down: Linear says where the ticket is.
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            match linear::ticket(&id, "M-l open ticket").await {
-                Ok(Some(t)) if !t.url.is_empty() => Server::open_link_later(&tx, client, t.url),
-                Ok(_) => Server::say_later(&tx, client, format!("Linear has no ticket {id}.")),
-                Err(e) => Server::say_later(&tx, client, format!("Can't open {id}.\n\n{e}")),
+            match found.link("M-l open ticket").await {
+                Ok(Some(url)) => Server::open_link_later(&tx, client, url),
+                Ok(None) => Server::say_later(&tx, client, found.no_link_words()),
+                Err(e) => {
+                    let id = found.shown();
+                    Server::say_later(&tx, client, format!("Can't open {id}.\n\n{e}"))
+                }
             }
         });
     }
@@ -1128,20 +1061,12 @@ impl Server {
         let Some((_, tab, dir)) = self.here(client) else {
             return;
         };
-        let id = match self.tab_ticket_at(tab, &dir) {
-            Some(Ticket::Linear(id)) => id,
-            Some(issue @ Ticket::Issue { .. }) => {
-                let text = match issue.url() {
-                    Some(link) if url => link,
-                    _ => issue.short(),
-                };
-                self.copy_said(client, &text);
-                return;
-            }
-            // A project, or none of the provider's: the Linear ticket the
-            // branch or the tab's names give, as before there were issues.
-            _ => match self.ticket_here(tab, &dir) {
-                Some(id) => id,
+        // A project, or none of the source's: the Linear ticket the branch
+        // or the tab's names give, as before there were other sources.
+        let found = match self.tab_ticket_at(tab, &dir).filter(Ticket::copied) {
+            Some(found) => found,
+            None => match self.ticket_here(tab, &dir) {
+                Some(id) => Ticket::Linear(id),
                 None => {
                     self.say(Some(client), "No ticket in this branch or tab name");
                     return;
@@ -1149,28 +1074,22 @@ impl Server {
             },
         };
         if !url {
-            self.copy_said(client, &id);
+            self.copy_said(client, &found.short());
             return;
         }
-        if let Some(workspace) = linear_workspace() {
-            self.copy_said(
-                client,
-                &format!("https://linear.app/{workspace}/issue/{id}"),
-            );
+        if let Some(link) = found.link_now() {
+            self.copy_said(client, &link);
             return;
         }
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let said = match linear::ticket(&id, "copy the ticket's URL").await {
-                Ok(Some(t)) if !t.url.is_empty() => {
-                    let _ = tx.send(Event::Views(ViewsEvent::Copy {
-                        client,
-                        text: t.url,
-                    }));
+            let said = match found.link("copy the ticket's URL").await {
+                Ok(Some(text)) => {
+                    let _ = tx.send(Event::Views(ViewsEvent::Copy { client, text }));
                     return;
                 }
-                Ok(_) => format!("Linear has no ticket {id}."),
-                Err(e) => format!("Can't copy {id}'s URL.\n\n{e}"),
+                Ok(None) => found.no_link_words(),
+                Err(e) => format!("Can't copy {}'s URL.\n\n{e}", found.shown()),
             };
             Server::say_later(&tx, client, said);
         });

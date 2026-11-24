@@ -90,7 +90,7 @@ impl Asked {
 /// default).
 pub fn asked(args: &[String]) -> Result<Asked, String> {
     match args {
-        [flag, id] if flag == "--ticket" => crate::views::ticket::id_of(id)
+        [flag, id] if flag == "--ticket" => crate::tickets::linear::id_of(id)
             .map(Asked::Ticket)
             .ok_or_else(|| "That isn't a Linear ticket ID.".to_string()),
         [flag] if flag == "--ticket" => Err("Which ticket? pr-image --ticket <ID>".into()),

@@ -53,9 +53,9 @@ use crate::photos::{Service, Who};
 use crate::sidebar::model::TabModel;
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{cut, width, wrap};
+use crate::tickets::Ticket;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Tone};
-use crate::views::ticket::Ticket;
 
 /// Under this many columns the thread pane goes behind `i`.
 pub const BESIDE_AT: usize = 120;
@@ -1997,13 +1997,13 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
         .map(|m| m.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let mut ids = crate::views::ticket::ids_in(&text);
+    let mut ids = crate::tickets::linear::ids_in(&text);
     for id in messages.iter().flat_map(|m| m.refs.iter()) {
         if !ids.contains(id) {
             ids.push(id.clone());
         }
     }
-    let issues = crate::views::ticket::issues_in(&text);
+    let issues = crate::tickets::github::issues_in(&text);
     let lower = text.to_lowercase();
     let now = jiff::Timestamp::from_millisecond(look.now_ms).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
     // Each as when it is: "today" all day, "now" while it runs, else how
@@ -2065,7 +2065,8 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
         let linear = Ticket::Linear(id.clone());
         let tab = look.tabs.iter().find(|t| {
             t.ticket.as_ref() == Some(&linear)
-                || crate::views::ticket::id_in_name(&t.ticket_name).as_deref() == Some(id.as_str())
+                || crate::tickets::linear::id_in_name(&t.ticket_name).as_deref()
+                    == Some(id.as_str())
         });
         rows.push((id, title, state, tab));
     }

@@ -187,7 +187,7 @@ pub struct TabModel {
     pub prs: Vec<PrLine>,
     /// The ticket its branch is for (`Server::tab_ticket`): its GitHub
     /// issue or Linear ticket.
-    pub ticket: Option<crate::views::ticket::Ticket>,
+    pub ticket: Option<crate::tickets::Ticket>,
     /// Its directory's GitHub repository, origin's `owner/name`, as the
     /// lookups last read it; `None` outside one or before it is read.
     pub repo: Option<String>,

@@ -1,5 +1,5 @@
 //! A GitHub issue as the ticket view shows it, for a tab whose ticket is
-//! the issue its branch was started for (`views::ticket::Ticket::Issue`):
+//! the issue its branch was started for (`tickets::Ticket::Issue`):
 //! its number and title, who opened it and when, its body, then its
 //! comments, oldest first, drawn as the PR view draws a PR's; with its
 //! state, labels, assignees and milestone beside them, as the board for a

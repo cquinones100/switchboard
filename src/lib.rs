@@ -19,6 +19,8 @@
 //! - `worktree`: what the worktree commands share.
 //! - `net`: HTTPS requests, each counted in the request audit.
 //! - `integrations`: GitHub and Linear over their APIs.
+//! - `tickets`: where a repository's tickets come from, one interface over
+//!   GitHub issues and Linear.
 //! - `trust`: whose code a directory holds: trusted-dirs, your own code,
 //!   and someone else's PR checked out untrusted.
 //! - `dev`: whether a directory, or the running build, is Switchboard's own
@@ -143,6 +145,7 @@ pub mod slots;
 pub mod sources;
 pub mod status;
 pub mod tabs;
+pub mod tickets;
 pub mod trust;
 pub mod ui;
 pub mod update;

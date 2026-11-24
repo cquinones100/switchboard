@@ -59,6 +59,7 @@ use serde_json::{Value, json};
 
 use crate::cmd::worktree_from_note::{self as note, failed_in_autopilot};
 use crate::integrations::{github, linear};
+use crate::tickets::{self, Kept, Source};
 use crate::ui::{Menu, MenuOption, PickItem, Picker, alone};
 use crate::util;
 use crate::worktree::{self, Fetched, Given, Purpose};
@@ -493,9 +494,11 @@ fn by_provider(
     made: &mut bool,
 ) -> Result<ExitCode, String> {
     let name = name_of(root);
-    match crate::repos::tickets_at(root)?.as_deref() {
-        Some("github") => super::worktree_from_issue::run(rest, &n.to_string(), made),
-        Some("linear") => {
+    match tickets::kept_at(root)? {
+        Some(Kept::In(Source::Github)) => {
+            super::worktree_from_issue::run(rest, &n.to_string(), made)
+        }
+        Some(Kept::In(Source::Linear)) => {
             let team = util::read_json(crate::files::file("linear.json"))
                 .and_then(|v| Some(v.get("linearTeam")?.as_str()?.trim().to_string()))
                 .filter(|t| !t.is_empty())
@@ -507,7 +510,7 @@ fn by_provider(
                 })?;
             linear_ticket(rest, &format!("{team}-{n}"), trusted)
         }
-        Some(_) => Err(format!(
+        Some(Kept::Notes) => Err(format!(
             "{name} keeps its work in a note's checklist, which has no numbers: run wt alone to pick an item, or give a GitHub issue as #{n}"
         )),
         None => Err(format!(
@@ -564,51 +567,41 @@ fn pick_repository(linear_first: bool) -> Result<PathBuf, String> {
 }
 
 /// The sources `wt` alone offers where the repository's `tickets` isn't
-/// set: each service its setting turns on (GitHub only for a repository on
-/// it), and the notes when there is a notes directory.
-pub fn sources_offered(root: &Path) -> Vec<&'static str> {
-    let mut out = Vec::new();
-    if crate::settings::is_on("linear") {
-        out.push("linear");
-    }
-    if crate::settings::is_on("github") && crate::sources::repo::origin_of(root).is_some() {
-        out.push("github");
-    }
+/// set: each source its setting turns on that the repository can use
+/// (`Source::offered_at`), and the notes when there is a notes directory.
+pub fn sources_offered(root: &Path) -> Vec<Kept> {
+    let mut out: Vec<Kept> = Source::OFFERED
+        .into_iter()
+        .filter(|s| s.is_on() && s.offered_at(root))
+        .map(Kept::In)
+        .collect();
     if note::notes_dir().is_dir() {
-        out.push("notes");
+        out.push(Kept::Notes);
     }
     out
 }
 
 /// What the question of which source names a source by.
-pub fn source_words(source: &str) -> &'static str {
-    match source {
-        "linear" => "A Linear ticket assigned to you",
-        "github" => "A GitHub issue",
-        _ => "A note's checklist item",
+pub fn source_words(kept: Kept) -> &'static str {
+    match kept {
+        Kept::In(source) => source.offered_words(),
+        Kept::Notes => "A note's checklist item",
     }
 }
 
 /// `wt` alone: the repository's open work from where it keeps it, picked.
 fn picked(rest: &Given, root: &Path, trusted: bool, made: &mut bool) -> Result<ExitCode, String> {
     can_ask()?;
-    let source = match crate::repos::tickets_at(root)? {
-        // A service is offered only while its setting is on.
-        Some(source)
-            if matches!(source.as_str(), "linear" | "github")
-                && !crate::settings::is_on(&source) =>
-        {
-            let service = if source == "linear" {
-                "Linear"
-            } else {
-                "GitHub"
-            };
+    let kept = match tickets::kept_at(root)? {
+        // A source is offered only while its setting is on.
+        Some(Kept::In(source)) if !source.is_on() => {
+            let service = source.name();
             return Err(format!(
                 "{service} is off in Settings, and {} keeps its work there: name the work, or turn {service} on",
                 name_of(root)
             ));
         }
-        Some(source) => source,
+        Some(kept) => kept,
         None => {
             let offered = sources_offered(root);
             match offered.as_slice() {
@@ -618,30 +611,30 @@ fn picked(rest: &Given, root: &Path, trusted: bool, made: &mut bool) -> Result<E
                         name_of(root)
                     ));
                 }
-                [one] => one.to_string(),
+                [one] => *one,
                 _ => {
                     let options = offered
                         .iter()
-                        .map(|s| MenuOption::new(source_words(s)))
+                        .map(|s| MenuOption::new(source_words(*s)))
                         .collect();
                     match alone::choose(Menu::new("Work on what?", options))? {
-                        Some(at) => offered[at].to_string(),
+                        Some(at) => offered[at],
                         None => return Ok(ExitCode::from(1)),
                     }
                 }
             }
         }
     };
-    match source.as_str() {
-        "linear" => match pick_ticket()? {
+    match kept {
+        Kept::In(Source::Linear) => match pick_ticket()? {
             Some(ticket) => linear_ticket(rest, &ticket, trusted),
             None => Ok(ExitCode::from(1)),
         },
-        "github" => match pick_issue(root)? {
+        Kept::In(Source::Github) => match pick_issue(root)? {
             Some(issue) => super::worktree_from_issue::run(rest, &issue, made),
             None => Ok(ExitCode::from(1)),
         },
-        _ => {
+        Kept::Notes => {
             let Some(note_name) = pick_note()? else {
                 return Ok(ExitCode::from(1));
             };
@@ -653,50 +646,10 @@ fn picked(rest: &Given, root: &Path, trusted: bool, made: &mut bool) -> Result<E
     }
 }
 
-const ASSIGNED: &str = "query { viewer { assignedIssues(first: 100, orderBy: createdAt, \
-     filter: { state: { type: { nin: [\"completed\", \"canceled\", \"duplicate\"] } } }) { \
-     nodes { identifier title createdAt state { type } } } } }";
-
-/// The open Linear tickets assigned to you, newest first: their IDs and
-/// titles, the titles without control characters, since someone else
-/// wrote them.
-pub async fn assigned_tickets(source: &str) -> anyhow::Result<Vec<(String, String)>> {
-    let data = linear::graphql(ASSIGNED, json!({}), source).await?;
-    Ok(assigned_of(&data))
-}
-
-/// `assigned_tickets` from Linear's answer.
-fn assigned_of(data: &Value) -> Vec<(String, String)> {
-    let mut tickets: Vec<(String, String, String)> = data
-        .pointer("/viewer/assignedIssues/nodes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|n| {
-            let kind = n.pointer("/state/type").and_then(Value::as_str);
-            !matches!(kind, Some("completed" | "canceled" | "duplicate"))
-        })
-        .filter_map(|n| {
-            let text = |k: &str| n.get(k).and_then(Value::as_str).map(str::to_string);
-            let title: String = text("title")?.chars().filter(|c| !c.is_control()).collect();
-            Some((
-                text("createdAt").unwrap_or_default(),
-                text("identifier")?,
-                title,
-            ))
-        })
-        .collect();
-    tickets.sort_by(|a, b| b.0.cmp(&a.0));
-    tickets
-        .into_iter()
-        .map(|(_, id, title)| (id, title))
-        .collect()
-}
-
 /// Which Linear ticket, from those assigned to you, or one typed in.
 fn pick_ticket() -> Result<Option<String>, String> {
-    let tickets =
-        util::block_on(assigned_tickets("wt: your tickets")).map_err(|e| e.to_string())?;
+    let tickets = util::block_on(crate::tickets::linear::assigned("wt: your tickets"))
+        .map_err(|e| e.to_string())?;
     let items = tickets
         .iter()
         .map(|(id, title)| PickItem::new(format!("{id} {title}"), id.clone()))
@@ -942,22 +895,6 @@ mod tests {
         assert_eq!(
             Asked::parse("https://github.com/acme/widgets/pull/12"),
             None
-        );
-    }
-
-    #[test]
-    fn your_open_tickets_newest_first_without_closed_ones_or_control_characters() {
-        let data = json!({ "viewer": { "assignedIssues": { "nodes": [
-            { "identifier": "ENG-1", "title": "Old", "createdAt": "2026-01-01T00:00:00Z", "state": { "type": "started" } },
-            { "identifier": "ENG-2", "title": "New\u{1b}[2J", "createdAt": "2026-02-01T00:00:00Z", "state": { "type": "unstarted" } },
-            { "identifier": "ENG-3", "title": "Done", "createdAt": "2026-03-01T00:00:00Z", "state": { "type": "completed" } },
-        ] } } });
-        assert_eq!(
-            assigned_of(&data),
-            vec![
-                ("ENG-2".to_string(), "New[2J".to_string()),
-                ("ENG-1".to_string(), "Old".to_string())
-            ]
         );
     }
 

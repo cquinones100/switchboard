@@ -999,7 +999,7 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         // The ticket its worktree's branch names, chosen for the tab.
         let ticket = dir
             .file_name()
-            .and_then(|b| crate::views::ticket::id_in_branch(&b.to_string_lossy()));
+            .and_then(|b| crate::tickets::linear::id_in_branch(&b.to_string_lossy()));
         let mut args = vec![
             "new-tab".to_string(),
             "-d".into(),

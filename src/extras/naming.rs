@@ -22,9 +22,9 @@ use crate::integrations::linear;
 use crate::mission::ask::Ask;
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Server};
+use crate::tickets::{self, Source, Ticket};
 use crate::ui::{Menu, MenuOption, Outcome};
-use crate::views::ticket::{self, Ticket};
-use crate::{settings, util};
+use crate::util;
 
 impl Server {
     /// Asks what to call `tab`, a new tab opened in `dir`.
@@ -32,11 +32,11 @@ impl Server {
         let mut options = vec![MenuOption::new("Type a name").key('n')];
         // An issue's branch names itself with GitHub on, as a ticket's does
         // with Linear on.
-        let issue = ticket::of_dir_all(&dir, Some("github"))
+        let issue = tickets::of_branch_by(&dir, Source::Github)
             .into_iter()
             .find(|t| matches!(t, Ticket::Issue { .. }))
-            .filter(|_| settings::is_on("github"));
-        let titled = issue.is_some() || settings::is_on("linear");
+            .filter(|_| Source::Github.is_on());
+        let titled = issue.is_some() || Source::Linear.is_on();
         if titled {
             options.push(MenuOption::new("Its ticket and the ticket's title").key('t'));
         }
@@ -59,7 +59,7 @@ impl Server {
                     };
                     return server.set_tab_name(tab, &name);
                 }
-                match ticket::id_for_dir(&dir) {
+                match tickets::linear::id_for_dir(&dir) {
                     Some(id) => server.name_after_ticket(client, tab, id, true, shaping),
                     None => server.ask_ticket_for_name(client, tab, dir, shaping),
                 }
@@ -78,7 +78,7 @@ impl Server {
                     let Outcome::Picked(p) = outcome else {
                         return;
                     };
-                    let branch = ticket::id_for_dir(&dir);
+                    let branch = tickets::linear::id_for_dir(&dir);
                     match ticket_typed(&p.value, branch.as_deref()) {
                         Ok(TicketTyped::Id(id) | TicketTyped::Url { id, .. }) => {
                             server.name_after_ticket(client, tab, id, false, shaping)

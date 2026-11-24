@@ -572,30 +572,31 @@ pub fn ticket_view_main(args: Vec<String>) -> ExitCode {
     if let [flag, arg] = args.as_slice()
         && flag == "--ticket"
     {
-        return match ticket::Ticket::parse(arg) {
-            Some(ticket::Ticket::Issue { repo, number }) => issue::main(repo, number),
-            Some(ticket::Ticket::Project(id)) => project::main(id),
-            Some(ticket::Ticket::Linear(id)) => ticket::main(Some(id)),
+        return match crate::tickets::Ticket::parse(arg) {
+            Some(found) => ticket_of(found),
             None => ticket::main(None),
         };
     }
     let arg = args.first().cloned().unwrap_or_default();
-    let given = ticket::Ticket::parse(&arg).filter(|_| !std::path::Path::new(&arg).is_dir());
+    let given =
+        crate::tickets::Ticket::parse(&arg).filter(|_| !std::path::Path::new(&arg).is_dir());
     let dir = dir_arg(args.first());
-    let tickets = crate::repos::tickets_known(&dir);
-    let found = given.or_else(|| ticket::of_dir(&dir, tickets.as_deref()));
-    match found {
-        Some(ticket::Ticket::Issue { repo, number }) => issue::main(repo, number),
-        Some(ticket::Ticket::Project(id)) => project::main(id),
-        Some(ticket::Ticket::Linear(id)) => ticket::main(Some(id)),
-        None => ticket::none(ticket::none_words(
+    let kept = crate::tickets::kept_known(&dir);
+    match given.or_else(|| crate::tickets::of_dir(&dir, kept)) {
+        Some(found) => ticket_of(found),
+        None => ticket::none(crate::tickets::none_words(
             &dir,
-            match tickets.as_deref() {
-                Some("github") => "No GitHub issue for this branch.",
-                Some("notes") => "No ticket: this repository keeps its work in a note's checklist.",
-                _ => "No Linear ticket in this branch or tab name.",
-            },
+            crate::tickets::none_in_branch_words(kept),
         )),
+    }
+}
+
+/// The view of a ticket of each kind its sources keep.
+fn ticket_of(found: crate::tickets::Ticket) -> ExitCode {
+    match found {
+        crate::tickets::Ticket::Issue { repo, number } => issue::main(repo, number),
+        crate::tickets::Ticket::Project(id) => project::main(id),
+        crate::tickets::Ticket::Linear(id) => ticket::main(Some(id)),
     }
 }
 

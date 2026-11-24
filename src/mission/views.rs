@@ -30,6 +30,7 @@
 //! or `z`, and its merged work hidden under a line of its own until Enter
 //! there shows it (`Folds`).
 
+use crate::tickets::Source;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -926,24 +927,16 @@ pub fn repo_key(item: &Item) -> Option<&str> {
     item.data.get("repo").and_then(Value::as_str)
 }
 
-static TICKET: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9]*-\d+)").expect("a regex"));
 /// An issue's branch's front, `issue/12`, which `wt --issue` names.
 static ISSUE_FRONT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^issue/\d+").expect("a regex"));
 
-/// The ticket a worktree's branch leads with, as its row shows it: the
-/// GitHub issue it was started for (`#12`) while GitHub is on, else the
-/// Linear ticket it starts with while Linear is on.
-fn ticket_of_branch(branch: &str, github: bool, linear: bool) -> Option<String> {
-    let issue = github
-        .then(|| crate::views::ticket::issue_number_of_branch(branch))
-        .flatten()
-        .map(|n| format!("#{n}"));
-    issue.or_else(|| {
-        linear
-            .then(|| TICKET.captures(branch).map(|m| m[1].to_uppercase()))
-            .flatten()
-    })
+/// The ticket a worktree's branch leads with, as its row shows it, from
+/// the first source `on` takes that finds one (`Source::leading_in_branch`).
+fn ticket_of_branch(branch: &str, on: impl Fn(Source) -> bool) -> Option<String> {
+    Source::ALL
+        .into_iter()
+        .filter(|s| on(*s))
+        .find_map(|s| s.leading_in_branch(branch))
 }
 
 /// Where a PR stands, in a few words: `#12 merged`, `#12 ✕ 2 failing`; none
@@ -1116,7 +1109,7 @@ fn named(tab: Option<&TabModel>, w: &Worktree, ticket: Option<&str>) -> String {
         None => {
             let base = w.branch.clone().unwrap_or_else(|| dir_name(&w.path));
             let base = ISSUE_FRONT.replace(&base, "");
-            let rest = TICKET.replace(&base, "");
+            let rest = crate::tickets::linear::without_leading(&base);
             rest.trim_start_matches(['-', '_'])
                 .split(['-', '_'])
                 .filter(|p| !p.is_empty())
@@ -1218,7 +1211,7 @@ pub fn work_map(
             .max_by_key(|(_, w)| w.path.as_os_str().len())
             .map(|(i, _)| i)
     };
-    let (github, linear) = (settings::is_on("github"), settings::is_on("linear"));
+    let sources_on: Vec<Source> = Source::ALL.into_iter().filter(|s| s.is_on()).collect();
     let mut rows: Vec<Placed> = Vec::new();
     let mut taken: Vec<crate::mux::TabId> = Vec::new();
     for (i, w) in all.iter().enumerate() {
@@ -1229,7 +1222,9 @@ pub fn work_map(
         if let Some(t) = tab {
             taken.push(t.id);
         }
-        let ticket = ticket_of_branch(w.branch.as_deref().unwrap_or(""), github, linear);
+        let ticket = ticket_of_branch(w.branch.as_deref().unwrap_or(""), |s| {
+            sources_on.contains(&s)
+        });
         let last = tab
             .is_none()
             .then(|| revived.iter().find(|r| r.tree == w.path))
@@ -1747,13 +1742,16 @@ mod tests {
         assert_eq!(rows[2].state, State::Attention);
         assert_eq!(rows[2].data["ticket"], "AB-1");
         assert_eq!(
-            ticket_of_branch("issue/12-fix-it", true, true).as_deref(),
+            ticket_of_branch("issue/12-fix-it", |_| true).as_deref(),
             Some("#12"),
             "an issue's branch leads with its number"
         );
-        assert_eq!(ticket_of_branch("issue/12-fix-it", false, true), None);
         assert_eq!(
-            ticket_of_branch("ab-1-fix", true, true).as_deref(),
+            ticket_of_branch("issue/12-fix-it", |s| s != Source::Github),
+            None
+        );
+        assert_eq!(
+            ticket_of_branch("ab-1-fix", |_| true).as_deref(),
             Some("AB-1")
         );
         assert_eq!(rows[2].data["worktree"], "AB-1-fix-the-login");

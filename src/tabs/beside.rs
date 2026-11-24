@@ -170,7 +170,7 @@ impl Server {
         let ticket = dir
             .as_deref()
             .and_then(|d| self.tab_ticket_at(tab, d))
-            .filter(|t| crate::settings::is_on(t.service()));
+            .filter(|t| t.source().is_on());
         if ticket.is_some() {
             has.push(Kind::Ticket);
         }

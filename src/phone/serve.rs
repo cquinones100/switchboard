@@ -43,7 +43,6 @@ use crate::sidebar::model::Rules;
 use crate::{settings, util};
 
 use crate::tabs::prs::TabPr;
-use crate::views::ticket::Ticket;
 
 use super::{cli, drawer, images, looks, tab_views};
 
@@ -934,22 +933,12 @@ impl Server {
                 let ticket = dir
                     .as_deref()
                     .and_then(|d| self.tab_ticket_at(tab, d))
-                    .filter(|t| settings::is_on(t.service()))
+                    .filter(|t| t.source().is_on())
                     .ok_or("This tab has no ticket.")?;
-                let held = match &ticket {
-                    Ticket::Linear(id) => self.ticket_held(id).cloned(),
-                    _ => None,
-                };
+                // What the Tickets view holds of it, else its view's last copy.
+                let held = self.ticket_held(&ticket.short()).cloned();
                 Ok(Box::new(move || {
-                    let copy = held.or_else(|| match &ticket {
-                        Ticket::Issue { repo, number } => {
-                            util::read_json(crate::views::issue::cache_file(repo, *number))
-                        }
-                        Ticket::Linear(id) => util::read_json(crate::views::ticket::cache_file(id)),
-                        Ticket::Project(id) => {
-                            util::read_json(crate::views::project::cache_file(id))
-                        }
-                    });
+                    let copy = held.or_else(|| ticket.last_read());
                     Ok(tab_views::ticket_json(&ticket, copy.as_ref()))
                 }))
             }

@@ -12,6 +12,7 @@
 //! first when it is done, as its item's version does. New with this menu;
 //! no tmux-version file is behind it.
 
+use crate::tickets::{Kept, Source};
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -65,7 +66,17 @@ pub struct Facts {
     /// GitHub, and its ticket source (repos.json's `tickets`).
     pub dir: Option<PathBuf>,
     pub repo: Option<String>,
-    pub tickets: Option<String>,
+    pub tickets: Option<Kept>,
+}
+
+impl Facts {
+    /// Whether `source`'s setting is on.
+    fn on(&self, source: Source) -> bool {
+        match source {
+            Source::Github => self.github,
+            Source::Linear => self.linear,
+        }
+    }
 }
 
 /// The view's actions over all it shows, in the order the menu lists them.
@@ -162,28 +173,25 @@ pub fn of(id: Option<&ViewId>, items: &[Item], shown: &[Item], f: &Facts) -> Vec
                     Whole::Refresh(crate::sources::TICKETS),
                 );
             }
-            let source = f.tickets.as_deref();
-            let service_on = match source {
-                Some("github") => f.github,
-                Some("linear") => f.linear,
-                _ => true,
-            };
+            let source = f.tickets.and_then(Kept::source);
+            let service_on = source.is_none_or(|s| f.on(s));
             if let Some(dir) = f.dir.as_ref().filter(|_| service_on) {
                 add(
-                    &shape_label(source),
+                    Kept::shape_label(f.tickets),
                     Whole::Shape {
                         dir: dir.clone(),
-                        source: source.map(str::to_string),
+                        source: f.tickets.map(|k| k.key().to_string()),
                     },
                 );
             }
-            match source {
-                Some("linear") if f.linear => {
+            // Where the source lists its tickets, while it is on.
+            match source.filter(|s| f.on(*s)) {
+                Some(Source::Linear) => {
                     if let Some(url) = linear_inbox(items) {
                         add("Open your Linear inbox", Whole::Do(Do::Open(url)));
                     }
                 }
-                Some("github") if f.github => {
+                Some(Source::Github) => {
                     if let Some(repo) = &f.repo {
                         add(
                             &format!("Open {repo}'s issues on GitHub"),
@@ -191,7 +199,7 @@ pub fn of(id: Option<&ViewId>, items: &[Item], shown: &[Item], f: &Facts) -> Vec
                         );
                     }
                 }
-                _ => {}
+                None => {}
             }
         }
         _ => {}
@@ -213,16 +221,6 @@ pub fn question(act: &Whole) -> Option<String> {
             ))
         }
         _ => None,
-    }
-}
-
-/// "Shape a new ticket…" naming where it is filed.
-pub fn shape_label(source: Option<&str>) -> String {
-    match source {
-        Some("github") => "Shape a new ticket as a GitHub issue…".into(),
-        Some("linear") => "Shape a new ticket in Linear…".into(),
-        Some("notes") => "Shape a new ticket as a note's item…".into(),
-        _ => "Shape a new ticket…".into(),
     }
 }
 
@@ -308,7 +306,7 @@ mod tests {
             slack_mark_read: true,
             dir: Some(PathBuf::from("/code/app")),
             repo: Some("acme/app".into()),
-            tickets: Some("linear".into()),
+            tickets: Some(Kept::In(Source::Linear)),
             ..Facts::default()
         }
     }
@@ -398,7 +396,7 @@ mod tests {
         }
         // A repository whose tickets are notes still shapes with both off.
         let notes = Facts {
-            tickets: Some("notes".into()),
+            tickets: Some(Kept::Notes),
             ..f
         };
         assert_eq!(
@@ -480,7 +478,7 @@ mod tests {
             (None, "Shape a new ticket…", None),
         ] {
             let f = Facts {
-                tickets: source.map(str::to_string),
+                tickets: source.and_then(Kept::parse),
                 ..on()
             };
             let items = [ticket()];

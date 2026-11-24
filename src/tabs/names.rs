@@ -52,7 +52,7 @@ use super::git::{self, GitPlace};
 use super::label;
 use crate::integrations::github::{self, Repo};
 use crate::integrations::linear;
-use crate::views::ticket::{self, Ticket};
+use crate::tickets::{self, Source, Ticket};
 use crate::{net, settings};
 
 /// How long a directory's answer holds once it has a PR, and before.
@@ -128,12 +128,12 @@ impl Switches {
         self.lookups && self.github
     }
 
-    /// Whether a ticket of `service`'s (`Ticket::service`) is named.
-    fn tickets_of(self, service: &str) -> bool {
+    /// Whether a ticket of `source`'s (`Ticket::source`) is named.
+    fn tickets_of(self, source: Source) -> bool {
         self.lookups
-            && match service {
-                "github" => self.github,
-                _ => self.linear,
+            && match source {
+                Source::Github => self.github,
+                Source::Linear => self.linear,
             }
     }
 }
@@ -382,17 +382,12 @@ impl Names {
         // (`<owner>/<repo>#<n>`); else the Linear ticket it names, any team
         // key: a branch that only looks like a ticket is harmless, Linear
         // having no such ticket, and the name is used as usual.
-        let ticket = place
-            .filter(|p| p.on_branch())
-            .map(|p| {
-                ticket::of_dir_all(dir, Some("github"))
-                    .into_iter()
-                    .chain(ticket::id_in_branch(&p.branch).map(Ticket::Linear))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-            .into_iter()
-            .find(|t| switches.tickets_of(t.service()));
+        let ticket = place.filter(|p| p.on_branch()).and_then(|p| {
+            Source::ALL
+                .into_iter()
+                .filter(|s| switches.tickets_of(*s))
+                .find_map(|s| tickets::titled_by_branch(dir, &p.common_dir, &p.branch, s))
+        });
         let title = ticket
             .as_ref()
             .and_then(|t| self.title_of(&t.arg(), now, asks));

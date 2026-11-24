@@ -634,7 +634,7 @@ pub async fn thread(
                 text: plain(raw.trim()),
                 ts: at.to_string(),
                 files,
-                refs: crate::views::ticket::ids_in(raw),
+                refs: crate::tickets::linear::ids_in(raw),
             });
         }
         cursor = said

@@ -1,6 +1,6 @@
 //! A Linear project as the ticket view shows it, for a tab whose name
 //! gives a project's ID (`Shaping P-ABC-4: ...`) or one chosen for it
-//! (`views::ticket::Ticket::Project`): its name, its description, and its
+//! (`tickets::Ticket::Project`): its name, its description, and its
 //! tickets with their states, with its status, lead and target date beside
 //! them, as the board for a ticket.
 //!

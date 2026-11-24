@@ -655,7 +655,7 @@ fn made_up_pr(pane: u32) -> Option<(crate::facts::PrFacts, Value)> {
 }
 
 /// The made-up ticket of a tab with one, as the ticket view last read it.
-fn made_up_ticket(pane: u32) -> Option<(crate::views::ticket::Ticket, Value)> {
+fn made_up_ticket(pane: u32) -> Option<(crate::tickets::Ticket, Value)> {
     let (id, title) = match pane {
         11 => ("ABC-142", "Orders table migration"),
         12 => ("ABC-150", "Release checklist for 2.4"),
@@ -668,7 +668,7 @@ fn made_up_ticket(pane: u32) -> Option<(crate::views::ticket::Ticket, Value)> {
         "description": format!("## Today\n\n{title} is done by hand.\n\n## What to build\n\n- Script it\n- Keep the old path working"),
         "state": { "name": "In Progress", "type": "started" },
     });
-    Some((crate::views::ticket::Ticket::Linear(id.into()), issue))
+    Some((crate::tickets::Ticket::Linear(id.into()), issue))
 }
 
 /// The tool call a made-up working tab is on, as the server sends it
