@@ -4083,6 +4083,8 @@ impl App {
         }
         let mode_before = self.editor.mode;
         let text_before = self.editor.doc.text.clone();
+        // Nothing pending (no command after C-o, no operator half typed).
+        let afresh = self.editor.idle() || matches!(mode_before, Mode::Visual { .. });
         if self.editor.is_typing() {
             // The note's own typing keys (Tab, Enter in a list) move the
             // column j and k keep as the editor's do.
@@ -4094,11 +4096,11 @@ impl App {
         if self.editor.doc.text != text_before {
             self.changed();
         }
-        if !matches!(mode_before, Mode::Insert | Mode::Replace)
-            && self.editor.is_typing()
-            && self.insert_from.is_none()
-        {
-            self.insert_from = Some(text_before.clone());
+        // A key from Normal or Visual mode with nothing pending starts
+        // Insert mode afresh (a command typed after C-o is in it still),
+        // so no other note's text is kept.
+        if afresh {
+            self.insert_from = self.editor.is_typing().then(|| text_before.clone());
         }
         let stopped_typing = matches!(mode_before, Mode::Insert | Mode::Replace)
             && !self.editor.is_typing()
