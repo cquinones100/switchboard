@@ -669,11 +669,6 @@ pub fn lands_by_key(key: &str) -> Option<Way> {
 /// error, naming Settings' row, while neither says. Runs git, so off the
 /// server's task.
 pub fn landing_for(dir: &Path) -> Result<Landing, String> {
-    // A new build run before its server restarts carries the old settings
-    // over itself, so no landing waits on the restart.
-    if !migrated_mark().exists() {
-        let _ = migrate_lands();
-    }
     landing_with(dir, &file())
 }
 
@@ -1079,14 +1074,26 @@ pub fn lands_migrated(
     changed.then_some((out, set))
 }
 
+/// Whether GitHub's failure to answer for a repository says it isn't there
+/// for you: no repository in its answer, or GraphQL's not found.
+fn gone(error: &str) -> bool {
+    [
+        "didn't answer",
+        "Could not resolve to a Repository",
+        "NOT_FOUND",
+    ]
+    .iter()
+    .any(|w| error.contains(w))
+}
+
 /// Carries repos.json's `landing`, the old guess kept in the state
 /// directory's `repos-landing.json` and Settings' `pr_merge_queue` over to
 /// `lands`, once, as a new build's server first starts (`lands_migrated`),
 /// the file before kept as `repos.json.bak`, and drops `pr_merge_queue`
 /// from this computer's settings and the synced ones and the old guess.
 /// GitHub is asked of each repository on it (`ask_setup`) with the github
-/// setting on; when it answers for none of them, nothing changes and the
-/// next start tries again, so a moment offline never settles a way. What it says it
+/// setting on; when asking fails for one that isn't gone, nothing changes
+/// and the next start tries again, so a moment offline never settles a way. What it says it
 /// did, in one message; `None` when there was nothing to carry over or it
 /// waits to try again. Asks GitHub, so off the server's task.
 pub fn migrate_lands() -> Option<String> {
@@ -1131,16 +1138,21 @@ pub fn migrate_lands() -> Option<String> {
                     remember_setup(&setup_file(), repo, &s);
                     asked.insert(repo.to_lowercase(), s);
                 }
+                // A repository GitHub says isn't there (gone, renamed, or
+                // out of the token's reach) is carried over as if it weren't
+                // asked; any other failure may be a moment offline.
+                Err(e) if gone(&e) => {
+                    eprintln!("repos.json: GitHub knows no {repo}: {e}");
+                }
                 Err(e) => {
                     failed += 1;
                     eprintln!("repos.json: GitHub didn't say how {repo} can land: {e}");
                 }
             }
         }
-        // GitHub answering for none of them is a moment offline, tried
-        // again next start; one it can't answer while it answers others
-        // (gone, or out of reach) is carried over as if it weren't asked.
-        if failed > 0 && failed == repos.len() {
+        // A failure to ask is tried again next start, so a moment offline
+        // never settles a way.
+        if failed > 0 {
             return None;
         }
     }
