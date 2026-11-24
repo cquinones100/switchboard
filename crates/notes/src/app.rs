@@ -4088,6 +4088,7 @@ impl App {
         let mode_before = self.editor.mode;
         let text_before = self.editor.doc.text.clone();
         let note_before = self.open.as_ref().map(|o| o.path.clone());
+        let row_before = self.editor.doc.row;
         if self.editor.is_typing() {
             // The note's own typing keys (Tab, Enter in a list) move the
             // column j and k keep as the editor's do.
@@ -4114,10 +4115,12 @@ impl App {
             // opened: a table only read, or put back as it was, stays as
             // written.
             let row = self.editor.doc.row;
-            // Rows deleted from a table's end leave the cursor under it.
-            let shorter = self.editor.doc.text.len() < text_before.len();
+            // Rows deleted from a table's end, the key begun on one of them,
+            // leave the cursor under it.
+            let rows_deleted = self.editor.doc.text.len() < text_before.len()
+                && table::is_row(Some(&text_before.line(row_before)));
             self.editor.tidy(|doc| {
-                if !table::align(doc, row) && shorter && row > 0 {
+                if !table::align(doc, row) && rows_deleted && row > 0 {
                     table::align(doc, row - 1);
                 }
             });

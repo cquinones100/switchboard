@@ -1326,6 +1326,24 @@ fn text_pasted_into_a_table_in_normal_mode_lines_its_text_up() {
 }
 
 #[test]
+fn deleting_a_line_under_a_table_leaves_the_table_as_written() {
+    let (_dir, mut store) = temp("table-under");
+    let first = store.create("", Some("Alpha"));
+    write(
+        &first,
+        "# Alpha\n\n| a | bbbb |\n|---|---|\n| cccccc | d |\n\ntext\n",
+    );
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "6Gdd");
+    assert_eq!(
+        lines(&app)[2..6],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |", "text"]
+    );
+}
+
+#[test]
 fn moving_into_a_table_written_unpadded_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));
