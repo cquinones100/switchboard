@@ -210,7 +210,8 @@ function workerTookOver() {
 
 // What a reload would lose: words or photos in the composer, a prompt with
 // options ticked, a menu or question open, a request under way or just
-// ended, or a toast showing.
+// ended, a toast showing, or a step back in the page's history under way
+// (the panel's Go to tab, which opens the tab once it lands).
 // Sends, answers and other requests that change something, under way: a
 // reload would cut them off, so it waits for them, and for a moment after,
 // so what one said as it ended (an error under the card) can be read, and is
@@ -235,7 +236,7 @@ function busy() {
   const tab = current();
   const prompt = tab && tab.prompt;
   const partlyAnswered = !!prompt && !!prompt.multi && prompt.options.some((o) => o.checked);
-  return drafting || partlyAnswered || !!state.menu || sending > 0 || toasts > 0;
+  return drafting || partlyAnswered || !!state.menu || sending > 0 || toasts > 0 || !!unwinding;
 }
 
 function reloadWhenFree() {
@@ -250,6 +251,9 @@ function reloadIfFree() {
   if (!reloadWanted || busy()) return;
   reloadWanted = false;
   reloadedFor(serverBuild());
+  // The builds it ran told the computer first, so phone.log can say it
+  // updated itself; kept alive, it goes as the page unloads.
+  fetch("/api/me", { credentials: "same-origin", headers: buildHeader(), keepalive: true }).catch(() => {});
   history.replaceState(null, "", "#" + (state.open || ""));
   location.reload();
 }
