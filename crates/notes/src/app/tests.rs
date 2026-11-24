@@ -1277,6 +1277,31 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
 }
 
 #[test]
+fn going_to_and_back_from_a_link_in_a_table_written_unpadded_leaves_it_as_written() {
+    let (_dir, mut store) = temp("table-jump");
+    let first = store.create("", Some("Alpha"));
+    write(
+        &first,
+        "# Alpha\n\n| a | bbbb |\n|---|---|\n| [[Beta]] | d |\n",
+    );
+    let second = store.create("", Some("Beta"));
+    write(&second, "# Beta\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "5GfB<CR>");
+    assert_eq!(app.current_path(), Some(second.as_path()));
+    keys(&mut app, "<C-o>");
+    assert_eq!(app.current_path(), Some(first.as_path()));
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| [[Beta]] | d |"],
+        "back in the table, nothing edited"
+    );
+    assert!(!app.modified(), "nothing to save");
+}
+
+#[test]
 fn moving_into_a_table_written_unpadded_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));

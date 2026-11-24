@@ -4079,6 +4079,7 @@ impl App {
         }
         let mode_before = self.editor.mode;
         let text_before = self.editor.doc.text.clone();
+        let note_before = self.open.as_ref().map(|o| o.path.clone());
         if self.editor.is_typing() {
             // The note's own typing keys (Tab, Enter in a list) move the
             // column j and k keep as the editor's do.
@@ -4099,9 +4100,11 @@ impl App {
             && self.editor.idle()
             && self.editor.doc.text != text_before
             && !self.editor.went_through_history()
+            && self.open.as_ref().map(|o| &o.path) == note_before.as_ref()
         {
-            // A change, not a motion, an undo or a redo: a table only read,
-            // or put back as it was, stays as written.
+            // A change, not a motion, an undo, a redo or another note
+            // opened: a table only read, or put back as it was, stays as
+            // written.
             let row = self.editor.doc.row;
             self.editor.tidy(|doc| {
                 table::align(doc, row);
