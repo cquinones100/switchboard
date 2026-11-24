@@ -686,6 +686,10 @@ pub struct Look {
     /// Text drawn before the line (a heading's ▾).
     pub before: Option<(&'static str, Hl)>,
     pub row_bg: Option<Hl>,
+    /// (at, columns, fill): `columns` of `fill` drawn before byte `at`,
+    /// none of them the text's own (a table's cells padded to their
+    /// column), left out where the line shows raw.
+    pub pads: Vec<(usize, usize, &'static str)>,
 }
 
 impl Look {
@@ -826,6 +830,21 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
             }
         }
         out.push(look);
+    }
+    // Each table's cells padded to their column as they show, whatever
+    // spaces its text has.
+    let mut row = 0;
+    while row < lines.len() {
+        if !matches!(kinds[row], Kind::Table { .. }) {
+            row += 1;
+            continue;
+        }
+        let first = row;
+        while row < lines.len() && matches!(kinds[row], Kind::Table { .. }) {
+            row += 1;
+        }
+        let rows: Vec<&str> = lines[first..row].iter().map(AsRef::as_ref).collect();
+        table::pad(&rows, &mut out[first..row]);
     }
     out
 }
@@ -1316,6 +1335,18 @@ pub fn cells(
     for (at, g) in line.grapheme_indices(true) {
         if at < skip_to {
             continue;
+        }
+        if !raw {
+            for &(_, columns, fill) in look.pads.iter().filter(|p| p.0 == at) {
+                let style = style_at(at.saturating_sub(1));
+                out.extend((0..columns).map(|_| Cell {
+                    text: fill.to_string(),
+                    style,
+                    col: None,
+                    len: 0,
+                    width: 1,
+                }));
+            }
         }
         if !raw
             && let Some(&(s, e, with)) = look

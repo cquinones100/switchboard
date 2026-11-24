@@ -1228,6 +1228,36 @@ fn a_mark_on_an_item_goes_with_it_as_ticking_sorts_it_down() {
 }
 
 #[test]
+fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
+    let (_dir, mut store) = temp("table-unpadded");
+    let first = store.create("", Some("Alpha"));
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    let body = "# Alpha\n\n| a | bbbb |\n|---|---|\n| cccccc | d |\n";
+    write(&first, body);
+    app.open_note(&first, false, false);
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |"],
+        "the text as it was written"
+    );
+    assert!(!app.modified(), "nothing to save");
+    let shown = screen(&mut app).join("\n");
+    for row in [
+        "│ a      │ bbbb │",
+        "├────────┼──────┤",
+        "│ cccccc │ d    │",
+    ] {
+        assert!(shown.contains(row), "{row} in:\n{shown}");
+    }
+    assert_eq!(
+        crate::id::body_of(&fs::read_to_string(&first).unwrap()),
+        crate::id::body_of(body),
+        "the file has its table as written, given only its ID"
+    );
+}
+
+#[test]
 fn a_table_lined_up_as_the_cursor_moves_into_it_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));

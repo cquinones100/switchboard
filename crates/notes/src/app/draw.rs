@@ -1158,12 +1158,26 @@ impl App {
         let s = self.geo.shown.get(k).or_else(|| self.geo.shown.last())?;
         match s {
             Shown::Text {
-                row, cells, indent, ..
+                row,
+                cells,
+                indent,
+                first,
+                ..
             } => {
                 let mut at = t.x + indent;
-                for c in cells {
+                for (k, c) in cells.iter().enumerate() {
                     if x < at + c.width as u16 {
-                        return Some((*row, c.col));
+                        // A table's padding, none of the text's own, is
+                        // where the cell's bar is; what stands before the
+                        // line (a heading's ▾) is no byte.
+                        let padding = c.col.is_none()
+                            && (!first || cells[..k].iter().any(|c| c.col.is_some()));
+                        let col = if padding {
+                            cells[k..].iter().find_map(|c| c.col)
+                        } else {
+                            c.col
+                        };
+                        return Some((*row, col));
                     }
                     at += c.width as u16;
                 }

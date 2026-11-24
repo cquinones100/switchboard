@@ -6,10 +6,13 @@
 //!   | Eggs | 12  |
 //! ```
 //!
-//! drawn with box lines (│ ├ ┼ ┤ ─), the first row bold, and kept aligned:
-//! leaving Insert mode, or any change in Normal mode, pads every cell of the
-//! table the cursor is in to its column's width, measured as the cell shows
-//! (markup hidden doesn't count). In Insert mode, Tab moves to the next cell
+//! drawn with box lines (│ ├ ┼ ┤ ─), the first row bold, and lined up as
+//! drawn: each cell padded on the screen to its column's width, measured as
+//! the cell shows (markup hidden doesn't count, a wide character is two), so
+//! a table written from outside with its cells unpadded reads aligned
+//! without its text changing. The text is kept aligned too where you edit:
+//! leaving Insert mode, or a key in Normal mode, pads every cell of the
+//! table the cursor is in. In Insert mode, Tab moves to the next cell
 //! (past the last, it adds a row) and Shift-Tab to the one before.
 
 use super::format::Doc;
@@ -142,25 +145,6 @@ pub fn align(doc: &mut Doc, row: usize) -> bool {
     true
 }
 
-/// Aligns every table in a note, for one just opened.
-pub fn align_all(doc: &mut Doc) {
-    let mut row = 0;
-    while row < doc.text.len() {
-        let lines = doc.text.lines();
-        match bounds(&lines, row) {
-            Some((_, last)) => {
-                let rows = &lines[row..=last];
-                let out = aligned(rows);
-                if out != rows {
-                    doc.text.set_lines(row, last + 1, &out);
-                }
-                row = last + 1;
-            }
-            None => row += 1,
-        }
-    }
-}
-
 /// A table line's look: its bars as box lines, a separator row as a line
 /// across, and the header row bold.
 pub fn draw(line: &str, header: bool, look: &mut Look) {
@@ -193,6 +177,47 @@ pub fn draw(line: &str, header: bool, look: &mut Look) {
             Hl::TableHeader,
             155,
         );
+    }
+}
+
+/// Pads a table's cells as they are drawn, `rows` the table's lines and
+/// `looks` theirs: each column as wide as its widest cell shows (markup
+/// hidden not counted, a wide character two), so the box lines line up
+/// whatever spaces the text has, the text itself unchanged.
+pub fn pad(rows: &[&str], looks: &mut [Look]) {
+    let segments: Vec<(Vec<usize>, Vec<usize>)> = rows
+        .iter()
+        .zip(looks.iter())
+        .map(|(line, look)| {
+            let bars = bars_of(line);
+            let shown = render::cells(line, look, false, &[], false);
+            let widths = bars
+                .windows(2)
+                .map(|w| {
+                    shown
+                        .iter()
+                        .filter(|c| c.col.is_some_and(|b| b > w[0] && b < w[1]))
+                        .map(|c| c.width)
+                        .sum()
+                })
+                .collect();
+            (bars, widths)
+        })
+        .collect();
+    let columns = segments.iter().map(|(_, w)| w.len()).max().unwrap_or(0);
+    let mut widest = vec![0; columns];
+    for (_, widths) in &segments {
+        for (c, &w) in widths.iter().enumerate() {
+            widest[c] = widest[c].max(w);
+        }
+    }
+    for ((line, look), (bars, widths)) in rows.iter().zip(looks.iter_mut()).zip(&segments) {
+        let fill = if is_separator(line) { "─" } else { " " };
+        for (c, &w) in widths.iter().enumerate() {
+            if widest[c] > w {
+                look.pads.push((bars[c + 1], widest[c] - w, fill));
+            }
+        }
     }
 }
 
@@ -400,6 +425,93 @@ mod tests {
         assert_eq!(doc.text.line(0), "| A   | B   |");
         jump(&mut doc, -1);
         assert_eq!((doc.row, doc.col), (0, 2), "Shift-Tab goes back a cell");
+    }
+
+    /// A table's lines as drawn, each cell with the byte it stands for.
+    fn drawn(lines: &[&str]) -> Vec<Vec<render::Cell>> {
+        let ks = render::kinds(lines);
+        let looks = render::looks(
+            lines,
+            &ks,
+            &render::Drawing {
+                strike_checked: true,
+                note_exists: &|_| true,
+            },
+        );
+        lines
+            .iter()
+            .zip(&looks)
+            .map(|(line, look)| render::cells(line, look, false, &[], false))
+            .collect()
+    }
+
+    #[test]
+    fn a_table_written_unpadded_draws_its_box_lines_in_line() {
+        let lines = [
+            "| a | bbbb |",
+            "|---|---|",
+            "| cccccc | **d** |",
+            "| 日本 | e |",
+        ];
+        let rows = drawn(&lines);
+        let text =
+            |cells: &[render::Cell]| cells.iter().map(|c| c.text.clone()).collect::<String>();
+        assert_eq!(
+            rows.iter().map(|r| text(r)).collect::<Vec<_>>(),
+            [
+                "│ a      │ bbbb │",
+                "├────────┼──────┤",
+                "│ cccccc │ d    │",
+                "│ 日本   │ e    │",
+            ],
+            "every column as wide as its widest cell shows"
+        );
+        let bars = |cells: &[render::Cell]| {
+            let mut x = 0;
+            let mut at = Vec::new();
+            for c in cells {
+                if matches!(c.text.as_str(), "│" | "├" | "┼" | "┤") {
+                    at.push(x);
+                }
+                x += c.width;
+            }
+            at
+        };
+        for row in &rows {
+            assert_eq!(bars(row), [0, 9, 16], "the box lines in the same columns");
+        }
+    }
+
+    #[test]
+    fn a_drawn_table_maps_each_byte_to_its_column_and_back() {
+        let lines = ["| a | bbbb |", "| cccccc | d |"];
+        let rows = drawn(&lines);
+        for (line, cells) in lines.iter().zip(&rows) {
+            // Each byte of the text to the column it is drawn at, and the
+            // column back to the byte, padding standing for no byte.
+            let mut x = 0;
+            let mut seen = Vec::new();
+            for c in cells {
+                if let Some(b) = c.col {
+                    seen.push(b);
+                    let back = {
+                        let mut at = 0;
+                        cells.iter().find(|d| {
+                            let hit = x < at + d.width;
+                            at += d.width;
+                            hit
+                        })
+                    };
+                    assert_eq!(back.and_then(|d| d.col), Some(b), "{line}: byte {b} at {x}");
+                }
+                x += c.width;
+            }
+            assert_eq!(
+                seen,
+                (0..line.len()).collect::<Vec<_>>(),
+                "{line}: every byte drawn once, in order"
+            );
+        }
     }
 
     #[test]

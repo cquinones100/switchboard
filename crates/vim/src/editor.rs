@@ -881,8 +881,7 @@ impl<N: Note> Editor<N> {
     }
 
     /// `change` for a change the person didn't make here (a file changed
-    /// from outside, the tables lined up as a note opens), which the change
-    /// list leaves out.
+    /// from outside), which the change list leaves out.
     pub fn change_outside(&mut self, edit: impl FnOnce(&mut Doc<N>)) -> bool {
         self.make_change(edit, true)
     }
@@ -930,8 +929,19 @@ impl<N: Note> Editor<N> {
     }
 
     pub fn undo(&mut self) -> bool {
-        // Undoing isn't a change of its own.
-        self.group = None;
+        // What is being typed (easy mode's Cmd-Z mid-word) is a step of its
+        // own, undone first, as C-o breaks it; undoing isn't a change of
+        // its own.
+        let typed = self.typed_in_step();
+        if let Some(group) = self.group.take()
+            && group.text != self.doc.text
+        {
+            self.undo.push(group);
+            self.redo.clear();
+            if typed {
+                self.record_change();
+            }
+        }
         let Some(snap) = self.undo.pop() else {
             self.say("Already at oldest change");
             return false;

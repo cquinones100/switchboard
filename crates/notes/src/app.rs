@@ -1242,8 +1242,6 @@ impl App {
             self.editor.top = top;
             self.editor.clamp();
         }
-        // Its tables lined up, as one change.
-        self.editor.change_outside(table::align_all);
         if self.modified() {
             self.save_due = Some(Instant::now() + AUTOSAVE);
         }
