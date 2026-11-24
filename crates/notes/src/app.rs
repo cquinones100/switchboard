@@ -3659,6 +3659,13 @@ impl App {
                     _ => self.editor.search_for(&text, kind == '/'),
                 }
                 self.editor.prompt_done();
+                if self.editor.idle() && self.editor.doc.text != before {
+                    // An Ex command's change (`:s`) lines up the table it
+                    // edited, as a key's does.
+                    let lines = before.lines();
+                    self.editor.tidy(|doc| table::line_up_edited(doc, &lines));
+                    self.editor.clamp();
+                }
                 if self.editor.end().is_some() || self.editor.doc.text != before {
                     self.changed();
                 }
@@ -4976,9 +4983,22 @@ impl App {
                     let from = (from.0, if from.1 == usize::MAX { 0 } else { from.1 });
                     let to = (pos.0, pos.1.unwrap_or(0));
                     if to != from || matches!(self.editor.mode, Mode::Visual { .. }) {
+                        let (mut from, mut to) = (from, to);
                         if self.editor.mode == Mode::Insert {
+                            let row = self.editor.doc.row;
+                            let line = self.editor.line();
                             self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
                             self.after_insert();
+                            // Both ends carried across the table leaving
+                            // Insert mode lined up.
+                            let now = self.editor.doc.line(row);
+                            if now != line {
+                                for end in [&mut from, &mut to] {
+                                    if end.0 == row {
+                                        end.1 = table::carry(&line, &now, end.1);
+                                    }
+                                }
+                            }
                         }
                         self.editor.select(from, to);
                         self.press = Some(((from.0, from.1), true));

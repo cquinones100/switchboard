@@ -11,8 +11,9 @@
 //! the cell shows (markup hidden doesn't count, a wide character is two), so
 //! a table written from outside with its cells unpadded reads aligned
 //! without its text changing. The text is kept aligned too where you edit:
-//! leaving Insert mode, or a change in Normal mode, pads every cell of the
-//! table the cursor is in, the cursor kept on its character. In Insert mode, Tab moves to the next cell
+//! leaving Insert mode in a table, or any change that edits a table's rows
+//! (`line_up_edited`), pads every cell of it, the cursor kept on its
+//! character. In Insert mode, Tab moves to the next cell
 //! (past the last, it adds a row) and Shift-Tab to the one before.
 
 use super::format::Doc;
@@ -191,7 +192,16 @@ pub fn align(doc: &mut Doc, row: usize) -> bool {
 /// Where byte `col` of a table row goes once the row is padded as `new`:
 /// the same character of the same cell, or the same bar, so lining a table
 /// up never moves the cursor to another character.
-fn carry(old: &str, new: &str, col: usize) -> usize {
+pub fn carry(old: &str, new: &str, col: usize) -> usize {
+    let at = carried(old, new, col).min(new.len());
+    // Always on a character of the new row.
+    (0..=at)
+        .rev()
+        .find(|&b| new.is_char_boundary(b))
+        .unwrap_or(0)
+}
+
+fn carried(old: &str, new: &str, col: usize) -> usize {
     let (bars, moved) = (bars_of(old), bars_of(new));
     let Some(&start) = bars.first() else {
         return col.min(new.len());
@@ -220,7 +230,7 @@ fn carry(old: &str, new: &str, col: usize) -> usize {
     let (s, e) = text(old, bars[k], next);
     let (s_new, e_new) = text(new, from, to);
     let at = if col < s {
-        from + 1 + (col - bars[k] - 1)
+        (from + 1 + (col - bars[k] - 1)).min(s_new)
     } else if col < e {
         s_new + (col - s)
     } else {
@@ -701,6 +711,11 @@ mod tests {
             carry_typing("| a | b |", "| a | b |", 4),
             4,
             "after a space, still at the bar"
+        );
+        assert_eq!(
+            carry("|   日本 | x |", "| 日本 | x   |", 3),
+            2,
+            "leading spaces carried to the text, never into it"
         );
     }
 
