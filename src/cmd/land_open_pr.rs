@@ -198,10 +198,12 @@ fn open(
         ],
     )
     .unwrap_or_default();
-    let steps = repos::landing_for(here)?.steps;
+    let landing = repos::landing_for(here)?;
     let checks = Checks {
         land: land_push::tab_option(crate::mux::server::LAND) == "1",
-        review_loop: steps.review == "review-loop",
+        // A way through a PR always reviews with the loop; a direct
+        // landing's review is its own step.
+        review_loop: landing.lands.through_pr() || landing.steps.review == "review-loop",
         recorded: land_push::this_program(here, &["codex-review", "--recorded"])
             .filter(|o| o.status.success())
             .and_then(|o| {

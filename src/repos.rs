@@ -669,6 +669,11 @@ pub fn lands_by_key(key: &str) -> Option<Way> {
 /// error, naming Settings' row, while neither says. Runs git, so off the
 /// server's task.
 pub fn landing_for(dir: &Path) -> Result<Landing, String> {
+    // A new build run before its server restarts carries the old settings
+    // over itself, so no landing waits on the restart.
+    if !migrated_mark().exists() {
+        let _ = migrate_lands();
+    }
     landing_with(dir, &file())
 }
 
@@ -888,7 +893,7 @@ pub fn ask_setup(repo: &str, now: i64) -> Result<Setup, String> {
     let (owner, name) = repo.split_once('/').ok_or("not owner/name")?;
     let source = "settings: how a repository lands";
     let data = wait_for(github::graphql(
-        "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { autoMergeAllowed mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } } }",
+        "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { autoMergeAllowed viewerPermission mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } } }",
         json!({ "o": owner, "n": name }),
         source,
     ))
@@ -942,10 +947,17 @@ pub fn setup_of(
         .and_then(Value::as_str)
         .map(str::to_string);
     let rule = repository.pointer("/defaultBranchRef/refUpdateRule");
+    // With no protection on the branch GitHub gives no rule, and then your
+    // permission on the repository says whether you can push.
     let can_push = rule
         .and_then(|r| r.get("viewerCanPush"))
         .and_then(Value::as_bool)
-        .unwrap_or(true);
+        .unwrap_or_else(|| {
+            matches!(
+                repository.get("viewerPermission").and_then(Value::as_str),
+                Some("ADMIN" | "MAINTAIN" | "WRITE")
+            )
+        });
     let reviews = rule.is_some_and(|r| {
         r.get("requiredApprovingReviewCount")
             .is_some_and(Value::is_number)
@@ -1637,6 +1649,7 @@ mod tests {
     fn answer(queue: bool, auto: bool, rule: Value, workflow: &str) -> Value {
         json!({ "repository": {
             "autoMergeAllowed": auto,
+            "viewerPermission": "WRITE",
             "mergeQueue": if queue { json!({"url": "u"}) } else { Value::Null },
             "defaultBranchRef": { "name": "main", "refUpdateRule": rule },
             "object": { "entries": [
@@ -1651,6 +1664,13 @@ mod tests {
         let open = setup_of(&answer(false, false, Value::Null, "on: push"), 1, &none).unwrap();
         assert!(open.can_push && !open.requires_pr && !open.train_ci);
         assert_eq!(open.suggests(), Some(Way::Direct));
+        let mut read_only = answer(false, false, Value::Null, "");
+        read_only["repository"]["viewerPermission"] = json!("READ");
+        let theirs = setup_of(&read_only, 1, &none).unwrap();
+        assert!(
+            !theirs.can_push && theirs.requires_pr,
+            "no protection, and no push for one who can only read"
+        );
         let queued = setup_of(&answer(true, false, Value::Null, ""), 1, &none).unwrap();
         assert!(queued.merge_queue && queued.requires_pr);
         assert_eq!(queued.suggests(), Some(Way::GithubQueue));
