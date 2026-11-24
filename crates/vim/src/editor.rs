@@ -892,6 +892,12 @@ impl<N: Note> Editor<N> {
         self.group.is_some()
     }
 
+    /// Whether the step under way has changed the text: something typed
+    /// since Insert mode began, not only entering and leaving it.
+    pub fn step_changed(&self) -> bool {
+        self.group.as_ref().is_some_and(|g| g.text != self.doc.text)
+    }
+
     /// The app's own tidying (a table lined up, empty markers dropped):
     /// part of the step under way, which it doesn't make a change of the
     /// person's, or, with none, left out of the history as before.

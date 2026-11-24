@@ -3306,13 +3306,17 @@ impl App {
     }
 
     /// Leaving Insert mode: an empty pair of markers put in to type into
-    /// goes, and the table the cursor is in lines up again.
+    /// goes, and the table the cursor is in lines up again when anything
+    /// was typed, so one only visited in Insert mode stays as written.
     fn after_insert(&mut self) {
+        let typed = self.editor.step_changed();
         // Tidying of the app's own, which the change list leaves out.
         self.editor.tidy(|doc| {
             format::drop_empty(doc);
-            let row = doc.row;
-            table::align(doc, row);
+            if typed {
+                let row = doc.row;
+                table::align(doc, row);
+            }
         });
         self.editor.clamp();
     }
