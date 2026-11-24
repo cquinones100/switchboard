@@ -141,8 +141,53 @@ pub fn align(doc: &mut Doc, row: usize) -> bool {
     if out == rows {
         return false;
     }
+    if (first..=last).contains(&doc.row) {
+        let at = doc.row - first;
+        doc.col = carry(&rows[at], &out[at], doc.col);
+    }
     doc.text.set_lines(first, last + 1, &out);
     true
+}
+
+/// Where byte `col` of a table row goes once the row is padded as `new`:
+/// the same character of the same cell, or the same bar, so lining a table
+/// up never moves the cursor to another character.
+fn carry(old: &str, new: &str, col: usize) -> usize {
+    let (bars, moved) = (bars_of(old), bars_of(new));
+    let Some(&start) = bars.first() else {
+        return col.min(new.len());
+    };
+    if col < start {
+        return col.min(moved.first().copied().unwrap_or(0));
+    }
+    if let Some(k) = bars.iter().position(|&b| b == col) {
+        return moved.get(k).copied().unwrap_or(col).min(new.len());
+    }
+    let k = bars.iter().filter(|&&b| b < col).count() - 1;
+    let (Some(&from), Some(&to)) = (moved.get(k), moved.get(k + 1)) else {
+        let end = bars[bars.len() - 1];
+        let end_new = moved.get(bars.len() - 1).copied().unwrap_or(end);
+        return (end_new + (col - end)).min(new.len());
+    };
+    let Some(&next) = bars.get(k + 1) else {
+        return (from + (col - bars[k])).min(new.len());
+    };
+    // The text of a cell, its spaces around it left out.
+    let text = |line: &str, a: usize, b: usize| {
+        let cell = &line[a + 1..b];
+        let s = a + 1 + (cell.len() - cell.trim_start().len());
+        (s, s + cell.trim().len())
+    };
+    let (s, e) = text(old, bars[k], next);
+    let (s_new, e_new) = text(new, from, to);
+    let at = if col < s {
+        from + 1 + (col - bars[k] - 1)
+    } else if col < e {
+        s_new + (col - s)
+    } else {
+        e_new + (col - e)
+    };
+    at.min(to.saturating_sub(1)).max(from + 1)
 }
 
 /// A table line's look: its bars as box lines, a separator row as a line
@@ -512,6 +557,45 @@ mod tests {
                 "{line}: every byte drawn once, in order"
             );
         }
+    }
+
+    #[test]
+    fn lining_a_table_up_keeps_the_cursor_on_its_character() {
+        let mut doc = Doc::new(Text::from_lines(&[
+            "| a | bbbb |",
+            "|---|---|",
+            "| cccccc | d |",
+        ]));
+        doc.col = 7;
+        assert!(align(&mut doc, 0));
+        assert_eq!(doc.text.line(0), "| a      | bbbb |");
+        assert_eq!(
+            &doc.text.line(0)[doc.col..doc.col + 1],
+            "b",
+            "still on the second b"
+        );
+        assert_eq!(doc.col, 12);
+        let mut doc = Doc::new(Text::from_lines(&[
+            "| a | bbbb |",
+            "|---|---|",
+            "| cccccc | d |",
+        ]));
+        doc.col = 4;
+        align(&mut doc, 0);
+        assert_eq!(doc.col, 9, "on the bar it was on");
+        let mut doc = Doc::new(Text::from_lines(&[
+            "| a | bbbb |",
+            "|---|---|",
+            "| cccccc | d |",
+        ]));
+        doc.row = 2;
+        doc.col = 11;
+        align(&mut doc, 0);
+        assert_eq!(
+            &doc.text.line(2)[doc.col..doc.col + 1],
+            "d",
+            "a row of its own carried too"
+        );
     }
 
     #[test]
