@@ -1255,6 +1255,18 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
         "| a | bbbb |",
         "Insert mode entered and left with nothing typed"
     );
+    keys(&mut app, "3GAz<C-o>0<Esc>");
+    assert_eq!(
+        lines(&app)[2],
+        "| a      | bbbb | z   |",
+        "typed in, a command in Insert mode after"
+    );
+    keys(&mut app, "uu");
+    assert_eq!(
+        lines(&app)[2],
+        "| a | bbbb |",
+        "undone, a step each side of C-o"
+    );
     keys(&mut app, "3Gllx");
     assert_eq!(
         lines(&app)[2],

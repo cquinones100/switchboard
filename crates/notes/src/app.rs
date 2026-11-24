@@ -718,6 +718,9 @@ pub struct App {
     last_change: Vec<Key>,
     recording: Option<(Vec<Key>, Text)>,
     replaying: bool,
+    /// The note's text as Insert mode began, so leaving it lines a table
+    /// up only when something was typed.
+    insert_from: Option<Text>,
     save_due: Option<Instant>,
     watch_due: Option<Instant>,
     /// When the settings file was last looked at, and its modified time
@@ -896,6 +899,7 @@ impl App {
             last_change: Vec::new(),
             recording: None,
             replaying: false,
+            insert_from: None,
             save_due: None,
             watch_due: None,
             settings_seen: Instant::now(),
@@ -3309,7 +3313,11 @@ impl App {
     /// goes, and the table the cursor is in lines up again when anything
     /// was typed, so one only visited in Insert mode stays as written.
     fn after_insert(&mut self) {
-        let typed = self.editor.step_changed();
+        // Entered some other way (a menu's new table): lined up as before.
+        let typed = self
+            .insert_from
+            .take()
+            .is_none_or(|from| from != self.editor.doc.text);
         // Tidying of the app's own, which the change list leaves out.
         self.editor.tidy(|doc| {
             format::drop_empty(doc);
@@ -4086,6 +4094,12 @@ impl App {
         if self.editor.doc.text != text_before {
             self.changed();
         }
+        if !matches!(mode_before, Mode::Insert | Mode::Replace)
+            && self.editor.is_typing()
+            && self.insert_from.is_none()
+        {
+            self.insert_from = Some(text_before.clone());
+        }
         let stopped_typing = matches!(mode_before, Mode::Insert | Mode::Replace)
             && !self.editor.is_typing()
             && !self.editor.one_command();
@@ -4094,7 +4108,7 @@ impl App {
         } else if self.editor.mode == Mode::Normal
             && self.editor.idle()
             && self.editor.doc.text != text_before
-            && self.editor.in_step()
+            && !self.editor.went_through_history()
         {
             // A change, not a motion, an undo or a redo: a table only read,
             // or put back as it was, stays as written.
