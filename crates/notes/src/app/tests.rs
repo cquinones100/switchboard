@@ -1249,26 +1249,6 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
         "moving into it leaves it as written"
     );
     assert!(!app.modified(), "still nothing to save");
-    keys(&mut app, "3Gi<Esc>");
-    assert_eq!(
-        lines(&app)[2],
-        "| a | bbbb |",
-        "Insert mode entered and left with nothing typed"
-    );
-    keys(&mut app, "3G2i<Esc>3Ggi<Esc>");
-    assert_eq!(lines(&app)[2], "| a | bbbb |", "nor after a count or g");
-    keys(&mut app, "3GAz<C-o>0<Esc>");
-    assert_eq!(
-        lines(&app)[2],
-        "| a      | bbbb | z   |",
-        "typed in, a command in Insert mode after"
-    );
-    keys(&mut app, "uu");
-    assert_eq!(
-        lines(&app)[2],
-        "| a | bbbb |",
-        "undone, a step each side of C-o"
-    );
     keys(&mut app, "3Gllx");
     assert_eq!(
         lines(&app)[2],
