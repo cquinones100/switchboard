@@ -51,6 +51,7 @@ use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::{self, ServerConfig};
 
+use super::build::Noted;
 use super::guard::{self, Refusal, Rules, WhoisCache};
 use super::pairing;
 use super::push;
@@ -398,9 +399,24 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
         .headers()
         .get(super::build::HEADER)
         .and_then(|h| h.to_str().ok())
-        && let Some(line) = app.builds.note(&device, builds, &served_build())
     {
-        super::log::line(&line);
+        match app
+            .builds
+            .note(&device, builds, &served_build(), util::now_ms())
+        {
+            Noted::Quiet => {}
+            Noted::Updated(line) => super::log::line(&line),
+            // Said only when the page hasn't updated itself by then.
+            Noted::FellBehind => {
+                let (app, device) = (app.clone(), device.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(super::build::LATE).await;
+                    if let Some(line) = app.builds.overdue(&device, util::now_ms()) {
+                        super::log::line(&line);
+                    }
+                });
+            }
+        }
     }
     req.extensions_mut().insert(Device(device));
     next.run(req).await
@@ -629,12 +645,16 @@ async fn events(
         .get(header::COOKIE)
         .and_then(|c| c.to_str().ok())
         .map(str::to_string);
-    let stream = futures_util::stream::unfold((rx, true), move |(mut rx, first)| {
+    // The build serving the app with each message, and on its own as it
+    // changes, so a page open in front updates itself (app.js's `catchUp`).
+    let first = (rx, None::<String>);
+    let stream = futures_util::stream::unfold(first, move |(mut rx, sent)| {
         let (device, cookie) = (device.clone(), cookie.clone());
         async move {
-            if !first && rx.changed().await.is_err() {
-                return None;
-            }
+            let build = match sent {
+                None => tokio::task::spawn_blocking(served_build).await.ok()?,
+                Some(sent) => super::build::next_on_stream(&mut rx, &sent, served_build).await?,
+            };
             let allowed =
                 tokio::task::spawn_blocking(move || still_allowed(&device, cookie.as_deref()))
                     .await
@@ -642,10 +662,10 @@ async fn events(
             if !allowed {
                 return None;
             }
-            let data = rx.borrow_and_update().to_string();
+            let data = super::build::with_build(rx.borrow_and_update().clone(), &build);
             Some((
                 Ok::<_, std::convert::Infallible>(SseEvent::default().data(data)),
-                (rx, false),
+                (rx, Some(build)),
             ))
         }
     });

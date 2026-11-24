@@ -563,15 +563,23 @@ async fn tabs(State(preview): State<Arc<Preview>>) -> Response {
 /// The tabs, now and each time they change, as the real stream sends them.
 async fn events(State(preview): State<Arc<Preview>>) -> Response {
     let rx = preview.tabs.subscribe();
-    let stream = futures_util::stream::unfold((rx, true), |(mut rx, first)| async move {
-        if !first && rx.changed().await.is_err() {
-            return None;
+    // With the preview's build, as the real stream sends the server's, so
+    // a commit in the clone updates the app in the frame.
+    let dir = preview.dir.clone();
+    let build_now = move || build_of(&dir);
+    let stream = futures_util::stream::unfold((rx, None::<String>), move |(mut rx, sent)| {
+        let build_now = build_now.clone();
+        async move {
+            let build = match sent {
+                None => tokio::task::spawn_blocking(build_now).await.ok()?,
+                Some(sent) => super::build::next_on_stream(&mut rx, &sent, build_now).await?,
+            };
+            let data = super::build::with_build(rx.borrow_and_update().clone(), &build);
+            Some((
+                Ok::<_, std::convert::Infallible>(SseEvent::default().data(data)),
+                (rx, Some(build)),
+            ))
         }
-        let data = rx.borrow_and_update().to_string();
-        Some((
-            Ok::<_, std::convert::Infallible>(SseEvent::default().data(data)),
-            (rx, false),
-        ))
     });
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
