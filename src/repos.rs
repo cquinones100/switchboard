@@ -1176,10 +1176,22 @@ pub fn migrate_lands() -> Option<String> {
     }
     if settings::is_on("github") {
         let now = util::now_ms();
+        // Only those whose way hangs on GitHub's answer: no way set yet,
+        // and not direct, set or guessed.
+        let needs_answer = |repo: &str| {
+            let entry = entry_of(&data, repo);
+            let old = entry.get("landing").and_then(Value::as_str).or_else(|| {
+                guessed
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(repo))
+                    .map(|(_, l)| l.as_str())
+            });
+            !entry.contains_key("lands") && old != Some("direct")
+        };
         let repos: Vec<&String> = data
             .keys()
             .chain(guessed.iter().map(|(k, _)| k))
-            .filter(|r| github::parse_name_with_owner(r).is_some())
+            .filter(|r| github::parse_name_with_owner(r).is_some() && needs_answer(r))
             .collect();
         let mut failed = 0;
         for repo in &repos {
