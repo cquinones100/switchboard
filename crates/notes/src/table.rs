@@ -130,6 +130,29 @@ pub fn aligned(rows: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Whether a change edited the table around `row` of `lines`: no table of
+/// `before` has exactly its rows, so one a change only sat beside, or
+/// moved whole, isn't.
+pub fn edited(before: &[String], lines: &[String], row: usize) -> bool {
+    let Some((first, last)) = bounds(lines, row) else {
+        return false;
+    };
+    let rows = &lines[first..=last];
+    let mut r = 0;
+    while r < before.len() {
+        match bounds(before, r) {
+            Some((f, l)) => {
+                if &before[f..=l] == rows {
+                    return false;
+                }
+                r = l + 1;
+            }
+            None => r += 1,
+        }
+    }
+    true
+}
+
 /// Aligns the table around `row`. Gives whether anything changed.
 pub fn align(doc: &mut Doc, row: usize) -> bool {
     let lines = doc.text.lines();
@@ -325,7 +348,7 @@ pub fn jump(doc: &mut Doc, step: i32) -> bool {
         .iter()
         .filter(|&&bar| bar < doc.col)
         .count()
-        .min(bars.len().saturating_sub(1));
+        .min(cells(&doc.text.line(row)).len());
     align(doc, row);
     let mut lines = doc.text.lines();
     let Some((first, mut last)) = bounds(&lines, row) else {
@@ -486,6 +509,15 @@ mod tests {
         assert_eq!(doc.text.line(0), "| A   | B   |");
         jump(&mut doc, -1);
         assert_eq!((doc.row, doc.col), (0, 2), "Shift-Tab goes back a cell");
+        let mut doc = Doc::new(Text::from_lines(&["| a | b |", "|---|---|", "| x | y"]));
+        doc.row = 2;
+        doc.col = 7;
+        jump(&mut doc, 1);
+        assert_eq!(
+            (doc.row, doc.text.len()),
+            (3, 4),
+            "past a last cell with no closing bar, a new row"
+        );
         let mut doc = Doc::new(Text::from_lines(&[
             "| a | b |",
             "|---|---|",

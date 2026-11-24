@@ -3099,11 +3099,7 @@ impl App {
             // The table edited lined up in the text, as a key's change
             // does; one only beside the change stays as written, and typing
             // pads it as Insert mode ends.
-            let lines = doc.text.lines();
-            let edited = table::bounds(&lines, doc.row).is_some_and(|(first, last)| {
-                let rows = &lines[first..=last];
-                !before.lines().windows(rows.len()).any(|w| w == rows)
-            });
+            let edited = table::edited(&before.lines(), &doc.text.lines(), doc.row);
             if typing.is_none() && !goes_on_typing && doc.insert.is_none() && edited {
                 let row = doc.row;
                 table::align(doc, row);
@@ -4088,7 +4084,6 @@ impl App {
         let mode_before = self.editor.mode;
         let text_before = self.editor.doc.text.clone();
         let note_before = self.open.as_ref().map(|o| o.path.clone());
-        let row_before = self.editor.doc.row;
         if self.editor.is_typing() {
             // The note's own typing keys (Tab, Enter in a list) move the
             // column j and k keep as the editor's do.
@@ -4114,14 +4109,19 @@ impl App {
             // A change, not a motion, an undo, a redo or another note
             // opened: a table only read, or put back as it was, stays as
             // written.
+            // The table the change edited: the cursor's, or, rows deleted
+            // from a table's end leaving the cursor under it, the one above.
             let row = self.editor.doc.row;
-            // Rows deleted from a table's end, the key begun on one of them,
-            // leave the cursor under it.
-            let rows_deleted = self.editor.doc.text.len() < text_before.len()
-                && table::is_row(Some(&text_before.line(row_before)));
+            let before = text_before.lines();
             self.editor.tidy(|doc| {
-                if !table::align(doc, row) && rows_deleted && row > 0 {
-                    table::align(doc, row - 1);
+                let lines = doc.text.lines();
+                let at = if table::bounds(&lines, row).is_some() || row == 0 {
+                    row
+                } else {
+                    row - 1
+                };
+                if table::edited(&before, &lines, at) {
+                    table::align(doc, at);
                 }
             });
             self.editor.clamp();

@@ -1337,9 +1337,11 @@ fn deleting_a_line_under_a_table_leaves_the_table_as_written() {
     app.start();
     app.open_note(&first, false, false);
     keys(&mut app, "6Gdd");
+    keys(&mut app, "2Gdd");
     assert_eq!(
-        lines(&app)[2..6],
-        ["| a | bbbb |", "|---|---|", "| cccccc | d |", "text"]
+        lines(&app)[1..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |", "text"],
+        "nor above it"
     );
 }
 
