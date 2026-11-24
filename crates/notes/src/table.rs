@@ -397,11 +397,19 @@ pub fn add_column(doc: &mut Doc) {
 
 pub fn delete_row(doc: &mut Doc) {
     let lines = doc.text.lines();
-    if bounds(&lines, doc.row).is_none() || is_separator(&lines[doc.row]) {
+    let Some((first, last)) = bounds(&lines, doc.row) else {
+        return;
+    };
+    if is_separator(&lines[doc.row]) {
         return;
     }
     doc.text.set_lines(doc.row, doc.row + 1, &[] as &[&str]);
     doc.row = doc.row.min(doc.text.len() - 1);
+    // The rows left lined up, as adding or deleting a column leaves them,
+    // whichever row went.
+    if last > first {
+        align(doc, first);
+    }
 }
 
 pub fn delete_column(doc: &mut Doc) {
@@ -478,6 +486,19 @@ mod tests {
         assert_eq!(doc.text.line(0), "| A   | B   |");
         jump(&mut doc, -1);
         assert_eq!((doc.row, doc.col), (0, 2), "Shift-Tab goes back a cell");
+        let mut doc = Doc::new(Text::from_lines(&[
+            "| a | b |",
+            "|---|---|",
+            "| cccc | d |",
+            "",
+        ]));
+        doc.row = 2;
+        delete_row(&mut doc);
+        assert_eq!(
+            doc.text.lines()[..2],
+            ["| a   | b   |", "| --- | --- |"],
+            "the last row deleted, the rest lined up"
+        );
         let mut doc = Doc::new(Text::from_lines(&["|abc|b|", "|-|-|", "|c|d|"]));
         doc.col = 4;
         jump(&mut doc, 1);
