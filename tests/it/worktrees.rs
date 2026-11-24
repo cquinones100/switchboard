@@ -2882,7 +2882,7 @@ fn wt_in_an_autopilot_tab_refuses_an_issue_edited_after_its_label_by_an_outsider
     assert_eq!(refused.status.code(), Some(1));
     assert!(
         stderr(&refused).contains(
-            "autopilot passes over o/r#12: its body was edited by outsider, who has no write access to the repository, after its label was added; add the label again to take it"
+            "autopilot passes over o/r#12: its body was edited by outsider, who has no write access to the repository, after its label was added; take the label off and add it again to take it"
         ),
         "{}",
         stderr(&refused)

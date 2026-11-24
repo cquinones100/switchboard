@@ -6,7 +6,8 @@
 //! it can queue work for your tabs by opening an issue; and one you didn't
 //! open only while nobody without write access has edited its body since
 //! that label was added (`passed_over`), so its author can't rewrite what a
-//! writer labeled. Adding the label again after reading the edit takes it.
+//! writer labeled. Taking the label off and adding it again after reading
+//! the edit takes it.
 //! No tmux-version file is behind it.
 //!
 //! An issue is ready as a planned note item is: its body is its plan. It
@@ -422,18 +423,23 @@ pub fn passed_over(found: &Found, viewer: &str, writers: &HashSet<String>) -> Op
         return None;
     }
     let trusted = |who: &str| same(who) || writers.contains(&who.to_lowercase());
+    let access = |who: &str| {
+        if askable(who) {
+            format!("{who}, who has no write access to the repository")
+        } else {
+            format!("{who}, whose access to the repository can't be asked about")
+        }
+    };
     let Some(labeler) = found.labeler.as_deref() else {
         return Some("who added its label can't be told".into());
     };
     if !trusted(labeler) {
-        return Some(format!(
-            "its label was added by {labeler}, who has no write access to the repository"
-        ));
+        return Some(format!("its label was added by {}", access(labeler)));
     }
     let editor = edited_since_labeled(found).find(|e| !e.is_some_and(trusted))?;
     Some(format!(
-        "its body was edited by {}, who has no write access to the repository, after its label was added; add the label again to take it",
-        editor.unwrap_or("a deleted account")
+        "its body was edited by {}, after its label was added; take the label off and add it again to take it",
+        editor.map_or_else(|| "a deleted account".to_string(), access)
     ))
 }
 
@@ -446,6 +452,15 @@ fn edited_since_labeled(found: &Found) -> impl Iterator<Item = Option<&str>> {
         .iter()
         .filter(move |(when, _)| when.as_str() >= at)
         .map(|(_, who)| who.as_deref())
+}
+
+/// Whether a login is one GitHub allows a person, which keeps anything
+/// else out of the path asked; a bot's (`name[bot]`) is never asked about,
+/// so never trusted. (An Enterprise Managed User's carries `_<shortcode>`.)
+fn askable(login: &str) -> bool {
+    login
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Those whose access must be asked about: the labelers of issues not
@@ -465,14 +480,7 @@ fn to_ask(found: &[Found], viewer: &str) -> Vec<String> {
             if who == viewer.to_lowercase() || out.contains(&who) {
                 continue;
             }
-            // A login as GitHub allows them, which keeps anything else out
-            // of the path; a bot's (`name[bot]`) is never asked about, so
-            // never taken.
-            // (an Enterprise Managed User's carries `_<shortcode>`)
-            if who
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
+            if askable(&who) {
                 out.push(who);
             }
         }
@@ -1677,7 +1685,7 @@ mod tests {
         assert_eq!(
             passed_over(&found[0], &viewer, &writers).as_deref(),
             Some(
-                "its body was edited by outsider, who has no write access to the repository, after its label was added; add the label again to take it"
+                "its body was edited by outsider, who has no write access to the repository, after its label was added; take the label off and add it again to take it"
             )
         );
         assert!(
