@@ -318,6 +318,14 @@ fn cell_index(line: &str, col: usize) -> usize {
 /// Past the last cell of the last row, adds a row.
 pub fn jump(doc: &mut Doc, step: i32) -> bool {
     let row = doc.row;
+    // The cell typed in, read before lining up: typing on a bar is at the
+    // end of the cell before it.
+    let bars = bars_of(&doc.text.line(row));
+    let typed_in = bars
+        .iter()
+        .filter(|&&bar| bar < doc.col)
+        .count()
+        .min(bars.len().saturating_sub(1));
     align(doc, row);
     let mut lines = doc.text.lines();
     let Some((first, mut last)) = bounds(&lines, row) else {
@@ -325,7 +333,7 @@ pub fn jump(doc: &mut Doc, step: i32) -> bool {
     };
     let mut r = row;
     let mut starts = cell_starts(&lines[r]);
-    let mut index = cell_index(&lines[r], doc.col) as i64 + step as i64;
+    let mut index = typed_in as i64 + step as i64;
     loop {
         if index >= 1 && index as usize <= starts.len() && !is_separator(&lines[r]) {
             break;
@@ -470,6 +478,15 @@ mod tests {
         assert_eq!(doc.text.line(0), "| A   | B   |");
         jump(&mut doc, -1);
         assert_eq!((doc.row, doc.col), (0, 2), "Shift-Tab goes back a cell");
+        let mut doc = Doc::new(Text::from_lines(&["|abc|b|", "|-|-|", "|c|d|"]));
+        doc.col = 4;
+        jump(&mut doc, 1);
+        assert_eq!(doc.text.line(0), "| abc | b   |");
+        assert_eq!(
+            (doc.row, doc.col),
+            (0, 8),
+            "typed up to a bar, Tab goes to the next cell"
+        );
     }
 
     /// A table's lines as drawn, each cell with the byte it stands for.
