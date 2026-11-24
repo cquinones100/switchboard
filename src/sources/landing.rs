@@ -630,9 +630,12 @@ pub fn view_items(
             }
         }
         if !queue.is_empty() {
-            let way = match r.method {
-                Some(w) if w.through_pr() => format!("through a PR · {}", w.label()),
-                _ => "merge queue".to_string(),
+            // These are GitHub's merge queue's entries, whatever way the
+            // repository is set to land by now.
+            let way = if r.method.is_some_and(crate::repos::Way::through_pr) {
+                "through a PR · GitHub merge queue"
+            } else {
+                "merge queue"
             };
             items.push(header(
                 &format!("{}:queue", r.common.display()),
@@ -1298,7 +1301,7 @@ mod tests {
         let heading = items.iter().find(|i| i.id.ends_with(":queue")).unwrap();
         assert_eq!(
             heading.title,
-            "me/github-queue · through a PR · GitHub's merge queue"
+            "me/github-queue · through a PR · GitHub merge queue"
         );
         assert_eq!(heading.data["right"], "1 in the merge queue");
     }

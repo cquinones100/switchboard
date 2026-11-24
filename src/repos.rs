@@ -1074,19 +1074,39 @@ pub fn lands_migrated(
     changed.then_some((out, set))
 }
 
-/// While the rest of the carrying over waits on GitHub, an entry whose
-/// `landing` was `direct` gets `direct` at once, since that needs no
-/// answer of GitHub's; the rest wait, `landing` kept for them.
-fn direct_now(path: &Path, data: &Map<String, Value>) {
-    let direct = |e: &Value| {
-        e.get("landing").and_then(Value::as_str) == Some("direct") && e.get("lands").is_none()
+/// While the rest of the carrying over waits on GitHub, a repository whose
+/// `landing` was `direct` (set, or as the old guess found it) gets
+/// `direct` at once, since that needs no answer of GitHub's; the rest
+/// wait, `landing` kept for them.
+fn direct_now(path: &Path, data: &Map<String, Value>, guessed: &[(String, String)]) {
+    let guessed_direct = |repo: &str| {
+        guessed
+            .iter()
+            .any(|(k, l)| k.eq_ignore_ascii_case(repo) && l == "direct")
     };
-    if !data.values().any(direct) {
+    let direct = |repo: &str, e: &Value| {
+        e.get("lands").is_none()
+            && match e.get("landing").and_then(Value::as_str) {
+                Some(old) => old == "direct",
+                None => guessed_direct(repo),
+            }
+    };
+    let new_entry = |d: &Map<String, Value>| {
+        guessed
+            .iter()
+            .any(|(k, l)| l == "direct" && !d.keys().any(|x| x.eq_ignore_ascii_case(k)))
+    };
+    if !new_entry(data) && !data.iter().any(|(k, e)| direct(k, e)) {
         return;
     }
     let _ = change_file(path, |d| {
-        for entry in d.values_mut() {
-            if direct(entry)
+        for (k, l) in guessed {
+            if l == "direct" && !d.keys().any(|x| x.eq_ignore_ascii_case(k)) {
+                d.insert(k.clone(), json!({}));
+            }
+        }
+        for (repo, entry) in d.iter_mut() {
+            if direct(repo, entry)
                 && let Some(e) = entry.as_object_mut()
             {
                 e.shift_remove("landing");
@@ -1151,7 +1171,7 @@ pub fn migrate_lands() -> Option<String> {
     // With GitHub not to be asked, how a repository can land through a PR
     // can't be told, so all but `direct` waits until it can.
     if !settings::is_on("github") {
-        direct_now(&path, &data);
+        direct_now(&path, &data, &guessed);
         return None;
     }
     if settings::is_on("github") {
@@ -1183,7 +1203,7 @@ pub fn migrate_lands() -> Option<String> {
         // A failure to ask is tried again next start, so a moment offline
         // never settles a way.
         if failed > 0 {
-            direct_now(&path, &data);
+            direct_now(&path, &data, &guessed);
             return None;
         }
     }
