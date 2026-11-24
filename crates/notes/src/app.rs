@@ -3072,26 +3072,34 @@ impl App {
             }
             _ => {}
         }
-        self.editor.change(|doc| match act {
-            FormatAct::Paragraph(style) => format::paragraph(doc, first, last, style),
-            FormatAct::Monospaced => format::monospaced(doc, first, last),
-            FormatAct::Character(style) => format::character(doc, style, sel, typing),
-            FormatAct::Tick => {
-                format::toggle_check(doc, first);
+        self.editor.change(|doc| {
+            match act {
+                FormatAct::Paragraph(style) => format::paragraph(doc, first, last, style),
+                FormatAct::Monospaced => format::monospaced(doc, first, last),
+                FormatAct::Character(style) => format::character(doc, style, sel, typing),
+                FormatAct::Tick => {
+                    format::toggle_check(doc, first);
+                }
+                FormatAct::SortChecked => format::sort_checked(doc, first),
+                FormatAct::UncheckAll => format::uncheck_all(doc),
+                FormatAct::DeleteChecked => format::delete_checked(doc),
+                FormatAct::Table => table::insert(doc),
+                FormatAct::AddRow => table::add_row(doc, first),
+                FormatAct::AddColumn => table::add_column(doc),
+                FormatAct::DeleteRow => table::delete_row(doc),
+                FormatAct::DeleteColumn => table::delete_column(doc),
+                FormatAct::Link
+                | FormatAct::PasteImage
+                | FormatAct::WorkOnItem
+                | FormatAct::DiagramCode
+                | FormatAct::AttachNote => {}
             }
-            FormatAct::SortChecked => format::sort_checked(doc, first),
-            FormatAct::UncheckAll => format::uncheck_all(doc),
-            FormatAct::DeleteChecked => format::delete_checked(doc),
-            FormatAct::Table => table::insert(doc),
-            FormatAct::AddRow => table::add_row(doc, first),
-            FormatAct::AddColumn => table::add_column(doc),
-            FormatAct::DeleteRow => table::delete_row(doc),
-            FormatAct::DeleteColumn => table::delete_column(doc),
-            FormatAct::Link
-            | FormatAct::PasteImage
-            | FormatAct::WorkOnItem
-            | FormatAct::DiagramCode
-            | FormatAct::AttachNote => {}
+            // The table edited lined up in the text, as a key's change
+            // does; typing pads it as Insert mode ends.
+            if typing.is_none() {
+                let row = doc.row;
+                table::align(doc, row);
+            }
         });
         self.take_insert();
         if act.typing() && sel.is_none() && self.editor.mode != Mode::Insert {

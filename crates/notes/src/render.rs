@@ -1309,15 +1309,16 @@ pub fn cells(
     let mut hls: Vec<(usize, usize, Hl, u16)> = look.hls.clone();
     hls.extend(extra.iter().map(|&(s, e, h)| (s, e, h, 300)));
     hls.sort_by_key(|h| h.3);
-    let style_at = |b: usize| {
+    let style_in = |hls: &[(usize, usize, Hl, u16)], b: usize| {
         let mut style = Style::new();
-        for (s, e, hl, _) in &hls {
+        for (s, e, hl, _) in hls {
             if b >= *s && b < *e {
                 style = style.patch(hl.style(light));
             }
         }
         style
     };
+    let style_at = |b: usize| style_in(&hls, b);
     let mut out = Vec::new();
     if let Some((text, hl)) = look.before {
         for g in text.graphemes(true) {
@@ -1338,9 +1339,9 @@ pub fn cells(
         }
         if !raw {
             for &(_, columns, fill) in look.pads.iter().filter(|p| p.0 == at) {
-                // The bar's, so a selection or match ending before it
-                // doesn't spill into what stands for no byte.
-                let style = style_at(at);
+                // The bar's own look, never a selection's or a match's,
+                // which act on bytes and padding stands for none.
+                let style = style_in(&look.hls, at);
                 out.extend((0..columns).map(|_| Cell {
                     text: fill.to_string(),
                     style,
