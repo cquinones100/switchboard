@@ -2805,6 +2805,107 @@ fn wt_waits_out_another_wts_lock_on_the_main_clones_config_and_takes_back_what_i
     );
 }
 
+/// In a tab autopilot opened, `wt --issue` refuses an issue an outsider
+/// opened, a writer labeled and the outsider then edited, saying why; once
+/// the writer labels it again it gets past that, and a body changed after
+/// the search read it fails the start.
+#[test]
+fn wt_in_an_autopilot_tab_refuses_an_issue_edited_after_its_label_by_an_outsider() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // 0: edited after the label; 1: labeled again since; 2: that, with the
+    // issue's body changed since the search.
+    let phase = Arc::new(AtomicU8::new(0));
+    let at = phase.clone();
+    let (w, _fake, clone) = issue_world_answering(
+        "wt-issue-edited",
+        json!({ "tickets": "github", "issueLabel": "autopilot" }),
+        move |request| {
+            let phase = at.load(Ordering::SeqCst);
+            let label = |at: &str| json!({ "label": { "name": "autopilot" }, "actor": { "login": "writer" }, "createdAt": at });
+            let mut events = vec![label("2026-01-01T10:00:00Z")];
+            if phase > 0 {
+                events.push(label("2026-01-01T12:00:00Z"));
+            }
+            match request.path() {
+                "/graphql" => Some(Reply::json(
+                    200,
+                    json!({ "data": { "viewer": { "login": "me" }, "search": { "nodes": [
+                        { "number": 12, "title": "Make the widget blue", "body": "It is red.",
+                          "url": "https://github.com/o/r/issues/12", "author": { "login": "outsider" },
+                          "timelineItems": { "nodes": events },
+                          "userContentEdits": { "nodes": [
+                              { "editedAt": "2026-01-01T11:00:00Z", "editor": { "login": "outsider" } } ] } }
+                    ] } } }),
+                )),
+                "/repos/o/r/collaborators/writer/permission" => {
+                    Some(Reply::json(200, json!({ "permission": "write" })))
+                }
+                "/repos/o/r/collaborators/outsider/permission" => {
+                    Some(Reply::json(200, json!({ "permission": "read" })))
+                }
+                "/user" => Some(Reply::json(200, json!({ "login": "me" }))),
+                "/repos/o/r/issues/12" => Some(Reply::json(
+                    200,
+                    json!({ "number": 12, "state": "open", "title": "Make the widget blue",
+                            "body": if phase == 2 { "Paint it green." } else { "It is red." },
+                            "html_url": "https://github.com/o/r/issues/12",
+                            "assignees": [{ "login": "me" }], "labels": [{ "name": "autopilot" }] }),
+                )),
+                _ => None,
+            }
+        },
+    );
+    let server = common::TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    let tab = &server.list()["sessions"][0]["tabs"][0];
+    let (tab_id, pane) = (
+        tab["id"].as_str().unwrap().to_string(),
+        tab["panes"][0]["id"].as_str().unwrap().to_string(),
+    );
+    server.ok(&["set", "-t", &tab_id, "@autopilot", "1"]);
+    let mut in_tab = World {
+        dir: TempDir::new("wt-issue-edited-tab"),
+        env: w.env.clone(),
+    };
+    in_tab.set("SWITCHBOARD", server.socket().to_str().unwrap());
+    in_tab.set("SWITCHBOARD_PANE", &pane);
+    let start = || {
+        in_tab.run(
+            &clone,
+            &["worktree-from-ticket", "--no-claude", "--issue", "12"],
+        )
+    };
+
+    let refused = start();
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains(
+            "autopilot passes over o/r#12: its body was edited by outsider, who has no write access to the repository, after its label was added; take the label off and add it again to take it"
+        ),
+        "{}",
+        stderr(&refused)
+    );
+
+    // Labeled again, it gets as far as autopilot's own mode, which is off.
+    phase.store(1, Ordering::SeqCst);
+    let past = start();
+    assert!(
+        stderr(&past).contains("autopilot no longer takes GitHub issues"),
+        "{}",
+        stderr(&past)
+    );
+
+    phase.store(2, Ordering::SeqCst);
+    let changed = start();
+    assert!(
+        stderr(&changed).contains("o/r#12's body was edited since autopilot read it"),
+        "{}",
+        stderr(&changed)
+    );
+}
+
 #[test]
 fn wt_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_github_issues() {
     let (w, _fake, clone) = issue_world(
