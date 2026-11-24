@@ -1075,12 +1075,15 @@ pub fn lands_migrated(
 }
 
 /// Whether GitHub's failure to answer for a repository says it isn't there
-/// for you: no repository in its answer, or GraphQL's not found.
+/// for you: no repository in its answer, GraphQL's not found, or one an
+/// organization's sign-in keeps the token out of.
 fn gone(error: &str) -> bool {
     [
         "didn't answer",
         "Could not resolve to a Repository",
         "NOT_FOUND",
+        "FORBIDDEN",
+        "SAML",
     ]
     .iter()
     .any(|w| error.contains(w))
@@ -1124,6 +1127,11 @@ pub fn migrate_lands() -> Option<String> {
         }
     };
     let mut asked = std::collections::HashMap::new();
+    // With GitHub not to be asked, whether a repository's CI runs on trains
+    // can't be told, so a computer whose queue was on waits until it can.
+    if !settings::is_on("github") && queue_was_on {
+        return None;
+    }
     if settings::is_on("github") {
         let now = util::now_ms();
         let repos: Vec<&String> = data
