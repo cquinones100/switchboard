@@ -3072,6 +3072,7 @@ impl App {
             }
             _ => {}
         }
+        let goes_on_typing = act.typing() && sel.is_none();
         self.editor.change(|doc| {
             let before = doc.text.clone();
             match act {
@@ -3096,8 +3097,14 @@ impl App {
                 | FormatAct::AttachNote => {}
             }
             // The table edited lined up in the text, as a key's change
-            // does; typing pads it as Insert mode ends.
-            if typing.is_none() && doc.text != before {
+            // does; one only beside the change stays as written, and typing
+            // pads it as Insert mode ends.
+            let lines = doc.text.lines();
+            let edited = table::bounds(&lines, doc.row).is_some_and(|(first, last)| {
+                let rows = &lines[first..=last];
+                !before.lines().windows(rows.len()).any(|w| w == rows)
+            });
+            if typing.is_none() && !goes_on_typing && doc.insert.is_none() && edited {
                 let row = doc.row;
                 table::align(doc, row);
             }
