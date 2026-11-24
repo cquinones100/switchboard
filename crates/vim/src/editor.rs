@@ -886,6 +886,12 @@ impl<N: Note> Editor<N> {
         self.make_change(edit, true)
     }
 
+    /// Whether a step to undo is under way: a key that changed the text,
+    /// not an undo or redo, which close theirs.
+    pub fn in_step(&self) -> bool {
+        self.group.is_some()
+    }
+
     /// The app's own tidying (a table lined up, empty markers dropped):
     /// part of the step under way, which it doesn't make a change of the
     /// person's, or, with none, left out of the history as before.

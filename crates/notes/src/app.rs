@@ -4090,8 +4090,10 @@ impl App {
         } else if self.editor.mode == Mode::Normal
             && self.editor.idle()
             && self.editor.doc.text != text_before
+            && self.editor.in_step()
         {
-            // A change, not a motion: a table only read stays as written.
+            // A change, not a motion, an undo or a redo: a table only read,
+            // or put back as it was, stays as written.
             let row = self.editor.doc.row;
             self.editor.tidy(|doc| {
                 table::align(doc, row);

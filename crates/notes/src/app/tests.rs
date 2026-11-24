@@ -1249,6 +1249,18 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
         "moving into it leaves it as written"
     );
     assert!(!app.modified(), "still nothing to save");
+    keys(&mut app, "3Gllx");
+    assert_eq!(
+        lines(&app)[2],
+        "|        | bbbb |",
+        "a change pads the table"
+    );
+    keys(&mut app, "u");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |"],
+        "a change undone puts it back as written"
+    );
     let shown = screen(&mut app).join("\n");
     for row in [
         "│ a      │ bbbb │",
