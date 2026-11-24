@@ -2265,7 +2265,8 @@ impl Server {
         }
         let mut entry = crate::repos::entry_of(&crate::repos::read_safely(), repo);
         entry.insert(field.to_string(), value.clone());
-        crate::repos::tickets_of(&entry).as_deref() == Some("github")
+        crate::tickets::kept_of(&entry)
+            == Some(crate::tickets::Kept::In(crate::tickets::Source::Github))
             && crate::repos::issue_label_of(&entry).is_some()
     }
 

@@ -36,6 +36,7 @@
 //! once wrote an empty one as an object) is none, as is a `closed` or
 //! `landed` that isn't.
 
+use crate::tickets::{Kept, Source};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -107,19 +108,20 @@ impl Sources {
     /// give, `name` the repository as said; why it takes none for
     /// `linear`, for none set, and for `github` with no `issueLabel`.
     pub fn of_tickets(
-        tickets: Option<&str>,
+        tickets: Option<Kept>,
         label: Option<&str>,
         name: &str,
     ) -> Result<Sources, String> {
         match (tickets, label) {
-            (Some("notes"), _) => Ok(Sources::Note),
-            (Some("github"), Some(_)) => Ok(Sources::Issues),
-            (Some("github"), None) => Err(format!(
+            (Some(Kept::Notes), _) => Ok(Sources::Note),
+            (Some(Kept::In(Source::Github)), Some(_)) => Ok(Sources::Issues),
+            (Some(Kept::In(Source::Github)), None) => Err(format!(
                 "{name} keeps its work in GitHub issues, and its issue label isn't set: set it in Settings' Issue label row, or \"issueLabel\" for it in {}",
                 crate::files::shown("repos.json")
             )),
-            (Some(_), _) => Err(format!(
-                "{name} keeps its work in Linear, which autopilot can't take"
+            (Some(Kept::In(source)), _) => Err(format!(
+                "{name} keeps its work in {}, which autopilot can't take",
+                source.name()
             )),
             (None, _) => Err(crate::repos::unset_words(name)),
         }
@@ -145,7 +147,7 @@ impl Sources {
 }
 
 /// Where autopilot takes its work in the repository whose main clone is
-/// `repo`, from the files alone (`repos::tickets_known` and
+/// `repo`, from the files alone (`tickets::kept_known` and
 /// `repos::issue_label_known`); why it takes none, else.
 pub fn source_of(repo: &Path) -> Result<Sources, String> {
     if repo.as_os_str().is_empty() {
@@ -153,7 +155,7 @@ pub fn source_of(repo: &Path) -> Result<Sources, String> {
     }
     let name = crate::repos::name_known(repo);
     Sources::of_tickets(
-        crate::repos::tickets_known(repo).as_deref(),
+        crate::tickets::kept_known(repo),
         crate::repos::issue_label_known(repo).as_deref(),
         &name,
     )
@@ -780,7 +782,7 @@ mod tests {
 
     #[test]
     fn the_repositorys_tickets_decide_the_source_with_no_default() {
-        let of = |t, l| Sources::of_tickets(t, l, "acme/app");
+        let of = |t: Option<&str>, l| Sources::of_tickets(t.and_then(Kept::parse), l, "acme/app");
         assert_eq!(of(Some("github"), Some("ready")), Ok(Sources::Issues));
         assert_eq!(of(Some("notes"), None), Ok(Sources::Note));
         assert!(

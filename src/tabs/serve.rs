@@ -46,7 +46,7 @@ pub struct Shown {
     /// (`names::Facts::untitled`).
     pub untitled: Option<String>,
     /// The ticket its branch is for (`names::Facts::ticket`).
-    pub ticket: Option<crate::views::ticket::Ticket>,
+    pub ticket: Option<crate::tickets::Ticket>,
     /// The color it wears: its project's, or gray with the `accent_colors`
     /// setting off.
     pub color: Option<Rgb>,
@@ -758,7 +758,7 @@ impl Server {
 
     /// The ticket the tab's branch is for, its GitHub issue or Linear
     /// ticket, as its directory's facts last said (`tabs::names`).
-    pub fn tab_ticket(&self, tab: TabId) -> Option<&crate::views::ticket::Ticket> {
+    pub fn tab_ticket(&self, tab: TabId) -> Option<&crate::tickets::Ticket> {
         self.tab_names.shown.get(&tab)?.ticket.as_ref()
     }
 
@@ -819,9 +819,7 @@ impl Server {
             (None, _) => label,
         };
         let pr_title = self.tab_pr_title(tab);
-        let ticket = self
-            .tab_ticket(tab)
-            .map(crate::views::ticket::Ticket::short);
+        let ticket = self.tab_ticket(tab).map(crate::tickets::Ticket::short);
         let facts = title::facts(
             branch.as_deref(),
             path.as_deref().map(paths::tilde).as_deref(),

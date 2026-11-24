@@ -10,6 +10,7 @@
 //! lazygit.yml) are gone with those dotfiles; keys.json, which changes the
 //! bindings, takes their place.
 
+use crate::tickets::{Kept, Source};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -731,20 +732,21 @@ pub fn landing_rows(
         if broken.is_some() {
             continue;
         }
-        let tickets = crate::repos::tickets_of(&crate::repos::entry_of(&data, repo));
+        let tickets = crate::tickets::kept_of(&crate::repos::entry_of(&data, repo));
+        let key = tickets.map(Kept::key);
         items.push(row(
             "tickets",
             "  Tickets".into(),
-            tickets.clone().unwrap_or_else(|| "not set".into()),
-            match tickets.as_deref() {
-                Some("github") => "Its work is kept in its GitHub issues: /shape files one, wt <number> starts one, M-i opens the branch's, and autopilot takes those carrying its issue label".to_string(),
-                Some("notes") => "Its work is kept in a note's checklist: /shape adds an item and its plan, wt starts one, and autopilot works the note chosen in its settings".to_string(),
-                Some(_) => "Its work is kept in Linear: /shape files a ticket, wt <ticket> starts one, M-i opens the branch's; autopilot can't take it".to_string(),
+            key.unwrap_or("not set").to_string(),
+            match tickets {
+                Some(Kept::In(Source::Github)) => "Its work is kept in its GitHub issues: /shape files one, wt <number> starts one, M-i opens the branch's, and autopilot takes those carrying its issue label".to_string(),
+                Some(Kept::Notes) => "Its work is kept in a note's checklist: /shape adds an item and its plan, wt starts one, and autopilot works the note chosen in its settings".to_string(),
+                Some(Kept::In(Source::Linear)) => "Its work is kept in Linear: /shape files a ticket, wt <ticket> starts one, M-i opens the branch's; autopilot can't take it".to_string(),
                 None => "Where its work is kept, GitHub issues, Linear or a note's checklist, which /shape files new work in, wt <number> starts it from, M-i opens a branch's ticket from and autopilot takes it from; not set, each of them refuses".to_string(),
             },
-            json!(tickets.as_deref().unwrap_or("unset")),
+            json!(key.unwrap_or("unset")),
         ));
-        if tickets.as_deref() == Some("github") {
+        if tickets == Some(Kept::In(Source::Github)) {
             let label = crate::repos::issue_label_of(&crate::repos::entry_of(&data, repo));
             items.push(row(
                 "issueLabel",

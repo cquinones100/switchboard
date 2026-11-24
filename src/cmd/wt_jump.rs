@@ -191,7 +191,7 @@ fn on_issue(p: &Pane, number: u64) -> bool {
     };
     p.branch
         .as_deref()
-        .and_then(crate::views::ticket::issue_number_of_branch)
+        .and_then(crate::tickets::github::issue_number_of_branch)
         == Some(number)
         || after_pr.starts_with(&named)
 }

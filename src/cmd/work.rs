@@ -32,6 +32,7 @@
 //! into the new tab's shell; the tabs go at the end, in the order asked
 //! for, and the first is brought to the front.
 
+use crate::tickets::{self, Kept, Source};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -186,7 +187,7 @@ pub fn repositories(here: &Path, linear_first: bool) -> Vec<PathBuf> {
     let mut repos = offered_from(here, &[], Wanted::Repo);
     if linear_first {
         // Stable, so each group keeps the list's order.
-        repos.sort_by_key(|r| crate::repos::tickets_known(r).as_deref() != Some("linear"));
+        repos.sort_by_key(|r| tickets::kept_known(r) != Some(Kept::In(Source::Linear)));
     }
     repos
 }
@@ -701,7 +702,7 @@ impl Server {
             // Stable, so each group keeps the list's order.
             found
                 .dirs
-                .sort_by_key(|d| crate::repos::tickets_known(d).as_deref() != Some("linear"));
+                .sort_by_key(|d| tickets::kept_known(d) != Some(Kept::In(Source::Linear)));
             server.ask_dir(
                 client,
                 "Work on tickets: the repository",
@@ -731,11 +732,10 @@ impl Server {
     /// lists them; where `tickets` isn't set, which first when more than one
     /// source is set up (`worktree_from_ticket::sources_offered`).
     fn ask_work(&mut self, client: ClientId, repo: PathBuf) {
-        let source = crate::repos::tickets_known(&repo);
-        let offered = match source.as_deref() {
-            // A service is offered only while its setting is on.
-            Some(s @ ("linear" | "github")) if !settings::is_on(s) => {
-                let service = if s == "linear" { "Linear" } else { "GitHub" };
+        let offered = match tickets::kept_known(&repo) {
+            // A source is offered only while its setting is on.
+            Some(Kept::In(source)) if !source.is_on() => {
+                let service = source.name();
                 self.say(
                     Some(client),
                     &format!(
@@ -744,18 +744,14 @@ impl Server {
                 );
                 return;
             }
-            Some(s) => vec![s.to_string()],
-            None => crate::cmd::worktree_from_ticket::sources_offered(&repo)
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            Some(kept) => vec![kept],
+            None => crate::cmd::worktree_from_ticket::sources_offered(&repo),
         };
-        let go = move |server: &mut Server, client: ClientId, source: &str, repo: PathBuf| {
-            match source {
-                "github" => server.ask_issue(client, repo),
-                "notes" => server.ask_note(client, repo),
-                _ => server.ask_linear(client, repo),
-            }
+        let go = move |server: &mut Server, client: ClientId, kept: Kept, repo: PathBuf| match kept
+        {
+            Kept::In(Source::Github) => server.ask_issue(client, repo),
+            Kept::In(Source::Linear) => server.ask_linear(client, repo),
+            Kept::Notes => server.ask_note(client, repo),
         };
         match offered.as_slice() {
             [] => {
@@ -766,22 +762,21 @@ impl Server {
                 return;
             }
             [one] => {
-                let source = one.clone();
-                go(self, client, &source, repo);
+                go(self, client, *one, repo);
                 return;
             }
             _ => {}
         }
         let options = offered
             .iter()
-            .map(|s| MenuOption::new(crate::cmd::worktree_from_ticket::source_words(s)))
+            .map(|s| MenuOption::new(crate::cmd::worktree_from_ticket::source_words(*s)))
             .collect();
         self.choose(
             client,
             Menu::new("Work on what?", options),
             move |server, client, chose| {
-                if let Some(source) = chose.and_then(|at| offered.get(at)) {
-                    go(server, client, source, repo);
+                if let Some(kept) = chose.and_then(|at| offered.get(at)) {
+                    go(server, client, *kept, repo);
                 }
             },
         );
@@ -795,9 +790,8 @@ impl Server {
         self.off_task(
             client,
             move || {
-                tokio::runtime::Handle::current().block_on(
-                    crate::cmd::worktree_from_ticket::assigned_tickets("M-W your tickets"),
-                )
+                tokio::runtime::Handle::current()
+                    .block_on(crate::tickets::linear::assigned("M-W your tickets"))
             },
             move |server, client, found| {
                 // A list Linear couldn't give still takes tickets typed in.

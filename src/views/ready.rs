@@ -1030,9 +1030,11 @@ mod tests {
                 }
             }
         }
-        let views = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/views");
+        // The views' own queries, and the ticket sources' their pickers ask.
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
-        rust_files(&views, &mut files);
+        rust_files(&src.join("views"), &mut files);
+        rust_files(&src.join("tickets"), &mut files);
         let graphql_string = Regex::new(r#"(?s)"(?:[^"\\]|\\.)*""#).unwrap();
         let mut found = Vec::new();
         for file in files {
@@ -1073,7 +1075,7 @@ mod tests {
                 found.push(text);
             }
         }
-        for expected in [CHECKS_QUERY, super::super::ticket::YOUR_TICKETS] {
+        for expected in [CHECKS_QUERY, crate::tickets::linear::YOUR_TICKETS] {
             assert!(found.iter().any(|text| text == expected), "{expected}");
         }
     }

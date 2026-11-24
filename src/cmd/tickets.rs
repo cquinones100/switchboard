@@ -20,7 +20,9 @@ use std::process::ExitCode;
 pub fn lines(tickets: Option<&str>, label: Option<&str>) -> Option<Vec<String>> {
     let tickets = tickets?;
     let mut out = vec![tickets.to_string()];
-    if let (Some(label), "github") = (label, tickets) {
+    let issues = crate::tickets::Kept::parse(tickets)
+        == Some(crate::tickets::Kept::In(crate::tickets::Source::Github));
+    if let (Some(label), true) = (label, issues) {
         out.push(format!("autopilot-label {label}"));
     }
     Some(out)

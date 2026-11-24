@@ -4252,7 +4252,7 @@ impl Server {
                 .as_deref()
                 .and_then(crate::sources::repo::origin_of)
                 .map(|r| r.to_string()),
-            tickets: dir.as_deref().and_then(crate::repos::tickets_known),
+            tickets: dir.as_deref().and_then(crate::tickets::kept_known),
             dir,
         }
     }
@@ -6816,15 +6816,12 @@ impl Server {
                         ("pr", "Through a PR"),
                         ("direct", "Straight on the default branch"),
                     ],
-                    "tickets" => vec![
-                        (
-                            "unset",
-                            "Not set: /shape, wt <number>, M-i and autopilot refuse",
-                        ),
-                        ("github", "GitHub issues"),
-                        ("linear", "Linear"),
-                        ("notes", "A note's checklist, with a plan note each"),
-                    ],
+                    "tickets" => std::iter::once((
+                        "unset",
+                        "Not set: /shape, wt <number>, M-i and autopilot refuse",
+                    ))
+                    .chain(crate::tickets::Kept::all().map(|k| (k.key(), k.label())))
+                    .collect(),
                     "testIn" => vec![
                         ("here", "Here, in the worktree"),
                         ("ci", "In CI, on a ci/ branch of the landing's own"),

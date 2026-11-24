@@ -321,7 +321,7 @@ pub fn thread_from(text: &str, now: i64) -> Option<Thread> {
         let raw = body.join("\n");
         // The tickets it names, a link's included, before a link becomes its
         // words.
-        said.refs = crate::views::ticket::ids_in(&raw);
+        said.refs = crate::tickets::linear::ids_in(&raw);
         said.text = super::slack_look::plain(raw.trim());
         if said.ts.parse::<f64>().is_ok() {
             messages.push(said);

@@ -11,8 +11,8 @@
 use serde_json::{Value, json};
 
 use crate::facts::{Merge, PrFacts, PrState};
+use crate::tickets::Ticket;
 use crate::ui::kit::{Mark, Tone};
-use crate::views::ticket::Ticket;
 
 use super::drawer::tone_name;
 
