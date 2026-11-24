@@ -1255,6 +1255,8 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
         "| a | bbbb |",
         "Insert mode entered and left with nothing typed"
     );
+    keys(&mut app, "3G2i<Esc>3Ggi<Esc>");
+    assert_eq!(lines(&app)[2], "| a | bbbb |", "nor after a count or g");
     keys(&mut app, "3GAz<C-o>0<Esc>");
     assert_eq!(
         lines(&app)[2],

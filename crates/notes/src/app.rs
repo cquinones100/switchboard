@@ -721,6 +721,10 @@ pub struct App {
     /// The note's text as Insert mode began, so leaving it lines a table
     /// up only when something was typed.
     insert_from: Option<Text>,
+    /// The note's text as the command under way began (`2i`, `gi`, `c` on
+    /// a selection), which `insert_from` takes when the command enters
+    /// Insert mode.
+    command_from: Option<Text>,
     save_due: Option<Instant>,
     watch_due: Option<Instant>,
     /// When the settings file was last looked at, and its modified time
@@ -900,6 +904,7 @@ impl App {
             recording: None,
             replaying: false,
             insert_from: None,
+            command_from: None,
             save_due: None,
             watch_due: None,
             settings_seen: Instant::now(),
@@ -4096,11 +4101,18 @@ impl App {
         if self.editor.doc.text != text_before {
             self.changed();
         }
-        // A key from Normal or Visual mode with nothing pending starts
-        // Insert mode afresh (a command typed after C-o is in it still),
-        // so no other note's text is kept.
+        // A command begun from Normal or Visual mode with nothing pending
+        // (not one typed after C-o, which is in Insert mode still) is out
+        // of Insert mode, so no other note's text is kept.
         if afresh {
-            self.insert_from = self.editor.is_typing().then(|| text_before.clone());
+            self.insert_from = None;
+            self.command_from = Some(text_before.clone());
+        }
+        if !matches!(mode_before, Mode::Insert | Mode::Replace)
+            && self.editor.is_typing()
+            && self.insert_from.is_none()
+        {
+            self.insert_from = Some(self.command_from.take().unwrap_or(text_before.clone()));
         }
         let stopped_typing = matches!(mode_before, Mode::Insert | Mode::Replace)
             && !self.editor.is_typing()

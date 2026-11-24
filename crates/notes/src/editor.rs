@@ -859,6 +859,11 @@ mod tests {
         press(&mut e, "xyz");
         assert!(e.undo());
         assert_eq!(e.doc.text.line(0), "one", "only what came after");
+        press(&mut e, "abc");
+        assert!(!e.redo(), "nothing to redo over what is typed");
+        press(&mut e, "<Esc>");
+        assert!(e.undo());
+        assert_eq!(e.doc.text.line(0), "one", "what was typed kept as a step");
         press(&mut e, "<Esc>");
     }
 

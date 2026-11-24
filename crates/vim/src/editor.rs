@@ -971,7 +971,18 @@ impl<N: Note> Editor<N> {
 
     pub fn redo(&mut self) -> bool {
         self.through_history = true;
-        self.group = None;
+        // What is being typed is newer than anything undone: kept as a step
+        // of its own, with nothing left to redo over it.
+        let typed = self.typed_in_step();
+        if let Some(group) = self.group.take()
+            && group.text != self.doc.text
+        {
+            self.undo.push(group);
+            self.redo.clear();
+            if typed {
+                self.record_change();
+            }
+        }
         let Some(snap) = self.redo.pop() else {
             self.say("Already at newest change");
             self.typing_goes_on();
