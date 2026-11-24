@@ -1073,8 +1073,8 @@ pub fn lands_migrated(
 /// the file before kept as `repos.json.bak`, and drops `pr_merge_queue`
 /// from this computer's settings and the synced ones and the old guess.
 /// GitHub is asked of each repository on it (`ask_setup`) with the github
-/// setting on; when it can't answer, nothing changes and the next start
-/// tries again, so a moment offline never settles a way. What it says it
+/// setting on; when it answers for none of them, nothing changes and the
+/// next start tries again, so a moment offline never settles a way. What it says it
 /// did, in one message; `None` when there was nothing to carry over or it
 /// waits to try again. Asks GitHub, so off the server's task.
 pub fn migrate_lands() -> Option<String> {
@@ -1086,9 +1086,10 @@ pub fn migrate_lands() -> Option<String> {
         crate::paths::local_config_dir().join("settings.json"),
         crate::settings::settings_file(),
     ];
-    let queue_was_on = setting_files.iter().any(|f| {
-        util::read_json(f).and_then(|v| v.get("pr_merge_queue").cloned()) == Some(Value::Bool(true))
-    });
+    // A computer's setting: only this computer's own file counted.
+    let queue_was_on = util::read_json(&setting_files[0])
+        .and_then(|v| v.get("pr_merge_queue").cloned())
+        == Some(Value::Bool(true));
     let guess_file = paths::state_dir().join("repos-landing.json");
     let guessed: Vec<(String, String)> = util::read_json_object(&guess_file)
         .into_iter()
@@ -1106,20 +1107,29 @@ pub fn migrate_lands() -> Option<String> {
     let mut asked = std::collections::HashMap::new();
     if settings::is_on("github") {
         let now = util::now_ms();
-        let repos = data.keys().chain(guessed.iter().map(|(k, _)| k));
-        for repo in repos.filter(|r| github::parse_name_with_owner(r).is_some()) {
+        let repos: Vec<&String> = data
+            .keys()
+            .chain(guessed.iter().map(|(k, _)| k))
+            .filter(|r| github::parse_name_with_owner(r).is_some())
+            .collect();
+        let mut failed = 0;
+        for repo in &repos {
             match ask_setup(repo, now) {
                 Ok(s) => {
                     remember_setup(&setup_file(), repo, &s);
                     asked.insert(repo.to_lowercase(), s);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "repos.json: GitHub didn't say how {repo} can land ({e}); carrying landing over to lands next start"
-                    );
-                    return None;
+                    failed += 1;
+                    eprintln!("repos.json: GitHub didn't say how {repo} can land: {e}");
                 }
             }
+        }
+        // GitHub answering for none of them is a moment offline, tried
+        // again next start; one it can't answer while it answers others
+        // (gone, or out of reach) is carried over as if it weren't asked.
+        if failed > 0 && failed == repos.len() {
+            return None;
         }
     }
     let said = match lands_migrated(&data, &guessed, queue_was_on, &|repo| {

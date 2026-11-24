@@ -9,7 +9,8 @@
 //! order; where the way came from (`source`: `repos.json`, or `branch` for
 //! the way the branch started landing with, which it finishes), why, the
 //! way repos.json sets now (`set`), and the repository. `--json` prints both
-//! as one object. `--start` keeps the way on the branch as the one it
+//! as one object. `--start` keeps the way on the branch (`--start=<way>`
+//! the one named, the way the landing read as it began) as the one it
 //! started landing with (`branch.<branch>.wtnLands`), unless it keeps one
 //! already, which queue-and-clean runs as a landing begins, so a change of
 //! way in Settings applies from the next landing. It fails (exit 1) when
@@ -172,14 +173,26 @@ fn already_landed(dir: &Path, upstream: Option<&str>) -> Value {
 
 pub fn main(args: Vec<String>) -> ExitCode {
     let as_json = args.iter().any(|a| a == "--json");
+    let usage = "usage: switchboard landing [--json] [--start[=<way>]] [<dir>]";
     let start = args.iter().any(|a| a == "--start");
-    if let Some(bad) = args
-        .iter()
-        .find(|a| a.starts_with('-') && !["--json", "--start"].contains(&a.as_str()))
-    {
-        eprintln!(
-            "landing: unknown option {bad}\nusage: switchboard landing [--json] [--start] [<dir>]"
-        );
+    // The way the landing read when it began, kept rather than what
+    // Settings holds by the time it is kept.
+    let start_as = match args.iter().find_map(|a| a.strip_prefix("--start=")) {
+        Some(key) => match repos::Way::parse(key) {
+            Some(way) => Some(way),
+            None => {
+                eprintln!("landing: not a way to land: {key}\n{usage}");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    if let Some(bad) = args.iter().find(|a| {
+        a.starts_with('-')
+            && !["--json", "--start"].contains(&a.as_str())
+            && !a.starts_with("--start=")
+    }) {
+        eprintln!("landing: unknown option {bad}\n{usage}");
         return ExitCode::from(2);
     }
     let dir = args
@@ -194,8 +207,8 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    if start && answer.source != "branch" {
-        match repos::record_at(&dir, answer.lands) {
+    if (start || start_as.is_some()) && answer.source != "branch" {
+        match repos::record_at(&dir, start_as.unwrap_or(answer.lands)) {
             Ok(kept) => answer.lands = kept,
             Err(e) => {
                 eprintln!("landing: couldn't keep the way on the branch: {e}");
