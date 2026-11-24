@@ -3012,11 +3012,27 @@ impl App {
         self.editor.is_typing().then_some(self.editor.doc.col)
     }
 
+    /// Out of Insert and Visual mode for a Format choice, the column typed
+    /// at carried across the table that leaving Insert mode lined up.
+    fn leave_modes_for(&mut self, from: &mut FormatFrom) {
+        let row = self.editor.doc.row;
+        let line = self.editor.line();
+        self.leave_modes();
+        if let Some(col) = from.typing_col
+            && self.editor.doc.row == row
+        {
+            let now = self.editor.line();
+            if now != line {
+                from.typing_col = Some(table::carry_typing(&line, &now, col));
+            }
+        }
+    }
+
     /// The Format menu, from where the cursor or the selection is.
     fn open_menu(&mut self) {
         let typing = self.typing_col();
-        let from = self.format_from(typing);
-        self.leave_modes();
+        let mut from = self.format_from(typing);
+        self.leave_modes_for(&mut from);
         self.push(
             Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
             Then::Format(from),
@@ -3846,8 +3862,8 @@ impl App {
     fn palette_here(&mut self) -> (Vec<palette::Command>, PaletteFrom) {
         let from_list = self.focus == Focus::List && self.list_shown;
         let typing = self.typing_col();
-        let format = self.format_from(typing);
-        self.leave_modes();
+        let mut format = self.format_from(typing);
+        self.leave_modes_for(&mut format);
         let commands = self.palette_commands(from_list);
         let from = PaletteFrom {
             list: from_list,
@@ -5297,8 +5313,8 @@ impl App {
         let b = easy::BUTTONS[index];
         self.focus = Focus::Note;
         let typing = self.typing_col();
-        let from = self.format_from(typing);
-        self.leave_modes();
+        let mut from = self.format_from(typing);
+        self.leave_modes_for(&mut from);
         match b.item.and_then(menu::by_label) {
             None => self.push(
                 Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),

@@ -213,6 +213,16 @@ fn carry(old: &str, new: &str, col: usize) -> usize {
     at.min(to.saturating_sub(1)).max(from + 1)
 }
 
+/// `carry` for where typing goes in: typing at a bar with text right
+/// before it is at the end of that text, which stays there.
+pub fn carry_typing(old: &str, new: &str, col: usize) -> usize {
+    let on_bar = bars_of(old).iter().skip(1).any(|&b| b == col);
+    match old[..col.min(old.len())].char_indices().last() {
+        Some((at, c)) if on_bar && !c.is_whitespace() => carry(old, new, at) + c.len_utf8(),
+        _ => carry(old, new, col),
+    }
+}
+
 /// A table line's look: its bars as box lines, a separator row as a line
 /// across, and the header row bold.
 pub fn draw(line: &str, header: bool, look: &mut Look) {
@@ -665,6 +675,16 @@ mod tests {
             &doc.text.line(2)[doc.col..doc.col + 1],
             "d",
             "a row of its own carried too"
+        );
+        assert_eq!(
+            carry_typing("|a|日本|", "| a   | 日本 |", 9),
+            14,
+            "typing after the text, not inside a character"
+        );
+        assert_eq!(
+            carry_typing("| a | b |", "| a | b |", 4),
+            4,
+            "after a space, still at the bar"
         );
     }
 
