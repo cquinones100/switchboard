@@ -1242,6 +1242,13 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
         "the text as it was written"
     );
     assert!(!app.modified(), "nothing to save");
+    keys(&mut app, "G");
+    assert_eq!(
+        lines(&app)[2..5],
+        ["| a | bbbb |", "|---|---|", "| cccccc | d |"],
+        "moving into it leaves it as written"
+    );
+    assert!(!app.modified(), "still nothing to save");
     let shown = screen(&mut app).join("\n");
     for row in [
         "│ a      │ bbbb │",
@@ -1258,7 +1265,7 @@ fn a_table_written_unpadded_shows_lined_up_on_opening_its_file_unchanged() {
 }
 
 #[test]
-fn a_table_lined_up_as_the_cursor_moves_into_it_is_no_change_to_visit() {
+fn moving_into_a_table_written_unpadded_is_no_change_to_visit() {
     let (_dir, mut store) = temp("table-tidy");
     let first = store.create("", Some("Alpha"));
     write(&first, "# Alpha\n\none\n");

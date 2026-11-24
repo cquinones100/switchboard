@@ -1338,7 +1338,9 @@ pub fn cells(
         }
         if !raw {
             for &(_, columns, fill) in look.pads.iter().filter(|p| p.0 == at) {
-                let style = style_at(at.saturating_sub(1));
+                // The bar's, so a selection or match ending before it
+                // doesn't spill into what stands for no byte.
+                let style = style_at(at);
                 out.extend((0..columns).map(|_| Cell {
                     text: fill.to_string(),
                     style,

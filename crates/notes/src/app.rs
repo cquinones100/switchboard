@@ -4087,7 +4087,11 @@ impl App {
             && !self.editor.one_command();
         if stopped_typing {
             self.after_insert();
-        } else if self.editor.mode == Mode::Normal && self.editor.idle() {
+        } else if self.editor.mode == Mode::Normal
+            && self.editor.idle()
+            && self.editor.doc.text != text_before
+        {
+            // A change, not a motion: a table only read stays as written.
             let row = self.editor.doc.row;
             self.editor.tidy(|doc| {
                 table::align(doc, row);

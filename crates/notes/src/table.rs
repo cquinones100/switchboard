@@ -11,8 +11,8 @@
 //! the cell shows (markup hidden doesn't count, a wide character is two), so
 //! a table written from outside with its cells unpadded reads aligned
 //! without its text changing. The text is kept aligned too where you edit:
-//! leaving Insert mode, or a key in Normal mode, pads every cell of the
-//! table the cursor is in. In Insert mode, Tab moves to the next cell
+//! leaving Insert mode, or a change in Normal mode, pads every cell of the
+//! table the cursor is in, the cursor kept on its character. In Insert mode, Tab moves to the next cell
 //! (past the last, it adds a row) and Shift-Tab to the one before.
 
 use super::format::Doc;

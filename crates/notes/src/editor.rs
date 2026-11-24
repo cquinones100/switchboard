@@ -851,6 +851,18 @@ mod tests {
     }
 
     #[test]
+    fn undo_while_typing_undoes_what_was_typed_and_what_comes_after_is_its_own_step() {
+        let mut e = editor(&["one"]);
+        press(&mut e, "Aabc");
+        assert!(e.undo());
+        assert_eq!(e.doc.text.line(0), "one", "the typing undone, still typing");
+        press(&mut e, "xyz");
+        assert!(e.undo());
+        assert_eq!(e.doc.text.line(0), "one", "only what came after");
+        press(&mut e, "<Esc>");
+    }
+
+    #[test]
     fn an_outside_change_while_nothing_is_typed_is_no_change_to_visit() {
         let mut e = editor(&["one", "two"]);
         press(&mut e, "i");

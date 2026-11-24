@@ -944,6 +944,7 @@ impl<N: Note> Editor<N> {
         }
         let Some(snap) = self.undo.pop() else {
             self.say("Already at oldest change");
+            self.typing_goes_on();
             return false;
         };
         let now = self.snap();
@@ -953,6 +954,7 @@ impl<N: Note> Editor<N> {
             ..now
         });
         self.put_back(snap);
+        self.typing_goes_on();
         true
     }
 
@@ -960,11 +962,21 @@ impl<N: Note> Editor<N> {
         self.group = None;
         let Some(snap) = self.redo.pop() else {
             self.say("Already at newest change");
+            self.typing_goes_on();
             return false;
         };
         self.undo.push(self.snap());
         self.put_back(snap);
+        self.typing_goes_on();
         true
+    }
+
+    /// After an undo or redo while typing (easy mode's Cmd-Z and
+    /// Cmd-Shift-Z): what is typed next is a step of its own, as after C-o.
+    fn typing_goes_on(&mut self) {
+        if self.is_typing() {
+            self.group = Some(self.snap());
+        }
     }
 
     // ── The cursor ────────────────────────────────────────────────────────
