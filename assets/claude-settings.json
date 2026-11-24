@@ -39,7 +39,6 @@
       "Bash(switchboard land-lock dequeue-pr *)",
       "Bash(switchboard land-lock pr-status *)",
       "Bash(switchboard land-lock pr-queue)",
-      "Bash(switchboard setting pr_merge_queue)",
       "Bash(switchboard land-lock phase)",
       "Bash(switchboard land-lock phase *)",
       "Bash(switchboard land-lock record *)",

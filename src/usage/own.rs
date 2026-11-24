@@ -302,7 +302,7 @@ pub const OWN_FILES: &[OwnFile] = &[
         category: "Your files",
         rows: &[whole(
             "Repositories",
-            "Each repository's own settings by its origin's owner/name, such as the apply list of what a landed change needs to take effect",
+            "Each repository's own settings by its origin's owner/name: the one way its work lands (lands, set in Settings' Repositories), where its work is kept, and the apply list of what a landed change needs to take effect",
         )],
     },
     OwnFile {
@@ -641,44 +641,47 @@ fn short_of(
     }
 }
 
-/// Settings' words for how a repository's work lands.
-pub fn landing_words(method: &str) -> &'static str {
-    match method {
-        "pr" => "through a PR",
-        "direct" => "straight to the branch",
-        _ => "automatic",
-    }
-}
-
-/// The category Settings lists each repository's landing under.
-pub const LANDING: &str = "Landing (repos.json)";
+/// The category Settings lists each repository under, its way first
+/// (board 191).
+pub const REPOSITORIES: &str = "Repositories";
 
 /// Settings' rows for `~/.config/switchboard/repos.json` (src/repos.rs), as
-/// own-config.js's `landingItems` gave them: for each repository a tab is
-/// in, how its work lands (automatic, through a PR, or straight on its
-/// default branch), and, landing straight, its steps. The automatic row
-/// says what the default found, as last worked out. Each row's
-/// `repo_setting` says what Enter changes.
+/// own-config.js's `landingItems` gave them: for each repository the
+/// workspace knows (a tab is in it, or repos.json has an entry for it) the
+/// one way its work lands, with whether that way is set up as GitHub last
+/// said (`repos::check`) and when a tab there is done, or, while none is
+/// set, that nothing lands, with the way GitHub's rules suggest; then where
+/// its work is kept, and, for a merge service, its label and check, and,
+/// landing straight, its steps. Each row's `repo_setting` says what Enter
+/// changes.
 pub fn landing_items(repos: &[String]) -> Vec<Item> {
-    let cache = crate::repos::cache_file();
-    landing_rows(repos, crate::repos::read(), &|repo| {
-        crate::repos::cached_in(&cache, repo)
-    })
+    let file = crate::repos::setup_file();
+    let data = crate::repos::read();
+    let mut known = repos.to_vec();
+    if let Ok(d) = &data {
+        known.extend(
+            d.iter()
+                .filter(|(_, v)| v.is_object())
+                .map(|(k, _)| k.clone()),
+        );
+    }
+    landing_rows(&known, data, &|repo| crate::repos::setup_in(&file, repo))
 }
 
-/// `landing_items` from the file as read and the answers worked out.
+/// `landing_items` from the file as read and what GitHub said of each.
 pub fn landing_rows(
     repos: &[String],
     data: Result<Map<String, Value>, String>,
-    cached: &dyn Fn(&str) -> Option<crate::repos::Cached>,
+    setup: &dyn Fn(&str) -> Option<crate::repos::Setup>,
 ) -> Vec<Item> {
+    use crate::repos::Way;
     let mut list: Vec<&String> = Vec::new();
     for r in repos {
         if !list.iter().any(|l| l.eq_ignore_ascii_case(r)) {
             list.push(r);
         }
     }
-    list.sort();
+    list.sort_by_key(|r| r.to_lowercase());
     let (data, broken) = match data {
         Ok(d) => (d, None),
         Err(e) => (Map::new(), Some(e)),
@@ -686,48 +689,66 @@ pub fn landing_rows(
     let mut items = Vec::new();
     for repo in list {
         let entry = crate::repos::landing_entry(&data, repo);
-        let set = entry.get("landing").and_then(Value::as_str);
-        let worked = cached(repo);
-        let method = set.or(worked.as_ref().map(|c| c.landing.as_str()));
-        let (detail, value) = match (&broken, set, &worked) {
-            (Some(e), _, _) => (
+        let set = crate::repos::lands_of(&entry);
+        let found = setup(repo);
+        let (detail, value) = match (&broken, set) {
+            (Some(e), _) => (
                 format!("{} can't be read: {e}", files::shown("repos.json")),
                 "unreadable".to_string(),
             ),
-            (None, Some(m), _) => (
-                "How its work lands, set in repos.json".to_string(),
-                landing_words(m).to_string(),
-            ),
-            (None, None, Some(c)) => (
-                format!("Worked out: {}, since {}", landing_words(&c.landing), c.why),
-                format!("auto: {}", c.landing),
-            ),
-            (None, None, None) => (
-                "Worked out the first time it lands, or when you come to Settings".to_string(),
-                "auto: ?".to_string(),
+            (None, Some(way)) => {
+                let check = crate::repos::check(way, found.as_ref(), &entry);
+                let mark = match check.ok {
+                    Some(true) => "✓ ",
+                    Some(false) => "✗ ",
+                    None => "",
+                };
+                (
+                    format!(
+                        "{mark}{} · {} · done when {} · Enter: how it lands, and its settings",
+                        check.words,
+                        way.label(),
+                        way.done_when()
+                    ),
+                    way.key().to_string(),
+                )
+            }
+            (None, None) => (
+                match found.as_ref().and_then(crate::repos::Setup::suggests) {
+                    Some(way) => format!(
+                        "● nothing lands until you choose; GitHub's rules suggest {}",
+                        way.label().to_lowercase()
+                    ),
+                    None => {
+                        "● nothing lands until you choose how: Enter lists the ways".to_string()
+                    }
+                },
+                "not set".to_string(),
             ),
         };
+        let check_ok = set.map(|w| crate::repos::check(w, found.as_ref(), &entry).ok);
         let row = |field: &str, title: String, value: String, detail: String, now: Value| {
+            let is_way = field == "lands";
             Item::new(format!("repo:{repo}:{field}"), title)
                 .detail(detail)
-                .group(LANDING)
-                .state(if field != "landing" || set.is_some() {
-                    State::Active
-                } else {
-                    State::Idle
+                .group(REPOSITORIES)
+                .state(match (is_way, set, check_ok.flatten()) {
+                    (true, None, _) | (true, _, Some(false)) => State::Attention,
+                    (true, Some(_), _) | (false, _, _) => State::Active,
                 })
                 .data(json!({
                     "value": value,
+                    "unset": is_way && set.is_none() && broken.is_none(),
                     "repo_setting": { "repo": repo, "field": field, "value": now },
-                    "search": format!("Landing repos.json {repo} {field} {value}"),
+                    "search": format!("Repositories repos.json {repo} {field} {value}"),
                 }))
         };
         items.push(row(
-            "landing",
+            "lands",
             repo.clone(),
             value,
             detail,
-            json!(set.unwrap_or("automatic")),
+            json!(set.map_or("unset", Way::key)),
         ));
         if broken.is_some() {
             continue;
@@ -759,7 +780,39 @@ pub fn landing_rows(
                 json!(label.unwrap_or_default()),
             ));
         }
-        if method != Some("direct") {
+        if set == Some(Way::Service) {
+            let full = crate::repos::entry_of(&data, repo);
+            for (field, title, about) in [
+                (
+                    "serviceLabel",
+                    "  Service label",
+                    "The label a PR carries for the service to merge it, which queue-and-clean adds once its checks pass",
+                ),
+                (
+                    "serviceCheck",
+                    "  Service check",
+                    "The check the service reports on a PR, which queue-and-clean waits on",
+                ),
+            ] {
+                let now = full
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                items.push(row(
+                    field,
+                    title.into(),
+                    if now.is_empty() {
+                        "not set".into()
+                    } else {
+                        now.clone()
+                    },
+                    about.into(),
+                    json!(now),
+                ));
+            }
+        }
+        if set != Some(Way::Direct) {
             continue;
         }
         let steps = crate::repos::steps_of(&entry);
@@ -975,22 +1028,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_repository_s_landing_is_a_row_and_landing_straight_its_steps() {
-        let data = json!({ "acme/direct": { "landing": "direct", "test": "npm test", "squash": false, "tickets": "github", "issueLabel": "ready" } });
-        let worked = |repo: &str| {
-            (repo == "acme/auto").then(|| crate::repos::Cached {
-                landing: "pr".into(),
-                why: "main has a merge queue".into(),
-                at: 1,
-            })
+    fn each_repository_is_a_row_with_its_way_and_landing_straight_its_steps() {
+        let data = json!({
+            "acme/direct": { "lands": "direct", "test": "npm test", "squash": false, "tickets": "github", "issueLabel": "ready" },
+            "acme/queue": { "lands": "github-queue" },
+            "acme/service": { "lands": "service", "serviceLabel": "merge-ready" },
+        });
+        let open = crate::repos::Setup {
+            at: 1,
+            branch: Some("main".into()),
+            can_push: true,
+            ..Default::default()
         };
+        let setup = |repo: &str| (repo != "acme/service").then(|| open.clone());
         let repos = vec![
-            "acme/auto".to_string(),
+            "acme/queue".to_string(),
             "acme/direct".into(),
             "acme/new".into(),
             "acme/direct".into(),
+            "acme/service".into(),
         ];
-        let rows = landing_rows(&repos, Ok(data.as_object().unwrap().clone()), &worked);
+        let rows = landing_rows(&repos, Ok(data.as_object().unwrap().clone()), &setup);
         let shown: Vec<(&str, &str)> = rows
             .iter()
             .map(|i| (i.title.as_str(), i.data["value"].as_str().unwrap_or("")))
@@ -998,9 +1056,7 @@ mod tests {
         assert_eq!(
             shown,
             vec![
-                ("acme/auto", "auto: pr"),
-                ("  Tickets", "not set"),
-                ("acme/direct", "straight to the branch"),
+                ("acme/direct", "direct"),
                 ("  Tickets", "github"),
                 ("  Issue label", "ready"),
                 ("  Tests", "npm test"),
@@ -1009,23 +1065,53 @@ mod tests {
                 ("  Review", "review-loop"),
                 ("  Before push", "none"),
                 ("  After a clean rebase", "the tests"),
-                ("acme/new", "auto: ?"),
+                ("acme/new", "not set"),
                 ("  Tickets", "not set"),
+                ("acme/queue", "github-queue"),
+                ("  Tickets", "not set"),
+                ("acme/service", "service"),
+                ("  Tickets", "not set"),
+                ("  Service label", "merge-ready"),
+                ("  Service check", "not set"),
             ],
-            "each repository once with its tickets, its steps only when it lands straight"
+            "each repository once with its tickets, a service its label and check, its steps only when it lands straight"
         );
-        assert_eq!(
-            rows[0].detail,
-            "Worked out: through a PR, since main has a merge queue"
+        assert!(
+            rows[0].detail.starts_with("✓ you can push to main"),
+            "{}",
+            rows[0].detail
         );
-        assert_eq!(rows[0].data["repo_setting"]["value"], "automatic");
-        assert_eq!(rows[1].data["repo_setting"]["value"], "unset");
-        assert_eq!(rows[3].data["repo_setting"]["field"], "tickets");
-        assert_eq!(rows[4].data["repo_setting"]["field"], "issueLabel");
-        assert_eq!(rows[6].data["repo_setting"]["field"], "testIn");
-        assert_eq!(rows[7].data["repo_setting"]["field"], "squash");
-        assert!(rows.iter().all(|r| r.group.as_deref() == Some(LANDING)));
-        let broken = landing_rows(&repos[..1], Err("bad".into()), &worked);
+        assert_eq!(rows[0].state, State::Active);
+        assert!(
+            rows[9].detail.contains("nothing lands until you choose; GitHub's rules suggest straight to the default branch"),
+            "{}",
+            rows[9].detail
+        );
+        assert_eq!(rows[9].data["repo_setting"]["value"], "unset");
+        assert_eq!(rows[9].data["unset"], true);
+        assert_eq!(rows[9].state, State::Attention);
+        assert!(
+            rows[11]
+                .detail
+                .starts_with("✗ main has no merge queue on GitHub"),
+            "{}",
+            rows[11].detail
+        );
+        assert_eq!(rows[11].state, State::Attention, "a way not set up");
+        assert!(
+            rows[13].detail.starts_with("✗ the label and the check"),
+            "{}",
+            rows[13].detail
+        );
+        assert_eq!(rows[0].data["repo_setting"]["field"], "lands");
+        assert_eq!(rows[1].data["repo_setting"]["field"], "tickets");
+        assert_eq!(rows[4].data["repo_setting"]["field"], "testIn");
+        assert_eq!(rows[16].data["repo_setting"]["field"], "serviceCheck");
+        assert!(
+            rows.iter()
+                .all(|r| r.group.as_deref() == Some(REPOSITORIES))
+        );
+        let broken = landing_rows(&repos[..1], Err("bad".into()), &setup);
         assert_eq!(broken[0].data["value"], "unreadable");
         assert_eq!(broken.len(), 1);
     }

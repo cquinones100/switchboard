@@ -32,26 +32,20 @@ pub struct Watched {
 }
 
 /// Whether a repository's landings test in CI: its entry in repos.json
-/// lands `direct` (set there, else as last worked out) with `testIn` `ci`.
-pub fn tests_in_ci(data: &Map<String, Value>, repo: &str, worked_out: Option<&str>) -> bool {
+/// lands `direct` with `testIn` `ci`.
+pub fn tests_in_ci(data: &Map<String, Value>, repo: &str) -> bool {
     let entry = crate::repos::landing_entry(data, repo);
-    let direct = entry.get("landing").and_then(Value::as_str).or(worked_out) == Some("direct");
-    direct && crate::repos::steps_of(&entry).test_in == "ci"
+    crate::repos::lands_of(&entry) == Some(crate::repos::Way::Direct)
+        && crate::repos::steps_of(&entry).test_in == "ci"
 }
 
 /// The repositories to watch: of those `busy` names (autopilot works on
 /// it, or a tab waits in its landing queue), with the default branch each
 /// is on, those whose landings test in CI, each once.
-pub fn watched(
-    busy: &[(String, String)],
-    data: &Map<String, Value>,
-    worked_out: &dyn Fn(&str) -> Option<String>,
-) -> Vec<Watched> {
+pub fn watched(busy: &[(String, String)], data: &Map<String, Value>) -> Vec<Watched> {
     let mut out: Vec<Watched> = Vec::new();
     for (repo, branch) in busy {
-        if out.iter().any(|w| w.repo.eq_ignore_ascii_case(repo))
-            || !tests_in_ci(data, repo, worked_out(repo).as_deref())
-        {
+        if out.iter().any(|w| w.repo.eq_ignore_ascii_case(repo)) || !tests_in_ci(data, repo) {
             continue;
         }
         out.push(Watched {
@@ -259,21 +253,17 @@ mod tests {
     #[test]
     fn only_repositories_whose_landings_test_in_ci_are_watched_each_once() {
         let data = json!({
-            "acme/ci": { "landing": "direct", "testIn": "ci" },
-            "acme/here": { "landing": "direct" },
-            "acme/pr": { "landing": "pr", "testIn": "ci" },
-            "acme/auto": { "testIn": "ci" },
+            "acme/ci": { "lands": "direct", "testIn": "ci" },
+            "acme/here": { "lands": "direct" },
+            "acme/pr": { "lands": "auto-merge", "testIn": "ci" },
+            "acme/unset": { "testIn": "ci" },
         });
         let data = data.as_object().unwrap();
-        let worked = |repo: &str| (repo == "acme/auto").then(|| "direct".to_string());
         let busy: Vec<(String, String)> =
-            ["acme/ci", "acme/here", "acme/pr", "acme/auto", "ACME/ci"]
+            ["acme/ci", "acme/here", "acme/pr", "acme/unset", "ACME/ci"]
                 .iter()
                 .map(|r| (r.to_string(), "main".to_string()))
                 .collect();
-        assert_eq!(
-            watched(&busy, data, &worked),
-            vec![main_of("acme/ci"), main_of("acme/auto")]
-        );
+        assert_eq!(watched(&busy, data), vec![main_of("acme/ci")]);
     }
 }

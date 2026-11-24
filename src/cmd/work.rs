@@ -1543,9 +1543,9 @@ impl Server {
                         )
                     })
                     .unwrap_or_default();
-                let landing = crate::repos::landing_for(&repo, false).map(|l| {
+                let landing = crate::repos::landing_for(&repo).map(|l| {
                     let said = crate::autopilot::said_by(&l.source).to_string();
-                    (l.landing, said)
+                    (l.lands.key().to_string(), said)
                 });
                 let claimed = !worktree_from_note::unclaimed(&repo, &name, &text)
                     .iter()
@@ -1782,17 +1782,17 @@ impl Server {
         }
         self.off_task(
             client,
-            move || crate::repos::landing_for(&repo, false).map(|l| (l, repo)),
+            move || crate::repos::landing_for(&repo).map(|l| (l, repo)),
             move |server, client, landing| match landing {
-                Ok((l, _)) if l.landing == "direct" => {
+                Ok((l, _)) if l.lands == crate::repos::Way::Direct => {
                     keep(branch.clone());
                     then(server, client, branch);
                 }
                 Ok((l, at)) => server.say(
                     Some(client),
-                    &crate::autopilot::target_refused(&branch, &at, &l.source),
+                    &crate::autopilot::target_refused(&branch, &at, &l),
                 ),
-                Err(e) => server.say(Some(client), &format!("Couldn't tell how it lands: {e}")),
+                Err(e) => server.say(Some(client), &e),
             },
         );
     }

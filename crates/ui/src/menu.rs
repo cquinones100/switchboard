@@ -165,13 +165,17 @@ pub const SEARCH_KEYS: &str = "↑↓ move  ↵ take  esc all";
 /// One option: its label, and a key that takes it at once, shown dim at the
 /// end of its row unless `unshown` (a menu that shows no letter keys, as
 /// board 54's, still taking them); or, in the key's place, a word about it
-/// (`aside`, board 158's "✓ set by you").
+/// (`aside`, board 158's "✓ set by you"); and what it is, shown under
+/// the options while it is chosen (`about`, board 192's facts of a way).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuOption {
     pub label: String,
     pub key: Option<char>,
     pub unshown: bool,
     pub aside: String,
+    /// A heading and rows of a label and its words, shown under the
+    /// options while this one is chosen.
+    pub about: Option<(String, Vec<(String, String)>)>,
 }
 
 impl MenuOption {
@@ -181,7 +185,15 @@ impl MenuOption {
             key: None,
             unshown: false,
             aside: String::new(),
+            about: None,
         }
+    }
+
+    /// What it is, under the options while it is chosen: a heading, then
+    /// each row's label dim and its words beside it, wrapped under them.
+    pub fn about(mut self, heading: impl Into<String>, rows: Vec<(String, String)>) -> MenuOption {
+        self.about = Some((heading.into(), rows));
+        self
     }
 
     /// A word about it, dim at the end of its row where a key would be.
@@ -206,6 +218,8 @@ impl MenuOption {
 pub struct Menu {
     title: String,
     body: String,
+    /// A heading and text under the options and what the chosen one is.
+    foot: Option<(String, String)>,
     options: Vec<MenuOption>,
     /// The search `/` opens, and the options it shows, by their index.
     filter: Filter,
@@ -233,6 +247,7 @@ impl Menu {
         Menu {
             title: title.into(),
             body: String::new(),
+            foot: None,
             shown: (0..options.len()).collect(),
             options,
             filter: Filter::default(),
@@ -256,6 +271,60 @@ impl Menu {
     pub fn body(mut self, text: impl Into<String>) -> Menu {
         self.body = text.into();
         self
+    }
+
+    /// A heading and text under the options (board 192's "Changing it").
+    pub fn foot(mut self, heading: impl Into<String>, text: impl Into<String>) -> Menu {
+        self.foot = Some((heading.into(), text.into()));
+        self
+    }
+
+    /// The lines under the options: the chosen option's `about`, then the
+    /// foot, `inner` wide, as many as the tallest option's take, so the
+    /// box keeps its size as the cursor moves.
+    fn below(&self, inner: usize, look: &Look) -> Vec<BoxLine> {
+        let about_of = |o: &MenuOption| -> Vec<BoxLine> {
+            let Some((heading, rows)) = &o.about else {
+                return Vec::new();
+            };
+            let label_w = rows.iter().map(|(l, _)| draw::width(l)).max().unwrap_or(0) + 2;
+            let room = inner.saturating_sub(label_w + 2).max(10);
+            let mut lines = vec![
+                BoxLine::blank(),
+                BoxLine::text(format!(" {heading}"), look.bold_bright()),
+            ];
+            for (label, words) in rows {
+                for (n, part) in draw::wrap(words, room).into_iter().enumerate() {
+                    let left = if n == 0 { label.as_str() } else { "" };
+                    let pad = " ".repeat(label_w - draw::width(left));
+                    lines.push(BoxLine::spans(vec![
+                        ratatui::text::Span::styled(format!(" {left}{pad}"), look.dim()),
+                        ratatui::text::Span::styled(part, look.text()),
+                    ]));
+                }
+            }
+            lines
+        };
+        let tallest = self
+            .options
+            .iter()
+            .map(|o| about_of(o).len())
+            .max()
+            .unwrap_or(0);
+        let mut lines = self
+            .shown
+            .get(self.cursor)
+            .map(|i| about_of(&self.options[*i]))
+            .unwrap_or_default();
+        lines.resize_with(tallest, BoxLine::blank);
+        if let Some((heading, text)) = &self.foot {
+            lines.push(BoxLine::blank());
+            lines.push(BoxLine::text(format!(" {heading}"), look.bold_bright()));
+            for part in draw::wrap(text, inner.saturating_sub(2)) {
+                lines.push(BoxLine::text(format!(" {part}"), look.text()));
+            }
+        }
+        lines
     }
 
     /// The option chosen when it opens.
@@ -406,7 +475,10 @@ impl Overlay for Menu {
             .min((area.width as usize).saturating_sub(2));
         let searching = self.filter.is_open();
         let search_w = self.closed_width.unwrap_or(inner);
-        let room = (area.height as usize).saturating_sub(6).max(1);
+        let below = self.below(inner, look);
+        let room = (area.height as usize)
+            .saturating_sub(6 + below.len())
+            .max(1);
         let n = self.shown.len();
         // The options come first, every one shown, or those around the
         // chosen one; the text takes what room is left with the search
@@ -517,11 +589,13 @@ impl Overlay for Menu {
                     .clickable(),
             );
         }
+        let wide = !shown.is_empty() || !below.is_empty();
+        lines.extend(below);
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(self.keys());
         if searching {
             spec.width = search_w as u16;
-        } else if !shown.is_empty() {
+        } else if wide {
             spec.width = inner as u16;
         }
         spec.close_lit = self.cursor == n || self.close_lit;
@@ -775,6 +849,47 @@ mod tests {
                 .any(|l| l.contains("↑↓ move  ↵ choose  / search  esc close")),
             "{s:#?}"
         );
+    }
+
+    #[test]
+    fn the_chosen_option_s_about_shows_under_the_options_the_box_keeping_its_size() {
+        let look = Look::default();
+        let rows = |w: &str| {
+            vec![
+                ("a tab".to_string(), w.to_string()),
+                ("never".to_string(), "pushes".to_string()),
+            ]
+        };
+        let mut m = Menu::new(
+            "How it lands",
+            vec![
+                MenuOption::new("Queue").about("The queue", rows("tests trains")),
+                MenuOption::new("Direct").about("Straight", rows("pushes it")),
+            ],
+        )
+        .foot("Changing it", "From the next landing.");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        m.draw(&mut buf, &look);
+        let first = screen(&buf);
+        assert!(
+            first.iter().any(|l| l.contains("a tab  tests trains")),
+            "{first:#?}"
+        );
+        assert!(
+            first.iter().any(|l| l.contains("From the next landing.")),
+            "{first:#?}"
+        );
+        let tall = |s: &[String]| s.iter().filter(|l| l.contains('│')).count();
+        m.key(key(KeyCode::Down), &look);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        m.draw(&mut buf, &look);
+        let second = screen(&buf);
+        assert!(
+            second.iter().any(|l| l.contains("a tab  pushes it")),
+            "{second:#?}"
+        );
+        assert!(!second.iter().any(|l| l.contains("tests trains")));
+        assert_eq!(tall(&first), tall(&second), "the box keeps its size");
     }
 
     fn typed(m: &mut Menu, text: &str, look: &Look) {

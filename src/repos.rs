@@ -2,16 +2,30 @@
 //! by its origin's `owner/name` on GitHub:
 //!
 //! ```json
-//! { "owner/name": { "landing": "direct", "test": "npm test", "squash": true,
+//! { "owner/name": { "lands": "direct", "test": "npm test", "squash": true,
 //!                   "testIn": "here", "review": "review-loop", "beforePush": "",
 //!                   "afterRebase": "cargo clippy --all-targets", "tickets": "github",
 //!                   "issueLabel": "autopilot",
 //!                   "apply": [{ "paths": ["db/**"], "label": "Reload the dev server", "command": "make reload" }] } }
 //! ```
 //!
-//! `landing` is how its work lands: `pr`, through a pull request, or
-//! `direct`, straight on its default branch. The rest of the landing keys
-//! are how a direct landing goes: `test` the command run before the review
+//! `lands` is the one way its work lands (`Way`): `switchboard-queue`
+//! (Switchboard's merge queue), `github-queue` (GitHub's merge queue),
+//! `auto-merge` (GitHub's auto-merge), `direct` (straight on its default
+//! branch) or `service` (a merge service, by the label `serviceLabel` names
+//! and the check `serviceCheck` names). Nothing guesses it: a repository
+//! with no `lands` lands nothing, `switchboard landing` failing with the
+//! words that name Settings' row for it (`not_set_words`), and
+//! queue-and-clean and autopilot stopping there. Settings' Repositories
+//! checks that each way is set up, from what GitHub said when last asked
+//! (`Setup`, kept in the state directory's `repos-setup.json`), and may
+//! suggest a way from GitHub's rules, which only you choose. A branch keeps
+//! the way it started landing with (`branch.<branch>.wtnLands`, written by
+//! `switchboard landing --start`), so a change of way applies from the next
+//! landing and a branch landing already finishes the old way.
+//!
+//! The rest of the landing keys are how a direct landing goes: `test` the
+//! command run before the review
 //! and again after the last rebase (empty, none; not set, what the
 //! repository's CLAUDE.md names), `testIn` where they run, `here` (in the
 //! worktree) or `ci` (the repository's CI, on a branch of the landing's own
@@ -35,24 +49,18 @@
 //! and never in this repository; Settings changes it (`set_repo`), never
 //! over a file it can't read.
 //!
-//! With no `landing` for a repository, the default decides (`landing_for`):
-//! a pull request when GitHub says the default branch needs one (a
-//! ruleset, branch protection, or a merge queue), else straight on it when
-//! the repository's CLAUDE.md says its work goes there with no PR, as a
-//! headless Haiku reads that file alone, else a pull request. The answer is
-//! kept a day in the state directory (`repos-landing.json`), so nothing
-//! waits on GitHub or Claude twice; off the network, or with the github
-//! setting off, the last answer stands, and with none it is a pull
-//! request, the way that can't push to the default branch by mistake.
-//! `switchboard landing` prints it, and queue-and-clean asks it which way
-//! to land. Ported from lib/repos.js and bin/apply-actions' `entry`.
+//! Before `lands`, a repository's `landing` (`pr` or `direct`) was guessed
+//! when unset, and Settings' `pr_merge_queue` chose between Switchboard's
+//! merge queue and GitHub's auto-merge for all of them; a new build's
+//! server carries those over once (`migrate_lands`). Ported from
+//! lib/repos.js and bin/apply-actions' `entry`.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
 use crate::integrations::github;
-use crate::{paths, requests, settings, util, worktree};
+use crate::{paths, settings, util, worktree};
 
 /// `~/.config/switchboard/repos.json`: always this computer's own, never
 /// read from a repository your files are kept in (src/files), since a
@@ -144,14 +152,222 @@ pub fn apply_of(dir: &Path) -> Option<Vec<Apply>> {
 
 // ── How a repository lands ──────────────────────────────────────────────────
 
-/// How work can land.
-pub const METHODS: [&str; 2] = ["pr", "direct"];
+/// The one way a repository's work lands, its `lands`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Way {
+    /// Switchboard's merge queue (src/merge_queue): trains of PRs tested
+    /// together on a `ci/train-*` branch and squash-merged in order.
+    SwitchboardQueue,
+    /// GitHub's merge queue on the default branch.
+    GithubQueue,
+    /// GitHub's auto-merge, each PR merged once its checks pass.
+    AutoMerge,
+    /// Straight on the default branch, with no PR.
+    Direct,
+    /// A merge service, which merges a PR carrying its label.
+    Service,
+}
+
+/// One fact of a way, as the menu of ways shows it under the chosen one.
+pub type Fact = (&'static str, &'static str);
+
+impl Way {
+    /// Every way, in the order the menu lists them.
+    pub const ALL: [Way; 5] = [
+        Way::SwitchboardQueue,
+        Way::GithubQueue,
+        Way::AutoMerge,
+        Way::Direct,
+        Way::Service,
+    ];
+
+    /// Its name in repos.json and `switchboard landing`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Way::SwitchboardQueue => "switchboard-queue",
+            Way::GithubQueue => "github-queue",
+            Way::AutoMerge => "auto-merge",
+            Way::Direct => "direct",
+            Way::Service => "service",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Way> {
+        Way::ALL.into_iter().find(|w| w.key() == key)
+    }
+
+    /// What Settings calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Way::SwitchboardQueue => "Switchboard's merge queue",
+            Way::GithubQueue => "GitHub's merge queue",
+            Way::AutoMerge => "GitHub's auto-merge",
+            Way::Direct => "Straight to the default branch",
+            Way::Service => "A merge service",
+        }
+    }
+
+    /// A few words beside it in the menu (board 192).
+    pub fn aside(self) -> &'static str {
+        match self {
+            Way::SwitchboardQueue => "PRs, trains tested together",
+            Way::GithubQueue => "PRs, GitHub queues them",
+            Way::AutoMerge => "PRs, each brought up to date",
+            Way::Direct => "no PR: the lock, tests, a push",
+            Way::Service => "PRs handed to a service",
+        }
+    }
+
+    /// Whether its work lands through a pull request.
+    pub fn through_pr(self) -> bool {
+        self != Way::Direct
+    }
+
+    /// What a tab does, when it is done, what it fixes, what it never does
+    /// and what the way needs, as the menu shows them (board 192).
+    pub fn facts(self) -> [Fact; 5] {
+        match self {
+            Way::SwitchboardQueue => [
+                (
+                    "a tab",
+                    "reviews, pushes and opens its PR, and adds it to Switchboard's queue once its checks pass; the workspace tests it with the next few on a ci/train-* branch and squash-merges them in order",
+                ),
+                (
+                    "done when",
+                    "its PR merges with its train and its worktree is gone",
+                ),
+                (
+                    "it fixes",
+                    "a failing check, a conflict, or a train that failed for it, then queues it again",
+                ),
+                (
+                    "never",
+                    "brings a PR up to date with the base, or pushes to the default branch",
+                ),
+                (
+                    "it needs",
+                    "CI on a push to ci/train-*, and a base branch that doesn't require PRs to be up to date",
+                ),
+            ],
+            Way::GithubQueue => [
+                (
+                    "a tab",
+                    "reviews, pushes and opens its PR, and adds it to GitHub's queue once its checks pass; GitHub merges it",
+                ),
+                ("done when", "GitHub merges the PR and its worktree is gone"),
+                (
+                    "it fixes",
+                    "a failing check or a drop from the queue, then queues it again",
+                ),
+                ("never", "merges by itself or pushes to the default branch"),
+                ("it needs", "a merge queue on the default branch"),
+            ],
+            Way::AutoMerge => [
+                (
+                    "a tab",
+                    "reviews, pushes and opens its PR and turns on auto-merge; GitHub merges it once its checks pass",
+                ),
+                ("done when", "GitHub merges the PR and its worktree is gone"),
+                (
+                    "it fixes",
+                    "a failing check, a conflict, or a base it must be up to date with, by a rebase",
+                ),
+                ("never", "merges by itself or pushes to the default branch"),
+                (
+                    "it needs",
+                    "auto-merge allowed in the repository's settings on GitHub",
+                ),
+            ],
+            Way::Direct => [
+                (
+                    "a tab",
+                    "takes the landing lock, tests, reviews and pushes onto the default branch, as its steps say",
+                ),
+                (
+                    "done when",
+                    "its push is on the default branch and its worktree is gone",
+                ),
+                (
+                    "it fixes",
+                    "a failing test or a rebase's conflict, before the push",
+                ),
+                ("never", "opens a PR or forces a push"),
+                (
+                    "it needs",
+                    "push rights to the default branch, with no rule asking for a PR",
+                ),
+            ],
+            Way::Service => [
+                (
+                    "a tab",
+                    "reviews, pushes and opens its PR, and adds the service's label once its checks pass; the service merges it",
+                ),
+                (
+                    "done when",
+                    "the service merges the PR and its worktree is gone",
+                ),
+                (
+                    "it fixes",
+                    "a failing check, the service's own check among them, then labels it again",
+                ),
+                ("never", "merges by itself or pushes to the default branch"),
+                (
+                    "it needs",
+                    "the label the service merges by and the check it reports, named in Settings",
+                ),
+            ],
+        }
+    }
+
+    /// The steps a landing this way goes through, in order, as
+    /// `switchboard landing` prints them, every way ending with the
+    /// worktree cleaned up.
+    pub fn steps(self) -> &'static [&'static str] {
+        match self {
+            Way::SwitchboardQueue => &[
+                "review",
+                "open-pr",
+                "checks",
+                "queue",
+                "train",
+                "merged",
+                "cleaned-up",
+            ],
+            Way::GithubQueue => &[
+                "review",
+                "open-pr",
+                "checks",
+                "queue",
+                "merged",
+                "cleaned-up",
+            ],
+            Way::AutoMerge => &["review", "open-pr", "auto-merge", "merged", "cleaned-up"],
+            Way::Direct => &["lock", "test", "review", "settle", "push", "cleaned-up"],
+            Way::Service => &[
+                "review",
+                "open-pr",
+                "checks",
+                "label",
+                "service",
+                "merged",
+                "cleaned-up",
+            ],
+        }
+    }
+
+    /// When a tab landing this way is done, for the Repositories row.
+    pub fn done_when(self) -> &'static str {
+        self.facts()[1].1
+    }
+}
+
 /// The reviews a direct landing can have.
 pub const REVIEWS: [&str; 2] = ["review-loop", "none"];
 /// Where a direct landing's tests can run: in the worktree, or in the
 /// repository's CI.
 pub const TEST_IN: [&str; 2] = ["here", "ci"];
-/// An answer worked out is kept this long, in ms.
+/// How long GitHub's answer on whether each way is set up stands before
+/// Settings asks again, in ms.
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// A direct landing's steps.
@@ -196,13 +412,23 @@ impl Steps {
     }
 }
 
+/// A merge service's label and check, its `serviceLabel` and
+/// `serviceCheck`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Service {
+    pub label: String,
+    pub check: String,
+}
+
 /// Whether a landing key holds a value it can.
 fn valid(key: &str, value: &Value) -> bool {
     match key {
-        "landing" => value.as_str().is_some_and(|v| METHODS.contains(&v)),
+        "lands" => value.as_str().and_then(Way::parse).is_some(),
         "review" => value.as_str().is_some_and(|v| REVIEWS.contains(&v)),
         "testIn" => value.as_str().is_some_and(|v| TEST_IN.contains(&v)),
         "test" | "beforePush" | "afterRebase" => value.is_string(),
+        "serviceLabel" => value.as_str().is_some_and(label_ok),
+        "serviceCheck" => value.as_str().is_some_and(|c| !c.trim().is_empty()),
         "squash" => value.is_boolean(),
         _ => false,
     }
@@ -214,6 +440,33 @@ pub fn landing_entry(data: &Map<String, Value>, repo: &str) -> Map<String, Value
         .into_iter()
         .filter(|(k, v)| valid(k, v))
         .collect()
+}
+
+/// An entry's way, when it sets one it can.
+pub fn lands_of(entry: &Map<String, Value>) -> Option<Way> {
+    entry
+        .get("lands")
+        .and_then(Value::as_str)
+        .and_then(Way::parse)
+}
+
+/// An entry's merge service, when it names both its label and its check.
+pub fn service_of(entry: &Map<String, Value>) -> Option<Service> {
+    let entry: Map<String, Value> = entry
+        .iter()
+        .filter(|(k, v)| valid(k, v))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let text = |k: &str| {
+        entry
+            .get(k)
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_string())
+    };
+    Some(Service {
+        label: text("serviceLabel")?,
+        check: text("serviceCheck")?,
+    })
 }
 
 /// A direct landing's steps from an entry's keys, the defaults for the rest.
@@ -234,30 +487,33 @@ pub fn steps_of(entry: &Map<String, Value>) -> Steps {
 }
 
 /// Sets one landing key, or `tickets` or `issueLabel`, of a repository's
-/// entry, keeping the rest of it; `landing` `automatic`, `tickets` `unset`
-/// and an empty `issueLabel` take the key out, so the default decides, and an entry left empty goes. Never over a file that can't be read as a JSON
-/// object, the version before kept as `repos.json.bak`.
+/// entry, keeping the rest of it; `lands` and `tickets` `unset`, and an
+/// empty `issueLabel`, `serviceLabel` or `serviceCheck`, take the key out,
+/// and an entry left empty goes. Never over a file that can't be read as a
+/// JSON object, the version before kept as `repos.json.bak`.
 pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
     set_repo_in(&file(), repo, key, value)
 }
 
 /// `set_repo` on the file at `path`.
 pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(), String> {
-    let automatic = (key == "landing" && value.as_str() == Some("automatic"))
-        || (key == "tickets" && value.as_str() == Some("unset"));
-    let automatic = automatic || (key == "issueLabel" && value.as_str() == Some(""));
+    let unset = (["lands", "tickets"].contains(&key) && value.as_str() == Some("unset"))
+        || (["issueLabel", "serviceLabel", "serviceCheck"].contains(&key)
+            && value.as_str().is_some_and(|v| v.trim().is_empty()));
     let tickets_ok = (key == "tickets"
         && value
             .as_str()
             .and_then(crate::tickets::Kept::parse)
             .is_some())
         || (key == "issueLabel" && value.as_str().is_some_and(label_ok));
-    if !automatic && !tickets_ok && !valid(key, &value) {
+    if !unset && !tickets_ok && !valid(key, &value) {
         return Err(
             if [
                 "tickets",
                 "issueLabel",
-                "landing",
+                "lands",
+                "serviceLabel",
+                "serviceCheck",
                 "test",
                 "testIn",
                 "squash",
@@ -273,40 +529,51 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
             },
         );
     }
+    let value = match value {
+        Value::String(s) if key.starts_with("service") => Value::String(s.trim().to_string()),
+        v => v,
+    };
+    change_file(path, |data| {
+        // The entry under the name the file has it by, in whatever case.
+        let name = data
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(repo))
+            .cloned()
+            .unwrap_or_else(|| repo.to_string());
+        let mut entry = data
+            .get(&name)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if unset {
+            entry.remove(key);
+        } else {
+            entry.insert(key.to_string(), value);
+        }
+        if entry.is_empty() {
+            data.remove(&name);
+        } else {
+            data.insert(name, Value::Object(entry));
+        }
+    })
+}
+
+/// Writes repos.json at `path` as `change` leaves it, never over a file
+/// that can't be read as a JSON object, the version before kept as
+/// `repos.json.bak`.
+fn change_file(path: &Path, change: impl FnOnce(&mut Map<String, Value>)) -> Result<(), String> {
     let mut data = read_file(path).map_err(|e| {
         format!(
             "{} can't be read ({e}); fix it by hand first",
             paths::tilde(path)
         )
     })?;
-    // The entry under the name the file has it by, in whatever case.
-    let name = data
-        .keys()
-        .find(|k| k.eq_ignore_ascii_case(repo))
-        .cloned()
-        .unwrap_or_else(|| repo.to_string());
-    let mut entry = data
-        .get(&name)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    if automatic {
-        entry.remove(key);
-    } else {
-        entry.insert(key.to_string(), value);
-    }
-    if entry.is_empty() {
-        data.remove(&name);
-    } else {
-        data.insert(name, Value::Object(entry));
-    }
+    change(&mut data);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     if path.exists() {
-        let mut bak = path.as_os_str().to_owned();
-        bak.push(".bak");
-        std::fs::copy(path, bak).map_err(|e| e.to_string())?;
+        std::fs::copy(path, bak_of(path)).map_err(|e| e.to_string())?;
     }
     util::write_atomic(
         path,
@@ -315,46 +582,11 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
     .map_err(|e| e.to_string())
 }
 
-/// `repos-landing.json` in the state directory: each repository's landing as
-/// last worked out, `{ landing, why, at }`.
-pub fn cache_file() -> PathBuf {
-    paths::state_dir().join("repos-landing.json")
-}
-
-/// An answer worked out before, however old.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Cached {
-    pub landing: String,
-    pub why: String,
-    pub at: i64,
-}
-
-/// The answer last worked out for a repository, by its key.
-pub fn cached_in(file: &Path, key: &str) -> Option<Cached> {
-    let data = util::read_json(file)?;
-    let answer = data.get(key)?;
-    let landing = answer.get("landing")?.as_str()?;
-    METHODS.contains(&landing).then(|| Cached {
-        landing: landing.to_string(),
-        why: answer
-            .get("why")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        at: answer.get("at").and_then(Value::as_f64).unwrap_or(0.0) as i64,
-    })
-}
-
-fn remember(file: &Path, key: &str, answer: &Cached) {
-    let mut data = util::read_json_object(file);
-    data.insert(
-        key.to_string(),
-        json!({ "landing": answer.landing, "why": answer.why, "at": util::js_number(answer.at as f64) }),
-    );
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = util::write_atomic(file, util::json_compact(&Value::Object(data)));
+/// `repos.json.bak` beside the file at `path`.
+fn bak_of(path: &Path) -> PathBuf {
+    let mut bak = path.as_os_str().to_owned();
+    bak.push(".bak");
+    PathBuf::from(bak)
 }
 
 /// How a repository lands, and why.
@@ -364,39 +596,529 @@ pub struct Landing {
     pub repo: Option<String>,
     /// What it is known by here: `owner/name`, else its git directory.
     pub key: String,
-    /// `pr` or `direct`.
-    pub landing: String,
+    pub lands: Way,
     pub why: String,
-    /// Where the method came from: `repos.json`, `github`, `claude-md`,
-    /// `default` (neither said), `cached` (a day old at most) or `offline`
-    /// (GitHub or Claude couldn't be asked: the last answer, else a PR).
+    /// Where the way came from: `repos.json`, or `branch` (the way the
+    /// branch started landing with, kept on it).
     pub source: String,
+    /// The way repos.json sets now, when the branch keeps another.
+    pub set: Option<Way>,
     pub steps: Steps,
+    /// The merge service's label and check, for `service`.
+    pub service: Option<Service>,
 }
 
-/// What GitHub says of a repository's default branch.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Rules {
+/// The words a landing stops with while a repository's `lands` isn't set,
+/// `name` its `owner/name` or what stands for it, naming the row of
+/// Settings that sets it.
+pub fn not_set_words(name: &str) -> String {
+    format!(
+        "{name} lands nothing yet: choose how its work lands in Settings' Repositories, on its {name} row, or set \"lands\" for it in {}",
+        crate::files::shown("repos.json")
+    )
+}
+
+/// The git config key a branch keeps the way it started landing with.
+fn recorded_key(branch: &str) -> String {
+    format!("branch.{branch}.wtnLands")
+}
+
+/// The branch checked out at `dir`.
+fn branch_at(dir: &Path) -> Option<String> {
+    worktree::git_at(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()
+        .filter(|b| !b.is_empty() && b != "HEAD")
+}
+
+/// The way the branch at `dir` started landing with, as kept on it.
+pub fn recorded_at(dir: &Path) -> Option<Way> {
+    let branch = branch_at(dir)?;
+    worktree::git_at(dir, &["config", "--get", &recorded_key(&branch)])
+        .ok()
+        .and_then(|w| Way::parse(w.trim()))
+}
+
+/// Keeps `way` on the branch at `dir` as the way it started landing with,
+/// unless it keeps one already; what it keeps after. Runs git.
+pub fn record_at(dir: &Path, way: Way) -> Result<Way, String> {
+    if let Some(kept) = recorded_at(dir) {
+        return Ok(kept);
+    }
+    let branch = branch_at(dir).ok_or("no branch is checked out")?;
+    worktree::git_at(dir, &["config", &recorded_key(&branch), way.key()])
+        .map_err(|e| e.to_string())?;
+    Ok(way)
+}
+
+/// How the repository at `dir` lands by what repos.json sets, read from
+/// the files alone with no git process (origin from git's config file), for
+/// a read on the server's task; `None` while it isn't set.
+pub fn lands_known(dir: &Path) -> Option<Way> {
+    let data = read_safely();
+    keys_known(dir).find_map(|k| lands_of(&entry_of(&data, &k)))
+}
+
+/// How a repository lands by its key (`owner/name`, else its shared git
+/// directory), as repos.json sets it, for a read that runs on every tick.
+pub fn lands_by_key(key: &str) -> Option<Way> {
+    lands_of(&entry_of(&read_safely(), key))
+}
+
+/// How the repository at `dir` lands, as the module's comment says: the
+/// way the branch started landing with, else what repos.json sets; an
+/// error, naming Settings' row, while neither says. Runs git, so off the
+/// server's task.
+pub fn landing_for(dir: &Path) -> Result<Landing, String> {
+    landing_with(dir, &file())
+}
+
+/// `landing_for` with repos.json at `repos`.
+pub fn landing_with(dir: &Path, repos: &Path) -> Result<Landing, String> {
+    let (repo, _, key) =
+        repository_at(dir).ok_or_else(|| format!("{} isn't in a git repository", dir.display()))?;
+    // A repos.json that can't be read stops it, rather than landing without
+    // what it may say.
+    let data = read_file(repos)
+        .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(repos)))?;
+    let mut entry = landing_entry(&data, &key);
+    if entry.is_empty()
+        && let Some(configured) = configured_at(dir)
+    {
+        entry = landing_entry(&data, &configured);
+    }
+    let set = lands_of(&entry);
+    let recorded = recorded_at(dir);
+    let (lands, why, source) = match (recorded, set) {
+        (Some(kept), Some(now)) if kept != now => (
+            kept,
+            format!(
+                "this branch started landing by {}, which it finishes; the next landing goes by {}",
+                kept.label(),
+                now.label()
+            ),
+            "branch",
+        ),
+        (Some(kept), None) => (
+            kept,
+            "this branch started landing this way, which it finishes".to_string(),
+            "branch",
+        ),
+        (_, Some(now)) => (
+            now,
+            "set in Settings' Repositories".to_string(),
+            "repos.json",
+        ),
+        (None, None) => {
+            return Err(not_set_words(repo.as_deref().unwrap_or(&key)));
+        }
+    };
+    Ok(Landing {
+        repo,
+        key,
+        lands,
+        why,
+        source: source.into(),
+        set,
+        steps: steps_of(&entry),
+        service: service_of(&entry),
+    })
+}
+
+// ── Whether each way is set up ──────────────────────────────────────────────
+
+/// What GitHub said of a repository, as each way's check reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Setup {
+    /// When it was asked, in ms.
+    pub at: i64,
+    /// The default branch.
     pub branch: Option<String>,
+    /// The default branch has a merge queue.
+    pub merge_queue: bool,
+    /// The repository allows auto-merge.
+    pub auto_merge: bool,
+    /// You can push to the default branch.
+    pub can_push: bool,
+    /// A rule makes the default branch take a pull request.
     pub requires_pr: bool,
-    pub why: String,
+    /// The default branch requires PRs to be up to date.
+    pub strict: bool,
+    /// A workflow of the default branch runs on a push to `ci/train-*`.
+    pub train_ci: bool,
 }
 
-/// How the default is worked out: GitHub asked of a repository's rules,
-/// and Claude of its CLAUDE.md (`direct` or `pr`); the tests give their own.
-pub struct Ask<'a> {
-    pub github: &'a dyn Fn(&str) -> Result<Rules, String>,
-    pub claude: &'a dyn Fn(&str) -> Result<String, String>,
+impl Setup {
+    fn json(&self) -> Value {
+        json!({
+            "at": util::js_number(self.at as f64),
+            "branch": self.branch,
+            "mergeQueue": self.merge_queue,
+            "autoMerge": self.auto_merge,
+            "canPush": self.can_push,
+            "requiresPr": self.requires_pr,
+            "strict": self.strict,
+            "trainCi": self.train_ci,
+        })
+    }
+
+    fn of(v: &Value) -> Option<Setup> {
+        let on = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+        Some(Setup {
+            at: v.get("at")?.as_f64()? as i64,
+            branch: v.get("branch").and_then(Value::as_str).map(str::to_string),
+            merge_queue: on("mergeQueue"),
+            auto_merge: on("autoMerge"),
+            can_push: on("canPush"),
+            requires_pr: on("requiresPr"),
+            strict: on("strict"),
+            train_ci: on("trainCi"),
+        })
+    }
+
+    /// The way GitHub's rules suggest, which only you choose: GitHub's
+    /// merge queue where there is one, straight on the branch where nothing
+    /// asks for a PR and you can push, else auto-merge where it is allowed,
+    /// else Switchboard's merge queue where its CI runs on trains.
+    pub fn suggests(&self) -> Option<Way> {
+        if self.merge_queue {
+            Some(Way::GithubQueue)
+        } else if !self.requires_pr && self.can_push {
+            Some(Way::Direct)
+        } else if self.auto_merge {
+            Some(Way::AutoMerge)
+        } else if self.train_ci && !self.strict {
+            Some(Way::SwitchboardQueue)
+        } else {
+            None
+        }
+    }
 }
 
-/// Where the answers are: the file of yours and the day's cache.
-pub struct Files {
-    pub repos: PathBuf,
-    pub cache: PathBuf,
+/// `repos-setup.json` in the state directory: what GitHub said of each
+/// repository when Settings last asked, by its key.
+pub fn setup_file() -> PathBuf {
+    paths::state_dir().join("repos-setup.json")
 }
 
-/// The repository at `dir`: its `owner/name` on GitHub, its worktree's top,
-/// and what it is known by here.
+/// What GitHub said of a repository when last asked, however long ago.
+pub fn setup_in(file: &Path, key: &str) -> Option<Setup> {
+    let data = util::read_json(file)?;
+    data.as_object()?
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .and_then(|(_, v)| Setup::of(v))
+}
+
+/// Keeps what GitHub said of a repository.
+pub fn remember_setup(file: &Path, key: &str, setup: &Setup) {
+    let mut data = util::read_json_object(file);
+    data.insert(key.to_string(), setup.json());
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = util::write_atomic(file, util::json_compact(&Value::Object(data)));
+}
+
+/// Whether a way is set up: `Some(true)` with what shows it, `Some(false)`
+/// with what is missing, `None` with why it couldn't be told.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Check {
+    pub ok: Option<bool>,
+    pub words: String,
+}
+
+/// Whether `way` is set up for a repository, from `setup` (GitHub's
+/// answer, `None` while there is none) and its entry in repos.json.
+pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Check {
+    let yes = |w: String| Check {
+        ok: Some(true),
+        words: w,
+    };
+    let no = |w: String| Check {
+        ok: Some(false),
+        words: w,
+    };
+    if way == Way::Service {
+        return match service_of(entry) {
+            Some(s) => yes(format!("the {} label and {}'s check", s.label, s.check)),
+            None => no("the label and the check the service uses aren't named".into()),
+        };
+    }
+    let Some(s) = setup else {
+        return Check {
+            ok: None,
+            words: if settings::is_on("github") {
+                "not checked yet: Settings asks GitHub while it is open".into()
+            } else {
+                "not checked: the github setting is off".into()
+            },
+        };
+    };
+    let branch = s.branch.as_deref().unwrap_or("the default branch");
+    match way {
+        Way::SwitchboardQueue => match (s.train_ci, s.strict) {
+            (true, false) => yes("CI runs on ci/train-* branches".into()),
+            (false, _) => no(format!(
+                "no workflow on {branch} runs on a push to ci/train-*"
+            )),
+            (true, true) => no(format!("{branch} requires PRs to be up to date")),
+        },
+        Way::GithubQueue if s.merge_queue => yes(format!("{branch} has a merge queue on GitHub")),
+        Way::GithubQueue => no(format!("{branch} has no merge queue on GitHub")),
+        Way::AutoMerge if s.auto_merge => yes("GitHub allows auto-merge here".into()),
+        Way::AutoMerge => no("auto-merge isn't allowed in its settings on GitHub".into()),
+        Way::Direct => match (s.can_push, s.requires_pr) {
+            (true, false) => yes(format!("you can push to {branch}; no rule asks for a PR")),
+            (false, _) => no(format!("you can't push to {branch}")),
+            (true, true) => no(format!("a rule asks for a PR on {branch}")),
+        },
+        Way::Service => unreachable!("answered above"),
+    }
+}
+
+/// What GitHub says of a repository, for each way's check: its default
+/// branch's merge queue, auto-merge, whether you can push and whether a
+/// rule asks for a PR (branch protection asking for one, a review count at
+/// all, 0 included, or no push for you, or a ruleset with a pull request or
+/// merge queue rule), whether PRs must be up to date, and whether a
+/// workflow runs on a push to `ci/train-*`. A repository on a plan without
+/// rulesets answers 404, which is none; any other failure is a failure to
+/// find out. Asks GitHub, so off the server's task.
+pub fn ask_setup(repo: &str, now: i64) -> Result<Setup, String> {
+    let (owner, name) = repo.split_once('/').ok_or("not owner/name")?;
+    let source = "settings: how a repository lands";
+    let data = wait_for(github::graphql(
+        "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { autoMergeAllowed mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } } }",
+        json!({ "o": owner, "n": name }),
+        source,
+    ))
+    .map_err(|e| e.to_string())?;
+    // Branch protection's "up to date" is readable only by some; one that
+    // can't be read is taken as off, and the queue says so if it is on.
+    let strict_classic = wait_for(github::graphql_partial(
+        "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { defaultBranchRef { branchProtectionRule { requiresStrictStatusChecks } } } }",
+        json!({ "o": owner, "n": name }),
+        source,
+    ))
+    .ok()
+    .and_then(|(v, _)| {
+        v.pointer("/repository/defaultBranchRef/branchProtectionRule/requiresStrictStatusChecks")
+            .and_then(Value::as_bool)
+    })
+    .unwrap_or(false);
+    let mut setup = setup_of(&data, now, &|branch: &str| {
+        let path = format!(
+            "repos/{owner}/{name}/rules/branches/{}",
+            branch.replace('/', "%2F")
+        );
+        match wait_for(github::rest("GET", &path, None, source)) {
+            Ok(v) => Ok(v),
+            Err(e)
+                if e.downcast_ref::<crate::net::ServiceError>()
+                    .is_some_and(|s| s.kind == crate::net::ErrorKind::NotFound) =>
+            {
+                Ok(Value::Array(Vec::new()))
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    })?;
+    setup.strict |= strict_classic;
+    Ok(setup)
+}
+
+/// GitHub's answer for a repository read as `ask_setup` reads it, its
+/// branch's rulesets asked of `rules`.
+pub fn setup_of(
+    data: &Value,
+    now: i64,
+    rules: &dyn Fn(&str) -> Result<Value, String>,
+) -> Result<Setup, String> {
+    let repository = data
+        .get("repository")
+        .filter(|r| r.is_object())
+        .ok_or("GitHub didn't answer")?;
+    let branch = repository
+        .pointer("/defaultBranchRef/name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let rule = repository.pointer("/defaultBranchRef/refUpdateRule");
+    let can_push = rule
+        .and_then(|r| r.get("viewerCanPush"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let reviews = rule.is_some_and(|r| {
+        r.get("requiredApprovingReviewCount")
+            .is_some_and(Value::is_number)
+    });
+    let mut setup = Setup {
+        at: now,
+        branch: branch.clone(),
+        merge_queue: repository.get("mergeQueue").is_some_and(Value::is_object),
+        auto_merge: repository.get("autoMergeAllowed") == Some(&Value::Bool(true)),
+        can_push,
+        requires_pr: reviews || !can_push,
+        strict: false,
+        train_ci: false,
+    };
+    setup.requires_pr |= setup.merge_queue;
+    if let Some(b) = branch.as_deref() {
+        for r in rules(b)?.as_array().into_iter().flatten() {
+            match r.get("type").and_then(Value::as_str) {
+                Some("pull_request") => setup.requires_pr = true,
+                Some("merge_queue") => {
+                    setup.requires_pr = true;
+                    setup.merge_queue = true;
+                }
+                Some("required_status_checks") => {
+                    setup.strict |= r
+                        .pointer("/parameters/strict_required_status_checks_policy")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                }
+                _ => {}
+            }
+        }
+    }
+    setup.train_ci = repository
+        .pointer("/object/entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|e| {
+            e.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|n| n.ends_with(".yml") || n.ends_with(".yaml"))
+        })
+        .filter_map(|e| e.pointer("/object/text").and_then(Value::as_str))
+        .any(runs_on_trains);
+    Ok(setup)
+}
+
+/// Whether a workflow's text runs it on a push to a merge queue train's
+/// branch, `ci/train-*`, or one taking every `ci/` branch.
+pub fn runs_on_trains(text: &str) -> bool {
+    text.contains("ci/train-") || text.contains("ci/train*") || text.contains("ci/**")
+}
+
+// ── Carrying the old settings over ──────────────────────────────────────────
+
+/// A repository and the way carrying the old settings over gave it.
+pub type WaySet = (String, Way);
+
+/// The state directory's mark that `migrate_lands` ran, so it runs once.
+pub fn migrated_mark() -> PathBuf {
+    paths::state_dir().join("repos-lands-migrated")
+}
+
+/// What carrying `landing` and `pr_merge_queue` over to `lands` does to
+/// repos.json: a repository set to `landing: direct` gets `direct`; one
+/// set to `landing: pr`, or with an entry and no `landing`, gets
+/// `switchboard-queue` where `queue_was_on` and `trains(repo)` says its CI
+/// runs on `ci/train-*`, else `auto-merge`; `landing` is dropped from
+/// every entry. A `lands` already set stays. What it set, by repository, in
+/// the file's order; `None` when it changes nothing.
+pub fn lands_migrated(
+    data: &Map<String, Value>,
+    queue_was_on: bool,
+    trains: &dyn Fn(&str) -> bool,
+) -> Option<(Map<String, Value>, Vec<WaySet>)> {
+    let mut out = data.clone();
+    let mut set = Vec::new();
+    let mut changed = false;
+    for (repo, entry) in out.iter_mut() {
+        let Some(entry) = entry.as_object_mut() else {
+            continue;
+        };
+        let old = entry.shift_remove("landing");
+        changed |= old.is_some();
+        if entry.contains_key("lands") {
+            continue;
+        }
+        let way = match old.as_ref().and_then(Value::as_str) {
+            Some("direct") => Way::Direct,
+            _ if queue_was_on && trains(repo) => Way::SwitchboardQueue,
+            _ => Way::AutoMerge,
+        };
+        entry.insert("lands".into(), json!(way.key()));
+        set.push((repo.clone(), way));
+        changed = true;
+    }
+    changed.then_some((out, set))
+}
+
+/// Carries repos.json's `landing` and Settings' `pr_merge_queue` over to
+/// `lands`, once, as a new build's server first starts (`lands_migrated`),
+/// the file before kept as `repos.json.bak`, and drops `pr_merge_queue`
+/// from this computer's settings and the synced ones. Whether a
+/// repository's CI runs on trains is asked of GitHub (`ask_setup`) only
+/// where the queue was on. What it says it did, in one message; `None`
+/// when there was nothing to carry over. Asks GitHub, so off the server's
+/// task.
+pub fn migrate_lands() -> Option<String> {
+    let mark = migrated_mark();
+    if mark.exists() {
+        return None;
+    }
+    let setting_files = [
+        crate::paths::local_config_dir().join("settings.json"),
+        crate::settings::settings_file(),
+    ];
+    let queue_was_on = setting_files.iter().any(|f| {
+        util::read_json(f).and_then(|v| v.get("pr_merge_queue").cloned()) == Some(Value::Bool(true))
+    });
+    let path = file();
+    let said = match read_file(&path) {
+        // A file that can't be read is left, and asked about again next start.
+        Err(e) => {
+            eprintln!("repos.json: can't carry landing over to lands: {e}");
+            return None;
+        }
+        Ok(data) => {
+            let now = util::now_ms();
+            let trains = |repo: &str| {
+                settings::is_on("github")
+                    && ask_setup(repo, now)
+                        .inspect(|s| remember_setup(&setup_file(), repo, s))
+                        .is_ok_and(|s| s.train_ci)
+            };
+            match lands_migrated(&data, queue_was_on, &trains) {
+                Some((out, set)) => match change_file(&path, |d| *d = out) {
+                    Ok(()) => Some(set),
+                    Err(e) => {
+                        eprintln!("repos.json: can't carry landing over to lands: {e}");
+                        return None;
+                    }
+                },
+                None => None,
+            }
+        }
+    };
+    for f in &setting_files {
+        let Some(Value::Object(mut mine)) = util::read_json(f) else {
+            continue;
+        };
+        if mine.shift_remove("pr_merge_queue").is_some() {
+            let _ = util::write_atomic(f, format!("{}\n", util::json_pretty(&Value::Object(mine))));
+        }
+    }
+    if let Some(dir) = mark.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = util::write_atomic(&mark, format!("{}\n", util::now_ms()));
+    // The answers the old guess kept a day, which nothing reads now.
+    let _ = std::fs::remove_file(paths::state_dir().join("repos-landing.json"));
+    let set = said.filter(|s| !s.is_empty())?;
+    let lines: Vec<String> = set
+        .iter()
+        .map(|(repo, way)| format!("{repo}: {}", way.label()))
+        .collect();
+    Some(format!(
+        "Each repository now lands one way, chosen in Settings' Repositories. From repos.json's landing and the pr_merge_queue setting, Switchboard set:\n\n{}\n\nThe file before is kept as {}.bak.",
+        lines.join("\n"),
+        crate::files::shown("repos.json")
+    ))
+}
+
 fn repository_at(dir: &Path) -> Option<(Option<String>, PathBuf, String)> {
     let top = PathBuf::from(worktree::git_at(dir, &["rev-parse", "--show-toplevel"]).ok()?);
     let repo = repo_at(dir);
@@ -555,175 +1277,6 @@ pub fn tickets_of(entry: &Map<String, Value>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// How the repository at `dir` lands as far as is known without asking
-/// anyone: what repos.json sets, else the last answer worked out, of any
-/// age; `None` when neither says. It runs git, so off the server's task.
-pub fn landing_known(dir: &Path) -> Option<String> {
-    let (_, _, key) = repository_at(dir)?;
-    let set = landing_entry(&read_safely(), &key)
-        .get("landing")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    set.or_else(|| cached_in(&cache_file(), &key).map(|c| c.landing))
-}
-
-/// How a repository lands by its key (`owner/name`, else its shared git
-/// directory), as `landing_known` says it, from the files alone, with no
-/// git process, for a read that runs on every tick.
-pub fn landing_by_key(key: &str) -> Option<String> {
-    let set = landing_entry(&read_safely(), key)
-        .get("landing")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    set.or_else(|| cached_in(&cache_file(), key).map(|c| c.landing))
-}
-
-/// How the repository at `dir` lands, as the module's comment says.
-pub fn landing_for(dir: &Path, refresh: bool) -> Result<Landing, String> {
-    let ask = Ask {
-        github: &ask_github,
-        claude: &ask_claude_md,
-    };
-    let files = Files {
-        repos: file(),
-        cache: cache_file(),
-    };
-    landing_with(
-        dir,
-        &ask,
-        &files,
-        util::now_ms(),
-        refresh,
-        settings::is_on("github"),
-    )
-}
-
-/// `landing_for` with what it asks and reads given.
-pub fn landing_with(
-    dir: &Path,
-    ask: &Ask,
-    files: &Files,
-    now: i64,
-    refresh: bool,
-    github_on: bool,
-) -> Result<Landing, String> {
-    let (repo, top, key) =
-        repository_at(dir).ok_or_else(|| format!("{} isn't in a git repository", dir.display()))?;
-    // A repos.json that can't be read stops it, rather than landing without
-    // what it may say.
-    let data = read_file(&files.repos).map_err(|e| {
-        format!(
-            "{} can't be read ({e}); fix it first",
-            paths::tilde(&files.repos)
-        )
-    })?;
-    let entry = landing_entry(&data, &key);
-    let steps = steps_of(&entry);
-    let answer = |landing: &str, why: String, source: &str| Landing {
-        repo: repo.clone(),
-        key: key.clone(),
-        landing: landing.to_string(),
-        why,
-        source: source.to_string(),
-        steps: steps.clone(),
-    };
-    if let Some(method) = entry.get("landing").and_then(Value::as_str) {
-        return Ok(answer(method, "set in repos.json".into(), "repos.json"));
-    }
-    let cached = cached_in(&files.cache, &key);
-    if let Some(c) = cached.as_ref().filter(|c| !refresh && now - c.at < DAY_MS) {
-        return Ok(answer(&c.landing, c.why.clone(), "cached"));
-    }
-    // The github setting off asks GitHub nothing: the last answer stands,
-    // else a pull request.
-    if !github_on {
-        return Ok(match cached {
-            Some(c) => answer(
-                &c.landing,
-                format!("{} (as last found; the github setting is off)", c.why),
-                "offline",
-            ),
-            None => answer(
-                "pr",
-                "the github setting is off, so through a PR unless repos.json says otherwise"
-                    .into(),
-                "offline",
-            ),
-        });
-    }
-    let found = (|| -> Result<(String, String, String), String> {
-        let rules = match &repo {
-            Some(repo) => (ask.github)(repo)?,
-            None => Rules {
-                branch: None,
-                requires_pr: false,
-                why: String::new(),
-            },
-        };
-        if rules.requires_pr {
-            return Ok(("pr".into(), rules.why, "github".into()));
-        }
-        // Only a file inside the repository, a link out of it never
-        // followed, since what is read is sent to Claude.
-        let text = std::fs::canonicalize(top.join("CLAUDE.md"))
-            .ok()
-            .filter(|f| std::fs::canonicalize(&top).is_ok_and(|t| f.starts_with(&t) && *f != t))
-            .and_then(|f| std::fs::read_to_string(f).ok())
-            .filter(|t| !t.trim().is_empty());
-        let said = match &text {
-            Some(text) => Some((ask.claude)(text)?),
-            None => None,
-        };
-        Ok(if said.as_deref() == Some("direct") {
-            (
-                "direct".into(),
-                format!(
-                    "its CLAUDE.md commits straight to {}",
-                    rules.branch.as_deref().unwrap_or("the default branch")
-                ),
-                "claude-md".into(),
-            )
-        } else {
-            (
-                "pr".into(),
-                if text.is_some() {
-                    "its CLAUDE.md doesn't say to commit straight to the default branch".into()
-                } else {
-                    "nothing says otherwise".into()
-                },
-                "default".into(),
-            )
-        })
-    })();
-    match found {
-        Ok((landing, why, source)) => {
-            remember(
-                &files.cache,
-                &key,
-                &Cached {
-                    landing: landing.clone(),
-                    why: why.clone(),
-                    at: now,
-                },
-            );
-            Ok(answer(&landing, why, &source))
-        }
-        Err(e) => Ok(match cached {
-            Some(c) => answer(
-                &c.landing,
-                format!("{} (as last found; couldn't ask again: {e})", c.why),
-                "offline",
-            ),
-            None => answer(
-                "pr",
-                format!("couldn't find out ({e}), so through a PR"),
-                "offline",
-            ),
-        }),
-    }
-}
-
-/// A file read as `read` reads repos.json.
 fn read_file(path: &Path) -> Result<Map<String, Value>, String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return if path.exists() {
@@ -771,144 +1324,6 @@ pub fn default_branch_on_github(repo: &str) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Whether GitHub makes the default branch take a pull request: a merge
-/// queue, branch protection asking for one (a review count at all, 0
-/// included, or no push for you), or a ruleset with a pull request or merge
-/// queue rule. A repository on a plan without rulesets answers 404, which
-/// is none; any other failure is a failure to find out, never read as none.
-pub fn ask_github(repo: &str) -> Result<Rules, String> {
-    let (owner, name) = repo.split_once('/').ok_or("not owner/name")?;
-    let data = wait_for(github::graphql(
-        "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } } }",
-        json!({ "o": owner, "n": name }),
-        "landing: how a repository lands",
-    ))
-    .map_err(|e| e.to_string())?;
-    rules_of(&data, &|branch: &str| {
-        let path = format!(
-            "repos/{owner}/{name}/rules/branches/{}",
-            branch.replace('/', "%2F")
-        );
-        match wait_for(github::rest(
-            "GET",
-            &path,
-            None,
-            "landing: how a repository lands",
-        )) {
-            Ok(v) => Ok(v),
-            Err(e)
-                if e.downcast_ref::<crate::net::ServiceError>()
-                    .is_some_and(|s| s.kind == crate::net::ErrorKind::NotFound) =>
-            {
-                Ok(Value::Array(Vec::new()))
-            }
-            Err(e) => Err(e.to_string()),
-        }
-    })
-}
-
-/// GitHub's answer for a repository read as `ask_github` reads it, its
-/// branch's rulesets asked of `rules`.
-pub fn rules_of(
-    data: &Value,
-    rules: &dyn Fn(&str) -> Result<Value, String>,
-) -> Result<Rules, String> {
-    let repository = data
-        .get("repository")
-        .filter(|r| r.is_object())
-        .ok_or("GitHub didn't answer")?;
-    let branch = repository
-        .pointer("/defaultBranchRef/name")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let named = branch.clone().unwrap_or_default();
-    if repository.get("mergeQueue").is_some_and(Value::is_object) {
-        return Ok(Rules {
-            branch,
-            requires_pr: true,
-            why: format!("{named} has a merge queue"),
-        });
-    }
-    let rule = repository.pointer("/defaultBranchRef/refUpdateRule");
-    let protected = rule.is_some_and(|r| {
-        r.get("viewerCanPush") == Some(&Value::Bool(false))
-            || r.get("requiredApprovingReviewCount")
-                .is_some_and(Value::is_number)
-    });
-    if protected {
-        return Ok(Rules {
-            branch,
-            requires_pr: true,
-            why: format!("GitHub requires a PR on {named}"),
-        });
-    }
-    if let Some(b) = branch.as_deref() {
-        let list = rules(b)?;
-        let needs = list.as_array().into_iter().flatten().any(|r| {
-            matches!(
-                r.get("type").and_then(Value::as_str),
-                Some("pull_request" | "merge_queue")
-            )
-        });
-        if needs {
-            return Ok(Rules {
-                branch,
-                requires_pr: true,
-                why: format!("GitHub requires a PR on {named}"),
-            });
-        }
-    }
-    Ok(Rules {
-        branch,
-        requires_pr: false,
-        why: String::new(),
-    })
-}
-
-/// Whether a CLAUDE.md says the work goes straight to the default branch
-/// with no PR, as a headless Haiku reads that file alone: `direct` or
-/// `pr`.
-pub fn ask_claude_md(text: &str) -> Result<String, String> {
-    let claude = crate::diff::tell::claude_command().ok_or("claude isn't installed")?;
-    requests::count("Anthropic", "claude -p", "landing: CLAUDE.md");
-    let mut cmd = std::process::Command::new(claude);
-    cmd.args([
-        "-p",
-        "--model",
-        "haiku",
-        "--no-session-persistence",
-        "--tools",
-        "",
-        "--strict-mcp-config",
-        "--disable-slash-commands",
-        "--output-format",
-        "text",
-    ]);
-    crate::diff::tell::headless(&mut cmd);
-    let prompt = format!(
-        "Below is a repository's CLAUDE.md. Does it say that work in this repository is committed straight to its default branch, with no pull request? Answer with the one word \"direct\" if it does, else \"pr\".\n\n<claude-md>\n{text}\n</claude-md>"
-    );
-    let out = crate::diff::tell::run_with_timeout(cmd, prompt.as_bytes(), 120)
-        .map_err(|e| e.to_string())?;
-    said(&out).ok_or_else(|| format!("Haiku didn't say direct or pr: {}", out.trim()))
-}
-
-/// Haiku's word: `direct` when its answer starts with it, `pr` when it
-/// said either word elsewhere, nothing when it said neither.
-fn said(out: &str) -> Option<String> {
-    let lower = out.to_lowercase();
-    if lower
-        .trim_start_matches(|c: char| !c.is_alphanumeric())
-        .starts_with("direct")
-    {
-        return Some("direct".into());
-    }
-    regex::Regex::new(r"\b(direct|pr)\b")
-        .ok()?
-        .is_match(&lower)
-        .then(|| "pr".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,27 +1343,56 @@ mod tests {
         assert_eq!(repo_of_url("https://gitlab.com/a/b"), None);
     }
 
-    use crate::tabs::git::tests::{Scratch, git, repo};
+    #[test]
+    fn each_way_reads_back_from_its_key_and_says_its_five_facts() {
+        for way in Way::ALL {
+            assert_eq!(Way::parse(way.key()), Some(way));
+            let facts = way.facts();
+            assert_eq!(
+                facts.map(|(k, _)| k),
+                ["a tab", "done when", "it fixes", "never", "it needs"]
+            );
+            assert!(facts.iter().all(|(_, v)| !v.is_empty()));
+        }
+        assert_eq!(Way::parse("pr"), None, "the old landing isn't a way");
+        assert!(!Way::Direct.through_pr());
+        assert!(Way::Service.through_pr());
+    }
 
-    fn never_github(_: &str) -> Result<Rules, String> {
-        panic!("GitHub isn't to be asked")
+    #[test]
+    fn lands_is_read_only_when_it_names_a_way() {
+        let entry = |v: Value| json!({ "lands": v }).as_object().unwrap().clone();
+        assert_eq!(
+            lands_of(&entry(json!("github-queue"))),
+            Some(Way::GithubQueue)
+        );
+        assert_eq!(lands_of(&entry(json!("pr"))), None);
+        assert_eq!(lands_of(&entry(json!(true))), None);
+        assert_eq!(lands_of(&Map::new()), None);
+        let service = json!({ "lands": "service", "serviceLabel": " merge-ready ", "serviceCheck": "mergebot" });
+        assert_eq!(
+            service_of(service.as_object().unwrap()),
+            Some(Service {
+                label: "merge-ready".into(),
+                check: "mergebot".into()
+            })
+        );
+        let half = json!({ "serviceLabel": "merge-ready" });
+        assert_eq!(service_of(half.as_object().unwrap()), None);
     }
-    fn never_claude(_: &str) -> Result<String, String> {
-        panic!("Claude isn't to be asked")
-    }
+
+    use crate::tabs::git::tests::{Scratch, git, repo};
 
     struct Rig {
         scratch: Scratch,
-        files: Files,
+        repos: PathBuf,
         direct: PathBuf,
-        guarded: PathBuf,
     }
 
     fn rig(name: &str) -> Option<Rig> {
         let scratch = Scratch::new(name);
         let direct = scratch.0.join("direct");
-        let guarded = scratch.0.join("guarded");
-        if !repo(&direct) || !repo(&guarded) {
+        if !repo(&direct) {
             eprintln!("skipped: no git");
             return None;
         }
@@ -956,45 +1400,27 @@ mod tests {
             &direct,
             &["remote", "add", "origin", "git@github.com:acme/direct.git"],
         );
-        git(
-            &guarded,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/acme/guarded.git",
-            ],
-        );
-        let files = Files {
-            repos: scratch.0.join("repos.json"),
-            cache: scratch.0.join("state/repos-landing.json"),
-        };
         Some(Rig {
+            repos: scratch.0.join("repos.json"),
             scratch,
-            files,
             direct,
-            guarded,
         })
     }
 
     #[test]
-    fn a_repositorys_entry_decides_with_its_steps_asking_neither_github_nor_claude() {
+    fn a_repository_lands_the_way_its_entry_sets_with_its_steps() {
         let Some(r) = rig("repos-entry") else {
             return;
         };
-        let never = Ask {
-            github: &never_github,
-            claude: &never_claude,
-        };
         std::fs::write(
-            &r.files.repos,
-            r#"{"acme/direct": {"landing": "direct", "test": "npm test", "squash": false}}"#,
+            &r.repos,
+            r#"{"acme/direct": {"lands": "direct", "test": "npm test", "squash": false}}"#,
         )
         .unwrap();
-        let answer = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap();
+        let answer = landing_with(&r.direct, &r.repos).unwrap();
         assert_eq!(
-            (answer.landing.as_str(), answer.source.as_str()),
-            ("direct", "repos.json")
+            (answer.lands, answer.source.as_str()),
+            (Way::Direct, "repos.json")
         );
         assert_eq!(
             answer.steps,
@@ -1008,172 +1434,68 @@ mod tests {
             },
             "what the entry leaves out takes the defaults"
         );
-        std::fs::write(&r.files.repos, r#"{"acme/direct": {"landing": "direct"}}"#).unwrap();
-        let answer = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap();
-        assert_eq!(
-            answer.steps.test, None,
-            "a test command not set is none, for the CLAUDE.md's tests"
-        );
         std::fs::write(
-            &r.files.repos,
-            r#"{"acme/direct": {"landing": "direct", "testIn": "ci"}}"#,
+            &r.repos,
+            r#"{"acme/direct": {"lands": "direct", "testIn": "elsewhere"}}"#,
         )
         .unwrap();
-        let answer = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap();
-        assert_eq!(answer.steps.test_in, "ci");
-        assert_eq!(answer.steps.json()["testIn"], "ci");
-        std::fs::write(
-            &r.files.repos,
-            r#"{"acme/direct": {"landing": "direct", "testIn": "elsewhere"}}"#,
-        )
-        .unwrap();
-        let answer = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap();
+        let answer = landing_with(&r.direct, &r.repos).unwrap();
         assert_eq!(
             answer.steps.test_in, "here",
             "a place the tests can't run is left out, so they run in the worktree"
         );
-        std::fs::write(&r.files.repos, "{ broken").unwrap();
-        let err = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap_err();
+        std::fs::write(&r.repos, "{ broken").unwrap();
+        let err = landing_with(&r.direct, &r.repos).unwrap_err();
         assert!(err.contains("can't be read"), "{err}");
+        let _ = &r.scratch;
     }
 
     #[test]
-    fn a_claude_md_committing_straight_to_the_branch_makes_it_direct_kept_a_day_and_github_requiring_a_pr_wins()
-     {
-        let Some(r) = rig("repos-default") else {
+    fn with_no_lands_nothing_lands_and_the_words_name_settings_row() {
+        let Some(r) = rig("repos-unset") else {
             return;
         };
         std::fs::write(
-            r.direct.join("CLAUDE.md"),
-            "Commit straight to main: there is no PR flow here.\n",
+            &r.repos,
+            r#"{"acme/direct": {"landing": "pr", "tickets": "github"}}"#,
         )
         .unwrap();
-        let read = std::cell::RefCell::new(String::new());
-        let open = |_: &str| {
-            Ok(Rules {
-                branch: Some("main".into()),
-                requires_pr: false,
-                why: String::new(),
-            })
-        };
-        let claude = |text: &str| {
-            *read.borrow_mut() = text.to_string();
-            Ok("direct".to_string())
-        };
-        let ask = Ask {
-            github: &open,
-            claude: &claude,
-        };
-        let now = 1_700_000_000_000;
-        let answer = landing_with(&r.direct, &ask, &r.files, now, false, true).unwrap();
-        assert_eq!(
-            (answer.landing.as_str(), answer.source.as_str()),
-            ("direct", "claude-md")
-        );
-        assert_eq!(answer.why, "its CLAUDE.md commits straight to main");
+        let err = landing_with(&r.direct, &r.repos).unwrap_err();
         assert!(
-            read.borrow().contains("no PR flow"),
-            "Claude is given the CLAUDE.md"
+            err.contains("acme/direct lands nothing yet") && err.contains("Settings' Repositories"),
+            "{err}"
         );
-        let never = Ask {
-            github: &never_github,
-            claude: &never_claude,
-        };
-        let again = landing_with(&r.direct, &never, &r.files, now + 1000, false, true).unwrap();
-        assert_eq!(
-            (again.landing.as_str(), again.source.as_str()),
-            ("direct", "cached")
-        );
-
-        let queue = |_: &str| {
-            Ok(Rules {
-                branch: Some("main".into()),
-                requires_pr: true,
-                why: "main has a merge queue".into(),
-            })
-        };
-        let ask = Ask {
-            github: &queue,
-            claude: &never_claude,
-        };
-        let pr = landing_with(&r.guarded, &ask, &r.files, now, false, true).unwrap();
-        assert_eq!(
-            (pr.landing.as_str(), pr.source.as_str(), pr.why.as_str()),
-            ("pr", "github", "main has a merge queue")
+        std::fs::remove_file(&r.repos).unwrap();
+        assert!(
+            landing_with(&r.direct, &r.repos).is_err(),
+            "no file, no way"
         );
     }
 
     #[test]
-    fn off_the_network_the_last_answer_stands_and_with_none_or_github_off_it_is_a_pr() {
-        let Some(r) = rig("repos-offline") else {
+    fn a_branch_finishes_the_way_it_started_landing_with() {
+        let Some(r) = rig("repos-recorded") else {
             return;
         };
-        let down = |_: &str| -> Result<Rules, String> { Err("no network".into()) };
-        let offline = Ask {
-            github: &down,
-            claude: &never_claude,
-        };
-        let now = 1_700_000_000_000;
-        let none = landing_with(&r.guarded, &offline, &r.files, now, false, true).unwrap();
+        git(&r.direct, &["commit", "--allow-empty", "-qm", "one"]);
+        git(&r.direct, &["checkout", "-qb", "work"]);
+        std::fs::write(&r.repos, r#"{"acme/direct": {"lands": "auto-merge"}}"#).unwrap();
+        assert_eq!(record_at(&r.direct, Way::AutoMerge), Ok(Way::AutoMerge));
+        std::fs::write(&r.repos, r#"{"acme/direct": {"lands": "github-queue"}}"#).unwrap();
+        let answer = landing_with(&r.direct, &r.repos).unwrap();
+        assert_eq!(answer.lands, Way::AutoMerge, "the old way, for this branch");
+        assert_eq!(answer.source, "branch");
+        assert_eq!(answer.set, Some(Way::GithubQueue));
         assert_eq!(
-            (none.landing.as_str(), none.source.as_str()),
-            ("pr", "offline")
+            record_at(&r.direct, Way::GithubQueue),
+            Ok(Way::AutoMerge),
+            "a way kept is never written over"
         );
-
-        std::fs::write(r.direct.join("CLAUDE.md"), "Commit straight to main.\n").unwrap();
-        let open = |_: &str| {
-            Ok(Rules {
-                branch: Some("main".into()),
-                requires_pr: false,
-                why: String::new(),
-            })
-        };
-        let direct = |_: &str| Ok("direct".to_string());
-        let ask = Ask {
-            github: &open,
-            claude: &direct,
-        };
-        landing_with(&r.direct, &ask, &r.files, now, false, true).unwrap();
-        let later =
-            landing_with(&r.direct, &offline, &r.files, now + 2 * DAY_MS, false, true).unwrap();
+        git(&r.direct, &["checkout", "-qb", "next"]);
         assert_eq!(
-            (later.landing.as_str(), later.source.as_str()),
-            ("direct", "offline"),
-            "the last answer stands, however old"
-        );
-
-        let never = Ask {
-            github: &never_github,
-            claude: &never_claude,
-        };
-        let off = landing_with(&r.guarded, &never, &r.files, now, false, false).unwrap();
-        assert_eq!(off.landing, "pr");
-        assert!(off.why.contains("github setting is off"), "{}", off.why);
-    }
-
-    #[test]
-    fn a_claude_md_linking_out_of_its_repository_is_never_read_or_sent() {
-        let Some(r) = rig("repos-link") else {
-            return;
-        };
-        let secret = r.scratch.0.join("secret");
-        std::fs::write(&secret, "a key\n").unwrap();
-        std::os::unix::fs::symlink(&secret, r.direct.join("CLAUDE.md")).unwrap();
-        let open = |_: &str| {
-            Ok(Rules {
-                branch: Some("main".into()),
-                requires_pr: false,
-                why: String::new(),
-            })
-        };
-        let ask = Ask {
-            github: &open,
-            claude: &never_claude,
-        };
-        let answer = landing_with(&r.direct, &ask, &r.files, 1, false, true).unwrap();
-        assert_eq!(
-            (answer.landing.as_str(), answer.why.as_str()),
-            ("pr", "nothing says otherwise")
+            landing_with(&r.direct, &r.repos).unwrap().lands,
+            Way::GithubQueue,
+            "the next branch lands the new way"
         );
     }
 
@@ -1181,58 +1503,56 @@ mod tests {
     fn set_repo_keeps_the_rest_of_an_entry_and_never_writes_over_a_file_it_cant_read() {
         let scratch = Scratch::new("repos-set");
         let path = scratch.0.join("repos.json");
-        set_repo_in(&path, "acme/direct", "landing", json!("direct")).unwrap();
+        set_repo_in(&path, "acme/direct", "lands", json!("direct")).unwrap();
         set_repo_in(&path, "acme/direct", "test", json!("make check")).unwrap();
         assert_eq!(
             read_file(&path).unwrap(),
-            *json!({ "acme/direct": { "landing": "direct", "test": "make check" } })
+            *json!({ "acme/direct": { "lands": "direct", "test": "make check" } })
                 .as_object()
                 .unwrap()
         );
-        set_repo_in(&path, "acme/direct", "landing", json!("automatic")).unwrap();
+        assert!(
+            set_repo_in(&path, "acme/direct", "lands", json!("pr"))
+                .unwrap_err()
+                .contains("not a value for lands")
+        );
+        set_repo_in(&path, "acme/direct", "lands", json!("unset")).unwrap();
         assert_eq!(
             read_file(&path).unwrap(),
             *json!({ "acme/direct": { "test": "make check" } })
                 .as_object()
                 .unwrap(),
-            "the default decides again, the steps kept"
+            "unset, the steps kept"
+        );
+        set_repo_in(&path, "acme/direct", "serviceLabel", json!(" merge-ready ")).unwrap();
+        assert_eq!(
+            read_file(&path).unwrap()["acme/direct"]["serviceLabel"],
+            json!("merge-ready")
+        );
+        set_repo_in(&path, "acme/direct", "serviceLabel", json!("")).unwrap();
+        assert!(
+            read_file(&path).unwrap()["acme/direct"]
+                .get("serviceLabel")
+                .is_none()
         );
         assert!(
             set_repo_in(&path, "acme/direct", "review", json!("maybe"))
                 .unwrap_err()
                 .contains("not a value")
         );
-        assert!(
-            set_repo_in(&path, "acme/direct", "testIn", json!("elsewhere"))
-                .unwrap_err()
-                .contains("not a value for testIn")
-        );
         set_repo_in(&path, "acme/direct", "testIn", json!("ci")).unwrap();
-        assert_eq!(
-            read_file(&path).unwrap()["acme/direct"]["testIn"],
-            json!("ci")
-        );
-        assert!(
-            set_repo_in(&path, "acme/direct", "afterRebase", json!(true))
-                .unwrap_err()
-                .contains("not a value for afterRebase")
-        );
         set_repo_in(&path, "acme/direct", "afterRebase", json!("make lint")).unwrap();
         let written = read_file(&path).unwrap();
-        assert_eq!(written["acme/direct"]["afterRebase"], json!("make lint"));
         let steps = steps_of(&landing_entry(&written, "acme/direct"));
-        assert_eq!(steps.after_rebase, "make lint");
-        assert_eq!(steps.json()["afterRebase"], "make lint");
+        assert_eq!(
+            (steps.test_in.as_str(), steps.after_rebase.as_str()),
+            ("ci", "make lint")
+        );
         set_repo_in(&path, "acme/direct", "tickets", json!("github")).unwrap();
         let written = read_file(&path).unwrap();
         assert_eq!(
             tickets_of(&entry_of(&written, "ACME/direct")).as_deref(),
             Some("github")
-        );
-        assert!(
-            set_repo_in(&path, "acme/direct", "tickets", json!("jira"))
-                .unwrap_err()
-                .contains("not a value for tickets")
         );
         set_repo_in(&path, "acme/direct", "tickets", json!("unset")).unwrap();
         assert!(
@@ -1241,75 +1561,130 @@ mod tests {
                 .is_none()
         );
         set_repo_in(&path, "acme/direct", "issueLabel", json!("ready")).unwrap();
-        let written = read_file(&path).unwrap();
-        assert_eq!(
-            issue_label_of(&entry_of(&written, "acme/direct")).as_deref(),
-            Some("ready")
-        );
         assert!(
             set_repo_in(&path, "acme/direct", "issueLabel", json!("a\"b"))
                 .unwrap_err()
                 .contains("not a value for issueLabel")
         );
-        set_repo_in(&path, "acme/direct", "issueLabel", json!("")).unwrap();
-        assert!(
-            read_file(&path).unwrap()["acme/direct"]
-                .get("issueLabel")
-                .is_none(),
-            "empty takes it out"
-        );
+        assert!(bak_of(&path).exists(), "the version before is kept");
         std::fs::write(&path, "{ not json").unwrap();
         assert!(
-            set_repo_in(&path, "acme/direct", "landing", json!("pr"))
+            set_repo_in(&path, "acme/direct", "lands", json!("direct"))
                 .unwrap_err()
                 .contains("can't be read")
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
     }
 
+    fn answer(queue: bool, auto: bool, rule: Value, workflow: &str) -> Value {
+        json!({ "repository": {
+            "autoMergeAllowed": auto,
+            "mergeQueue": if queue { json!({"url": "u"}) } else { Value::Null },
+            "defaultBranchRef": { "name": "main", "refUpdateRule": rule },
+            "object": { "entries": [
+                { "name": "ci.yml", "object": { "text": workflow } },
+                { "name": "README.md", "object": { "text": "ci/train-" } },
+            ] } } })
+    }
+
     #[test]
-    fn github_s_rules_a_queue_protection_or_a_ruleset_need_a_pr_and_a_404_is_none() {
-        let answer = |queue: bool, rule: Value| {
-            json!({ "repository": { "mergeQueue": if queue { json!({"url": "u"}) } else { Value::Null },
-                "defaultBranchRef": { "name": "main", "refUpdateRule": rule } } })
-        };
+    fn github_s_answer_says_which_ways_are_set_up_and_a_404_ruleset_is_none() {
         let none = |_: &str| Ok(Value::Array(Vec::new()));
+        let open = setup_of(&answer(false, false, Value::Null, "on: push"), 1, &none).unwrap();
+        assert!(open.can_push && !open.requires_pr && !open.train_ci);
+        assert_eq!(open.suggests(), Some(Way::Direct));
+        let queued = setup_of(&answer(true, false, Value::Null, ""), 1, &none).unwrap();
+        assert!(queued.merge_queue && queued.requires_pr);
+        assert_eq!(queued.suggests(), Some(Way::GithubQueue));
+        let protected = setup_of(
+            &answer(
+                false,
+                true,
+                json!({"viewerCanPush": true, "requiredApprovingReviewCount": 0}),
+                "on:\n  push:\n    branches: [main, 'ci/train-*']\n",
+            ),
+            1,
+            &none,
+        )
+        .unwrap();
         assert!(
-            rules_of(&answer(true, Value::Null), &none)
-                .unwrap()
-                .requires_pr
-        );
-        assert!(
-            rules_of(
-                &answer(
-                    false,
-                    json!({"viewerCanPush": true, "requiredApprovingReviewCount": 0})
-                ),
-                &none
-            )
-            .unwrap()
-            .requires_pr,
+            protected.requires_pr,
             "protection asking for a PR with no approvals still asks for one"
         );
-        assert!(
-            !rules_of(&answer(false, Value::Null), &none)
-                .unwrap()
-                .requires_pr
-        );
-        let ruleset = |_: &str| Ok(json!([{ "type": "pull_request" }]));
-        assert!(
-            rules_of(&answer(false, Value::Null), &ruleset)
-                .unwrap()
-                .requires_pr
-        );
+        assert!(protected.train_ci && protected.auto_merge);
+        assert_eq!(protected.suggests(), Some(Way::AutoMerge));
+        let ruleset = |_: &str| {
+            Ok(json!([{ "type": "pull_request" },
+                { "type": "required_status_checks", "parameters": { "strict_required_status_checks_policy": true } }]))
+        };
+        let strict =
+            setup_of(&answer(false, false, Value::Null, "ci/train-"), 1, &ruleset).unwrap();
+        assert!(strict.requires_pr && strict.strict);
         let failing = |_: &str| -> Result<Value, String> { Err("500".into()) };
         assert!(
-            rules_of(&answer(false, Value::Null), &failing).is_err(),
+            setup_of(&answer(false, false, Value::Null, ""), 1, &failing).is_err(),
             "a ruleset that can't be read is a failure to find out"
         );
-        assert_eq!(said("direct"), Some("direct".into()));
-        assert_eq!(said("**Direct**."), Some("direct".into()));
-        assert_eq!(said("pr"), Some("pr".into()));
-        assert_eq!(said("I can't tell"), None);
+    }
+
+    #[test]
+    fn a_way_not_set_up_says_what_is_missing() {
+        let none = |_: &str| Ok(Value::Array(Vec::new()));
+        let s = setup_of(&answer(false, false, Value::Null, ""), 1, &none).unwrap();
+        let empty = Map::new();
+        let missing = |way| check(way, Some(&s), &empty);
+        assert_eq!(missing(Way::GithubQueue).ok, Some(false));
+        assert!(missing(Way::GithubQueue).words.contains("no merge queue"));
+        assert!(
+            missing(Way::AutoMerge)
+                .words
+                .contains("auto-merge isn't allowed")
+        );
+        assert!(missing(Way::SwitchboardQueue).words.contains("ci/train-*"));
+        assert_eq!(missing(Way::Direct).ok, Some(true));
+        assert_eq!(missing(Way::Service).ok, Some(false));
+        let named = json!({ "serviceLabel": "merge-ready", "serviceCheck": "mergebot" });
+        let set = check(Way::Service, None, named.as_object().unwrap());
+        assert_eq!(set.ok, Some(true), "a service needs nothing of GitHub's");
+        assert_eq!(
+            check(Way::AutoMerge, None, &empty).ok,
+            None,
+            "not asked yet"
+        );
+    }
+
+    #[test]
+    fn landing_and_the_queue_setting_carry_over_once_to_one_way_each() {
+        let data = json!({
+            "acme/direct": { "landing": "direct", "test": "make" },
+            "acme/trains": { "landing": "pr" },
+            "acme/plain": { "tickets": "github" },
+            "acme/set": { "landing": "pr", "lands": "github-queue" },
+        });
+        let data = data.as_object().unwrap();
+        let trains = |repo: &str| repo == "acme/trains" || repo == "acme/plain";
+        let (out, set) = lands_migrated(data, true, &trains).unwrap();
+        assert_eq!(
+            out["acme/direct"],
+            json!({ "test": "make", "lands": "direct" })
+        );
+        assert_eq!(out["acme/trains"], json!({ "lands": "switchboard-queue" }));
+        assert_eq!(out["acme/plain"]["lands"], "switchboard-queue");
+        assert_eq!(
+            out["acme/set"],
+            json!({ "lands": "github-queue" }),
+            "a way set stays"
+        );
+        assert_eq!(set.len(), 3);
+        let (off, _) = lands_migrated(data, false, &trains).unwrap();
+        assert_eq!(
+            off["acme/trains"]["lands"], "auto-merge",
+            "the queue was off"
+        );
+        assert_eq!(
+            lands_migrated(&out, true, &trains),
+            None,
+            "a second time changes nothing"
+        );
     }
 }

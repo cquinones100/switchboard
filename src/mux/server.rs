@@ -779,6 +779,19 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
         Some(handed) => super::upgrade::adopt(&mut server, handed),
         None => super::persist::restore(&mut server),
     }
+    // repos.json's landing and the pr_merge_queue setting carried over to
+    // one way per repository, once, and said in one message; never in a
+    // try or the demo, whose files may be linked to yours.
+    let own_home = std::env::var_os("SWITCHBOARD_CHECKOUT").is_none_or(|c| c.is_empty())
+        && std::env::var_os("SWITCHBOARD_DEMO").is_none_or(|d| d.is_empty());
+    if own_home {
+        let tx = server.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Some(text) = crate::repos::migrate_lands() {
+                let _ = tx.send(Event::Ui(crate::ui::UiEvent::Said { client: None, text }));
+            }
+        });
+    }
     loop {
         // A program holding a frame back (synchronized output) that never
         // says it is done gets it shown at its deadline.

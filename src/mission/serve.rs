@@ -2113,7 +2113,6 @@ impl Server {
         self.mission.worktrees_busy = true;
         self.mission.worktrees_at = Some(Instant::now());
         let tx = self.tx.clone();
-        let github = settings::is_on("github");
         // Every repository the map heads: the tabs', and those only worktrees
         // with no tab are known in.
         let mut heads = mains.clone();
@@ -2126,20 +2125,16 @@ impl Server {
             let mut found = std::collections::HashMap::new();
             let mut landings = std::collections::HashMap::new();
             for main in heads {
-                // How it lands, as far as is known without asking: the
-                // Settings view and coming to the map work out the rest.
-                let lands = github
-                    .then(|| crate::repos::landing_known(&main))
-                    .flatten()
-                    .map(|method| match method.as_str() {
-                        "direct" => {
-                            let default = crate::tabs::git::locate(&main)
-                                .and_then(|p| crate::tabs::git::default_branch(&p.common_dir))
-                                .unwrap_or_else(|| "main".into());
-                            format!("lands straight on {default}")
-                        }
-                        _ => "lands through a PR".into(),
-                    });
+                // How it lands, as repos.json sets it.
+                let lands = crate::repos::lands_known(&main).map(|way| match way {
+                    crate::repos::Way::Direct => {
+                        let default = crate::tabs::git::locate(&main)
+                            .and_then(|p| crate::tabs::git::default_branch(&p.common_dir))
+                            .unwrap_or_else(|| "main".into());
+                        format!("lands straight on {default}")
+                    }
+                    way => format!("lands through a PR, by {}", way.label()),
+                });
                 if let Some(lands) = lands {
                     landings.insert(main, lands);
                 }
@@ -6762,8 +6757,8 @@ impl Server {
         }
     }
 
-    /// Enter on a repository's landing row in Settings: how its work lands
-    /// from a menu (automatic leaves it to the default), where its work is
+    /// Enter on a repository's row in Settings' Repositories: the way its
+    /// work lands from the menu of ways (`choose_way`), where its work is
     /// kept, its review and where its tests run from a menu each, squash on or off, and a command typed in, written to
     /// ~/.config/switchboard/repos.json (`repos::set_repo`), as the daemon's
     /// `changeRepo` did.
@@ -6808,14 +6803,13 @@ impl Server {
         };
         let name = r["repo"].as_str().unwrap_or("").to_string();
         match r["field"].as_str().unwrap_or("") {
-            field @ ("landing" | "tickets" | "review" | "testIn") => {
-                let landing = field == "landing";
+            "lands" => self.choose_way(
+                client,
+                name,
+                now.as_str().and_then(crate::repos::Way::parse),
+            ),
+            field @ ("tickets" | "review" | "testIn") => {
                 let options: Vec<(&str, &str)> = match field {
-                    "landing" => vec![
-                        ("automatic", "Automatic: GitHub's rules, else its CLAUDE.md"),
-                        ("pr", "Through a PR"),
-                        ("direct", "Straight on the default branch"),
-                    ],
                     "tickets" => std::iter::once((
                         "unset",
                         "Not set: /shape, wt <number>, M-i and autopilot refuse",
@@ -6833,9 +6827,7 @@ impl Server {
                     .position(|(v, _)| now.as_str() == Some(v))
                     .unwrap_or(0);
                 let values: Vec<String> = options.iter().map(|(v, _)| v.to_string()).collect();
-                let title = if landing {
-                    format!("{name}: how its work lands")
-                } else if field == "tickets" {
+                let title = if field == "tickets" {
                     format!("{name}: where its work is kept")
                 } else if field == "testIn" {
                     format!("{name}: where the tests run")
@@ -6868,12 +6860,18 @@ impl Server {
             field => {
                 let title = match field {
                     "issueLabel" => format!("{name}: the label autopilot takes issues by"),
+                    "serviceLabel" => format!("{name}: the label the service merges by"),
+                    "serviceCheck" => format!("{name}: the check the service reports"),
                     "test" => format!("{name}: the tests"),
                     "afterRebase" => format!("{name}: the check after a clean rebase"),
                     _ => format!("{name}: the command before the push"),
                 };
                 let about = if field == "issueLabel" {
                     "One GitHub label, with no quotes; empty for none, so autopilot takes no issues."
+                } else if field == "serviceLabel" {
+                    "The one GitHub label the service merges a PR by; empty for none."
+                } else if field == "serviceCheck" {
+                    "The name of the check the service reports on a PR; empty for none."
                 } else {
                     "A shell command run in the worktree; empty for none."
                 };
@@ -6893,6 +6891,142 @@ impl Server {
         }
     }
 
+    /// Enter on a repository's row in Settings' Repositories: the menu of
+    /// the five ways its work can land (board 192), the one set marked,
+    /// each with what a tab does, when it is done, what it fixes, what it
+    /// never does and what it needs, with whether that is set up here; and
+    /// under them, that a change applies from the next landing, the tabs
+    /// landing now finishing the way they started with. A merge service
+    /// asks for its label and check before it is saved.
+    fn choose_way(&mut self, client: ClientId, repo: String, set: Option<crate::repos::Way>) {
+        use crate::repos::Way;
+        let setup = crate::repos::setup_in(&crate::repos::setup_file(), &repo);
+        let entry = crate::repos::entry_of(&crate::repos::read_safely(), &repo);
+        let options: Vec<MenuOption> = Way::ALL
+            .iter()
+            .map(|&way| {
+                let check = crate::repos::check(way, setup.as_ref(), &entry);
+                let mark = match check.ok {
+                    Some(true) => "✓",
+                    Some(false) => "✗",
+                    None => "?",
+                };
+                let rows = way
+                    .facts()
+                    .into_iter()
+                    .map(|(label, words)| {
+                        let words = if label == "it needs" {
+                            format!("{words}: {mark} {}", check.words)
+                        } else {
+                            words.to_string()
+                        };
+                        (label.to_string(), words)
+                    })
+                    .collect();
+                let dot = if Some(way) == set { "●" } else { "○" };
+                let ellipsis = if way == Way::Service { "…" } else { "" };
+                MenuOption::new(format!("{dot} {}{ellipsis}", way.label()))
+                    .aside(way.aside())
+                    .about(way.label(), rows)
+            })
+            .collect();
+        let landing_now = self
+            .sources
+            .landing
+            .repos
+            .iter()
+            .filter(|r| {
+                r.repo
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(&repo))
+            })
+            .map(|r| usize::from(r.holder.is_some()) + r.waiting.len() + r.prs.prs.len())
+            .sum::<usize>();
+        let foot = match (set, landing_now) {
+            (Some(way), n) if n > 0 => format!(
+                "{n} {} landing by {} and {} that way; a change applies from the next landing.",
+                if n == 1 { "tab is" } else { "tabs are" },
+                way.label(),
+                if n == 1 { "finishes" } else { "finish" }
+            ),
+            _ => "A change applies from the next landing; a branch landing already finishes the way it started with.".to_string(),
+        };
+        let at = set
+            .and_then(|s| Way::ALL.iter().position(|w| *w == s))
+            .unwrap_or(0);
+        let menu = Menu::new(format!("How {repo} lands"), options)
+            .foot("Changing it", foot)
+            .at(at);
+        let label_now = crate::repos::service_of(&entry);
+        self.choose(client, menu, move |server, client, chose| {
+            let Some(&way) = chose.and_then(|i| Way::ALL.get(i)) else {
+                return;
+            };
+            if way != Way::Service {
+                server.save_way(client, &repo, way, None);
+                return;
+            }
+            let (label, check) = label_now
+                .map(|s| (s.label, s.check))
+                .unwrap_or_default();
+            let ask = Ask::new(
+                format!("{repo}: the label the service merges by"),
+                "The one GitHub label queue-and-clean adds once a PR's checks pass, for the service to merge it.",
+            )
+            .text(label);
+            server.open(
+                client,
+                Box::new(ask),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    let Outcome::Picked(p) = outcome else {
+                        return;
+                    };
+                    let label = p.value.trim().to_string();
+                    let ask = Ask::new(
+                        format!("{repo}: the check the service reports"),
+                        "The name of the check the service reports on a PR, which queue-and-clean waits on.",
+                    )
+                    .text(check);
+                    server.open(
+                        client,
+                        Box::new(ask),
+                        Some(Box::new(move |server: &mut Server, client, outcome| {
+                            if let Outcome::Picked(p) = outcome {
+                                let check = p.value.trim().to_string();
+                                server.save_way(client, &repo, Way::Service, Some((label, check)));
+                            }
+                        })),
+                    );
+                })),
+            );
+        });
+    }
+
+    /// Saves a repository's way in repos.json, a merge service's label
+    /// and check first, and says so.
+    fn save_way(
+        &mut self,
+        client: ClientId,
+        repo: &str,
+        way: crate::repos::Way,
+        service: Option<(String, String)>,
+    ) {
+        let saved = service
+            .map(|(label, check)| {
+                crate::repos::set_repo(repo, "serviceLabel", Value::String(label)).and_then(|()| {
+                    crate::repos::set_repo(repo, "serviceCheck", Value::String(check))
+                })
+            })
+            .unwrap_or(Ok(()))
+            .and_then(|()| crate::repos::set_repo(repo, "lands", Value::String(way.key().into())));
+        let said = match saved {
+            Ok(()) => format!("{repo} lands by {} from its next landing", way.label()),
+            Err(e) => format!("Not saved: {e}"),
+        };
+        self.mission.own = None;
+        self.mission_note(client, said);
+    }
+
     /// Each GitHub repository the tabs are in, once, with a directory of it.
     fn tab_repos(&mut self) -> Vec<(String, PathBuf)> {
         let mut out: Vec<(String, PathBuf)> = Vec::new();
@@ -6908,36 +7042,43 @@ impl Server {
         out
     }
 
-    /// Going to Settings works out, in the background, how each repository
-    /// a tab is in lands, for its Landing rows, where neither repos.json
-    /// nor the last day says; only with the github setting on, since it asks
-    /// GitHub first, and each repository at most every `LANDING_RETRY`.
+    /// Going to Settings asks GitHub, in the background, whether each way
+    /// to land is set up for each repository a tab is in and each
+    /// repos.json names by `owner/name` (`repos::ask_setup`), for its
+    /// Repositories row's ✓ or ✗, kept in the state directory; only with the
+    /// github setting on, each at most once a day and every `LANDING_RETRY`.
     fn work_out_landing(&mut self) {
         if !settings::is_on("github") || tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        let data = crate::repos::read_safely();
-        let cache = crate::repos::cache_file();
+        let file = crate::repos::setup_file();
         let now = util::now_ms();
-        for (repo, dir) in self.tab_repos() {
-            let set = crate::repos::landing_entry(&data, &repo).contains_key("landing");
-            let fresh = crate::repos::cached_in(&cache, &repo)
-                .is_some_and(|c| now - c.at < crate::repos::DAY_MS);
+        let mut repos: Vec<String> = self.tab_repos().into_iter().map(|(r, _)| r).collect();
+        for key in crate::repos::read_safely().keys() {
+            if crate::integrations::github::parse_name_with_owner(key).is_some()
+                && !repos.iter().any(|r| r.eq_ignore_ascii_case(key))
+            {
+                repos.push(key.clone());
+            }
+        }
+        for repo in repos {
+            let fresh = crate::repos::setup_in(&file, &repo)
+                .is_some_and(|s| now - s.at < crate::repos::DAY_MS);
             let asked = self
                 .mission
                 .landing_asked
                 .get(&repo)
                 .is_some_and(|at| at.elapsed() < LANDING_RETRY);
-            if set || fresh || asked {
+            if fresh || asked {
                 continue;
             }
             self.mission
                 .landing_asked
                 .insert(repo.clone(), Instant::now());
-            tokio::task::spawn_blocking(move || {
-                if let Err(e) = crate::repos::landing_for(&dir, false) {
-                    eprintln!("landing: {repo}: {e}");
-                }
+            let file = file.clone();
+            tokio::task::spawn_blocking(move || match crate::repos::ask_setup(&repo, now) {
+                Ok(setup) => crate::repos::remember_setup(&file, &repo, &setup),
+                Err(e) => eprintln!("settings: how {repo} can land: {e}"),
             });
         }
     }

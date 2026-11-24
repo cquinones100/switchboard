@@ -274,7 +274,7 @@ pub(crate) fn main(
         println!("moved: {base} has moved past this commit's base, so rebase onto it again");
         return ExitCode::from(MOVED);
     }
-    let steps = match repos::landing_for(here, false) {
+    let steps = match repos::landing_for(here) {
         Ok(landing) => landing.steps,
         Err(e) => return failed(lock, &e),
     };

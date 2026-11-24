@@ -1844,7 +1844,7 @@ mod tickets {
             ],
             &json!({"notifications": false, "tips": false, "linear": false}).to_string(),
         );
-        repos(&server, json!({ "landing": "pr" }));
+        repos(&server, json!({ "lands": "auto-merge" }));
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
         git(&work, &["init", "-q"]);

@@ -1,12 +1,22 @@
-//! `switchboard landing [--json] [--refresh] [<dir>]`: how the repository at
-//! `<dir>` (the current directory by default) lands its work, `pr` (through
-//! a pull request) or `direct` (straight on its default branch), on the
-//! first line, then, on the second, a direct landing's steps as JSON
-//! (`test`, `testIn`, `squash`, `review`, `beforePush`, `afterRebase`) with where the answer came
-//! from (`source`), why, and the repository. `--json` prints both as one
-//! object; `--refresh` asks GitHub and Claude again rather than taking the
-//! answer kept from the last day. It fails when repos.json can't be read.
-//! queue-and-clean asks it which way to land a branch with no PR, and how.
+//! `switchboard landing [--json] [--start] [<dir>]`: how the repository at
+//! `<dir>` (the current directory by default) lands its work, its one way
+//! (`lands`: `switchboard-queue`, `github-queue`, `auto-merge`, `direct` or
+//! `service`, src/repos.rs's `Way`) on the first line, then, on the second,
+//! the rest as JSON: `direct`, a direct landing's steps (`test`, `testIn`,
+//! `squash`, `review`, `beforePush`, `afterRebase`), null for any other
+//! way; `service`, a merge service's `label` and `check`, null for any
+//! other way or one not named; `steps`, the steps the way goes through, in
+//! order; where the way came from (`source`: `repos.json`, or `branch` for
+//! the way the branch started landing with, which it finishes), why, the
+//! way repos.json sets now (`set`), and the repository. `--json` prints both
+//! as one object. `--start` keeps the way on the branch as the one it
+//! started landing with (`branch.<branch>.wtnLands`), unless it keeps one
+//! already, which queue-and-clean runs as a landing begins, so a change of
+//! way in Settings applies from the next landing. It fails (exit 1) when
+//! repos.json can't be read, and when the repository's `lands` isn't set,
+//! saying so and naming Settings' row that sets it, since nothing guesses
+//! how a repository lands. queue-and-clean asks it which way to land a
+//! branch, and how.
 //! `target` is the branch a direct landing goes onto when it isn't the
 //! default branch: the one autopilot cut the branch from, which `wt
 //! --target` recorded as `branch.<branch>.wtnTarget`, with the remote branch
@@ -162,13 +172,13 @@ fn already_landed(dir: &Path, upstream: Option<&str>) -> Value {
 
 pub fn main(args: Vec<String>) -> ExitCode {
     let as_json = args.iter().any(|a| a == "--json");
-    let refresh = args.iter().any(|a| a == "--refresh");
+    let start = args.iter().any(|a| a == "--start");
     if let Some(bad) = args
         .iter()
-        .find(|a| a.starts_with('-') && !["--json", "--refresh"].contains(&a.as_str()))
+        .find(|a| a.starts_with('-') && !["--json", "--start"].contains(&a.as_str()))
     {
         eprintln!(
-            "landing: unknown option {bad}\nusage: switchboard landing [--json] [--refresh] [<dir>]"
+            "landing: unknown option {bad}\nusage: switchboard landing [--json] [--start] [<dir>]"
         );
         return ExitCode::from(2);
     }
@@ -177,67 +187,91 @@ pub fn main(args: Vec<String>) -> ExitCode {
         .find(|a| !a.starts_with('-'))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    match repos::landing_for(&dir, refresh) {
-        Ok(answer) => {
-            let mut rest = answer.steps.json();
-            if let Value::Object(map) = &mut rest {
-                map.insert("source".into(), json!(answer.source));
-                map.insert("why".into(), json!(answer.why));
-                map.insert("repo".into(), json!(answer.repo));
-                let target = target_at(&dir);
-                let default = repos::default_branch(&dir);
-                let upstream = lands_on(&target, default.as_deref());
-                let (note, item) = note_and_item_at(&dir);
-                map.insert("target".into(), target);
-                map.insert("defaultBranch".into(), json!(default));
-                map.insert("note".into(), note);
-                map.insert("item".into(), item);
-                let reference = branch_at(&dir)
-                    .and_then(|b| crate::cmd::worktree_from_issue::issue_of_branch(&dir, &b));
-                let origin = crate::sources::repo::remotes_of(&dir).origin;
-                map.insert(
-                    "issueWork".into(),
-                    json!(issue_work(
-                        &branch_at(&dir).unwrap_or_default(),
-                        reference.as_deref()
-                    )),
-                );
-                map.insert(
-                    "issue".into(),
-                    json!(issue_of(reference.as_deref(), origin.as_ref())),
-                );
-                map.insert(
-                    "ciBranch".into(),
-                    json!(branch_at(&dir).map(|b| ci_branch_of(&b))),
-                );
-                map.insert(
-                    "alreadyLanded".into(),
-                    already_landed(&dir, upstream.as_deref()),
-                );
-                let started = started_at(&dir);
-                map.insert("started".into(), json!(started));
-                map.insert(
-                    "took".into(),
-                    json!(started.map(|s| crate::sidebar::text::span(crate::util::now_secs() - s))),
-                );
-            }
-            if as_json {
-                let mut all = serde_json::Map::new();
-                all.insert("landing".into(), json!(answer.landing));
-                if let Value::Object(map) = rest {
-                    all.extend(map);
-                }
-                println!("{}", Value::Object(all));
-            } else {
-                println!("{}\n{rest}", answer.landing);
-            }
-            ExitCode::SUCCESS
-        }
+    let mut answer = match repos::landing_for(&dir) {
+        Ok(answer) => answer,
         Err(e) => {
             eprintln!("landing: {e}");
-            ExitCode::from(1)
+            return ExitCode::from(1);
+        }
+    };
+    if start && answer.source != "branch" {
+        match repos::record_at(&dir, answer.lands) {
+            Ok(kept) => answer.lands = kept,
+            Err(e) => {
+                eprintln!("landing: couldn't keep the way on the branch: {e}");
+                return ExitCode::from(1);
+            }
         }
     }
+    let lands = answer.lands;
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "direct".into(),
+        if lands == repos::Way::Direct {
+            answer.steps.json()
+        } else {
+            Value::Null
+        },
+    );
+    map.insert(
+        "service".into(),
+        match (&answer.service, lands) {
+            (Some(s), repos::Way::Service) => json!({ "label": s.label, "check": s.check }),
+            _ => Value::Null,
+        },
+    );
+    map.insert("steps".into(), json!(lands.steps()));
+    map.insert("source".into(), json!(answer.source));
+    map.insert("why".into(), json!(answer.why));
+    map.insert("set".into(), json!(answer.set.map(repos::Way::key)));
+    map.insert("repo".into(), json!(answer.repo));
+    let target = target_at(&dir);
+    let default = repos::default_branch(&dir);
+    let upstream = lands_on(&target, default.as_deref());
+    let (note, item) = note_and_item_at(&dir);
+    map.insert("target".into(), target);
+    map.insert("defaultBranch".into(), json!(default));
+    map.insert("note".into(), note);
+    map.insert("item".into(), item);
+    let branch = branch_at(&dir);
+    let reference = branch
+        .as_deref()
+        .and_then(|b| crate::cmd::worktree_from_issue::issue_of_branch(&dir, b));
+    let origin = crate::sources::repo::remotes_of(&dir).origin;
+    map.insert(
+        "issueWork".into(),
+        json!(issue_work(
+            branch.as_deref().unwrap_or_default(),
+            reference.as_deref()
+        )),
+    );
+    map.insert(
+        "issue".into(),
+        json!(issue_of(reference.as_deref(), origin.as_ref())),
+    );
+    map.insert(
+        "ciBranch".into(),
+        json!(branch.as_deref().map(ci_branch_of)),
+    );
+    map.insert(
+        "alreadyLanded".into(),
+        already_landed(&dir, upstream.as_deref()),
+    );
+    let started = started_at(&dir);
+    map.insert("started".into(), json!(started));
+    map.insert(
+        "took".into(),
+        json!(started.map(|s| crate::sidebar::text::span(crate::util::now_secs() - s))),
+    );
+    if as_json {
+        let mut all = serde_json::Map::new();
+        all.insert("lands".into(), json!(lands.key()));
+        all.extend(map);
+        println!("{}", Value::Object(all));
+    } else {
+        println!("{}\n{}", lands.key(), Value::Object(map));
+    }
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

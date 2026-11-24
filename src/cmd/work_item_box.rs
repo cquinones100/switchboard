@@ -243,8 +243,11 @@ impl WorkItemBox {
             Ok((how, said)) if how == "direct" => {
                 format!("straight on {branch} through queue-and-clean{said}")
             }
-            Ok((_, said)) => format!("through a PR to {branch}{said}"),
-            Err(e) => format!("couldn't tell how it lands: {e}"),
+            Ok((how, said)) => {
+                let by = crate::repos::Way::parse(how).map_or(how.as_str(), |w| w.label());
+                format!("through a PR to {branch}, by {by}{said}")
+            }
+            Err(e) => e.clone(),
         }
     }
 
@@ -795,7 +798,7 @@ mod tests {
             target: String::new(),
             branches: vec!["main".into(), "release".into()],
             default_branch: "main".into(),
-            landing: Ok(("direct".into(), ", as repos.json says".into())),
+            landing: Ok(("direct".into(), ", as Settings sets it".into())),
             tab: 10,
             worktree: "note-cycle-through-idle-tabs-with-m-a".into(),
             claimed: false,
@@ -844,8 +847,11 @@ mod tests {
             second.contains('○') && !second.contains("the note's"),
             "{second}"
         );
-        assert!(shown.contains("straight on main through queue-and-clean, as repos.json says"));
         let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("straight on main through queue-and-clean, as Settings sets it"),
+            "{shown}"
+        );
         assert!(flat.contains(
             "Opens tab 10 in a new worktree, note-cycle-through-idle-tabs-with-m-a, running wt on this item and its plan."
         ), "{shown}");
@@ -992,10 +998,10 @@ mod tests {
     fn a_claimed_item_and_a_pr_landing_say_so() {
         let mut c = ctx();
         c.claimed = true;
-        c.landing = Ok(("pr".into(), String::new()));
+        c.landing = Ok(("auto-merge".into(), String::new()));
         let shown = text(&WorkItemBox::new(c), WIDTH);
         assert!(shown.contains("A worktree of ~/switchboard has this item already."));
-        assert!(shown.contains("through a PR to main"));
+        assert!(shown.contains("through a PR to main, by GitHub's auto-merge"));
     }
 
     #[test]

@@ -198,7 +198,7 @@ fn open(
         ],
     )
     .unwrap_or_default();
-    let steps = repos::landing_for(here, false)?.steps;
+    let steps = repos::landing_for(here)?.steps;
     let checks = Checks {
         land: land_push::tab_option(crate::mux::server::LAND) == "1",
         review_loop: steps.review == "review-loop",

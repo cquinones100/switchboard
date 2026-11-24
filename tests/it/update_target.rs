@@ -141,7 +141,7 @@ fn repos(name: &str, test: Option<&str>) -> Repos {
     git(&home, &home, &["clone", "-q", &s(&origin), &s(&other)]);
     let own = home.join(".config/switchboard");
     fs::create_dir_all(&own).unwrap();
-    let mut entry = json!({ "landing": "direct" });
+    let mut entry = json!({ "lands": "direct" });
     if let Some(test) = test {
         entry["test"] = json!(test);
     }
@@ -561,7 +561,7 @@ fn a_repository_off_github_takes_its_steps_by_its_git_directory() {
     let common = r.clone.join(".git").canonicalize().unwrap();
     fs::write(
         home.join(".config/switchboard/repos.json"),
-        json!({ common.to_str().unwrap(): { "landing": "direct", "test": "false" } }).to_string(),
+        json!({ common.to_str().unwrap(): { "lands": "direct", "test": "false" } }).to_string(),
     )
     .unwrap();
     r.push_from_other("main", "a.txt", "from main\n");
@@ -625,7 +625,7 @@ fn a_run_cut_short_while_holding_the_lock_is_taken_up_by_the_next_as_its_own() {
     let own = home.join(".config/switchboard");
     fs::write(
         own.join("repos.json"),
-        json!({ "acme/r": { "landing": "direct", "test": "while [ ! -f \"$HOME/go\" ]; do sleep 0.05; done" } })
+        json!({ "acme/r": { "lands": "direct", "test": "while [ ! -f \"$HOME/go\" ]; do sleep 0.05; done" } })
             .to_string(),
     )
     .unwrap();

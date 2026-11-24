@@ -253,8 +253,17 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
     let tickets: Map<String, Value> = fixtures::REPOS
         .iter()
         .map(|r| {
-            let kept = if r.name == "api" { "notes" } else { "linear" };
-            (format!("acme/{}", r.name), json!({ "tickets": kept }))
+            // The API lands straight on main, as autopilot works it; the
+            // rest through PRs GitHub merges.
+            let (kept, lands) = if r.name == "api" {
+                ("notes", "direct")
+            } else {
+                ("linear", "auto-merge")
+            };
+            (
+                format!("acme/{}", r.name),
+                json!({ "tickets": kept, "lands": lands }),
+            )
         })
         .collect();
     util::write_atomic(

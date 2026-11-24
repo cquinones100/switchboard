@@ -923,7 +923,11 @@ fn landing_names_the_default_branch_note_item_and_ci_branch_and_whether_it_has_l
     let own = home.join(".config/switchboard");
     std::fs::create_dir_all(&own).unwrap();
     std::fs::write(own.join("settings.json"), r#"{"github": false}"#).unwrap();
-    std::fs::write(own.join("repos.json"), "{}").unwrap();
+    std::fs::write(
+        own.join("repos.json"),
+        json!({ repo.join(".git").to_str().unwrap(): { "lands": "direct" } }).to_string(),
+    )
+    .unwrap();
     let notes = home.join("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
@@ -994,7 +998,7 @@ fn landing_names_the_default_branch_note_item_and_ci_branch_and_whether_it_has_l
 }
 
 #[test]
-fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_github_off() {
+fn landing_says_the_one_way_a_repository_lands_and_nothing_when_none_is_set() {
     let tmp = TempDir::new("landing");
     let home = tmp.path();
     let repo = repo(home);
@@ -1004,11 +1008,11 @@ fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_gi
     );
     let own = home.join(".config/switchboard");
     std::fs::create_dir_all(&own).unwrap();
-    // Nothing asks GitHub or Claude here: the github setting is off.
+    // Nothing asks GitHub here: the github setting is off.
     std::fs::write(own.join("settings.json"), r#"{"github": false}"#).unwrap();
     std::fs::write(
         own.join("repos.json"),
-        r#"{"acme/direct": {"landing": "direct", "test": "npm test", "squash": false}}"#,
+        r#"{"acme/direct": {"lands": "direct", "test": "npm test", "squash": false}}"#,
     )
     .unwrap();
     let out = landing(home, &repo, &[]);
@@ -1016,14 +1020,15 @@ fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_gi
     let text = stdout(&out);
     let mut lines = text.lines();
     assert_eq!(lines.next(), Some("direct"));
-    let steps: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let rest: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let steps = &rest["direct"];
     assert_eq!(
         (
             &steps["test"],
             &steps["testIn"],
             &steps["squash"],
             &steps["review"],
-            &steps["source"]
+            &rest["source"]
         ),
         (
             &json!("npm test"),
@@ -1035,24 +1040,71 @@ fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_gi
     );
     let json_of =
         |out: Output| -> serde_json::Value { serde_json::from_str(&stdout(&out)).unwrap() };
+    let all = json_of(landing(home, &repo, &["--json"]));
+    assert_eq!(all["lands"], "direct");
+    assert_eq!(all["steps"][0], "lock");
+    assert!(all.get("landing").is_none(), "no pr or direct of old");
+
+    std::fs::write(
+        own.join("repos.json"),
+        r#"{"acme/direct": {"lands": "service", "serviceLabel": "merge-ready", "serviceCheck": "mergebot"}}"#,
+    )
+    .unwrap();
+    let all = json_of(landing(home, &repo, &["--json"]));
+    assert_eq!(all["lands"], "service");
     assert_eq!(
-        json_of(landing(home, &repo, &["--json"]))["landing"],
-        "direct"
+        all["direct"],
+        serde_json::Value::Null,
+        "steps only for direct"
+    );
+    assert_eq!(
+        all["service"],
+        json!({ "label": "merge-ready", "check": "mergebot" })
     );
 
-    std::fs::write(own.join("repos.json"), "{}").unwrap();
-    let all = json_of(landing(home, &repo, &["--json"]));
-    assert_eq!(all["landing"], "pr", "with GitHub not to be asked, a PR");
+    std::fs::write(
+        own.join("repos.json"),
+        r#"{"acme/direct": {"tickets": "github"}}"#,
+    )
+    .unwrap();
+    let unset = landing(home, &repo, &["--json"]);
+    assert_eq!(code(&unset), 1, "nothing lands with no way set");
+    let said = String::from_utf8_lossy(&unset.stderr);
     assert!(
-        all["why"]
-            .as_str()
-            .unwrap()
-            .contains("github setting is off")
+        said.contains("acme/direct lands nothing yet") && said.contains("Settings' Repositories"),
+        "{said}"
     );
+
+    // A branch keeps the way it started landing with.
+    git(&repo, &["checkout", "-qb", "work"]);
+    std::fs::write(
+        own.join("repos.json"),
+        r#"{"acme/direct": {"lands": "auto-merge"}}"#,
+    )
+    .unwrap();
+    let started = json_of(landing(home, &repo, &["--json", "--start"]));
+    assert_eq!(started["lands"], "auto-merge");
+    let kept = Command::new("git")
+        .args(["config", "branch.work.wtnLands"])
+        .current_dir(&repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&kept.stdout).trim(), "auto-merge");
+    std::fs::write(
+        own.join("repos.json"),
+        r#"{"acme/direct": {"lands": "github-queue"}}"#,
+    )
+    .unwrap();
+    let after = json_of(landing(home, &repo, &["--json"]));
     assert_eq!(
-        all["test"],
-        serde_json::Value::Null,
-        "a test command not set"
+        (&after["lands"], &after["source"], &after["set"]),
+        (
+            &json!("auto-merge"),
+            &json!("branch"),
+            &json!("github-queue")
+        ),
+        "the old way finishes; the next landing goes the new way"
     );
 
     std::fs::write(own.join("repos.json"), "{ broken").unwrap();
@@ -1354,7 +1406,7 @@ impl Landing {
         git(&repo, &["remote", "set-head", "origin", "main"]);
         std::fs::write(
             home.join(".config/switchboard/repos.json"),
-            json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop" } })
+            json!({ repo.join(".git").to_str().unwrap(): { "lands": "direct", "test": "true", "review": "review-loop" } })
                 .to_string(),
         )
         .unwrap();
@@ -1505,7 +1557,7 @@ fn the_landing_push_lands_without_asking_through_its_gate_and_does_the_bookkeepi
     // question.
     std::fs::write(
         l.server.home.join(".config/switchboard/repos.json"),
-        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop", "beforePush": "touch \"$HOME/before-ran\"" } })
+        json!({ l.repo.join(".git").to_str().unwrap(): { "lands": "direct", "test": "true", "review": "review-loop", "beforePush": "touch \"$HOME/before-ran\"" } })
             .to_string(),
     )
     .unwrap();
@@ -1691,7 +1743,7 @@ fn a_refused_landing_push_leaves_the_remote_and_lets_the_lock_go() {
     // the computer's git knows.
     std::fs::write(
         l.server.home.join(".config/switchboard/repos.json"),
-        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "beforePush": "touch \"$HOME/before-ran\"" } })
+        json!({ l.repo.join(".git").to_str().unwrap(): { "lands": "direct", "test": "true", "beforePush": "touch \"$HOME/before-ran\"" } })
             .to_string(),
     )
     .unwrap();
@@ -1730,7 +1782,7 @@ fn ask_before_landing_chosen_while_before_push_runs_asks_after_all() {
     // beforePush stands in for you choosing "Ask before landing" meanwhile.
     std::fs::write(
         l.server.home.join(".config/switchboard/repos.json"),
-        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop", "beforePush": format!("env -u SWITCHBOARD_PANE '{BIN}' set -t {} @land 0", l.tab) } })
+        json!({ l.repo.join(".git").to_str().unwrap(): { "lands": "direct", "test": "true", "review": "review-loop", "beforePush": format!("env -u SWITCHBOARD_PANE '{BIN}' set -t {} @land 0", l.tab) } })
             .to_string(),
     )
     .unwrap();
@@ -1925,7 +1977,7 @@ fn squash_folds_the_branch_into_one_commit_and_moves_the_review_only_when_safe()
 fn queue_pr_keeps_order_across_worktrees_and_refuses_a_pr_twice() {
     let tmp = TempDir::new("land-lock-prs");
     let home = tmp.path();
-    common::write_settings(home, json!({ "pr_merge_queue": true }));
+    common::write_settings(home, json!({}));
     let repo = repo(home);
     let one = worktree(home, &repo, home, "one");
     let two = worktree(home, &repo, home, "two");
@@ -1961,13 +2013,13 @@ fn queue_pr_keeps_order_across_worktrees_and_refuses_a_pr_twice() {
         stdout(&lock(home, &one, &["pr-status", "7"])),
         "queued 1 of 2\n"
     );
-    common::write_settings(home, json!({}));
+    common::write_settings(home, json!({ "github": false }));
     assert_eq!(
         stdout(&lock(home, &one, &["pr-status", "7"])),
-        "held Settings' pr_merge_queue is off · queued 1 of 2\n",
+        "held Settings' github is off · queued 1 of 2\n",
         "with the setting off, nothing moves a queued PR"
     );
-    common::write_settings(home, json!({ "pr_merge_queue": true }));
+    common::write_settings(home, json!({ "github": true }));
     assert_eq!(code(&lock(home, &one, &["dequeue-pr", "7"])), 0);
     assert_eq!(code(&lock(home, &one, &["dequeue-pr", "7"])), 3);
     assert_eq!(stdout(&lock(home, &one, &["pr-status", "7"])), "none\n");

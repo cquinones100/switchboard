@@ -301,9 +301,9 @@ fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
     let landing = if fields.repo.trim().is_empty() {
         String::new()
     } else {
-        crate::repos::landing_for(&repo, false)
-            .map(|l| landing_words(&l.landing, &l.source))
-            .unwrap_or_else(|e| format!("couldn't tell how it lands: {e}"))
+        crate::repos::landing_for(&repo)
+            .map(|l| landing_words(&l))
+            .unwrap_or_else(|e| e)
     };
     let mut repos: Vec<String> = Vec::new();
     let mut add = |r: String| {
@@ -391,35 +391,38 @@ fn skipped_of(mode: &Mode, id: &str) -> Vec<String> {
 }
 
 /// How a repository lands, in words, and what says so.
-fn landing_words(landing: &str, source: &str) -> String {
-    let how = if landing == "direct" {
-        "straight on it through queue-and-clean"
+fn landing_words(l: &crate::repos::Landing) -> String {
+    let how = if l.lands == crate::repos::Way::Direct {
+        "straight on it through queue-and-clean".to_string()
     } else {
-        "through a PR to the default branch, opened and queued to merge by queue-and-clean"
+        format!(
+            "through a PR to the default branch, opened by queue-and-clean and landed by {}",
+            l.lands.label()
+        )
     };
-    format!("{how}{}", said_by(source))
+    format!("{how}{}", said_by(&l.source))
 }
 
 /// What said how a repository lands, as words to follow it.
 pub fn said_by(source: &str) -> &'static str {
     match source {
-        "repos.json" => ", as repos.json says",
-        "github" => ", as GitHub's rules say",
-        "claude-md" => ", as its CLAUDE.md says",
+        "repos.json" => ", as Settings sets it",
+        "branch" => ", as this branch started landing",
         _ => "",
     }
 }
 
 /// Why `branch` can't be landed on in the repository at `repo`, which
-/// lands through PRs, as `source` says.
-pub fn target_refused(branch: &str, repo: &Path, source: &str) -> String {
+/// lands through PRs, as `landing` says.
+pub fn target_refused(branch: &str, repo: &Path, landing: &crate::repos::Landing) -> String {
     let name = repo
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| paths::tilde(repo));
     format!(
-        "{branch} can't be landed on: {name} lands through PRs{}, and they go to the default branch. Land on the default branch, or set \"landing\": \"direct\" for it in ~/.config/switchboard/repos.json",
-        said_by(source)
+        "{branch} can't be landed on: {name} lands through PRs, by {}{}, and they go to the default branch. Land on the default branch, or choose Straight to the default branch for it in Settings' Repositories",
+        landing.lands.label(),
+        said_by(&landing.source)
     )
 }
 
@@ -530,15 +533,15 @@ impl FieldsCheck {
         // the box: a repository landing through PRs sends them to the
         // default branch, so it takes no other.
         if starting || picked || repo != mode_repo || target != mode_target {
-            match crate::repos::landing_for(&repo, false) {
-                Ok(l) if l.landing == "direct" => {}
+            match crate::repos::landing_for(&repo) {
+                Ok(l) if l.lands == crate::repos::Way::Direct => {}
                 Ok(l) => {
                     let default = common.as_deref().and_then(crate::tabs::git::default_branch);
                     if !target.is_empty() && default.as_deref() != Some(target.as_str()) {
-                        return Err(target_refused(&target, &repo, &l.source));
+                        return Err(target_refused(&target, &repo, &l));
                     }
                 }
-                Err(e) => return Err(format!("Couldn't tell how it lands: {e}")),
+                Err(e) => return Err(e),
             }
         }
         // A note to start on, or picked, must be there to read.
@@ -709,9 +712,9 @@ impl Server {
                     }
                     server.off_task(
                         client,
-                        move || crate::repos::landing_for(&at, false).map(|l| (l, at)),
+                        move || crate::repos::landing_for(&at).map(|l| (l, at)),
                         move |server, client, landing| match landing {
-                            Ok((l, _)) if l.landing == "direct" => {
+                            Ok((l, _)) if l.lands == crate::repos::Way::Direct => {
                                 keep(&branch);
                                 then(server, client, branch)
                             }
@@ -722,7 +725,7 @@ impl Server {
                                 then(server, client, String::new())
                             }
                             Ok((l, at)) => {
-                                server.say(Some(client), &target_refused(&branch, &at, &l.source))
+                                server.say(Some(client), &target_refused(&branch, &at, &l))
                             }
                             Err(e) => server.say(
                                 Some(client),
