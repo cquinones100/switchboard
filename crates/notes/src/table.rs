@@ -153,6 +153,22 @@ pub fn edited(before: &[String], lines: &[String], row: usize) -> bool {
     true
 }
 
+/// After a change made from `before`, the table it edited lined up: the
+/// cursor's, or, rows deleted from a table's end leaving the cursor under
+/// it, the one above. A table only beside the change stays as written.
+pub fn line_up_edited(doc: &mut Doc, before: &[String]) {
+    let lines = doc.text.lines();
+    let row = doc.row;
+    let at = if bounds(&lines, row).is_some() || row == 0 {
+        row
+    } else {
+        row - 1
+    };
+    if edited(before, &lines, at) {
+        align(doc, at);
+    }
+}
+
 /// Aligns the table around `row`. Gives whether anything changed.
 pub fn align(doc: &mut Doc, row: usize) -> bool {
     let lines = doc.text.lines();

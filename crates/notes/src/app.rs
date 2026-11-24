@@ -2950,7 +2950,11 @@ impl App {
                 if let Some(url) = typed(&outcome) {
                     let url = url.trim().to_string();
                     if !url.is_empty() && url != "https://" {
-                        self.editor.change(|doc| format::link(doc, selection, &url));
+                        self.editor.change(|doc| {
+                            let before = doc.text.lines();
+                            format::link(doc, selection, &url);
+                            table::line_up_edited(doc, &before);
+                        });
                         self.changed();
                     }
                 }
@@ -3115,10 +3119,8 @@ impl App {
             // The table edited lined up in the text, as a key's change
             // does; one only beside the change stays as written, and typing
             // pads it as Insert mode ends.
-            let edited = table::edited(&before.lines(), &doc.text.lines(), doc.row);
-            if typing.is_none() && !goes_on_typing && doc.insert.is_none() && edited {
-                let row = doc.row;
-                table::align(doc, row);
+            if typing.is_none() && !goes_on_typing && doc.insert.is_none() {
+                table::line_up_edited(doc, &before.lines());
             }
         });
         self.take_insert();
@@ -3155,8 +3157,14 @@ impl App {
         };
         let grab = self.grab;
         let mut result = Ok(String::new());
+        // Typing, the table lines up as Insert mode ends.
+        let typing = self.editor.is_typing();
         self.editor.change(|doc| {
+            let before = doc.text.lines();
             result = images::paste(doc, &path, &|f| grab(f));
+            if !typing {
+                table::line_up_edited(doc, &before);
+            }
         });
         match result {
             Ok(_) => self.changed(),
@@ -4125,21 +4133,8 @@ impl App {
             // A change, not a motion, an undo, a redo or another note
             // opened: a table only read, or put back as it was, stays as
             // written.
-            // The table the change edited: the cursor's, or, rows deleted
-            // from a table's end leaving the cursor under it, the one above.
-            let row = self.editor.doc.row;
             let before = text_before.lines();
-            self.editor.tidy(|doc| {
-                let lines = doc.text.lines();
-                let at = if table::bounds(&lines, row).is_some() || row == 0 {
-                    row
-                } else {
-                    row - 1
-                };
-                if table::edited(&before, &lines, at) {
-                    table::align(doc, at);
-                }
-            });
+            self.editor.tidy(|doc| table::line_up_edited(doc, &before));
             self.editor.clamp();
         }
         if let Some(before) = self.editor.end() {
