@@ -630,12 +630,12 @@ pub fn view_items(
             }
         }
         if !queue.is_empty() {
-            // These are GitHub's merge queue's entries, whatever way the
-            // repository is set to land by now.
-            let way = if r.method.is_some_and(crate::repos::Way::through_pr) {
-                "through a PR · GitHub merge queue"
-            } else {
+            // A direct landing's own queue, else GitHub's merge queue's
+            // entries, whatever other way the repository is set to by now.
+            let way = if r.method == Some(crate::repos::Way::Direct) {
                 "merge queue"
+            } else {
+                "through a PR · GitHub merge queue"
             };
             items.push(header(
                 &format!("{}:queue", r.common.display()),
