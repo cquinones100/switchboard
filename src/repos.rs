@@ -1074,6 +1074,28 @@ pub fn lands_migrated(
     changed.then_some((out, set))
 }
 
+/// While the rest of the carrying over waits on GitHub, an entry whose
+/// `landing` was `direct` gets `direct` at once, since that needs no
+/// answer of GitHub's; the rest wait, `landing` kept for them.
+fn direct_now(path: &Path, data: &Map<String, Value>) {
+    let direct = |e: &Value| {
+        e.get("landing").and_then(Value::as_str) == Some("direct") && e.get("lands").is_none()
+    };
+    if !data.values().any(direct) {
+        return;
+    }
+    let _ = change_file(path, |d| {
+        for entry in d.values_mut() {
+            if direct(entry)
+                && let Some(e) = entry.as_object_mut()
+            {
+                e.shift_remove("landing");
+                e.insert("lands".into(), json!(Way::Direct.key()));
+            }
+        }
+    });
+}
+
 /// Whether GitHub's failure to answer for a repository says it isn't there
 /// for you: no repository in its answer, GraphQL's not found, or one an
 /// organization's sign-in keeps the token out of.
@@ -1130,6 +1152,7 @@ pub fn migrate_lands() -> Option<String> {
     // With GitHub not to be asked, whether a repository's CI runs on trains
     // can't be told, so a computer whose queue was on waits until it can.
     if !settings::is_on("github") && queue_was_on {
+        direct_now(&path, &data);
         return None;
     }
     if settings::is_on("github") {
@@ -1161,6 +1184,7 @@ pub fn migrate_lands() -> Option<String> {
         // A failure to ask is tried again next start, so a moment offline
         // never settles a way.
         if failed > 0 {
+            direct_now(&path, &data);
             return None;
         }
     }
