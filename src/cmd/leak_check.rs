@@ -84,12 +84,14 @@ pub fn read_words(file: &Path) -> Result<Vec<String>, String> {
     }
 }
 
-/// Standards, and key names (M-1, C-2), that look like ticket IDs.
+/// Standards, public security advisories, and key names (M-1, C-2), that
+/// look like ticket IDs.
 const NOT_TICKETS: &[&str] = &[
-    "UTF", "SHA", "ISO", "RFC", "CVE", "HTTP", "TLS", "SSL", "AES", "RSA", "ECMA", "IPV", "UTC",
-    "GMT", "ASCII", "ABC", "XYZ", "CP", "MD", "ES", "WCAG", "BASE", "LF", "CRLF", "PEP", "POSIX",
-    "IEEE", "ANSI", "OSC", "CSI", "DCS", "SGR", "DEC", "VT", "XTERM", "TODO", "NOTE", "UID", "GID",
-    "PID", "SIG", "MPL", "GPL", "LGPL", "AGPL", "BSD", "CC", "APACHE", "M", "C", "S",
+    "UTF", "SHA", "ISO", "RFC", "CVE", "RUSTSEC", "GHSA", "HTTP", "TLS", "SSL", "AES", "RSA",
+    "ECMA", "IPV", "UTC", "GMT", "ASCII", "ABC", "XYZ", "CP", "MD", "ES", "WCAG", "BASE", "LF",
+    "CRLF", "PEP", "POSIX", "IEEE", "ANSI", "OSC", "CSI", "DCS", "SGR", "DEC", "VT", "XTERM",
+    "TODO", "NOTE", "UID", "GID", "PID", "SIG", "MPL", "GPL", "LGPL", "AGPL", "BSD", "CC",
+    "APACHE", "M", "C", "S",
 ];
 const PLACEHOLDER_USERS: &[&str] = &[
     "me", "you", "someone", "name", "user", "username", "example", "test", "x", "shared",
