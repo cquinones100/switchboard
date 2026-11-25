@@ -114,11 +114,7 @@ impl Work {
 
 impl Server {
     /// Opens a tab for `work` at the end of the client's session, in `dir`,
-    /// in front or behind as `opened` says; says why when it can't. An
-    /// item's tab is named after the item, cut short, its whole first line
-    /// its full title, and linked to its note (`@tab_name`, `@tab_title`,
-    /// `@tab_note`); every other tab is named once its command has made the
-    /// worktree, from its branch (src/tabs/names.rs).
+    /// in front or behind as `opened` says; says why when it can't.
     pub fn open_work_tab(
         &mut self,
         client: ClientId,
@@ -126,7 +122,39 @@ impl Server {
         work: Work,
         opened: Opened,
     ) -> Option<TabId> {
-        let tab = self.tab_at_end(client, dir, work.command(), opened)?;
+        let session = self.clients.get(&client)?.session.clone();
+        match self.open_work_tab_in(&session, dir, work, opened) {
+            Ok(tab) => Some(tab),
+            Err(e) => {
+                self.say(Some(client), &e);
+                None
+            }
+        }
+    }
+
+    /// `open_work_tab` in a session named, for a caller with no client (the
+    /// phone app), the error its words. An item's tab is named after the
+    /// item, cut short, its whole first line its full title, and linked to
+    /// its note (`@tab_name`, `@tab_title`, `@tab_note`); every other tab is
+    /// named once its command has made the worktree, from its branch
+    /// (src/tabs/names.rs).
+    pub fn open_work_tab_in(
+        &mut self,
+        session: &str,
+        dir: &Path,
+        work: Work,
+        opened: Opened,
+    ) -> Result<TabId, String> {
+        let (tab, _) = self
+            .new_tab(
+                session,
+                Some(dir.to_path_buf()),
+                Some(work.command()),
+                None,
+                opened,
+            )
+            .map_err(|e| format!("Couldn't open a tab: {e}"))?;
+        self.tab_to_end(tab);
         if let Work::Item { note, text, .. } = work
             && let Some(t) = self.tabs.get_mut(&tab)
         {
@@ -136,7 +164,7 @@ impl Server {
             t.opts.insert("@tab_note".into(), note);
             self.dirty_tab(tab);
         }
-        Some(tab)
+        Ok(tab)
     }
 }
 
