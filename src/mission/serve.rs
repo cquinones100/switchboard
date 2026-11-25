@@ -7008,6 +7008,14 @@ impl Server {
                                 return;
                             };
                             let comment = p.value.trim().to_string();
+                            if label.is_empty() && comment.is_empty() {
+                                server.mission.own = None;
+                                server.mission_note(
+                                    client,
+                                    "Not saved: a merge service needs the label or the comment that hands it a PR",
+                                );
+                                return;
+                            }
                             let ask = Ask::new(
                                 format!("{repo}: the check the service reports"),
                                 "The name of the check the service reports on a PR, which queue-and-clean waits on.",
