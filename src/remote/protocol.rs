@@ -263,6 +263,9 @@ pub trait Remote {
 const START_WAIT: Duration = Duration::from_secs(300);
 const _: () = assert!(START_WAIT.as_secs() > crate::autopilot::START_LIMIT.as_secs());
 
+/// How long what a front-end asks to have done to a tab is waited for.
+const DONE_WAIT: Duration = Duration::from_secs(60);
+
 /// The running server, on its socket.
 pub struct Server {
     pub socket: PathBuf,
@@ -293,11 +296,18 @@ impl Server {
         self.ask_for(args, Some(wait))
     }
 
-    /// `ask`, waiting for the answer however long the server takes (a
-    /// view's menu option works off the server's task), its last line
-    /// break taken off: what a front-end asks to be done, which the phone
-    /// never gave up on.
+    /// `ask` for what a front-end asks to have done to a tab, its answer's
+    /// last line break taken off: the server answers at once, so the wait
+    /// is long (`DONE_WAIT`) only so a busy server isn't taken for one
+    /// that failed, and bounded, since the relay waits on its one thread.
     fn said(&self, args: &[&str]) -> Result<String> {
+        Ok(self.ask_for(args, Some(DONE_WAIT))?.trim_end().to_string())
+    }
+
+    /// `ask` for a view's menu option or a tab's view, which the server
+    /// works out off its task: waited for however long it takes, as the
+    /// phone, its only asker, always has.
+    fn said_once_done(&self, args: &[&str]) -> Result<String> {
         Ok(self.ask_for(args, None)?.trim_end().to_string())
     }
 
@@ -498,13 +508,13 @@ impl Remote for Server {
     }
 
     fn tab_view(&self, pane: &str, kind: &str) -> Result<String> {
-        self.said(&["phone-tab", "-t", pane, kind])
+        self.said_once_done(&["phone-tab", "-t", pane, kind])
     }
 
     fn view_option(&self, view: &str, id: Option<&str>, label: &str) -> Result<String> {
         match id {
-            Some(id) => self.said(&["phone-item", view, id, label]),
-            None => self.said(&["phone-view", view, label]),
+            Some(id) => self.said_once_done(&["phone-item", view, id, label]),
+            None => self.said_once_done(&["phone-view", view, label]),
         }
     }
 

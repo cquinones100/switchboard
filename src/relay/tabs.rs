@@ -1,7 +1,8 @@
 //! The tabs running Claude, as the relay reads and types into them
 //! (lib/slack-relay/tabs.js): each tab's Claude pane, its transcript and
-//! last turn, its screen, the prompts and dialogs it shows, and typing an
-//! answer or a message into it.
+//! last turn, its screen, and the prompts and dialogs it shows, which the
+//! relay answers, and messages it sends, through the server's `answer`
+//! (src/remote).
 //!
 //! A tab can hold other panes beside Claude (a shell, a server, another
 //! Claude), so it keeps the pane it had: the first Claude pane the relay

@@ -828,6 +828,16 @@ async fn send_to_tab(
             )
             .await;
         }
+        // The server sends what follows a settle a moment later (a choice
+        // beside a preview, then Enter), so the screen read next waits too.
+        if crate::mission::answer::presses(prompt, answer)
+            .contains(&crate::mission::answer::Press::Settle)
+        {
+            tokio::time::sleep(Duration::from_millis(
+                crate::mission::answer::PASTE_SETTLE_MS,
+            ))
+            .await;
+        }
         let did = tabs::answer_said(answer);
         cx.log(&format!("→ {name}: {did}"));
         let noted = settle_choice(cx, &tab.id, &format!("{did}."), None).await;

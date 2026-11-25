@@ -1,23 +1,12 @@
-//! The server's side of the phone app: the commands `switchboard phone`
-//! asks of it over the socket, `prompt` (a Claude pane's waiting prompt as
-//! JSON), `answer` (an option pressed, or a message typed, in a Claude
-//! pane), `kill-tab -s` (a Claude tab closed, which the phone asks about
-//! first), `remind` (a Claude tab's reminder set or cleared, as the
-//! workspace's reminder box does), `pin` (a Claude tab pinned or unpinned,
-//! as M-f does), `stop` (a working Claude's turn stopped with Esc, which
-//! the phone asks about first) and `watch` (every Claude tab's state and last turn, streamed as
-//! a line of JSON each time they change), and the server's log's line for
-//! what your phone did, with no notification, since you know what you did
-//! and the tab shows it; and, after the server takes over from another
-//! build, the phone app started again in its tab on this one
-//! (`phone_after_upgrade`), since a program a pane runs keeps the build it
-//! started with.
-//!
-//! A prompt is read and answered with mission control's own reader and
-//! keys (`mission::answer`), the ones the Slack relay uses, so the phone
-//! presses exactly what the answer box would. Nothing here reaches a pane
-//! that isn't running Claude: `prompt`, `answer`, `kill-tab -s`, `remind`,
-//! `pin` and `stop` refuse one, and `watch` lists Claude tabs alone.
+//! The server's side of the phone app: `watch` (every Claude tab's state
+//! and last turn, streamed as a line of JSON each time they change) and
+//! `phone-pair`, the pictures a tab's Claude showed with `look` kept for
+//! the phone, and, after the server takes over from another build, the
+//! phone app started again in its tab on this one (`phone_after_upgrade`),
+//! since a program a pane runs keeps the build it started with. What the
+//! phone does to a tab (`prompt`, `answer`, `stop`, `remind`, `pin`,
+//! `kill-tab -s`) is the remote front-end protocol's, src/remote/serve.rs.
+//! `watch` lists Claude tabs alone.
 //!
 //! `watch` keeps its connection: the server takes the stream back from
 //! the command's task (`Answer::Keep`) and writes `Output` frames to it,
