@@ -166,7 +166,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             "--refresh" => {
                 // Whether every part it ran worked, for the server's look
                 // at the clone (src/setup/plugin.rs), which tries again.
-                return if refresh_now().0 {
+                return if refresh_now(false).0 {
                     ExitCode::SUCCESS
                 } else {
                     ExitCode::FAILURE
@@ -512,6 +512,12 @@ fn plugin_offered(check: bool, list: &mut List) {
 /// taken out without asking, and your rules imported after asking the
 /// first time.
 fn in_claude(check: bool, list: &mut List) {
+    if server_on_another_build() {
+        list.optional(
+            "what an earlier version put in ~/.claude, taken out once the workspace runs this build (switchboard upgrade), since the server running now may start its panes without the plugin",
+        );
+        return;
+    }
     let settings = part_named("claude").expect("a part");
     match pending(settings) {
             Err(e) => list.todo(format!("Claude Code's settings: {e:#}")),
@@ -722,22 +728,27 @@ pub fn state_of_its_own() -> bool {
 /// hooks would run twice in a pane: your CLAUDE.md gets only Switchboard's
 /// import taken out, with no pull of your rules' repository, which the
 /// update look does, and your rules' import is left for the guided setup to
-/// ask about. It runs as the new build's server starts, never as a client
-/// attaches, since a server still on an older build would start panes
-/// without the plugin while the hooks were already gone. Whether it worked,
-/// and whether it took an earlier version's hooks or skills out, which a
-/// tab opened before (its shell's environment naming no plugin) has none of
-/// until it is reopened.
-pub fn refresh_now() -> (bool, bool) {
+/// ask about. It runs as the new build's server starts (`by_the_server`),
+/// never as a client attaches; by hand, while the workspace's server runs
+/// another build (`server_on_another_build`), it writes the plugin alone
+/// and records nothing, since that server may start panes without the
+/// plugin, so the new build's server does the rest as it starts. Whether it
+/// worked, and whether it took an earlier version's hooks or skills out,
+/// which a tab opened before (its shell's environment naming no plugin)
+/// has none of until it is reopened.
+pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
     let file = build_file();
     let mark = build_mark();
     if util::read_text(&file).is_some_and(|t| t.trim() == mark) {
         return (true, false);
     }
-    let earlier = claude_settings::set_up() || skills::installed();
     let mut report = Report::new(false);
     report.silent = true;
     let mut worked = plugin::run(&mut report).is_ok();
+    if !by_the_server && server_on_another_build() {
+        return (worked, false);
+    }
+    let earlier = claude_settings::set_up() || skills::installed();
     worked &= claude_settings::run(&mut report).is_ok();
     if claude_md::set_up() || exists(&claude_md::part_file()) {
         worked &= claude_md::migrate(&mut report).is_ok();
@@ -752,6 +763,19 @@ pub fn refresh_now() -> (bool, bool) {
         let _ = util::write_atomic(&file, format!("{mark}\n"));
     }
     (worked, earlier)
+}
+
+/// Whether the workspace's server runs another build than this one (or
+/// one too old to say), which may start its panes without the plugin, so
+/// taking an earlier version's hooks out of `~/.claude` waits for this
+/// build's server. No server running, or none answering, is none.
+fn server_on_another_build() -> bool {
+    crate::mux::socket::ask_quiet(vec!["server-version".into()], None, None).is_some_and(
+        |(code, out, _)| {
+            code != 0
+                || String::from_utf8_lossy(&out).trim() != crate::update::version_line().trim()
+        },
+    )
 }
 
 // ── What the parts share ────────────────────────────────────────────────────
