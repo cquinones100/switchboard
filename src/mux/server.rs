@@ -729,19 +729,26 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
         }
     });
     // Switchboard's plugin, which Claude in the panes loads, as this build
-    // has it, and what earlier versions put in ~/.claude taken out, as a new
-    // build's first run does (a server restarted by `switchboard upgrade`
-    // has no client attaching to run it): off the server's task, and before the restored panes' Claude
+    // has it, and, on a new build's first start, what earlier versions put
+    // in ~/.claude taken out (`setup::refresh_now`), said to the client
+    // used last, since a tab kept through `switchboard upgrade` names no
+    // plugin until it is reopened: off the server's task, and before the restored panes' Claude
     // sessions take the time a shell and Claude take to start. Not by a
     // server with a state directory of its own (a test's, or a worktree's
     // build run by hand), which shares your home: there it would write over
     // the plugin every pane of your workspace loads.
     if !crate::setup::state_of_its_own() {
-        tokio::task::spawn_blocking(|| {
+        let said = tx.clone();
+        tokio::task::spawn_blocking(move || {
             if let Err(e) = crate::setup::plugin::write_quietly() {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
             }
-            crate::setup::refresh_now();
+            if let (_, true) = crate::setup::refresh_now() {
+                let _ = said.send(Event::Ui(crate::ui::UiEvent::Said {
+                    client: None,
+                    text: "Switchboard took its hooks, skills and instructions out of ~/.claude: it loads as a plugin in its panes now. A tab open from before has none of it until it is reopened or the workspace restarts (switchboard kill-server, then switchboard).".into(),
+                }));
+            }
             // The cargo, npm and pnpm the panes find first, which put heavy
             // work through the queue (src/cmd/slot.rs); not in a demo,
             // whose home links nothing outside it and builds nothing.

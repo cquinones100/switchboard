@@ -45,8 +45,8 @@
 //! What the parts write is compiled into the binary, so a binary built from
 //! a clone brings new skills, hooks and settings that reach the plugin only
 //! through a run of setup (or the server's start). The setup.sh version had
-//! git's post-merge hook run it after every pull; here the first run of a new build (`switchboard`
-//! attaching, `refresh`) writes the plugin and takes out what earlier
+//! git's post-merge hook run it after every pull; here a new build's server
+//! as it first starts (`refresh_now`) writes the plugin and takes out what earlier
 //! versions put in `~/.claude` quietly, as the guided setup would without
 //! asking, and `switchboard setup` after a build does the same out loud.
 
@@ -166,7 +166,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             "--refresh" => {
                 // Whether every part it ran worked, for the server's look
                 // at the clone (src/setup/plugin.rs), which tries again.
-                return if refresh_now() {
+                return if refresh_now().0 {
                     ExitCode::SUCCESS
                 } else {
                     ExitCode::FAILURE
@@ -709,35 +709,32 @@ fn build_mark() -> String {
 /// (`SWITCHBOARD_STATE_DIR`: a test's, or a worktree's build run by hand),
 /// which shares your home, so what it wrote of Switchboard's parts there
 /// would be its version in place of the one your workspace runs. Such a run
-/// writes none of them by itself: neither `refresh` nor its server's start.
+/// writes none of them by itself as its server starts.
 pub fn state_of_its_own() -> bool {
     std::env::var_os("SWITCHBOARD_STATE_DIR").is_some_and(|d| !d.is_empty())
 }
 
-/// The first run of a new build: the plugin written and the parts already
-/// set up brought up to date, quietly, as `switchboard` attaches. Not in a
-/// run with a state directory of its own (`state_of_its_own`).
-pub fn refresh() {
-    if state_of_its_own() {
-        return;
-    }
-    refresh_now();
-}
-
-/// `refresh` whatever the state directory (`switchboard setup --refresh`):
-/// once per build, recorded only once every part it ran worked, so one
+/// The first run of a new build, as its server starts (but one with a state
+/// directory of its own, `state_of_its_own`) and `switchboard setup
+/// --refresh`: once per build, recorded only once every part it ran worked, so one
 /// that failed is tried again on the next run. The plugin written, and what
 /// earlier versions put in `~/.claude` taken out, since left in, their
 /// hooks would run twice in a pane: your CLAUDE.md gets only Switchboard's
 /// import taken out, with no pull of your rules' repository, which the
 /// update look does, and your rules' import is left for the guided setup to
-/// ask about.
-pub fn refresh_now() -> bool {
+/// ask about. It runs as the new build's server starts, never as a client
+/// attaches, since a server still on an older build would start panes
+/// without the plugin while the hooks were already gone. Whether it worked,
+/// and whether it took an earlier version's hooks or skills out, which a
+/// tab opened before (its shell's environment naming no plugin) has none of
+/// until it is reopened.
+pub fn refresh_now() -> (bool, bool) {
     let file = build_file();
     let mark = build_mark();
     if util::read_text(&file).is_some_and(|t| t.trim() == mark) {
-        return true;
+        return (true, false);
     }
+    let earlier = claude_settings::set_up() || skills::installed();
     let mut report = Report::new(false);
     report.silent = true;
     let mut worked = plugin::run(&mut report).is_ok();
@@ -754,7 +751,7 @@ pub fn refresh_now() -> bool {
         }
         let _ = util::write_atomic(&file, format!("{mark}\n"));
     }
-    worked
+    (worked, earlier)
 }
 
 // ── What the parts share ────────────────────────────────────────────────────
