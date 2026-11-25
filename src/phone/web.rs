@@ -795,12 +795,10 @@ async fn asked(
     let answer = tokio::task::spawn_blocking(move || ask(&Server::current())).await;
     match answer {
         Ok(Ok(out)) => Ok(out),
-        Ok(Err(e)) if !matches!(e.downcast_ref(), Some(Refused::Down(_))) => Err(Box::new(
-            (
-                StatusCode::CONFLICT,
-                axum::Json(json!({"error": e.to_string()})),
-            )
-                .into_response(),
+        // Refused in the server's words, shown whole; anything else (no
+        // server, or one that hung up) as Switchboard not running.
+        Ok(Err(ref e)) if let Some(Refused::No(why)) = e.downcast_ref() => Err(Box::new(
+            (StatusCode::CONFLICT, axum::Json(json!({"error": why}))).into_response(),
         )),
         _ => Err(Box::new(
             (

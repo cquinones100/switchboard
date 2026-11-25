@@ -2847,9 +2847,11 @@ switchboard stop [-t pane] [-s from] [-f] press Esc in a working Claude pane,
                                          computer does; refused for a pane
                                          not running Claude, for one whose
                                          Claude isn't working and for one
-                                         asking a permission (with -f, only
-                                         for one neither working nor
-                                         waiting, where Esc answers no); -s
+                                         asking a permission (with -f, taken
+                                         for one waiting too, where Esc
+                                         answers no to a prompt, and refused
+                                         only for one neither working nor
+                                         waiting); -s
                                          names who asked (phone), written
                                          in the server's log
 switchboard watch                        every Claude tab's state, last turn

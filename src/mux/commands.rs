@@ -62,20 +62,24 @@
 //! seen [-t tab] [-s from]                the tab seen, as if looked at: its
 //!                                        finished Claude and a reminder come
 //!                                        due (the Slack relay's Open); -s
-//!                                        names who asked (src/phone)
+//!                                        names who asked (src/remote)
 //! prompt [-t pane]                       the prompt a Claude pane waits on,
-//!                                        as JSON, null with none (src/phone)
-//! answer [-t pane] [-m] [-h id] [-s from] reply
-//!                                        the prompt (the one -h names) answered as mission
+//!                                        as JSON, null with none (src/remote)
+//! answer [-t pane] [-m] [-h id] [-s from] [-d] [-a] reply
+//!                                        the prompt (the one -h names), or
+//!                                        with -d a dialog, answered as mission
 //!                                        control answers it, or with -m a
-//!                                        message typed to its Claude; never
-//!                                        typed in a pane (src/phone)
+//!                                        message typed to its Claude, -a after
+//!                                        a draft; never typed in a pane
+//!                                        (src/remote)
+//! clear-draft [-t pane]                  a Claude pane's unsent draft cleared
+//!                                        (src/remote)
 //! remind [-t pane] [-s from] [-n note] (-c | when)
 //!                                        a Claude pane's tab's reminder set
 //!                                        for when (as the reminder box reads
-//!                                        it) or cleared (src/phone)
+//!                                        it) or cleared (src/remote)
 //! pin [-t pane] [-s from] [-u]           a Claude pane's tab pinned as M-f
-//!                                        pins it, or unpinned (src/phone)
+//!                                        pins it, or unpinned (src/remote)
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up
@@ -262,7 +266,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "stop",
-        "stop [-t pane] [-s from] [-f]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude, for one whose Claude isn't working and for one showing a permission prompt or dialog, or with -f only for one neither working nor waiting, where Esc answers no; -s names who asked (phone), written in the server's log",
+        "stop [-t pane] [-s from] [-f]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude, for one whose Claude isn't working and for one showing a permission prompt or dialog; with -f taken for one working or waiting whatever it shows, where Esc answers no to a prompt, and refused only for one neither working nor waiting; -s names who asked (phone), written in the server's log",
     ),
     (
         "watch",

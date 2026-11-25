@@ -35,8 +35,9 @@ use serde_json::Value;
 
 use crate::mux::proto::{self, ClientMsg, ServerMsg};
 
-/// Why the server didn't do what it was asked: it refused, in its words,
-/// or it couldn't be reached. The phone answers the two differently.
+/// Why the server didn't do what it was asked: it refused, in its words
+/// (shown by their first line, the phone showing them whole), or it
+/// couldn't be reached. The phone answers the two differently.
 #[derive(Debug)]
 pub enum Refused {
     No(String),
@@ -46,7 +47,8 @@ pub enum Refused {
 impl std::fmt::Display for Refused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Refused::No(why) | Refused::Down(why) => f.write_str(why),
+            Refused::No(why) => f.write_str(why.lines().next().unwrap_or(why)),
+            Refused::Down(why) => f.write_str(why),
         }
     }
 }
@@ -291,9 +293,11 @@ impl Server {
         self.ask_for(args, Some(wait))
     }
 
-    /// `ask`, waiting for the answer however long the server takes, as a
-    /// view's menu option does that works off the server's task.
-    fn ask_until_done(&self, args: &[&str]) -> Result<String> {
+    /// `ask`, waiting for the answer however long the server takes (a
+    /// view's menu option works off the server's task), its last line
+    /// break taken off: what a front-end asks to be done, which the phone
+    /// never gave up on.
+    fn said(&self, args: &[&str]) -> Result<String> {
         Ok(self.ask_for(args, None)?.trim_end().to_string())
     }
 
@@ -318,9 +322,13 @@ impl Server {
                     stderr,
                 }) => {
                     if code != 0 {
-                        let why = String::from_utf8_lossy(&stderr);
-                        let why = why.trim().lines().next().unwrap_or("the server refused");
-                        return Err(Refused::No(why.to_string()).into());
+                        let why = String::from_utf8_lossy(&stderr).trim().to_string();
+                        let why = if why.is_empty() {
+                            "the server refused".into()
+                        } else {
+                            why
+                        };
+                        return Err(Refused::No(why).into());
                     }
                     return Ok(String::from_utf8_lossy(&stdout).into_owned());
                 }
@@ -336,16 +344,11 @@ impl Server {
         }
     }
 
-    /// `ask`, its answer's last line break taken off.
-    fn said(&self, args: &[&str]) -> Result<String> {
-        Ok(self.ask(args)?.trim_end().to_string())
-    }
-
     /// Keys by name (`Enter`, `Escape`, `Down`).
     pub fn send_keys(&self, pane: &str, keys: &[&str]) -> Result<()> {
         let mut args = vec!["send-keys", "-t", pane];
         args.extend_from_slice(keys);
-        self.ask(&args).map(|_| ())
+        self.said(&args).map(|_| ())
     }
 
     /// Text typed as it is.
@@ -447,7 +450,7 @@ impl Remote for Server {
     }
 
     fn clear_draft(&self, pane: &str) -> Result<()> {
-        self.ask(&["clear-draft", "-t", pane]).map(|_| ())
+        self.said(&["clear-draft", "-t", pane]).map(|_| ())
     }
 
     fn stop(&self, pane: &str, from: Option<&str>, force: bool) -> Result<String> {
@@ -495,13 +498,13 @@ impl Remote for Server {
     }
 
     fn tab_view(&self, pane: &str, kind: &str) -> Result<String> {
-        self.ask_until_done(&["phone-tab", "-t", pane, kind])
+        self.said(&["phone-tab", "-t", pane, kind])
     }
 
     fn view_option(&self, view: &str, id: Option<&str>, label: &str) -> Result<String> {
         match id {
-            Some(id) => self.ask_until_done(&["phone-item", view, id, label]),
-            None => self.ask_until_done(&["phone-view", view, label]),
+            Some(id) => self.said(&["phone-item", view, id, label]),
+            None => self.said(&["phone-view", view, label]),
         }
     }
 

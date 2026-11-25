@@ -6049,8 +6049,8 @@ impl Server {
     /// message into a tab's Claude goes through here (the PR view's
     /// /resolve-conflicts, the Slack tab's /slack-updates, a CI loop
     /// started from mission control, a message answering a tab, a reply
-    /// sent to another tab); the relay does the same through its own
-    /// `tabs::type_into`.
+    /// sent to another tab, and the phone's and the Slack relay's messages,
+    /// through the protocol's `answer -m`).
     pub(crate) fn type_into_claude(&mut self, pane: PaneId, presses: Vec<Press>) {
         let screen = self
             .panes
