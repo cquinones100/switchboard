@@ -27,7 +27,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
-    if !crate::cmd::worktree_from_note::in_autopilot_tab() {
+    if !crate::cmd::work_tab::in_autopilot_tab() {
         eprintln!(
             "autopilot-duplicate: this tab isn't autopilot's (never opened by it, or made yours since)"
         );

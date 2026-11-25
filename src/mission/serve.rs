@@ -5109,7 +5109,8 @@ impl Server {
             }
             Do::StartIn { dir, work } => {
                 self.mission_close(client);
-                self.mission_new_tab(client, &dir, Some(work.command()), None);
+                let dir = if dir.is_dir() { dir } else { paths::home() };
+                self.open_work_tab(client, &dir, work, crate::mux::server::Opened::Front);
             }
             Do::TypeInto { tab, pane, text } => {
                 self.type_into_claude(
@@ -5187,7 +5188,7 @@ impl Server {
                     let command =
                         crate::worktree::tab_command("claude \"$@\"", "claude", &[h.prompt]);
                     if let Some(tab) =
-                        server.work_tab(client, &dir, command, crate::mux::server::Opened::Front)
+                        server.tab_at_end(client, &dir, command, crate::mux::server::Opened::Front)
                     {
                         if let Some(t) = server.tabs.get_mut(&tab) {
                             t.opts.insert("@tab_name".into(), h.name);

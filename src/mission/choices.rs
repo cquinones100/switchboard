@@ -22,7 +22,6 @@ use crate::sidebar::model::{MergeState, TabModel, TabState};
 use crate::sidebar::notices;
 use crate::sources::Waiter;
 use crate::usage::habits;
-use crate::worktree;
 
 /// What an option does.
 #[derive(Clone, Debug, PartialEq)]
@@ -257,49 +256,9 @@ pub enum Do {
     },
 }
 
-/// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
-/// did, typed into a new shell by the tmux version, run here as the tab's
-/// own command through the binary (`command`), as the workspace's keys
-/// start work (src/cmd/work.rs), so nothing needs the shell functions in
-/// your rc and nothing races the shell's prompt. Only a ticket's ID or a
-/// PR's address is ever in one, each a word of its own.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Work {
-    /// A worktree for the ticket, and Claude in it (`wt`).
-    Ticket(String),
-    /// Claude shaping the ticket with you (`shape`).
-    Shape(String),
-    /// A worktree on the PR's branch, and Claude in it (`wtpr`), with a
-    /// first prompt of its own when there is one (WTPR_PROMPT).
-    Pr { url: String, prompt: Option<String> },
-}
-
-impl Work {
-    /// The new tab's command: an interactive shell of yours that runs the
-    /// work and stays a shell once it ends.
-    pub fn command(&self) -> Vec<String> {
-        match self {
-            Work::Ticket(ticket) => {
-                worktree::tab_running("worktree-from-ticket", "wt", std::slice::from_ref(ticket))
-            }
-            Work::Shape(ticket) => {
-                let script = format!("{} \"$@\"", worktree::self_command("shape"));
-                worktree::tab_command(&script, "shape", std::slice::from_ref(ticket))
-            }
-            Work::Pr { url, prompt } => {
-                let run =
-                    worktree::tab_running("worktree-from-pr", "wtpr", std::slice::from_ref(url));
-                match prompt {
-                    Some(prompt) => ["env".to_string(), format!("WTPR_PROMPT={prompt}")]
-                        .into_iter()
-                        .chain(run)
-                        .collect(),
-                    None => run,
-                }
-            }
-        }
-    }
-}
+/// What a tab opened from a menu works on, opened as every work tab is
+/// (src/cmd/work_tab.rs).
+pub use crate::cmd::work_tab::Work;
 
 /// What a Claude is handed about an item (`handoff`): the words pasted into
 /// a tab picked for it, the prompt a new tab for it starts with, that
@@ -1955,8 +1914,8 @@ pub fn led_to_words(
         Do::Open(_) => "opened in the browser".into(),
         Do::ReadHere(_) => "read beside your pane".into(),
         Do::StartIn { work, .. } => match work {
-            Work::Ticket(_) | Work::Pr { .. } => "a tab opened for it".into(),
             Work::Shape(_) => "a tab opened to shape it".into(),
+            _ => "a tab opened for it".into(),
         },
         // Asked for, since a directory or a tab is picked first, which may
         // be canceled.

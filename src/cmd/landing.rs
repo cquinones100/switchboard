@@ -58,7 +58,7 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use crate::cmd::worktree_from_note::tracked;
+use crate::cmd::work_tab::tracked;
 use crate::notes::{id, store};
 use crate::{repos, worktree, worktree_sweep};
 

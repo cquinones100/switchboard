@@ -187,7 +187,7 @@ pub(crate) fn may_run_its_code(common: &Path, here: &Path) -> bool {
 pub(crate) fn onto(common: &Path, here: &Path, target: Option<String>) -> Result<Onto, String> {
     match target {
         Some(name) => {
-            let remote = crate::cmd::worktree_from_note::tracked(here, &name);
+            let remote = crate::cmd::work_tab::tracked(here, &name);
             Ok(Onto { name, remote })
         }
         None => {

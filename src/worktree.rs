@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::LazyLock;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -235,18 +235,32 @@ fn tab_holding(pid: u32) -> Option<String> {
 }
 
 /// What a worktree is for, in the refusal's words:`work` ("ticket", "item")
-/// and `command` ("wt", "wtb"); `start` is the commit a new branch is made
-/// from, with no upstream, else the current HEAD.
+/// and `command` ("wt", "wtb"), and where its branch starts.
 pub struct Purpose<'a> {
     pub work: &'a str,
     pub command: &'a str,
-    pub start: Option<&'a str>,
+    pub start: Start<'a>,
+}
+
+/// Where a new worktree's branch starts: `at`, the commit a new branch is
+/// made from (else the current HEAD), and `tracks`, the remote branch it
+/// tracks, by its remote and its name there (none: no upstream until its
+/// first push).
+#[derive(Clone, Copy, Default)]
+pub struct Start<'a> {
+    pub at: Option<&'a str>,
+    pub tracks: Option<(&'a str, &'a str)>,
 }
 
 /// Makes the worktree, or reuses it. Idempotent so rerunning on the same work
 /// reopens the worktree instead of erroring: the directory is reused if it is
 /// there, and the branch if it is there.
-pub fn ensure_worktree(worktree: &Path, branch: &str, purpose: &Purpose) -> Result<()> {
+pub fn ensure_worktree(
+    root: &Path,
+    worktree: &Path,
+    branch: &str,
+    purpose: &Purpose,
+) -> Result<(), String> {
     if worktree.exists() {
         // Two sessions on one piece of work edit the same files and push the
         // same branch, so a worktree that already has Claude running in it is
@@ -274,13 +288,13 @@ pub fn ensure_worktree(worktree: &Path, branch: &str, purpose: &Purpose) -> Resu
                     )
                 })
                 .collect();
-            bail!(
+            return Err(format!(
                 "Claude is already working on this {}, so {} will not start another session.\n{}\nSwitch to that session, or end it and run {} again.",
                 purpose.work,
                 purpose.command,
                 lines.join("\n\n"),
                 purpose.command
-            );
+            ));
         }
         // A directory of the same name on another branch is another piece of
         // work, never taken for this one.
@@ -293,39 +307,48 @@ pub fn ensure_worktree(worktree: &Path, branch: &str, purpose: &Purpose) -> Resu
             } else {
                 format!("branch {checked_out}")
             };
-            bail!(
+            return Err(format!(
                 "{} is there already, on {on}, not {branch}.",
                 worktree.display()
-            );
+            ));
         }
         eprintln!("Worktree already exists, reusing it.");
         return Ok(());
     }
+    add_worktree(root, worktree, branch, &purpose.start)
+}
 
-    let branch_exists = git_run(&[
-        "show-ref",
-        "--verify",
-        "--quiet",
-        &format!("refs/heads/{branch}"),
-    ])
-    .is_ok();
-    let path = worktree.to_string_lossy().into_owned();
-    let args: Vec<&str> = if branch_exists {
-        vec!["worktree", "add", &path, branch]
-    } else if let Some(start) = purpose.start {
-        vec!["worktree", "add", "--no-track", "-b", branch, &path, start]
+/// The one way a work tab's worktree is made: `git worktree add` at `path`
+/// on `branch`. A local branch already there keeps its own commits, caught
+/// up with the branch it `tracks` when it only falls behind (`--ff-only`,
+/// so unpushed work is reported, never rewritten); a new one is made from
+/// `start.at`, tracking `start.tracks` when it names one.
+pub fn add_worktree(root: &Path, path: &Path, branch: &str, start: &Start) -> Result<(), String> {
+    let existing = branch_exists(root, branch);
+    let at = path.to_string_lossy();
+    let mut args = vec!["worktree", "add"];
+    if existing {
+        args.extend([&*at, branch]);
     } else {
-        vec!["worktree", "add", "-b", branch, &path]
+        if start.tracks.is_none() {
+            args.push("--no-track");
+        }
+        args.extend(["-b", branch, &*at]);
+        args.extend(start.at);
+    }
+    if !git_loud(root, &args, true) {
+        return Err("git worktree creation failed (see output above)".into());
+    }
+    let Some((remote, remote_branch)) = start.tracks else {
+        return Ok(());
     };
-    // git's stdout to stderr, so it can't pollute anything a caller parses.
-    let status = Command::new("git")
-        .args(&args)
-        .stdin(Stdio::inherit())
-        .stdout(std::io::stderr())
-        .stderr(Stdio::inherit())
-        .status();
-    if !status.is_ok_and(|s| s.success()) {
-        bail!("git worktree creation failed (see output above)");
+    if !existing {
+        set_upstream(root, branch, remote, remote_branch);
+    } else if !git_ok(
+        path,
+        &["merge", "--ff-only", &format!("{remote}/{remote_branch}")],
+    ) {
+        eprintln!("Note: {branch} has diverged from {remote}/{remote_branch} and was left as-is.");
     }
     Ok(())
 }

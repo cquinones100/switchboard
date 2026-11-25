@@ -15,7 +15,8 @@
 //! repository is the one the clone's remote names as configured, before any
 //! `insteadOf` rewrite. Everything after that is plain git. `init zsh`
 //! prints the `wtpr` function, which works as `wt` does
-//! (worktree_from_ticket.rs).
+//! (worktree_from_ticket.rs), and its tab starts as every work tab does
+//! (src/cmd/work_tab.rs).
 //!
 //! A fork's PR is someone else's code, and so is a PR of the repository's
 //! own with a commit beyond the default branch that someone else wrote
@@ -358,46 +359,12 @@ fn create_worktree(path: &Path, c: &Checkout, root: &Path, number: u64) -> Resul
             pull
         }
     };
-    // A branch that already exists locally keeps its own commits; -b would
-    // refuse to reuse it. Anything it is missing is picked up below.
-    let existing = worktree::branch_exists(root, c.branch);
-    let at = path.to_string_lossy().into_owned();
-    let mut args = vec!["worktree", "add"];
-    if existing {
-        args.extend([at.as_str(), c.branch]);
-    } else {
-        if !on_remote {
-            args.push("--no-track");
-        }
-        args.extend(["-b", c.branch, at.as_str(), start.as_str()]);
-    }
-    if !worktree::git_loud(root, &args, true) {
-        return Err("git worktree creation failed (see output above)".into());
-    }
-    let Some(remote) = c.remote.filter(|_| on_remote) else {
-        return Ok(());
+    let tracks = c.remote.filter(|_| on_remote).map(|r| (r, c.remote_branch));
+    let start = worktree::Start {
+        at: Some(&start),
+        tracks,
     };
-    if !existing {
-        worktree::set_upstream(root, c.branch, remote, c.remote_branch);
-        return Ok(());
-    }
-    // Catches up a local branch left behind by an earlier run; --ff-only, so
-    // a branch carrying your own unpushed commits is reported, never
-    // rewritten.
-    if !worktree::git_ok(
-        path,
-        &[
-            "merge",
-            "--ff-only",
-            &format!("{remote}/{}", c.remote_branch),
-        ],
-    ) {
-        eprintln!(
-            "Note: {} has diverged from {remote}/{} and was left as-is.",
-            c.branch, c.remote_branch
-        );
-    }
-    Ok(())
+    worktree::add_worktree(root, path, c.branch, &start)
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
@@ -622,27 +589,12 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
             return Ok(code);
         }
     }
-    crate::cmd::clone_build::start(&finished);
-    worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
-
     let prompt = if wanted {
         start_prompt(&pr, me.as_deref())
     } else {
         String::new()
     };
-    if let Some(cd_file) = &given.cd_file {
-        worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", finished.display()))
-            .map_err(|e| e.to_string())?;
-    }
-    if given.no_claude {
-        return Ok(ExitCode::SUCCESS);
-    }
-    let args: Vec<String> = if prompt.is_empty() {
-        Vec::new()
-    } else {
-        vec![prompt]
-    };
-    Ok(worktree::run_in("claude", &args, &finished))
+    crate::cmd::work_tab::hand_over(given, &root, &finished, &prompt, None, None)
 }
 
 // ── Someone else's PR ───────────────────────────────────────────────────────

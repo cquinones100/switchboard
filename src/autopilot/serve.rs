@@ -17,7 +17,7 @@
 //! checks (`Pilot::check`). Reading the queue starts git, so it runs off the
 //! task and answers with `Event::Autopilot`; the tab for the item found is
 //! opened back on it, in the session used last, as the palette's "Start
-//! work on a note's checklist items" opens one (`Server::open_item_tab`).
+//! work on a note's checklist items" opens one (`Server::open_work_tab`).
 //!
 //! The note is followed by its stable ID (crates/notes/src/id.rs): each tick reads
 //! the ID at the note's path (its last bytes, again only once the file
@@ -38,6 +38,7 @@ use super::{AutopilotEvent, Command};
 use crate::agent::State;
 use crate::cmd::work::main_clone;
 use crate::cmd::work_recent;
+use crate::cmd::work_tab::Work;
 use crate::cmd::worktree_from_note::{self, Item};
 use crate::diff::in_place::PARKED_PANE;
 use crate::mission::ask::Ask;
@@ -2869,23 +2870,24 @@ impl Server {
                 return;
             }
         }
-        let opened = match super::issues::issue_of(&item) {
-            Some((repo, number)) => self.open_issue_tab(
-                client,
-                &mode.repo,
-                &format!("{repo}#{number}"),
-                &mode.target,
-                crate::mux::server::Opened::Background,
-            ),
-            None => self.open_item_tab(
-                client,
-                &mode.repo,
-                &mode.note,
-                &item,
-                &mode.target,
-                crate::mux::server::Opened::Background,
-            ),
+        let work = match super::issues::issue_of(&item) {
+            Some((repo, number)) => Work::Issue {
+                reference: format!("{repo}#{number}"),
+                target: mode.target.clone(),
+            },
+            None => Work::Item {
+                note: mode.note.clone(),
+                line: item.line,
+                text: item.text.clone(),
+                target: mode.target.clone(),
+            },
         };
+        let opened = self.open_work_tab(
+            client,
+            &mode.repo,
+            work,
+            crate::mux::server::Opened::Background,
+        );
         let Some(tab) = opened else {
             return;
         };

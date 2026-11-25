@@ -35,6 +35,8 @@
 //! worktree-from-ticket init zsh       prints the `wt` shell function
 //! ```
 //!
+//! Its tab starts as every work tab does (src/cmd/work_tab.rs).
+//!
 //! The bare command can't change your shell's directory (no child process
 //! can), so `init` prints a `wt` function that runs it with `--no-claude
 //! --cd-file`, cd's into the worktree it names, and starts Claude itself.
@@ -57,7 +59,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::cmd::worktree_from_note::{self as note, failed_in_autopilot};
+use crate::cmd::work_tab::{failed_in_autopilot, hand_over};
+use crate::cmd::worktree_from_note as note;
 use crate::integrations::{github, linear};
 use crate::tickets::{self, Kept, Source};
 use crate::ui::{Menu, MenuOption, PickItem, Picker, alone};
@@ -836,12 +839,15 @@ fn linear_ticket(given: &Given, ticket: &str, trusted: bool) -> Result<ExitCode,
     let purpose = Purpose {
         work: "ticket",
         command: "wt",
-        start: start.as_ref().map(|s| s.commit.as_str()),
+        start: worktree::Start {
+            at: start.as_ref().map(|s| s.commit.as_str()),
+            tracks: start
+                .as_ref()
+                .filter(|s| s.tracks)
+                .map(|_| ("origin", branch.as_str())),
+        },
     };
-    worktree::ensure_worktree(&path, &branch, &purpose).map_err(|e| e.to_string())?;
-    if start.as_ref().is_some_and(|s| s.tracks) {
-        worktree::set_upstream(&root, &branch, "origin", &branch);
-    }
+    worktree::ensure_worktree(&root, &path, &branch, &purpose)?;
     // A teammate's start on the ticket is their code: Claude loads its
     // CLAUDE.md, settings and hooks only once you say so (src/trust.rs).
     // Against the default branch as it is now; offline, as last fetched.
@@ -851,8 +857,6 @@ fn linear_ticket(given: &Given, ticket: &str, trusted: bool) -> Result<ExitCode,
     if !trusted {
         crate::trust::branch_yours_or_listed(&crate::paths::home(), &path)?;
     }
-    crate::cmd::clone_build::start(&path);
-    worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
     let mut prompt = prompt_for(&issue, &extra);
     if let Some(words) = start.as_ref().and_then(|s| s.offline.as_ref()) {
         // Offline, wt couldn't ask whether someone pushed the ticket's
@@ -865,16 +869,7 @@ fn linear_ticket(given: &Given, ticket: &str, trusted: bool) -> Result<ExitCode,
             " This branch starts from {words}, since origin couldn't be reached: before your first commit, fetch origin and {catch_up}."
         ));
     }
-    // Read by the `wt` function: line 1 the worktree, then the prompt, so
-    // the function and the standalone path can't drift apart.
-    if let Some(cd_file) = &given.cd_file {
-        worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", path.display()))
-            .map_err(|e| e.to_string())?;
-    }
-    if given.no_claude {
-        return Ok(ExitCode::SUCCESS);
-    }
-    Ok(worktree::run_in("claude", &[prompt], Path::new(&path)))
+    hand_over(given, &root, &path, &prompt, None, None)
 }
 
 #[cfg(test)]

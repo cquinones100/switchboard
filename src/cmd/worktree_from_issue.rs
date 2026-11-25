@@ -2,7 +2,7 @@
 //! --issue`): a git worktree on a new branch named after one of the
 //! repository's GitHub issues, with Claude opened in it, told to work on
 //! the issue and to land it with /queue-and-clean, as `wt --item` does for
-//! a note's item, sharing its start (worktree_from_note.rs's
+//! a note's item, sharing its start (src/cmd/work_tab.rs's
 //! `make_worktree`, `after_claim` and `hand_over`). What autopilot opens for
 //! an issue it takes (src/autopilot/issues.rs). No tmux-version file is
 //! behind it.
@@ -39,11 +39,12 @@ use std::process::ExitCode;
 
 use crate::autopilot::issues::{self, Issue};
 use crate::autopilot::mode::{Mode, Sources};
-use crate::cmd::worktree_from_note::{
-    after_claim, claim, duplicates_first, hand_over, in_autopilot_tab, in_hands_free_tab,
-    make_worktree_at, onto_words, refused_by_source, refused_in_autopilot, slug_of, start_point,
+use crate::cmd::work_tab::{
+    after_claim, also_from_me, duplicates_first, hand_over, in_autopilot_tab, in_hands_free_tab,
+    make_worktree, onto_words, push_rule, refused_by_source, refused_in_autopilot, start_point,
     target_of,
 };
+use crate::cmd::worktree_from_note::{claim, slug_of};
 use crate::integrations::github;
 use crate::paths;
 use crate::worktree::{self, Given};
@@ -277,7 +278,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         ],
     );
     let making = worktree::Making::before(&root, &path, &branch);
-    let start = make_worktree_at(&path, &branch, "issue", start_at)?;
+    make_worktree(&root, &path, &branch, "issue", &start_at)?;
     *made = true;
     let recorded = (|| {
         // A branch of that name made before, holding someone else's
@@ -290,7 +291,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         if !worktree::git_config(&root, &[&key, &issue.reference()]) {
             return Err(format!("could not record the issue in git config ({key})"));
         }
-        after_claim(&root, &path, &branch, target)
+        after_claim(&root, &branch, target)
     })();
     if let Err(e) = recorded {
         making.undo();
@@ -304,7 +305,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     if in_autopilot {
         let _ = crate::mux::socket::ask(&["set", crate::autopilot::ISSUE, &issue.reference()]);
     }
-    let prompt = prompt_of(
+    let mut prompt = prompt_of(
         &issue,
         &label,
         in_autopilot,
@@ -312,7 +313,9 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         &duplicates_first(None),
         target,
     );
-    hand_over(given, &root, &path, &start, target, prompt, &making)
+    also_from_me(given, &mut prompt);
+    let settings = push_rule(&path, &root, &start_at, target);
+    hand_over(given, &root, &path, &prompt, settings, Some(&making))
 }
 
 /// Why a start fails whose issue's body changed after autopilot's search
