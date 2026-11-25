@@ -194,11 +194,9 @@ impl Server {
                 self.type_into_claude(pane, answer::message_presses(reply));
                 format!("Sent \"{}\"", short(reply))
             }
-            (false, None) => {
-                let dialog = self
-                    .remote_dialog(pane)
-                    .filter(|_| how.dialog)
-                    .ok_or("its Claude isn't showing a prompt")?;
+            // A dialog asked for is answered over a numbered list still on
+            // the screen above it, which reads as a prompt too.
+            (false, _) if let Some(dialog) = self.remote_dialog(pane).filter(|_| how.dialog) => {
                 if how.expect.is_some_and(|id| id != dialog.hash()) {
                     return Err("its dialog changed since: look at it again".into());
                 }
@@ -207,6 +205,7 @@ impl Server {
                 self.press(pane, dialog.presses(&picked));
                 format!("Chose {}. {}", picked.n, picked.label)
             }
+            (false, None) => return Err("its Claude isn't showing a prompt".into()),
             (false, Some(found)) if how.expect.is_some_and(|id| id != screen::hash_of(&found)) => {
                 return Err("its prompt changed since: look at it again".into());
             }

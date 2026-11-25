@@ -281,14 +281,15 @@ impl Mux for Rc<FakeMux> {
 
     fn answer(&self, pane: &str, reply: &str, how: How) -> Result<String> {
         let shown = self.shown(pane)?;
-        if let Some(found) = answer::options_in(&shown) {
+        let dialog = screen::dialog_in(&shown).filter(|_| how.dialog);
+        if dialog.is_none()
+            && let Some(found) = answer::options_in(&shown)
+        {
             let a = answer::answer_for(&found, reply).ok_or_else(|| anyhow!("not an option"))?;
             self.apply(pane, answer::presses(&found, &a))?;
             return Ok(answer::answer_said(&a));
         }
-        let dialog = screen::dialog_in(&shown)
-            .filter(|_| how.dialog)
-            .ok_or_else(|| anyhow!("no prompt"))?;
+        let dialog = dialog.ok_or_else(|| anyhow!("no prompt"))?;
         let picked = answer::chosen_option(&dialog.options, reply)
             .ok_or_else(|| anyhow!("not an option"))?;
         self.apply(pane, dialog.presses(&picked))?;
