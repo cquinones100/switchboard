@@ -1,7 +1,7 @@
 //! `switchboard autopilot-duplicate '<which>'`: what a tab autopilot opened
 //! runs when its Claude finds the item or issue it was opened for already
 //! started or done elsewhere (another item, issue, PR or tab), as its first
-//! prompt tells it to (worktree_from_note.rs's `duplicates_first`). It marks
+//! prompt tells it to (work_tab.rs's `duplicates_first`). It marks
 //! its own tab `@autopilot_refused` with "Duplicate of <which>", which
 //! autopilot reads to skip the item with that reason, close the tab and, for
 //! an issue, comment that it is one (src/autopilot/serve.rs). That

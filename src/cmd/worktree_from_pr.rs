@@ -1128,6 +1128,7 @@ mod tests {
                 "worktree_from_note.rs",
                 include_str!("worktree_from_note.rs"),
             ),
+            ("work_tab.rs", include_str!("work_tab.rs")),
         ] {
             for line in text.lines() {
                 let code = line.trim_start();

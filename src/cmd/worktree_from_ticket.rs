@@ -105,7 +105,7 @@ fn usage() -> ExitCode {
 /// same shell doesn't see them again and a note's path never has to be
 /// quoted into a command. The prompt is every line of the cd-file after the
 /// first, since an item it carries can run to several. The settings Claude
-/// starts with (`push_rule` in worktree_from_note.rs), when the command
+/// starts with (`push_rule` in work_tab.rs), when the command
 /// writes any, come back in a file of their own. `rc`, not `status`:
 /// `status` is a read-only special variable in zsh.
 ///
