@@ -13,10 +13,9 @@
 //! - skills only you can invoke, which that list leaves out, from the skill
 //!   and command folders Claude Code reads: yours in ~/.claude, and the
 //!   project's in .claude in the tab's directory and the directories above;
-//! - Switchboard's, from its plugin (src/setup/plugin.rs) while Settings
-//!   loads it as one, by their bare names, or `switchboard:<name>` where a
-//!   skill of yours or the project's has the bare one, as Claude Code names
-//!   them. The old way (src/setup/way.rs) they are in ~/.claude, with yours.
+//! - Switchboard's, from its plugin (src/setup/plugin.rs), by their bare
+//!   names, or `switchboard:<name>` where a skill of yours or the project's
+//!   has the bare one, as Claude Code names them.
 //!
 //! A Slack menu holds at most 100 options, and a project can have more
 //! skills than that, so each says where it came from: the ones you use

@@ -15,8 +15,6 @@
 //! computer setting's kept, and `--reset` takes it out, so a service's
 //! turns on again once it works here). A running
 //! workspace takes it at once, as it reads the file again on any change.
-//! Changing `claude_plugin` moves Switchboard into its plugin or back into
-//! `~/.claude` after, as Settings does (`switchboard setup --move`).
 
 use std::process::ExitCode;
 
@@ -74,10 +72,6 @@ pub fn main(args: Vec<String>) -> ExitCode {
         },
     };
     match settings::write_setting(key, new.clone()) {
-        Ok(()) if key == crate::setup::way::SETTING => {
-            println!("{}", words_of(&new));
-            crate::setup::main(vec!["--move".to_string()])
-        }
         Ok(()) => {
             println!("{}", words_of(&new));
             ExitCode::SUCCESS

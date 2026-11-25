@@ -11,31 +11,19 @@
 //! `~/.config/switchboard/CLAUDE.md` when there is one. Then
 //! `~/.claude/CLAUDE.md` is a short file importing them, which Claude Code
 //! follows (`@path`), so an edit shows at once; a real file in its way that
-//! isn't one written here is moved aside first, but never by a move between
-//! the plugin and `~/.claude` (`run_moving`), which asks nothing, so it
-//! only adds or takes out Switchboard's import there. A link into a clone's
-//! old `claude/CLAUDE.md` becomes `~/.config/switchboard/CLAUDE.md`, from
-//! what it linked to, else from git once the file is gone.
+//! isn't one written here is moved aside first.
 //!
 //! Switchboard's part of the instructions (`assets/switchboard.md`: the
-//! tabs and talking to them, the notes app, repository skills) follows the
-//! way setup puts Switchboard (src/setup/way.rs):
-//!
-//! - As a plugin, it reaches only the Claude sessions in Switchboard's
-//!   panes, from the plugin's SessionStart hook (src/cmd/claude_context.rs).
-//!   The line importing it that the old way added is taken out
-//!   (`take_out`), with the blank line setup put before it when it added it
-//!   to the end of a CLAUDE.md of yours, and nothing else of yours; a
-//!   CLAUDE.md that held nothing but the line, as setup made one where there
-//!   was none, would be left empty, so it is removed, which is how it was
-//!   before setup made it. Then the copy of the part goes too. With no rules
-//!   named, a CLAUDE.md of your own otherwise stays as it is.
-//! - The old way, it is written to `~/.local/share/switchboard/
-//!   switchboard.md` from the copy compiled in, where setup.sh imported it
-//!   from the clone, and your CLAUDE.md imports it after your rules, for
-//!   every Claude of yours. With no rules named, a CLAUDE.md of your own
-//!   gets only the line importing it (the clone's old import line pointed
-//!   at it instead), and a missing one is made with it.
+//! tabs and talking to them, the notes app, repository skills) reaches only
+//! the Claude sessions in Switchboard's panes, from its plugin's
+//! SessionStart hook (src/cmd/claude_context.rs). The line importing it
+//! that earlier versions added is taken out (`take_out`), with the blank
+//! line setup put before it when it added it to the end of a CLAUDE.md of
+//! yours, and nothing else of yours; a CLAUDE.md that held nothing but the
+//! line, as setup made one where there was none, would be left empty, so it
+//! is removed, which is how it was before setup made it. Then the copy of
+//! the part goes too. With no rules named, a CLAUDE.md of your own
+//! otherwise stays as it is.
 //!
 //! A pull (the update check's) and a change in Settings can overlap. The
 //! pull, which can take as long as the network does, runs first and holds
@@ -51,42 +39,29 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::way::Way;
 use super::{Report, exists, home_tilde, is_link, stamp};
 use crate::{paths, util, worktree};
 
-/// The line importing Switchboard's part, the old way.
+/// The line earlier versions added importing Switchboard's part.
 pub const IMPORT: &str = "@~/.local/share/switchboard/switchboard.md";
 
-/// The line setup.sh wrote, importing it from the clone.
-pub const OLD_IMPORT: &str = "@~/switchboard/claude/switchboard.md";
-
-/// The first line of a CLAUDE.md written here, as a plugin. Every version's
-/// and setup.sh's began the same way (`Written by Switchboard's setup.sh`),
-/// so any is known as one of ours, never moved aside.
+/// The first line of a CLAUDE.md written here. Every version's began the
+/// same way (`MARK_START`), so any is known as one of ours, never moved
+/// aside.
 pub const MARK: &str = "<!-- Written by Switchboard's setup to import your rules. Edit them where they live, not here. -->";
-/// The first line of one written the old way, which imports Switchboard's
-/// part too.
-pub const MARK_WITH_PART: &str = "<!-- Written by Switchboard's setup: your rules, then Switchboard's. Edit them where they live, not here. -->";
 const MARK_START: &str = "<!-- Written by Switchboard's setup";
 
-/// Where Switchboard's part is written, the old way.
+/// Where earlier versions wrote Switchboard's part.
 pub fn part_file() -> PathBuf {
     paths::home_join(".local/share/switchboard/switchboard.md")
 }
 
 /// Whether a line is one importing Switchboard's part.
 fn imports_ours(line: &str) -> bool {
-    line == IMPORT || line == OLD_IMPORT
-}
-
-/// Whether your CLAUDE.md imports Switchboard's part, as the old way has it.
-pub fn imports_part() -> bool {
-    !is_link(&claude_md())
-        && util::read_text(claude_md()).is_some_and(|text| text.lines().any(imports_ours))
+    line == IMPORT
 }
 
 /// Whether claude.json (or your own `~/.config/switchboard/CLAUDE.md`)
@@ -138,26 +113,13 @@ pub fn set_up() -> bool {
 
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
-    run_as(r, false)
-}
-
-/// The part as a move between the plugin and `~/.claude` runs it
-/// (`super::move_over`), which no one was asked about: a CLAUDE.md of yours
-/// in the way of your rules' import is never moved aside, and only gets
-/// Switchboard's import line added (back into `~/.claude`) or taken out
-/// (into the plugin); a link of yours is left as it is.
-pub fn run_moving(r: &mut Report) -> Result<()> {
-    run_as(r, true)
-}
-
-fn run_as(r: &mut Report, moving: bool) -> Result<()> {
     if r.check {
-        return now(r, false, moving);
+        return now(r, false);
     }
     pull();
     let lock_file = paths::state_dir().join("claude-md.lock");
     let _held = lock(&lock_file, Duration::from_secs(120))?;
-    now(r, true, moving)
+    now(r, true)
 }
 
 /// Holds `file` locked until the result is dropped (the run's end, however
@@ -301,39 +263,6 @@ fn least_deep(clone: &Path, repo: &str) -> Result<PathBuf> {
     }
 }
 
-/// Your rules as a clone's old `claude/CLAUDE.md` held them: what the link
-/// leads to, else the file from git, the commit before the one that removed
-/// it; the line importing Switchboard's part left out.
-fn rules_from_link(target: &Path) -> Option<String> {
-    let text = fs::read_to_string(target).ok().or_else(|| {
-        let repo = target.parent()?.parent()?;
-        let removed = worktree::git_at(
-            repo,
-            &[
-                "log",
-                "-1",
-                "--format=%H",
-                "--diff-filter=D",
-                "--",
-                "claude/CLAUDE.md",
-            ],
-        )
-        .ok()
-        .filter(|h| !h.is_empty())?;
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(repo)
-            .args(["show", &format!("{removed}^:claude/CLAUDE.md")]);
-        util::run_command(&mut cmd).ok()
-    })?;
-    let kept: String = text
-        .lines()
-        .filter(|l| !imports_ours(l))
-        .map(|l| format!("{l}\n"))
-        .collect();
-    (!kept.trim().is_empty()).then_some(kept)
-}
-
 /// A CLAUDE.md without the lines importing Switchboard's part, or `None`
 /// when it has none. Where setup added the line to the end of yours, after
 /// a blank line of its own, that blank line goes too.
@@ -342,11 +271,9 @@ pub fn without_import(text: &str) -> Option<String> {
         return None;
     }
     let mut text = text.to_string();
-    for line in [IMPORT, OLD_IMPORT] {
-        let added = format!("\n\n{line}\n");
-        if text.ends_with(&added) {
-            text.truncate(text.len() - added.len() + 1);
-        }
+    let added = format!("\n\n{IMPORT}\n");
+    if text.ends_with(&added) {
+        text.truncate(text.len() - added.len() + 1);
     }
     Some(
         text.split_inclusive('\n')
@@ -419,24 +346,8 @@ fn remove_part(r: &mut Report, file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Switchboard's part, as this build reads it (src/assets.rs), written where your
-/// CLAUDE.md imports it from the old way. Alone, it is what a new build
-/// brings to a CLAUDE.md set up the old way (`super::refresh`), with no
-/// pull and no lock, since it touches only that one file, written whole.
-pub fn write_part(r: &mut Report) -> Result<()> {
-    let part = part_file();
-    let text = crate::cmd::claude_context::part();
-    if util::read_text(&part).as_deref() != Some(&*text) {
-        if !r.check {
-            util::write_atomic(&part, &*text)?;
-        }
-        r.change(format!("write Switchboard's part to {}", home_tilde(&part)));
-    }
-    Ok(())
-}
-
-/// What a new build brings to a CLAUDE.md set up with Switchboard as a
-/// plugin (`super::refresh`): Switchboard's import taken out, as the part
+/// What a new build brings to a CLAUDE.md earlier versions set up
+/// (`super::refresh`): Switchboard's import taken out, as the part
 /// would, with no pull and no clone, which wait on the network, and the
 /// lock waited on only a moment, so a run holding it is left to finish and
 /// this is tried again by the next build's first run.
@@ -458,35 +369,10 @@ pub fn migrate(r: &mut Report) -> Result<()> {
     remove_part(r, &file)
 }
 
-/// The locked part of the run (all of it with `--check`), `moving` as
-/// `run_moving` says.
-fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
+/// The locked part of the run (all of it with `--check`).
+fn now(r: &mut Report, pulled: bool) -> Result<()> {
     let file = claude_md();
     let clone = clone_dir();
-    let way = super::way::current();
-
-    if way == Way::Old {
-        write_part(r)?;
-    }
-
-    if is_link(&file)
-        && let Ok(target) = fs::read_link(&file)
-        && target.to_string_lossy().ends_with("/claude/CLAUDE.md")
-        && !exists(&own_rules())
-    {
-        if !r.check {
-            // A relative link leads from the folder it is in.
-            let target = match file.parent() {
-                Some(dir) => dir.join(&target),
-                None => target,
-            };
-            let rules = rules_from_link(&target)
-                .ok_or_else(|| anyhow!("could not copy your rules from {}", target.display()))?;
-            util::write_atomic(own_rules(), rules)?;
-        }
-        r.change("copy your rules from the repo's claude/CLAUDE.md, which your ~/.claude/CLAUDE.md linked to, to ~/.config/switchboard/CLAUDE.md");
-    }
-
     let repo = config("repo");
     let mut backup: Option<PathBuf> = None;
     // With --check, before the clone: it isn't there to look in yet.
@@ -540,7 +426,7 @@ fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
         // new one's work instead, so what it writes is what the setting
         // says.
         if config("repo") != repo {
-            return now(r, pulled, moving);
+            return now(r, pulled);
         }
         // gh's helper kept in the clone.
         if let Some(h) = &helper
@@ -609,23 +495,9 @@ fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
     } else {
         util::read_text(&file)
     };
-    // A CLAUDE.md of yours, which writing one to import your rules would
-    // move aside (or a link of yours, which it would replace).
-    let yours = is_link(&file) || current.as_ref().is_some_and(|t| !t.contains(MARK_START));
     if let Some(m) = &mine {
-        let want = match way {
-            Way::Plugin => format!("{MARK}\n\n@{}\n", home_tilde(m)),
-            Way::Old => format!("{MARK_WITH_PART}\n\n@{}\n{IMPORT}\n", home_tilde(m)),
-        };
-        if moving && yours {
-            // A move asks nothing, so yours stays: only Switchboard's line
-            // goes in or out.
-            match (way, &current) {
-                (Way::Old, Some(text)) => add_import(r, &file, text)?,
-                (Way::Plugin, Some(text)) => take_out(r, &file, text)?,
-                (_, None) => {}
-            }
-        } else if current.as_deref() != Some(want.as_str()) {
+        let want = format!("{MARK}\n\n@{}\n", home_tilde(m));
+        if current.as_deref() != Some(want.as_str()) {
             if let Some(text) = &current
                 && !text.contains(MARK_START)
             {
@@ -641,13 +513,10 @@ fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
                 }
                 util::write_atomic(&file, &want)?;
             }
-            r.change(match way {
-                Way::Plugin => format!("write {shown} to import your rules ({})", home_tilde(m)),
-                Way::Old => format!(
-                    "write {shown} to import your rules ({}) and Switchboard's",
-                    home_tilde(m)
-                ),
-            });
+            r.change(format!(
+                "write {shown} to import your rules ({})",
+                home_tilde(m)
+            ));
         }
     } else if let Some(left) = current
         .as_deref()
@@ -664,59 +533,10 @@ fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
         r.change(format!(
             "take the import of your rules out of {shown}: they were in your files' repository, which your files no longer come from"
         ));
-    } else if way == Way::Plugin {
-        if let Some(text) = current {
-            take_out(r, &file, &text)?;
-        }
     } else if let Some(text) = current {
-        add_import(r, &file, &text)?;
-    } else if !is_link(&file) {
-        if !r.check {
-            util::write_atomic(&file, format!("{IMPORT}\n"))?;
-        }
-        r.change(format!("make {shown}, importing Switchboard's part"));
+        take_out(r, &file, &text)?;
     }
-    if way == Way::Plugin {
-        remove_part(r, &file)?;
-    }
-    Ok(())
-}
-
-/// The old way, with no rules named: your own CLAUDE.md (`text`) given the
-/// line importing Switchboard's part, or setup.sh's import pointed at it.
-fn add_import(r: &mut Report, file: &Path, text: &str) -> Result<()> {
-    let shown = home_tilde(file);
-    if text.lines().any(|l| l == IMPORT) {
-        return Ok(());
-    }
-    if text.lines().any(|l| l == OLD_IMPORT) {
-        if !r.check {
-            let pointed: String = text
-                .split_inclusive('\n')
-                .map(|l| {
-                    if l.trim_end_matches('\n') == OLD_IMPORT {
-                        l.replacen(OLD_IMPORT, IMPORT, 1)
-                    } else {
-                        l.to_string()
-                    }
-                })
-                .collect();
-            util::write_atomic(file, pointed)?;
-        }
-        r.change(format!(
-            "point your {shown}'s import of Switchboard's part at {}",
-            home_tilde(&part_file())
-        ));
-    } else {
-        if !r.check {
-            let mut f = OpenOptions::new().append(true).open(file)?;
-            std::io::Write::write_all(&mut f, format!("\n{IMPORT}\n").as_bytes())?;
-        }
-        r.change(format!(
-            "add the line importing Switchboard's part to your {shown}"
-        ));
-    }
-    Ok(())
+    remove_part(r, &file)
 }
 
 #[cfg(test)]
@@ -730,11 +550,6 @@ mod files_import_tests {
         assert_eq!(
             without_files_import(&wrote, clone),
             Some(format!("{MARK}\n\n"))
-        );
-        let old = format!("{MARK_WITH_PART}\n\n@{clone}/switchboard/CLAUDE.md\n{IMPORT}\n");
-        assert_eq!(
-            without_files_import(&old, clone),
-            Some(format!("{MARK_WITH_PART}\n\n{IMPORT}\n"))
         );
         // Rules from elsewhere, a sibling folder, or a file of your own stay.
         for kept in [
@@ -754,7 +569,6 @@ mod tests {
     #[test]
     fn a_mark_is_known_by_how_it_starts() {
         assert!(MARK.starts_with(MARK_START));
-        assert!(MARK_WITH_PART.starts_with(MARK_START));
     }
 
     #[test]
@@ -765,9 +579,9 @@ mod tests {
             without_import(&format!("# Mine\n- be brief\n\n{IMPORT}\n")).as_deref(),
             Some("# Mine\n- be brief\n")
         );
-        // Moved by you, or setup.sh's, in the middle: only the line.
+        // Moved by you, in the middle: only the line.
         assert_eq!(
-            without_import(&format!("# Mine\n{OLD_IMPORT}\n\n- more\n")).as_deref(),
+            without_import(&format!("# Mine\n{IMPORT}\n\n- more\n")).as_deref(),
             Some("# Mine\n\n- more\n")
         );
         // A file setup made to hold only the line is left with nothing.

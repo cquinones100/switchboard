@@ -37,9 +37,7 @@ both have to be in place.
    `claude --plugin-dir ~/.local/share/switchboard/claude/plugin` (its skill is
    then `/switchboard:review-loop`, or `/review-loop` while nothing else has
    that name), or copy its `skills/review-loop` folder into
-   `~/.claude/skills/`. With Settings' "Load Switchboard as a plugin" off,
-   `switchboard setup skills` writes it into `~/.claude/skills/` for every
-   session. Claude Code picks it up on the next session.
+   `~/.claude/skills/`. Claude Code picks it up on the next session.
 
 ## What Codex is allowed to do
 

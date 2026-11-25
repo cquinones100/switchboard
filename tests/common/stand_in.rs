@@ -784,11 +784,11 @@ parts() {
   shift
   for part do
     case $part in
-      --check | --refresh | --move | --parts | -h | --help | plugin | claude | claude-md | claude_md | skills | terminal | leftovers) ;;
+      --check | --refresh | --parts | -h | --help | plugin | claude | claude-md | claude_md | skills | terminal | lazygit) ;;
       *)
         wrong "Unknown part: $part"
         printf 'Unknown part: %s\n' "$part" >&2
-        printf '  parts: plugin claude claude-md skills terminal leftovers\n' >&2
+        printf '  parts: plugin claude claude-md skills terminal lazygit\n' >&2
         exit 1 ;;
     esac
   done

@@ -2,11 +2,10 @@
 //! (`assets/switchboard.md`: the notes app and the tab's own note,
 //! `switchboard tabs`, talking to another tab and naming one, a
 //! repository's own skills), printed as a SessionStart hook's
-//! `additionalContext`, which Claude Code adds to the conversation as a session starts, resumes, clears or compacts. New with
-//! the plugin (src/setup/plugin.rs), whose hooks run it, so the text
-//! reaches the Claude sessions in Switchboard's panes without an import in
-//! your own `~/.claude/CLAUDE.md`, as the old way (and the tmux version)
-//! has it.
+//! `additionalContext`, which Claude Code adds to the conversation as a
+//! session starts, resumes, clears or compacts. The plugin's hooks run it
+//! (src/setup/plugin.rs), so the text reaches the Claude sessions in
+//! Switchboard's panes without an import in your own `~/.claude/CLAUDE.md`.
 //!
 //! Only an interactive session gets it. A headless `claude -p` started from
 //! a pane (a skill's, a script's, one of Switchboard's own that kept the

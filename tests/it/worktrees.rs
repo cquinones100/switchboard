@@ -2404,7 +2404,7 @@ fn several_bringing_old_claims_to_ids_at_once_do_it_once_and_none_fails() {
 }
 
 #[test]
-fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
+fn wt_s_claude_function_takes_the_plugin_as_the_policy_allows_at_each_launch() {
     let dir = TempDir::new("sbw-claude");
     let home = dir.path().join("home");
     let bin = home.join("bin");
@@ -2414,11 +2414,12 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
         .install(&bin);
     let plugin = home.join(".local/share/switchboard/claude/plugin");
     let ours = plugin.to_string_lossy().into_owned();
-    let settings = dir.path().join("settings.json");
-    // A shell's value from before the setting changed, with a folder of
-    // the person's own beside Switchboard's.
+    let managed = dir.path().join("managed-settings.json");
+    // A shell's value from before, with a folder of the person's own
+    // beside Switchboard's; Claude Code's managed settings allowing a
+    // plugin directory (`on`) or not.
     let run = |on: bool, in_workspace: bool, before: &str| {
-        std::fs::write(&settings, json!({ "claude_plugin": on }).to_string()).unwrap();
+        std::fs::write(&managed, json!({ "disableSideloadFlags": !on }).to_string()).unwrap();
         let mut cmd = Command::new("bash");
         cmd.arg("-c")
             .arg(format!(
@@ -2427,7 +2428,7 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
             ))
             .env("HOME", &home)
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-            .env("SWITCHBOARD_SETTINGS", &settings)
+            .env("SWITCHBOARD_CLAUDE_MANAGED_SETTINGS", &managed)
             .env("CLAUDE_CODE_PLUGIN_DIRS", before)
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_STATE_DIR");

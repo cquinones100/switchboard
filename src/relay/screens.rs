@@ -281,11 +281,8 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
         ("claude", "Claude Code"),
         ("session", "Plugins and built-in"),
     ];
-    // Switchboard's own, from its plugin while the panes load it; the old
-    // way they are in ~/.claude/skills, with yours. The setting is read
-    // through the relay's own reader, which a test gives its own.
-    let plugin =
-        (!cx.setting_off(crate::setup::way::SETTING)).then_some(cx.paths.plugin_dir.as_path());
+    // Switchboard's own, from its plugin.
+    let plugin = Some(cx.paths.plugin_dir.as_path());
     let skills = skills_for(
         &cx.paths,
         tab.cwd.as_deref(),

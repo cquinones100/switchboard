@@ -1822,7 +1822,7 @@ impl Server {
 
     /// A program started for pane `id`, as every pane's is: `command` (the
     /// login shell when `None`) in `cwd`, its environment naming the server,
-    /// the pane and, while Settings' "Load Switchboard as a plugin" is on,
+    /// the pane and, unless Claude Code's managed settings forbid it,
     /// Switchboard's plugin for the Claude Code that runs there.
     pub(crate) fn start_program(
         &self,
@@ -1864,13 +1864,13 @@ impl Server {
         // Claude Code loads the plugin directories this names for the
         // session (src/setup/plugin.rs): Switchboard's skills, hooks and
         // instructions, for Claude here alone. Any the server was started
-        // with are kept. Off, setup has put them in ~/.claude instead
-        // (src/setup/way.rs), and the plugin would run them twice.
+        // with are kept. Left out where Claude Code's managed settings
+        // forbid it (src/setup/blocked.rs), whose Claude wouldn't start.
         let plugin = crate::setup::plugin::ENV;
         let inherited = std::env::var(plugin).ok();
         let now = crate::setup::plugin::value_now(
             inherited.as_deref(),
-            crate::settings::is_on(crate::setup::way::SETTING),
+            crate::setup::blocked::panes_load_plugin(),
             &paths::plugin_dir(),
             &paths::home(),
         );
