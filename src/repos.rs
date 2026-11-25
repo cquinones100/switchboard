@@ -261,10 +261,7 @@ impl Way {
                     "it fixes",
                     "a failing check or a drop from the queue, then queues it again",
                 ),
-                (
-                    "never",
-                    "rebases or queues the PR, merges it by itself or pushes to the default branch",
-                ),
+                ("never", "merges by itself or pushes to the default branch"),
                 ("it needs", "a merge queue on the default branch"),
             ],
             Way::AutoMerge => [
@@ -315,7 +312,10 @@ impl Way {
                     "it fixes",
                     "a failing check, the service's own check among them, pushing the fix to the PR the service holds; a conflict it leaves to you",
                 ),
-                ("never", "merges by itself or pushes to the default branch"),
+                (
+                    "never",
+                    "rebases or queues the PR, merges it by itself or pushes to the default branch",
+                ),
                 (
                     "it needs",
                     "the label or comment the service takes a PR by and the check it reports, named in Settings",
