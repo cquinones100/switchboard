@@ -496,10 +496,13 @@ fn folder_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// A train's name as the views say it: `ci/train-3` is train 3.
+/// A train's name as the views say it: `ci/train-3` is train 3, and a
+/// train named by its tip's hash (`ci/train-1a2b3c4d5e6f`, as the queue
+/// names them) goes by its first four characters, train 1a2b, so a card
+/// keeps room for its CI time and its tab.
 pub fn train_name(branch: &str) -> String {
     let id = branch.strip_prefix("ci/train-").unwrap_or(branch);
-    format!("train {id}")
+    format!("train {}", id.get(..4).unwrap_or(id))
 }
 
 /// "landing", or "3rd in line to land", for a tab's words.
@@ -866,7 +869,9 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
                 "train": train.filter(|_| q.in_train(p.number)).or(ahead.filter(|_| q.in_ahead(p.number))).map(|t| t.branch.clone()),
                 "place": match train.filter(|_| q.in_train(p.number)) {
                     Some(t) => t.prs.iter().position(|x| x.number == p.number).map(|n| n + 1),
-                    None => at.map(|n| n + 1),
+                    // Its place in line, as the PR board, CI and the
+                    // sidebar say it.
+                    None => q.line(p.number).map(|n| n as usize),
                 },
                 "since": train.filter(|_| q.in_train(p.number)).map(|t| t.since),
                 "record": r.pr_records.get(&p.number),
@@ -1471,6 +1476,12 @@ mod tests {
             "lands by GitHub's merge queue  ·  done when GitHub merges its PR, then cleaned up"
         );
         assert_eq!(heading.data["right"], "1 in GitHub's queue");
+    }
+
+    #[test]
+    fn a_train_goes_by_its_number_or_its_hash_s_first_four() {
+        assert_eq!(train_name("ci/train-3"), "train 3");
+        assert_eq!(train_name("ci/train-1a2b3c4d5e6f"), "train 1a2b");
     }
 
     #[test]
