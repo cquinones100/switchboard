@@ -59,8 +59,8 @@ pub fn load_owner(paths: &Paths) -> Option<String> {
 
 /// How the relay reaches Slack: a Web API call, a file's bytes sent to the
 /// address Slack gave for it, and a file Slack keeps fetched with the bot's
-/// token. The relay's own is `http::Https`; the tests put stand-ins here,
-/// so they never reach Slack.
+/// token. The relay's own is `integrations::slack::Client` (`http::as_bot`);
+/// the tests put stand-ins here, so they never reach Slack.
 pub trait Transport {
     fn call<'a>(&'a self, method: &'a str, params: &'a Value) -> LocalBoxFuture<'a, Result<Value>>;
     fn put<'a>(&'a self, url: &'a str, bytes: Vec<u8>) -> LocalBoxFuture<'a, Result<()>>;

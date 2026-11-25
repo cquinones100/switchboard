@@ -46,8 +46,9 @@ pub enum Error {
         error: anyhow::Error,
     },
     /// Slack's `ok: false`, or its rate limit (status 429): its error
-    /// (empty when it gave none), the scope it said was missing, the HTTP
-    /// status and the seconds it asked to wait.
+    /// (empty when it gave none, as for an answer that wasn't JSON), the
+    /// scope it said was missing, the HTTP status and the seconds it asked
+    /// to wait.
     Refused {
         method: String,
         error: String,
@@ -62,7 +63,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::Unreachable { method, error } => write!(f, "{method}: {error}"),
             Error::Refused { method, error, .. } if error.is_empty() => {
-                write!(f, "{method}: undefined")
+                write!(f, "{method}: Slack's answer wasn't JSON")
             }
             Error::Refused { method, error, .. } => write!(f, "{method}: {error}"),
         }
