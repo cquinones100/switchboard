@@ -2224,10 +2224,18 @@ fn pr_face(item: &Item, m: &Mission, theme: &Theme) -> Face {
         .as_str()
         .filter(|w| queued && !w.is_empty());
     let meta = match (tab, item.data["reviewers"].as_str()) {
-        _ if landing.is_some() => vec![Span::styled(
-            landing.unwrap_or_default().to_string(),
-            Tone::Landing.style(theme),
-        )],
+        // Its place in its way, then the tab it is open in.
+        _ if landing.is_some() => {
+            let mut words = vec![Span::styled(
+                landing.unwrap_or_default().to_string(),
+                Tone::Landing.style(theme),
+            )];
+            if let Some(t) = tab {
+                words.push(Span::styled(" · ", fg(theme.dim)));
+                words.extend(tab_words(t, m, theme));
+            }
+            words
+        }
         (Some(t), _) => tab_words(t, m, theme),
         (None, Some(r)) if !queued && !r.is_empty() => {
             vec![Span::styled(r.to_string(), fg(theme.dim))]
