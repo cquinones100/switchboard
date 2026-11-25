@@ -874,6 +874,10 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
                     None => q.line(p.number).map(|n| n as usize),
                 },
                 "since": train.filter(|_| q.in_train(p.number)).map(|t| t.since),
+                // Its train's CI passed and the queue merges it, or has
+                // failed to.
+                "passed": train.filter(|_| q.in_train(p.number)).is_some_and(|t| t.passed),
+                "mergeFailures": train.filter(|_| q.in_train(p.number)).map_or(0, |t| t.merge_failures),
                 "record": r.pr_records.get(&p.number),
                 "first": at == Some(0),
                 "last": at.is_some_and(|a| a + 1 == waiting.len()),

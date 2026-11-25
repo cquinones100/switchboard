@@ -3493,12 +3493,32 @@ fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     } else {
         (stage_cell(Stage::Queued, ordinal(place)), waiting())
     };
+    // Its train's CI passed: the queue merges it, or failed to and tries
+    // again.
+    let (train_cell, landed) = match (
+        testing && q["passed"].as_bool() == Some(true),
+        q["mergeFailures"].as_u64().unwrap_or(0),
+    ) {
+        (true, 0) => (
+            stage_cell(Stage::Done, "✓ passed"),
+            stage_cell(Stage::Running, "merging…"),
+        ),
+        (true, n) => (
+            stage_cell(Stage::Done, "✓ passed"),
+            StageCell {
+                stage: Stage::Failed,
+                label: "✕ merge failed".into(),
+                note: format!("{n} tries"),
+            },
+        ),
+        _ => (train_cell, waiting()),
+    };
     [
         review_cell(&q["record"]["review"], now_ms),
         stage_cell(Stage::Done, "✓ passed"),
         queued,
         train_cell,
-        waiting(),
+        landed,
         waiting(),
     ]
 }
@@ -10673,6 +10693,11 @@ mod tests {
                 "testing": true, "train": "ci/train-3", "place": 1,
                 "record": { "review": { "clean_rounds": 2 } },
             } }));
+        let merging = Item::new("prqueue:/r:2041", "3. #2041 merging")
+            .detail("testing on ci/train-4 · tab 7")
+            .data(serde_json::json!({ "prqueue": {
+                "testing": true, "train": "ci/train-4", "place": 1, "passed": true,
+            } }));
         let waiting = Item::new("prqueue:/r:219", "2. #219 tab colors")
             .detail("waiting · tab 6")
             .data(serde_json::json!({ "prqueue": { "testing": false, "place": 2 } }));
@@ -10686,7 +10711,7 @@ mod tests {
             vec![list_view(
                 ViewId::Landing,
                 "Landing",
-                vec![ours, in_train, waiting, landed],
+                vec![ours, in_train, merging, waiting, landed],
             )],
         );
         m.view = 1;
@@ -10722,6 +10747,7 @@ mod tests {
             "{first}"
         );
         assert!(text[row("#219 tab colors")].contains("2nd"));
+        assert!(text[row("#2041 merging")].contains("merging…"));
         let merged = &text[row("#208 billing page")];
         assert!(
             merged.contains("✓ merged") && merged.contains("cleaning…"),
