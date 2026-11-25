@@ -288,10 +288,20 @@ impl Server {
 
     /// `ask`, waiting at most `wait` for the answer.
     pub fn ask_waiting(&self, args: &[&str], wait: Duration) -> Result<String> {
+        self.ask_for(args, Some(wait))
+    }
+
+    /// `ask`, waiting for the answer however long the server takes, as a
+    /// view's menu option does that works off the server's task.
+    fn ask_until_done(&self, args: &[&str]) -> Result<String> {
+        Ok(self.ask_for(args, None)?.trim_end().to_string())
+    }
+
+    fn ask_for(&self, args: &[&str], wait: Option<Duration>) -> Result<String> {
         let down = |why: &str| anyhow::Error::new(Refused::Down(why.to_string()));
         let mut stream = UnixStream::connect(&self.socket)
             .map_err(|_| down("no Switchboard server is running"))?;
-        stream.set_read_timeout(Some(wait))?;
+        stream.set_read_timeout(wait)?;
         let msg = ClientMsg::Command {
             args: args.iter().map(|a| a.to_string()).collect(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
@@ -485,13 +495,13 @@ impl Remote for Server {
     }
 
     fn tab_view(&self, pane: &str, kind: &str) -> Result<String> {
-        self.said(&["phone-tab", "-t", pane, kind])
+        self.ask_until_done(&["phone-tab", "-t", pane, kind])
     }
 
     fn view_option(&self, view: &str, id: Option<&str>, label: &str) -> Result<String> {
         match id {
-            Some(id) => self.said(&["phone-item", view, id, label]),
-            None => self.said(&["phone-view", view, label]),
+            Some(id) => self.ask_until_done(&["phone-item", view, id, label]),
+            None => self.ask_until_done(&["phone-view", view, label]),
         }
     }
 
