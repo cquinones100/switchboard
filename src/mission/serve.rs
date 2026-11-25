@@ -7054,12 +7054,17 @@ impl Server {
     ) {
         let saved = service
             .map(|values| {
-                ["serviceLabel", "serviceComment", "serviceCheck"]
-                    .into_iter()
-                    .zip(values)
-                    .try_for_each(|(key, value)| {
-                        crate::repos::set_repo(repo, key, Value::String(value))
-                    })
+                let mut keys: Vec<(&str, String)> =
+                    ["serviceLabel", "serviceComment", "serviceCheck"]
+                        .into_iter()
+                        .zip(values)
+                        .collect();
+                // What is set goes first, so taking the other hand-over out
+                // never leaves the service with none in between.
+                keys.sort_by_key(|(_, v)| v.is_empty());
+                keys.into_iter().try_for_each(|(key, value)| {
+                    crate::repos::set_repo(repo, key, Value::String(value))
+                })
             })
             .unwrap_or(Ok(()))
             .and_then(|()| crate::repos::set_repo(repo, "lands", Value::String(way.key().into())));

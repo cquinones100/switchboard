@@ -1272,7 +1272,7 @@ fn queue_and_clean_lands_the_one_way_landing_names_and_nothing_when_none_is_set(
     assert!(direct.contains("For `lands` `direct`. Its steps: "));
     assert!(direct.contains("and the tab is cleaned up, as \"Done\" says."));
     let done = section(&text, "Done");
-    assert!(done.contains("`landed and cleaned up: <short hash> on <name>, by <how>`"));
+    assert!(done.contains("`landed and cleaned up: <short hash> on <name>, <how>`"));
     assert!(
         section(&text, "GitHub's auto-merge")
             .contains("gh pr merge <number> --auto --match-head-commit <headRefOid>"),

@@ -574,6 +574,24 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
         Value::String(s) if key.starts_with("service") => Value::String(s.trim().to_string()),
         v => v,
     };
+    // A merge service keeps a label or a comment to hand a PR to it.
+    let other_hand_over = match key {
+        "serviceLabel" => Some("serviceComment"),
+        "serviceComment" => Some("serviceLabel"),
+        _ => None,
+    };
+    if unset && let Some(other) = other_hand_over {
+        let entry = entry_of(&read_file(path).unwrap_or_default(), repo);
+        let has_other = entry
+            .get(other)
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.trim().is_empty());
+        if lands_of(&entry) == Some(Way::Service) && !has_other {
+            return Err(
+                "a merge service needs the label or the comment that hands it a PR".to_string(),
+            );
+        }
+    }
     change_file(path, |data| {
         // The entry under the name the file has it by, in whatever case.
         let name = data
@@ -1723,6 +1741,12 @@ mod tests {
             "unset, the steps kept"
         );
         set_repo_in(&path, "acme/direct", "serviceLabel", json!(" merge-ready ")).unwrap();
+        set_repo_in(&path, "acme/direct", "lands", json!("service")).unwrap();
+        assert!(
+            set_repo_in(&path, "acme/direct", "serviceLabel", json!("")).is_err(),
+            "a merge service keeps its hand-over"
+        );
+        set_repo_in(&path, "acme/direct", "lands", json!("unset")).unwrap();
         assert_eq!(
             read_file(&path).unwrap()["acme/direct"]["serviceLabel"],
             json!("merge-ready")
