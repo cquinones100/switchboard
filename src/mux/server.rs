@@ -743,7 +743,7 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
             if let Err(e) = crate::setup::plugin::write_quietly() {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
             }
-            if let (true, true) = crate::setup::refresh_now(true) {
+            if let (_, true) = crate::setup::refresh_now(true) {
                 let _ = said.send(Event::Ui(crate::ui::UiEvent::Said {
                     client: None,
                     text: "Switchboard took its hooks, skills and instructions out of ~/.claude: it loads as a plugin in its panes now. A tab open from before has none of it until it is reopened or the workspace restarts (switchboard kill-server, then switchboard).".into(),

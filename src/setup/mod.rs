@@ -557,7 +557,7 @@ fn in_claude(check: bool, list: &mut List) {
     match pending(md) {
         Err(e) => list.todo(format!("your CLAUDE.md: {e:#}")),
         Ok(0) => {
-            if claude_md::rules_named() {
+            if claude_md::rules_named() && !old_way_waits() {
                 list.ok("your CLAUDE.md imports your rules");
             }
         }
@@ -590,7 +590,7 @@ fn in_claude(check: bool, list: &mut List) {
     }
 
     // The skills an earlier version wrote, taken out.
-    if skills::installed() {
+    if skills::installed() && !old_way_waits() {
         let part = part_named("skills").expect("a part");
         match pending(part) {
             Err(e) => list.todo(format!("Switchboard's skills: {e:#}")),
@@ -732,7 +732,7 @@ pub fn state_of_its_own() -> bool {
 /// another build (`old_way_waits`), it writes the plugin alone
 /// and records nothing, since that server may start panes without the
 /// plugin, so the new build's server does the rest as it starts. Whether it
-/// worked, and whether it took an earlier version's hooks or skills out,
+/// worked, and whether an earlier version's hooks are now out of your settings,
 /// which a tab opened before (its shell's environment naming no plugin)
 /// has none of until it is reopened.
 pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
@@ -764,7 +764,7 @@ pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
         }
         let _ = util::write_atomic(&file, format!("{mark}\n"));
     }
-    (worked, earlier)
+    (worked, earlier && !claude_settings::has_hooks())
 }
 
 /// Set in the server's own run of `refresh_now`, which is this build.
