@@ -1,14 +1,13 @@
 //! Slack over the network (lib/slack-relay/slack.js's `apiCall`, `putFile`,
-//! `getFile` and `socketMode`): the Web API over HTTPS with reqwest, and
-//! Socket Mode's WebSocket with tokio-tungstenite, both on rustls. Every
-//! request is counted in the request audit as it is made.
+//! `getFile` and `socketMode`): the Web API through `integrations::slack`,
+//! as the bot, a file sent or fetched with reqwest, and Socket Mode's
+//! WebSocket with tokio-tungstenite, all on rustls. Every request is counted
+//! in the request audit as it is made.
 //!
-//! A Web API call goes out form-encoded, which every method accepts
-//! (objects and arrays as JSON), with the bot's token. Slack's own refusal
-//! (`ok: false`) is an error naming the method and why; a rate limit is
-//! waited out as Slack asks, up to three times. None of this decides what
-//! may be called: `Slack::api` has already refused anything that isn't for
-//! the DM before a call gets here.
+//! A Web API call goes out form-encoded, which every method accepts, and a
+//! rate limit is waited out as Slack asks, up to three times. None of this
+//! decides what may be called: `Slack::api` has already refused anything
+//! that isn't for the DM before a call gets here.
 //!
 //! Built without the `net` feature, each of these says Switchboard can't
 //! reach Slack, and Socket Mode never connects.
@@ -18,56 +17,14 @@ use futures_util::future::LocalBoxFuture;
 use serde_json::Value;
 
 use super::slack::Transport;
+use crate::integrations::slack::{Client, Send};
 
-/// A call that hasn't answered in this long has failed.
-pub const API_TIMEOUT_SECS: u64 = 30;
 /// A file sent or fetched can be a video of up to 200 MB.
 pub const FILE_TIMEOUT_SECS: u64 = 5 * 60;
 
-/// A call's arguments as a form: each present one, an object or array as
-/// JSON, a string as it is (`URLSearchParams`).
-pub fn form_body(params: &Value) -> String {
-    let Some(map) = params.as_object() else {
-        return String::new();
-    };
-    map.iter()
-        .filter(|(_, v)| !v.is_null())
-        .map(|(k, v)| {
-            let text = match v {
-                Value::String(s) => s.clone(),
-                Value::Object(_) | Value::Array(_) => crate::util::json_compact(v),
-                other => other.to_string(),
-            };
-            format!("{}={}", form_escape(k), form_escape(&text))
-        })
-        .collect::<Vec<_>>()
-        .join("&")
-}
-
-/// `application/x-www-form-urlencoded`'s escaping: letters, digits and
-/// `*-._` as they are, a space as `+`, everything else as UTF-8 bytes in
-/// `%XX`.
-fn form_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for b in text.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
-                out.push(b as char)
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
 /// The relay's way to Slack: the Web API at `base`, as the bot.
 pub struct Https {
-    pub base: String,
-    pub bot_token: String,
-    /// Whether requests are counted in the request audit (always, but in
-    /// the tests, which must not write to your state directory).
-    pub audit: bool,
+    api: Client,
     #[cfg(feature = "net")]
     client: reqwest::Client,
 }
@@ -81,19 +38,10 @@ impl Https {
             .build()
             .map_err(|e| anyhow::anyhow!("couldn't set up HTTPS: {e}"))?;
         Ok(Https {
-            base,
-            bot_token,
-            audit: true,
+            api: Client::new(base, bot_token).waiting_out_limits(3),
             #[cfg(feature = "net")]
             client,
         })
-    }
-
-    #[cfg(feature = "net")]
-    fn count(&self, protocol: &str, source: &str) {
-        if self.audit {
-            crate::requests::count("Slack", protocol, source);
-        }
     }
 }
 
@@ -101,53 +49,14 @@ impl Https {
 impl Transport for Https {
     fn call<'a>(&'a self, method: &'a str, params: &'a Value) -> LocalBoxFuture<'a, Result<Value>> {
         Box::pin(async move {
-            let body = form_body(params);
-            let mut attempt = 0;
-            loop {
-                self.count("REST", &format!("relay: {method}"));
-                let response = self
-                    .client
-                    .post(format!("{}{method}", self.base))
-                    .bearer_auth(&self.bot_token)
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .body(body.clone())
-                    .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECS))
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{method}: {}", reason(&e)))?;
-                if response.status().as_u16() == 429 && attempt < 3 {
-                    let wait = response
-                        .headers()
-                        .get("retry-after")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.trim().parse::<f64>().ok())
-                        .filter(|s| *s > 0.0)
-                        .unwrap_or(1.0);
-                    tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
-                    attempt += 1;
-                    continue;
-                }
-                let bytes = response
-                    .bytes()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{method}: {}", reason(&e)))?;
-                let reply: Value = serde_json::from_slice(&bytes)
-                    .map_err(|_| anyhow::anyhow!("{method}: Slack's answer wasn't JSON"))?;
-                if reply.get("ok") != Some(&Value::Bool(true)) {
-                    let error = reply
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("undefined");
-                    anyhow::bail!("{method}: {error}");
-                }
-                return Ok(reply);
-            }
+            let source = format!("relay: {method}");
+            Ok(self.api.call(Send::Form, method, params, &source).await?)
         })
     }
 
     fn put<'a>(&'a self, url: &'a str, bytes: Vec<u8>) -> LocalBoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.count("HTTPS", "relay: file upload");
+            crate::requests::count("Slack", "HTTPS", "relay: file upload");
             let response = self
                 .client
                 .post(url)
@@ -165,11 +74,11 @@ impl Transport for Https {
 
     fn get<'a>(&'a self, url: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
-            self.count("HTTPS", "relay: file download");
+            crate::requests::count("Slack", "HTTPS", "relay: file download");
             let response = self
                 .client
                 .get(url)
-                .bearer_auth(&self.bot_token)
+                .bearer_auth(self.api.token())
                 .timeout(std::time::Duration::from_secs(FILE_TIMEOUT_SECS))
                 .send()
                 .await
@@ -206,8 +115,8 @@ const NO_NET: &str = "Switchboard was built without network support, so it can't
 
 #[cfg(not(feature = "net"))]
 impl Transport for Https {
-    fn call<'a>(&'a self, _: &'a str, _: &'a Value) -> LocalBoxFuture<'a, Result<Value>> {
-        Box::pin(async { Err(anyhow::anyhow!(NO_NET)) })
+    fn call<'a>(&'a self, method: &'a str, params: &'a Value) -> LocalBoxFuture<'a, Result<Value>> {
+        Box::pin(async move { Ok(self.api.call(Send::Form, method, params, method).await?) })
     }
 
     fn put<'a>(&'a self, _: &'a str, _: Vec<u8>) -> LocalBoxFuture<'a, Result<()>> {
@@ -297,29 +206,14 @@ pub async fn socket_mode(cx: super::Cx, app_token: String) {
 /// token.
 #[cfg(feature = "net")]
 async fn open_socket(app_token: &str) -> Result<String> {
-    crate::requests::count("Slack", "REST", "relay: apps.connections.open");
-    let client = reqwest::Client::builder()
-        .user_agent(crate::net::USER_AGENT)
-        .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECS))
-        .build()?;
-    let reply: Value = client
-        .post(format!("{}apps.connections.open", super::slack::api_base()))
-        .bearer_auth(app_token)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("apps.connections.open: {}", reason(&e)))?
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("apps.connections.open: {}", reason(&e)))?;
-    if reply.get("ok") != Some(&Value::Bool(true)) {
-        anyhow::bail!(
-            "apps.connections.open: {}",
-            reply
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("undefined")
-        );
-    }
+    let reply = Client::new(crate::integrations::slack::api_base(), app_token.into())
+        .call(
+            Send::Form,
+            "apps.connections.open",
+            &Value::Null,
+            "relay: apps.connections.open",
+        )
+        .await?;
     reply
         .get("url")
         .and_then(Value::as_str)
@@ -336,21 +230,6 @@ pub async fn socket_mode(cx: super::Cx, _app_token: String) {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn arguments_go_form_encoded_with_objects_as_json() {
-        let body = form_body(&json!({
-            "channel": "D1",
-            "text": "a b&c=é",
-            "thread_ts": null,
-            "unfurl_links": false,
-            "blocks": [{ "type": "markdown" }],
-        }));
-        assert_eq!(
-            body,
-            "channel=D1&text=a+b%26c%3D%C3%A9&unfurl_links=false&blocks=%5B%7B%22type%22%3A%22markdown%22%7D%5D"
-        );
-    }
 
     #[cfg(feature = "net")]
     #[test]
@@ -370,8 +249,7 @@ mod tests {
             ],
         );
         let base = format!("{}/api/", fake.url);
-        let mut https = Https::new(base, "xoxb-test".into()).unwrap();
-        https.audit = false;
+        let https = Https::new(base, "xoxb-test".into()).unwrap();
         let slack = crate::relay::slack::Slack::new(Box::new(https));
         *slack.channel.borrow_mut() = Some("D1".into());
         *slack.owner.borrow_mut() = Some("U1".into());

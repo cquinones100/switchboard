@@ -169,12 +169,40 @@ pub async fn post_json(
 /// comes (the network, a timeout, a method that isn't one); an answer with an
 /// error status is an `Ok` for the caller to read, since each service says
 /// what went wrong in its own way.
-#[cfg(feature = "net")]
 pub async fn request_json(
     method: &str,
     url: &str,
     headers: &[(&str, &str)],
     body: Option<&Value>,
+    audit: Audit<'_>,
+) -> Result<Response> {
+    request(method, url, headers, body.map(Body::Json), audit).await
+}
+
+/// A POST of `body`, already form-encoded, its answer read as
+/// `request_json` reads one.
+pub async fn post_form(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: String,
+    audit: Audit<'_>,
+) -> Result<Response> {
+    request("POST", url, headers, Some(Body::Form(body)), audit).await
+}
+
+/// What a request sends: JSON, or a form already encoded.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+enum Body<'a> {
+    Json(&'a Value),
+    Form(String),
+}
+
+#[cfg(feature = "net")]
+async fn request(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<Body<'_>>,
     audit: Audit<'_>,
 ) -> Result<Response> {
     let method =
@@ -198,8 +226,14 @@ pub async fn request_json(
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
-    if let Some(body) = body {
-        request = request.json(body);
+    match body {
+        Some(Body::Json(body)) => request = request.json(body),
+        Some(Body::Form(body)) => {
+            request = request
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(body)
+        }
+        None => {}
     }
     requests::count(audit.service, audit.protocol, audit.source);
     let unreachable = |e: reqwest::Error| {
@@ -244,11 +278,11 @@ pub async fn request_json(
 
 /// Without the `net` feature: the same function, which never reaches out.
 #[cfg(not(feature = "net"))]
-pub async fn request_json(
+async fn request(
     _method: &str,
     _url: &str,
     _headers: &[(&str, &str)],
-    _body: Option<&Value>,
+    _body: Option<Body<'_>>,
     audit: Audit<'_>,
 ) -> Result<Response> {
     Err(ServiceError::new(

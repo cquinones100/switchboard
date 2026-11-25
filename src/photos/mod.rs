@@ -41,6 +41,7 @@ use anyhow::{Result, bail};
 use image::RgbaImage;
 use serde_json::{Value, json};
 
+use crate::integrations::slack::Send;
 use crate::net::{self, Audit};
 use crate::{integrations, paths, util};
 
@@ -242,7 +243,7 @@ pub async fn fetch(who: &Who) -> Result<Option<Vec<u8>>> {
                 bail!("The Slack relay isn't set up, so there are no Slack photos.");
             };
             let Some(url) =
-                slack_photo_url(&crate::relay::slack::api_base(), &token, &who.id).await?
+                slack_photo_url(&crate::integrations::slack::api_base(), &token, &who.id).await?
             else {
                 return Ok(None);
             };
@@ -279,7 +280,7 @@ pub async fn fetch(who: &Who) -> Result<Option<Vec<u8>>> {
             if let Some(token) = crate::relay::slack::token(crate::relay::slack::BOT_TOKEN_SERVICE)
             {
                 return match slack_photo_by_address(
-                    &crate::relay::slack::api_base(),
+                    &crate::integrations::slack::api_base(),
                     &token,
                     &who.id,
                 )
@@ -342,30 +343,22 @@ pub async fn slack_photo_by_address(
     token: &str,
     address: &str,
 ) -> Result<Option<String>> {
-    let params = json!({ "email": address });
-    crate::relay::slack::refuse("users.lookupByEmail", &params, None, None)?;
-    let auth = format!("Bearer {token}");
-    let audit = Audit {
-        service: "Slack",
-        protocol: "REST",
-        source: SOURCE,
-    };
-    let encoded: String = url::form_urlencoded::byte_serialize(address.as_bytes()).collect();
-    let response = net::get_json(
-        &format!("{base}users.lookupByEmail?email={encoded}"),
-        &[("Authorization", auth.as_str())],
-        audit,
+    let answer = bot_get(
+        base,
+        token,
+        "users.lookupByEmail",
+        json!({ "email": address }),
     )
     .await?;
-    if response.body["error"].as_str() == Some("users_not_found") {
+    if answer["error"].as_str() == Some("users_not_found") {
         return Ok(None);
     }
-    if response.body["error"].as_str() == Some("missing_scope") {
+    if answer["error"].as_str() == Some("missing_scope") {
         bail!(
             "Slack's users.lookupByEmail needs the users:read.email scope in the Slack relay's app, so attendees have no Slack photos."
         );
     }
-    slack_photo_of(&response.body)
+    slack_photo_of(&answer)
 }
 
 /// Where GitHub's avatars are (`SWITCHBOARD_GITHUB_AVATARS` moves it).
@@ -389,21 +382,23 @@ fn linear_host(url: &str) -> bool {
 /// (Slack's Web API, its `/` at the end) with the bot's token. `None` when
 /// they kept Slack's picture.
 pub async fn slack_photo_url(base: &str, token: &str, id: &str) -> Result<Option<String>> {
-    let params = json!({ "user": id });
-    crate::relay::slack::refuse("users.info", &params, None, None)?;
-    let auth = format!("Bearer {token}");
-    let audit = Audit {
-        service: "Slack",
-        protocol: "REST",
-        source: SOURCE,
-    };
-    let response = net::get_json(
-        &format!("{base}users.info?user={id}"),
-        &[("Authorization", auth.as_str())],
-        audit,
-    )
-    .await?;
-    slack_photo_of(&response.body)
+    let answer = bot_get(base, token, "users.info", json!({ "user": id })).await?;
+    slack_photo_of(&answer)
+}
+
+/// A read of Slack's Web API at `base` with the bot's token, once the
+/// relay's rules pass it: Slack's answer, or its refusal as an answer of
+/// `ok: false` for the caller to read.
+async fn bot_get(base: &str, token: &str, method: &str, params: Value) -> Result<Value> {
+    crate::relay::slack::refuse(method, &params, None, None)?;
+    let client = integrations::slack::Client::new(base.into(), token.into());
+    match client.call(Send::Get, method, &params, SOURCE).await {
+        Ok(answer) => Ok(answer),
+        Err(integrations::slack::Error::Unreachable { error, .. }) => Err(error),
+        Err(refused) => {
+            Ok(json!({ "ok": false, "error": Some(refused.code()).filter(|c| !c.is_empty()) }))
+        }
+    }
 }
 
 /// `users.info`'s answer read: the largest of its pictures we use, or why

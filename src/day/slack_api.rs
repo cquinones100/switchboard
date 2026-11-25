@@ -67,7 +67,7 @@ pub async fn client(state: &Path) -> Option<Result<Client, String>> {
     {
         return Some(Ok(client.clone()));
     }
-    let client = Client::stored().await;
+    let client = slack_user::stored().await;
     if let Ok(c) = &client {
         *KEPT.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((stamp, std::time::Instant::now(), c.clone()));

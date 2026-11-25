@@ -455,7 +455,7 @@ pub fn relay() -> ExitCode {
             DONT_RESTART,
         );
     };
-    let https = match super::http::Https::new(slack::api_base(), bot) {
+    let https = match super::http::Https::new(crate::integrations::slack::api_base(), bot) {
         Ok(h) => h,
         Err(e) => return fail(&paths, &e.to_string(), DONT_RESTART),
     };
@@ -814,7 +814,7 @@ pub async fn say_down(paths: &Paths, why: &str) {
     let Some(bot) = slack::token(BOT_TOKEN_SERVICE) else {
         return;
     };
-    let Ok(https) = super::http::Https::new(slack::api_base(), bot) else {
+    let Ok(https) = super::http::Https::new(crate::integrations::slack::api_base(), bot) else {
         return;
     };
     let relay = Relay::new(
