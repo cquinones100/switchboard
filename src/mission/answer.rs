@@ -292,8 +292,14 @@ pub fn step_presses(found: &Prompt, to: &StepTo) -> Result<(Vec<Press>, String),
     } else {
         KeyCode::Left
     };
-    let presses = (0..target.abs_diff(at))
-        .map(|_| Press::Key(Key::new(code, Mods::NONE)))
+    // In the free option's field (an answer of your own typed into a
+    // question of several answers leaves the ❯ there), ← and → move the
+    // text's cursor, so ↑ leaves the field first, keeping what was typed.
+    let in_field = found.free.is_some() && found.cursor == found.free.map(Cursor::Option);
+    let leave = in_field.then(|| Press::Key(Key::new(KeyCode::Up, Mods::NONE)));
+    let presses = leave
+        .into_iter()
+        .chain((0..target.abs_diff(at)).map(|_| Press::Key(Key::new(code, Mods::NONE))))
         .collect();
     Ok((presses, format!("Stepped to {}", found.steps[target].name)))
 }
@@ -1466,6 +1472,16 @@ Review your answers
             Ok(vec![left])
         );
         assert!(step_presses(&found, &StepTo::parse("Shape")).is_err());
+        let mut typed = found.clone();
+        typed.cursor = Some(Cursor::Option(4));
+        assert_eq!(
+            step_presses(&typed, &StepTo::Back).map(|(p, _)| p),
+            Ok(vec![
+                Press::Key(Key::new(KeyCode::Up, Mods::NONE)),
+                Press::Key(Key::new(KeyCode::Left, Mods::NONE))
+            ]),
+            "out of the free option's field first"
+        );
         assert!(
             step_presses(&found, &StepTo::parse("Submit")).is_err(),
             "already there"
