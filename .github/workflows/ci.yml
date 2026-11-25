@@ -243,6 +243,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Count the code's lines
+        # The 1.0 refactor measures less code by the total line count, so
+        # the summary shows it for each run, and a file whose code before
+        # its tests is over 1,500 lines gets a warning, never a failure.
+        run: |
+          files=$(git ls-files -- src crates assets tests | grep -E '\.(rs|js|css|html)$')
+          total=$(echo "$files" | tr '\n' '\0' | xargs -0 cat | wc -l | tr -d " ")
+          long=$(echo "$files" | grep '\.rs$' | grep -vE '(^|/)tests(/|\.rs$)' | tr '\n' '\0' | xargs -0 awk '
+            FNR == 1 { if (file != "" && n > 1500) print n, file; file = FILENAME; n = 0; tests = 0 }
+            /^#\[cfg\(test\)\]/ { tests = 1 }
+            !tests { n++ }
+            END { if (n > 1500) print n, file }' | sort -rn)
+          echo "$long" | while read -r n file; do
+            if [ -n "$file" ]; then
+              echo "::warning file=$file::$n lines before its tests, over 1,500"
+            fi
+          done
+          {
+            echo "### Lines of code"
+            echo
+            echo "$total lines of .rs, .js, .css and .html under src/, crates/, assets/ and tests/."
+            echo
+            echo "$(echo "$long" | grep -c .) files are over 1,500 lines before their tests."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
