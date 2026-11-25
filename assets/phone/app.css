@@ -414,6 +414,48 @@ body { position: fixed; inset: 0; height: auto; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A prompt's steps (board 188): ‹ and › at the ends, dimmed at the first
+   and last step, the names between them, each a 44 target, the one shown lit
+   in the accent and each answered one with ✓ in green. */
+.card .steps { display: flex; align-items: center; gap: var(--s1); margin: var(--s2) 0 0; }
+.card .steps .icon:disabled { opacity: .45; }
+.card .steps .names { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: var(--s1); }
+.card .steps .name {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 var(--s3);
+  border-radius: var(--pill);
+  background: var(--raised);
+  color: var(--dim);
+  font-size: var(--fact);
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card .steps .name.answered { color: var(--green); }
+.card .steps .name.lit { background: var(--accent); color: var(--ink); }
+.option .given { color: var(--ink); }
+/* Submit's step: each answer under its question's name, a tap stepping back
+   to it; Cancel at the left, Submit answers lit at the right. */
+.card .reviewed {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  min-height: var(--tap);
+  margin: var(--s2) 0 0;
+  padding: 6px var(--s3);
+  border-radius: var(--round);
+  background: var(--raised);
+  text-align: left;
+}
+.card .reviewed .q { flex: 0 1 40%; color: var(--dim); font-size: var(--fact); overflow-wrap: anywhere; }
+.card .reviewed .a { flex: 1; font-weight: 700; overflow-wrap: anywhere; }
+.card .reviewed .go { color: var(--accent); font-weight: 700; }
+.card .pair { display: flex; gap: var(--s2); margin: var(--s3) 0 0; }
+.card .pair .option { flex: 1; margin: 0; text-align: center; }
 .card .answered { color: var(--dim); }
 .card .error { color: var(--red); margin-top: var(--s2); }
 

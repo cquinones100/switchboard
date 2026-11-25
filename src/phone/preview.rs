@@ -104,6 +104,9 @@ struct Data {
     /// How many times the tabs were reset, so a reply due from before a
     /// reset changes nothing after it.
     resets: u64,
+    /// The two-question tab's step shown and the option chosen for each
+    /// question so far (`made_up::theme_prompt`).
+    theme: (usize, [Option<u64>; 2]),
 }
 
 impl Data {
@@ -117,6 +120,7 @@ impl Data {
             live: true,
             made: 0,
             resets: 0,
+            theme: (0, [None, None]),
         }
     }
 
@@ -148,6 +152,72 @@ impl Data {
             };
             tab["turn"] = json!({"prompt": prompt, "reply": reply, "at": at});
         }
+    }
+
+    /// An answer or a step on the two-question tab, as Claude Code takes
+    /// them: an option answers the question shown and moves on to the next
+    /// step, a step moves as ← and → do, and on Submit's step Submit
+    /// answers sends every answer while Cancel turns the questions down.
+    fn theme_answer(
+        &mut self,
+        n: &str,
+        reply: &str,
+        step: &str,
+    ) -> Result<(String, bool), (StatusCode, &'static str)> {
+        let names: Vec<&str> = made_up::THEME_QUESTIONS
+            .iter()
+            .map(|(name, ..)| *name)
+            .chain(["Submit"])
+            .collect();
+        let (mut shown, mut answers) = self.theme;
+        let submit = names.len() - 1;
+        let said = if !step.is_empty() {
+            shown = match step {
+                "back" if shown > 0 => shown - 1,
+                "forward" if shown < submit => shown + 1,
+                "back" | "forward" => return Err((StatusCode::CONFLICT, "no step that way")),
+                name => names
+                    .iter()
+                    .position(|s| *s == name)
+                    .ok_or((StatusCode::BAD_REQUEST, "no such step"))?,
+            };
+            format!("Stepped to {}", names[shown])
+        } else if shown == submit {
+            let words = match reply {
+                "1" => made_up::THEME_QUESTIONS
+                    .iter()
+                    .zip(answers)
+                    .filter_map(|((_, _, labels), a)| {
+                        labels.get(usize::try_from(a? - 1).ok()?).copied()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                "2" => "Not now".to_string(),
+                _ => return Err((StatusCode::BAD_REQUEST, "no such option")),
+            };
+            self.theme = (0, [None, None]);
+            self.add_turn(n, "you", &words, Vec::new());
+            self.set_state(n, "working", Some("Carrying on after your answer"));
+            return Ok((format!("Answered \"{words}\""), true));
+        } else {
+            let labels = made_up::THEME_QUESTIONS[shown].2;
+            let chosen = reply
+                .parse::<u64>()
+                .ok()
+                .filter(|&c| c >= 1 && c <= labels.len() as u64)
+                .ok_or((
+                    StatusCode::BAD_REQUEST,
+                    "the preview takes one of its options here",
+                ))?;
+            answers[shown] = Some(chosen);
+            shown += 1;
+            format!("Chose {chosen}. {}", labels[chosen as usize - 1])
+        };
+        self.theme = (shown, answers);
+        if let Some(tab) = self.tab(n) {
+            tab["prompt"] = made_up::theme_prompt(shown, answers);
+        }
+        Ok((said, false))
     }
 
     /// A tab set to `state`, from now.
@@ -652,6 +722,7 @@ async fn answer(
 ) -> Response {
     let reply = text_of(&body, "reply");
     let id = text_of(&body, "prompt");
+    let step = text_of(&body, "step");
     let answered = preview.change(|d| {
         if !d.live {
             return Err(OFFLINE);
@@ -665,6 +736,12 @@ async fn answer(
                 StatusCode::CONFLICT,
                 "the question it answers is no longer showing",
             ));
+        }
+        if prompt["steps"].as_array().is_some_and(|s| !s.is_empty()) {
+            return d.theme_answer(&n, &reply, &step);
+        }
+        if !step.is_empty() {
+            return Err((StatusCode::CONFLICT, "its prompt has no steps"));
         }
         let free = prompt["free"].as_u64();
         let multi = prompt["multi"] == true;
@@ -1064,6 +1141,29 @@ mod tests {
         assert!(!loopback_host(Some("evil.example:4174"), 4174));
         assert!(!loopback_host(Some("127.0.0.1:4175"), 4174));
         assert!(!loopback_host(None, 4174));
+    }
+
+    #[test]
+    fn the_two_question_tab_steps_answers_and_reviews_as_claude_code_does() {
+        let mut data = Data::new();
+        let n = made_up::STEPPED.to_string();
+        let shown = |d: &mut Data| d.tab(&n).unwrap()["prompt"]["shown"].clone();
+        assert_eq!(shown(&mut data), 0);
+        assert!(data.theme_answer(&n, "", "back").is_err());
+        assert_eq!(data.theme_answer(&n, "2", "").unwrap().0, "Chose 2. Cool");
+        assert_eq!(shown(&mut data), 1, "an answer moves on");
+        data.theme_answer(&n, "", "Colors").unwrap();
+        let prompt = data.tab(&n).unwrap()["prompt"].clone();
+        assert_eq!(prompt["cursor"], 2, "the answer given");
+        assert_eq!(prompt["steps"][0]["answered"], true);
+        data.theme_answer(&n, "2", "").unwrap();
+        data.theme_answer(&n, "1", "").unwrap();
+        let prompt = data.tab(&n).unwrap()["prompt"].clone();
+        assert_eq!(prompt["review"][1]["answer"], "Compact");
+        let (said, answered) = data.theme_answer(&n, "1", "").unwrap();
+        assert_eq!(said, "Answered \"Cool, Compact\"");
+        assert!(answered);
+        assert_eq!(data.tab(&n).unwrap()["state"], "working");
     }
 
     #[test]

@@ -241,11 +241,11 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "prompt",
-        "prompt [-t pane]: the prompt the pane's Claude waits on, as JSON (its question, options, whether it takes several, its free option), null with none; refused for a pane not running Claude",
+        "prompt [-t pane]: the prompt the pane's Claude waits on, as JSON (its question, options, whether it takes several, its free option, the option the cursor is on, and for several questions their steps, the step shown and Submit's review of the answers), null with none; refused for a pane not running Claude",
     ),
     (
         "answer",
-        "answer [-t pane] [-m] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; -s names who asked (phone), written in the server's log; refused for a pane not running Claude, and typed in a pane",
+        "answer [-t pane] [-m] [-g step] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; with -g and no reply, a prompt of several questions stepped back, forward or to a step by its name (back, forward or the name), pressing ← or → as many times as it takes; -s names who asked (phone), written in the server's log; refused for a pane not running Claude, and typed in a pane",
     ),
     (
         "remind",
@@ -570,10 +570,17 @@ impl Server {
             "prompt" => Args::parse(rest, "t")
                 .and_then(|a| self.pane_from(&a, caller))
                 .and_then(|pane| self.phone_prompt(pane)),
-            "answer" => Args::parse(rest, "tsh").and_then(|a| {
+            "answer" => Args::parse(rest, "tshg").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
                 let reply = a.rest.join(" ");
-                self.phone_answer(pane, &reply, a.has('m'), a.value('h'), a.value('s'))
+                self.phone_answer(
+                    pane,
+                    &reply,
+                    a.has('m'),
+                    a.value('g'),
+                    a.value('h'),
+                    a.value('s'),
+                )
             }),
             "remind" => Args::parse(rest, "tsn").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;

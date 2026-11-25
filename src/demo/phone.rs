@@ -465,7 +465,103 @@ const TABS: &[Tab] = &[
         // Its turns are `long_conversation`'s.
         turns: &[],
     },
+    Tab {
+        pane: STEPPED,
+        name: "Theme picker",
+        repo: "web",
+        branch: "abc-188-theme-picker",
+        state: "waiting",
+        wait: Some("AskUserQuestion"),
+        minutes_ago: 1,
+        prompt: Some(|| theme_prompt(0, [None, None])),
+        shape: plain,
+        turns: &[
+            ("you", "Add a theme picker to the settings page.", &[], 12),
+            (
+                "claude",
+                "Before I build it, two questions about what it offers.",
+                &[],
+                1,
+            ),
+        ],
+    },
 ];
+
+/// The pane of the tab asking two questions at once, which the preview
+/// steps over (`theme_prompt`).
+pub const STEPPED: u32 = 32;
+
+/// The questions `theme_prompt` asks: each one's name, its question and
+/// its options, with no answer of your own, which the preview leaves out.
+pub const THEME_QUESTIONS: [(&str, &str, &[&str]); 2] = [
+    (
+        "Colors",
+        "Which colors should the picker offer first?",
+        &["Warm", "Cool", "Both"],
+    ),
+    (
+        "Size",
+        "Which size should it open at?",
+        &["Compact", "Roomy"],
+    ),
+];
+
+/// A prompt of two questions as the server reads one, on step `shown` (the
+/// two questions, then Submit's review), with the option chosen for each
+/// so far, which is the cursor's on a step already answered.
+pub fn theme_prompt(shown: usize, answers: [Option<u64>; 2]) -> Value {
+    let mut steps: Vec<Value> = THEME_QUESTIONS
+        .iter()
+        .zip(answers)
+        .map(|((name, ..), a)| json!({"name": name, "answered": a.is_some(), "submit": false}))
+        .collect();
+    steps.push(json!({"name": "Submit", "answered": false, "submit": true}));
+    let id = format!(
+        "demo-theme-{shown}-{}-{}",
+        answers[0].unwrap_or(0),
+        answers[1].unwrap_or(0)
+    );
+    let Some((_, question, labels)) = THEME_QUESTIONS.get(shown) else {
+        let review: Vec<Value> = THEME_QUESTIONS
+            .iter()
+            .zip(answers)
+            .enumerate()
+            .filter_map(|(i, ((_, question, labels), a))| {
+                let label = labels.get(usize::try_from(a? - 1).ok()?)?;
+                Some(json!({"question": question, "answer": label, "step": i}))
+            })
+            .collect();
+        return json!({
+            "id": id,
+            "question": "Review your answers",
+            "options": [
+                {"n": 1, "label": "Submit answers", "checked": null, "detail": ""},
+                {"n": 2, "label": "Cancel", "checked": null, "detail": ""},
+            ],
+            "multi": false,
+            "free": null,
+            "cursor": null,
+            "steps": steps,
+            "shown": shown,
+            "review": review,
+        });
+    };
+    json!({
+        "id": id,
+        "question": question,
+        "options": labels
+            .iter()
+            .enumerate()
+            .map(|(i, label)| json!({"n": i + 1, "label": label, "checked": null, "detail": ""}))
+            .collect::<Vec<_>>(),
+        "multi": false,
+        "free": null,
+        "cursor": answers[shown].unwrap_or(1),
+        "steps": steps,
+        "shown": shown,
+        "review": [],
+    })
+}
 
 /// The pane of the tab with a long conversation, which its channel loads a
 /// screen of turns at a time as it is scrolled up (`phone::turns`'s

@@ -100,6 +100,208 @@ pub struct Prompt {
     /// The options whose screen shows more than their label: words cut
     /// from its end, or lines under it (a description, a wrapped label).
     pub more: Vec<u32>,
+    /// The steps of a prompt of several questions, from the line of their
+    /// names, Submit last; empty for a prompt of one question.
+    pub steps: Vec<QuestionStep>,
+    /// Which of `steps` is shown, read from the line's cells
+    /// (`read_shown`), since its text loses the highlight that marks it;
+    /// `None` when read from text alone.
+    pub shown: Option<usize>,
+    /// On Submit's step, Claude Code's review of the answers given.
+    pub review: Vec<Reviewed>,
+}
+
+/// One step of a prompt of several questions: a question's name, as the
+/// line of names shows it, and whether it is answered (☒), or Submit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionStep {
+    pub name: String,
+    pub answered: bool,
+    pub submit: bool,
+}
+
+/// One answer on Submit's step: the question, the answer given, and the
+/// step it was given on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reviewed {
+    pub question: String,
+    pub answer: String,
+    pub step: Option<usize>,
+}
+
+/// Where to step in a prompt of several questions: back or forward, as ←
+/// and → do, or to a step by its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StepTo {
+    Back,
+    Forward,
+    Named(String),
+}
+
+impl StepTo {
+    /// `back`, `forward`, or a step's name.
+    pub fn parse(text: &str) -> StepTo {
+        match text {
+            "back" => StepTo::Back,
+            "forward" => StepTo::Forward,
+            name => StepTo::Named(name.to_string()),
+        }
+    }
+}
+
+/// The steps on the line of a prompt's questions' names (`← ☐ Colors  ☒
+/// Size  ✔ Submit →`): each name, ☒ answered, and Submit last. Only a line
+/// ending in Submit has steps, and only with two questions or more, since
+/// a prompt of one question shows its name alone.
+fn steps_in(line: &str) -> Vec<QuestionStep> {
+    const MARKS: [char; 3] = ['☐', '☒', '✔'];
+    let chars: Vec<char> = line.chars().collect();
+    let at: Vec<usize> = (0..chars.len())
+        .filter(|&i| MARKS.contains(&chars[i]))
+        .collect();
+    let steps: Vec<QuestionStep> = at
+        .iter()
+        .enumerate()
+        .map(|(k, &i)| {
+            let end = at.get(k + 1).copied().unwrap_or(chars.len());
+            let name: String = chars[i + 1..end].iter().collect();
+            let name = name.trim().trim_end_matches('→').trim().to_string();
+            QuestionStep {
+                submit: chars[i] == '✔',
+                answered: chars[i] == '☒',
+                name,
+            }
+        })
+        .collect();
+    let questions = steps.iter().filter(|s| !s.submit).count();
+    let ends_in_submit = steps.last().is_some_and(|s| s.submit) && questions == steps.len() - 1;
+    if ends_in_submit && questions >= 2 {
+        steps
+    } else {
+        Vec::new()
+    }
+}
+
+/// Claude Code's review of the answers on Submit's step: under "Review
+/// your answers", each question, then `→` and its answer, a line set in
+/// past the arrow more of the answer. Each is matched to the answered
+/// steps in order, which are the questions it lists.
+fn review_in(lines: &[&str], steps: &[QuestionStep]) -> Vec<Reviewed> {
+    let Some(title) = lines.iter().position(|l| l.trim() == "Review your answers") else {
+        return Vec::new();
+    };
+    let indent = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
+    let mut out: Vec<Reviewed> = Vec::new();
+    let mut question: Vec<&str> = Vec::new();
+    let mut arrow_at: Option<usize> = None;
+    for l in &lines[title + 1..] {
+        let t = l.trim();
+        if let Some(answer) = t.strip_prefix('→') {
+            arrow_at = Some(indent(l));
+            out.push(Reviewed {
+                question: question.join(" "),
+                answer: answer.trim().to_string(),
+                step: None,
+            });
+            question.clear();
+        } else if let (Some(at), true, Some(last)) = (arrow_at, question.is_empty(), out.last_mut())
+            && indent(l) > at
+        {
+            last.answer.push(' ');
+            last.answer.push_str(t);
+        } else if t.starts_with('⚠') || t == "Some questions are unanswered" {
+            continue;
+        } else {
+            arrow_at = None;
+            question.push(t.trim_start_matches(['●', '•', '·', '-']).trim());
+        }
+    }
+    let answered: Vec<usize> = (0..steps.len()).filter(|&i| steps[i].answered).collect();
+    if answered.len() == out.len() {
+        for (r, &step) in out.iter_mut().zip(&answered) {
+            r.step = Some(step);
+        }
+    }
+    out
+}
+
+/// Which step the line of names shows, given the screen's rows as drawn:
+/// Claude Code draws the one shown on a background of its own, which the
+/// text loses. The last row with the names is read.
+pub fn read_shown(found: &mut Prompt, rows: &[Vec<Span<'_>>]) {
+    if found.steps.is_empty() {
+        return;
+    }
+    let Some(row) = rows.iter().rev().find(|r| {
+        let text: String = r.iter().map(|s| s.content.as_ref()).collect();
+        QUESTION_TABS.is_match(&text) && !steps_in(&text).is_empty()
+    }) else {
+        return;
+    };
+    let mut lit: Vec<String> = Vec::new();
+    let mut joined = false;
+    for span in row {
+        let on = span
+            .style
+            .bg
+            .is_some_and(|bg| bg != ratatui::style::Color::Reset);
+        match (on, joined, lit.last_mut()) {
+            (true, true, Some(last)) => last.push_str(&span.content),
+            (true, _, _) => lit.push(span.content.to_string()),
+            _ => {}
+        }
+        joined = on;
+    }
+    found.shown = lit.iter().find_map(|text| {
+        let name = text.trim().trim_start_matches(['☐', '☒', '✔']).trim();
+        (!name.is_empty())
+            .then(|| found.steps.iter().position(|s| s.name == name))
+            .flatten()
+    });
+}
+
+/// What stepping takes in a prompt of several questions: ← back, → forward,
+/// or as many of either as a named step lies from the one shown.
+pub fn step_presses(found: &Prompt, to: &StepTo) -> Result<(Vec<Press>, String), String> {
+    if found.steps.is_empty() {
+        return Err("its prompt has no steps".into());
+    }
+    let last = found.steps.len() - 1;
+    let target = match (to, found.shown) {
+        (StepTo::Back, Some(0)) => return Err("it already shows the first step".into()),
+        (StepTo::Forward, Some(at)) if at == last => {
+            return Err("it already shows the last step".into());
+        }
+        (StepTo::Back, Some(at)) => at - 1,
+        (StepTo::Forward, Some(at)) => at + 1,
+        // Unread, a step could press past either end, where Claude Code
+        // takes the key as nothing and the phone waits on a change.
+        (_, None) => return Err("which step it shows can't be read".into()),
+        (StepTo::Named(name), Some(_)) => found
+            .steps
+            .iter()
+            .position(|s| &s.name == name)
+            .ok_or_else(|| format!("\"{name}\" isn't one of its steps"))?,
+    };
+    let at = found.shown.unwrap_or(0);
+    if target == at {
+        return Err(format!("it already shows {}", found.steps[at].name));
+    }
+    let code = if target > at {
+        KeyCode::Right
+    } else {
+        KeyCode::Left
+    };
+    // In the free option's field (an answer of your own typed into a
+    // question of several answers leaves the ❯ there), ← and → move the
+    // text's cursor, so ↑ leaves the field first, keeping what was typed.
+    let in_field = found.free.is_some() && found.cursor == found.free.map(Cursor::Option);
+    let leave = in_field.then(|| Press::Key(Key::new(KeyCode::Up, Mods::NONE)));
+    let presses = leave
+        .into_iter()
+        .chain((0..target.abs_diff(at)).map(|_| Press::Key(Key::new(code, Mods::NONE))))
+        .collect();
+    Ok((presses, format!("Stepped to {}", found.steps[target].name)))
 }
 
 /// The numbered choices a waiting tab is showing (a permission prompt, or a
@@ -111,7 +313,8 @@ pub struct Prompt {
 /// end with "Type something", for an answer of your own, and a rule sets
 /// "Chat about this" apart below; that last option above the rule is
 /// `free`, found by its place. With several questions they come one at a
-/// time, under a line of their names marked ☐ or ☒. A question that takes
+/// time, under a line of their names marked ☐ or ☒, read as `steps`, with
+/// Submit's step reviewing the answers (`review`). A question that takes
 /// several answers (`multi`) shows each option as [ ] or [✔], and a Submit
 /// row after the options moves on. One whose options carry a preview draws
 /// it in a box to their right (`preview`), its edge on the options' rows.
@@ -238,6 +441,17 @@ pub fn options_in(text: &str) -> Option<Prompt> {
     let named = lines[first.saturating_sub(13)..first]
         .iter()
         .any(|l| QUESTION_TABS.is_match(l));
+    // The line of names is the nearest above the options, back to the
+    // prompt's rule, however many answers Submit's review lists.
+    let names_at = (0..first)
+        .rev()
+        .take_while(|&i| !RULE.is_match(lines[i]))
+        .find(|&i| QUESTION_TABS.is_match(lines[i]));
+    let steps = names_at.map(|i| steps_in(lines[i])).unwrap_or_default();
+    let review = match names_at {
+        Some(i) if !steps.is_empty() => review_in(&lines[i + 1..first], &steps),
+        _ => Vec::new(),
+    };
     let most = if named { 12 } else { 3 };
     let mut above: Vec<&str> = Vec::new();
     for i in (0..first).rev() {
@@ -268,6 +482,9 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         free,
         cursor: free.and(cursor),
         more,
+        steps,
+        shown: None,
+        review,
     })
 }
 
@@ -1097,6 +1314,177 @@ Which colors?
             presses(&found, &Answer::Submit).len(),
             4,
             "three rows down to Submit, then Enter"
+        );
+    }
+
+    const TWO_QUESTIONS: &str = "\
+────────────────────────────────────────
+ ← ☒ Colors  ☐ Size  ✔ Submit  →
+
+Which colors should the picker offer first?
+
+  1. Warm
+❯ 2. Cool
+  3. Both
+  4. Type something
+──────────────────
+  5. Chat about this";
+
+    /// The line of names as Claude Code draws it, the step at `lit` on a
+    /// background of its own.
+    fn names_row(lit: usize) -> Vec<Span<'static>> {
+        let bg = Style::new().bg(ratatui::style::Color::Rgb(177, 185, 249));
+        let mut row = vec![Span::raw(" ← ")];
+        for (i, name) in [" ☒ Colors ", " ☐ Size ", " ✔ Submit "]
+            .into_iter()
+            .enumerate()
+        {
+            row.push(if i == lit {
+                Span::styled(name, bg)
+            } else {
+                Span::raw(name)
+            });
+        }
+        row.push(Span::raw(" →"));
+        row
+    }
+
+    #[test]
+    fn the_steps_of_several_questions_are_read_with_their_answered_marks() {
+        let found = options_in(TWO_QUESTIONS).expect("a prompt");
+        let steps: Vec<(&str, bool, bool)> = found
+            .steps
+            .iter()
+            .map(|s| (s.name.as_str(), s.answered, s.submit))
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                ("Colors", true, false),
+                ("Size", false, false),
+                ("Submit", false, true)
+            ]
+        );
+        assert_eq!(found.shown, None, "text alone can't tell which is shown");
+        assert_eq!(found.cursor, Some(Cursor::Option(2)), "the answer given");
+        assert_eq!(
+            found.question,
+            "Which colors should the picker offer first?"
+        );
+        assert!(found.review.is_empty());
+        let one = "\
+ ☐ Layout
+
+Which layout?
+
+❯ 1. Sidebar
+  2. Top bar
+  3. Type something
+──────────────────
+  4. Chat about this";
+        assert!(
+            options_in(one).expect("a prompt").steps.is_empty(),
+            "a prompt of one question has no steps"
+        );
+    }
+
+    #[test]
+    fn the_step_shown_is_read_from_the_line_of_names_cells() {
+        let mut found = options_in(TWO_QUESTIONS).expect("a prompt");
+        let rows = vec![vec![Span::raw("─".repeat(40))], names_row(1)];
+        read_shown(&mut found, &rows);
+        assert_eq!(found.shown, Some(1));
+        read_shown(&mut found, &[names_row(0)]);
+        assert_eq!(found.shown, Some(0));
+        let mut plain = options_in(TWO_QUESTIONS).expect("a prompt");
+        read_shown(
+            &mut plain,
+            &[vec![Span::raw(" ← ☒ Colors  ☐ Size  ✔ Submit  →")]],
+        );
+        assert_eq!(plain.shown, None, "nothing drawn lit");
+    }
+
+    #[test]
+    fn submits_step_reviews_each_answer_and_its_question() {
+        let screen = "\
+ ← ☒ Colors  ☒ Size  ✔ Submit  →
+
+Review your answers
+
+ ● Which colors should the picker offer first?
+   → Cool
+ ● Which size should it open at?
+   → Roomy, with the sidebar
+     open
+
+❯ 1. Submit answers
+  2. Cancel";
+        let found = options_in(screen).expect("a prompt");
+        assert_eq!(found.steps.len(), 3);
+        assert_eq!(
+            found.review,
+            vec![
+                Reviewed {
+                    question: "Which colors should the picker offer first?".into(),
+                    answer: "Cool".into(),
+                    step: Some(0),
+                },
+                Reviewed {
+                    question: "Which size should it open at?".into(),
+                    answer: "Roomy, with the sidebar open".into(),
+                    step: Some(1),
+                },
+            ]
+        );
+        let labels: Vec<&str> = found.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Submit answers", "Cancel"]);
+    }
+
+    #[test]
+    fn stepping_presses_left_and_right_as_many_times_as_it_takes() {
+        let left = Press::Key(Key::new(KeyCode::Left, Mods::NONE));
+        let right = Press::Key(Key::new(KeyCode::Right, Mods::NONE));
+        let mut found = options_in(TWO_QUESTIONS).expect("a prompt");
+        read_shown(&mut found, &[names_row(0)]);
+        assert!(
+            step_presses(&found, &StepTo::Back).is_err(),
+            "nothing before the first"
+        );
+        assert_eq!(
+            step_presses(&found, &StepTo::Forward),
+            Ok((vec![right.clone()], "Stepped to Size".into()))
+        );
+        assert_eq!(
+            step_presses(&found, &StepTo::parse("Submit")).map(|(p, _)| p),
+            Ok(vec![right.clone(), right.clone()])
+        );
+        read_shown(&mut found, &[names_row(2)]);
+        assert!(
+            step_presses(&found, &StepTo::Forward).is_err(),
+            "nothing past Submit"
+        );
+        assert_eq!(
+            step_presses(&found, &StepTo::parse("Colors")).map(|(p, _)| p),
+            Ok(vec![left.clone(), left.clone()])
+        );
+        assert_eq!(
+            step_presses(&found, &StepTo::parse("back")).map(|(p, _)| p),
+            Ok(vec![left])
+        );
+        assert!(step_presses(&found, &StepTo::parse("Shape")).is_err());
+        let mut typed = found.clone();
+        typed.cursor = Some(Cursor::Option(4));
+        assert_eq!(
+            step_presses(&typed, &StepTo::Back).map(|(p, _)| p),
+            Ok(vec![
+                Press::Key(Key::new(KeyCode::Up, Mods::NONE)),
+                Press::Key(Key::new(KeyCode::Left, Mods::NONE))
+            ]),
+            "out of the free option's field first"
+        );
+        assert!(
+            step_presses(&found, &StepTo::parse("Submit")).is_err(),
+            "already there"
         );
     }
 
