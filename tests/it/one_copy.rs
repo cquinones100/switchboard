@@ -5,7 +5,8 @@
 //! empties its entries as it lands; nothing is added to one.
 //!
 //! - git's wrapper: `fn git(` only in plugin-api's `sdk` (issue 399).
-//! - Claude's transcripts: read only by `agent::transcript` (issue 400).
+//! - Claude's transcripts: read only by `agent::transcript`, which issue 400
+//!   makes; until then `history::transcript` is the reader to use.
 //! - Mission control: a view acts on an item through its menus, never a
 //!   key of its own (issue 396).
 
@@ -218,7 +219,7 @@ fn git_has_one_wrapper() {
 fn transcripts_have_one_reader() {
     let found = transcript_copies(&sources());
     let mut bad = new_copies(
-        "a new reader of Claude's transcripts; read them through agent::transcript",
+        "a new reader of Claude's transcripts; read them through agent::transcript (issue 400), or history::transcript until it is there",
         found.clone(),
         TRANSCRIPT_COPIES,
     );
