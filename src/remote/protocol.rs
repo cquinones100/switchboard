@@ -348,7 +348,7 @@ impl Server {
     pub fn send_keys(&self, pane: &str, keys: &[&str]) -> Result<()> {
         let mut args = vec!["send-keys", "-t", pane];
         args.extend_from_slice(keys);
-        self.said(&args).map(|_| ())
+        self.ask(&args).map(|_| ())
     }
 
     /// Text typed as it is.
@@ -465,7 +465,7 @@ impl Remote for Server {
     fn mark_seen(&self, tab: &str, from: Option<&str>) -> Result<()> {
         let mut args = vec!["seen", "-t", tab];
         args.extend(from_args(from));
-        self.ask(&args).map(|_| ())
+        self.said(&args).map(|_| ())
     }
 
     fn remind(
