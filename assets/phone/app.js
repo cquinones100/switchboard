@@ -1656,31 +1656,113 @@ function card(tab) {
   }
   const options = p.options.filter((o) => o.n !== p.free);
   const waiting = !!state.sent && state.sent.pane === tab.pane && state.sent.key === promptKey(p);
+  const steps = p.steps && p.steps.length ? p.steps : null;
+  const shown = steps && p.shown !== null && p.shown !== undefined ? steps[p.shown] : null;
+  const questions = steps ? steps.filter((s) => !s.submit).length : 0;
+  const place = !shown ? null : shown.submit ? "review" : p.shown + 1 + " of " + questions;
+  const review = shown && shown.submit ? reviewed(p, waiting) : null;
   const c = el(
     "div",
     { class: "card" },
-    el("div", { class: "top" }, el("span", {}, "● Waiting on you"), p.multi ? el("span", { class: "chip y" }, "choose several") : null),
-    el("div", { class: "question" }, p.question || "Claude asks"),
-    options.map((o, i) => choice(p, o, i, waiting)),
-    p.multi ? el("button", { class: "option lit", onclick: () => answer("submit"), disabled: waiting }, "Submit") : null,
+    el(
+      "div",
+      { class: "top" },
+      el("span", {}, "● Waiting on you"),
+      place ? el("span", {}, place) : p.multi ? el("span", { class: "chip y" }, "choose several") : null,
+    ),
+    steps ? stepsLine(p, waiting) : null,
+    review || [
+      el("div", { class: "question" }, p.question || "Claude asks"),
+      ...options.map((o, i) => choice(p, o, i, waiting)),
+      p.multi ? el("button", { class: "option lit", onclick: () => answer("submit"), disabled: waiting }, "Submit") : null,
+    ],
     state.error ? el("div", { class: "error" }, state.error) : null,
   );
   return c;
+}
+
+// The steps of a prompt of several questions (board 188), at the card's
+// head: ‹ and › step back and forward, as ← and → do at the computer, dimmed
+// at the first and last step; between them each question's name, the one
+// shown lit and each answered one with ✓, Submit last, a tap on one stepping
+// straight to it. A swipe across the card stays the channel's.
+function stepsLine(p, waiting) {
+  const at = p.shown;
+  const last = p.steps.length - 1;
+  return el(
+    "div",
+    { class: "steps" },
+    el("button", { class: "icon", "aria-label": "The question before", disabled: waiting || at === 0, onclick: () => step("back") }, "‹"),
+    el(
+      "div",
+      { class: "names" },
+      p.steps.map((s, i) =>
+        el(
+          "button",
+          {
+            class: "name" + (i === at ? " lit" : "") + (s.answered ? " answered" : ""),
+            "aria-current": i === at ? "step" : null,
+            disabled: waiting,
+            onclick: () => {
+              if (i !== at) step(s.name);
+            },
+          },
+          (s.answered ? "✓ " : "") + s.name,
+        ),
+      ),
+    ),
+    el("button", { class: "icon", "aria-label": "The question after", disabled: waiting || at === last, onclick: () => step("forward") }, "›"),
+  );
+}
+
+// Submit's step: each answer under its question's name, a tap on one
+// stepping back to it, then Cancel at the left and Submit answers lit at the
+// right, as Claude Code's review offers them. `null` when the review can't be
+// matched to its options, so the card shows them as it shows any.
+function reviewed(p, waiting) {
+  const submit = p.options.find((o) => o.label === "Submit answers");
+  const cancel = p.options.find((o) => o.label === "Cancel");
+  if (!submit || !cancel) return null;
+  return [
+    el("div", { class: "question" }, "Review your answers"),
+    ...p.review.map((r) => {
+      const s = r.step === null || r.step === undefined ? null : p.steps[r.step];
+      return el(
+        "button",
+        { class: "reviewed", disabled: waiting || !s, onclick: () => s && step(s.name) },
+        el("span", { class: "q" }, s ? s.name : r.question),
+        el("span", { class: "a" }, "→ " + r.answer),
+        s ? el("span", { class: "go" }, "›") : null,
+      );
+    }),
+    el(
+      "div",
+      { class: "pair" },
+      el("button", { class: "option", onclick: () => answer(String(cancel.n)), disabled: waiting }, "Cancel"),
+      el("button", { class: "option lit", onclick: () => answer(String(submit.n)), disabled: waiting }, "Submit answers"),
+    ),
+  ];
 }
 
 // One choice: its button, which answers, and, when the question explains
 // it, an info button beside it that shows the explainer under it and hides
 // it again, answering nothing.
 function choice(p, o, i, waiting) {
+  // Among a prompt's steps the cursor's option is lit, which on a step
+  // already answered is the answer given; elsewhere the first is.
+  const stepped = !!(p.steps && p.steps.length) && typeof p.cursor === "number";
+  const lit = !p.multi && (stepped ? o.n === p.cursor : i === 0);
+  const given = stepped && lit && p.shown !== null && p.shown !== undefined && p.steps[p.shown].answered;
   const button = el(
     "button",
     {
-      class: "option" + (i === 0 && !p.multi ? " lit" : "") + (o.checked ? " ticked" : ""),
+      class: "option" + (lit ? " lit" : "") + (o.checked ? " ticked" : ""),
       onclick: () => answer(String(o.n)),
       disabled: waiting,
     },
     el("span", { class: "n" }, o.n + "."),
     o.label,
+    given ? el("span", { class: "given" }, " ✓") : null,
   );
   if (!o.detail) return button;
   const key = p.id + ":" + o.n;
@@ -1711,6 +1793,26 @@ function choice(p, o, i, waiting) {
 const promptKey = (p) => p.id + ":" + p.options.map((o) => (o.checked ? 1 : 0)).join("");
 
 const answer = (reply) => whileSending(() => answerNow(reply));
+
+// A step over a prompt's questions: `back`, `forward` or a step's name,
+// pressed as ← or → at the computer. Its buttons wait for the step to change.
+const step = (to) => whileSending(() => stepNow(to));
+
+async function stepNow(to) {
+  state.error = "";
+  const tab = current();
+  const p = tab && tab.prompt;
+  if (!p) return;
+  state.sent = { pane: tab.pane, key: promptKey(p) };
+  render();
+  try {
+    await api("/api/tabs/" + state.open + "/answer", { step: to, prompt: p.id });
+  } catch (e) {
+    state.error = String(e.message || e);
+    state.sent = null;
+  }
+  render();
+}
 
 async function answerNow(reply) {
   state.error = "";

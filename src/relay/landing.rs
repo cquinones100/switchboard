@@ -359,6 +359,9 @@ mod tests {
             free: None,
             cursor: None,
             more: Vec::new(),
+            steps: Vec::new(),
+            shown: None,
+            review: Vec::new(),
         };
         let q = push_question(&prompt(&["Push to main", "Not yet", "Type something."])).unwrap();
         assert_eq!((q.asks.as_str(), q.yes, q.no), ("Push to main?", 1, 2));

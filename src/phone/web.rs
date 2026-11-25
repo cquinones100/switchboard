@@ -828,7 +828,11 @@ async fn answer(
         )
             .into_response();
     }
-    ask(vec![
+    // A step over a prompt's questions (`back`, `forward` or a step's
+    // name) is a field of its own, never `reply`, which carries words typed
+    // in the composer.
+    let step = text_of(&body, "step");
+    let mut args: Vec<String> = vec![
         "answer".into(),
         "-t".into(),
         pane,
@@ -836,10 +840,12 @@ async fn answer(
         id,
         "-s".into(),
         "phone".into(),
-        "--".into(),
-        reply,
-    ])
-    .await
+    ];
+    if !step.is_empty() {
+        args.extend(["-g".into(), step]);
+    }
+    args.extend(["--".into(), reply]);
+    ask(args).await
 }
 
 async fn message(

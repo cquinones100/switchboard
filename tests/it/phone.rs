@@ -112,6 +112,78 @@ fn prompt_and_answer_read_and_press_a_claude_panes_prompt() {
     );
 }
 
+/// A prompt of two questions as Claude Code draws one, the step at `lit`
+/// on a background of its own, then `cat` echoing what is pressed (← and →
+/// as `^[[D` and `^[[C`). ☐ ✔ ← → ❯ ─ go as octal escapes, as above.
+fn show_steps(server: &TestServer, pane: &str, lit: usize) {
+    let name = |i: usize, name: &str| {
+        if i == lit {
+            format!(r"\033[44m {name} \033[0m")
+        } else {
+            format!(" {name} ")
+        }
+    };
+    let line = format!(
+        r"\342\206\220{}{}{}\342\206\222",
+        name(0, r"\342\230\220 Colors"),
+        name(1, r"\342\230\220 Size"),
+        name(2, r"\342\234\224 Submit"),
+    );
+    let printed = format!(
+        r"clear; printf '{line}\n\nWhich colors?\n\n\342\235\257 1. Warm\n  2. Cool\n  3. Type something\n\342\224\200\342\224\200\342\224\200\n  4. Chat about this\n'; cat"
+    );
+    server.ok(&["send-keys", "-t", pane, "-l", &printed]);
+    server.ok(&["send-keys", "-t", pane, "Enter"]);
+    wait_until(server, "the questions shown", || {
+        let found: Value = serde_json::from_str(&server.ok(&["prompt", "-t", pane])).unwrap();
+        found["shown"] == lit
+    });
+}
+
+#[test]
+fn a_prompt_of_several_questions_reads_its_steps_and_steps_with_the_arrows() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = claude_pane(&server);
+
+    show_steps(&server, &pane, 0);
+    let found: Value = serde_json::from_str(&server.ok(&["prompt", "-t", &pane])).unwrap();
+    let names: Vec<&str> = found["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Colors", "Size", "Submit"]);
+    assert_eq!(found["shown"], 0);
+    let first = found["id"].as_str().unwrap().to_string();
+    let (code, _, err) = server.run(&["answer", "-t", &pane, "-g", "back", "-h", &first]);
+    assert_eq!(code, 1, "nothing before the first step");
+    assert!(err.contains("first step"), "{err}");
+
+    let said = server.ok(&[
+        "answer", "-t", &pane, "-g", "forward", "-h", &first, "-s", "phone",
+    ]);
+    assert_eq!(said.trim(), "Stepped to Size");
+    wait_until(&server, "→ pressed", || {
+        screen(&server, &pane).contains("^[[C")
+    });
+
+    server.ok(&["send-keys", "-t", &pane, "C-c"]);
+    show_steps(&server, &pane, 1);
+    let (code, _, err) = server.run(&["answer", "-t", &pane, "-g", "back", "-h", &first]);
+    assert_eq!(code, 1, "the step changed since the phone read it");
+    assert!(err.contains("prompt changed"), "{err}");
+    let found: Value = serde_json::from_str(&server.ok(&["prompt", "-t", &pane])).unwrap();
+    let second = found["id"].as_str().unwrap().to_string();
+    let said = server.ok(&["answer", "-t", &pane, "-g", "back", "-h", &second]);
+    assert_eq!(said.trim(), "Stepped to Colors");
+    wait_until(&server, "← pressed", || {
+        screen(&server, &pane).contains("^[[D")
+    });
+}
+
 #[test]
 fn the_prompt_the_phone_reads_has_each_choices_explainer() {
     let server = TestServer::start();
@@ -2988,7 +3060,7 @@ mod preview_server {
         assert_eq!(json_of(at, "/api/me")["paired"], true);
         let tabs = json_of(at, "/api/tabs");
         assert_eq!(tabs["live"], true);
-        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 21);
+        assert_eq!(tabs["tabs"].as_array().unwrap().len(), 22);
         let turns = json_of(at, "/api/tabs/13/turns");
         assert!(!turns["messages"].as_array().unwrap().is_empty());
     }

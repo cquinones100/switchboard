@@ -1005,8 +1005,14 @@ pub fn prompt_hash(question: &str, options: &[PromptOption]) -> String {
         .to_string()
 }
 
+/// A prompt's id: its question and options, and, where the step it shows
+/// was read (as the phone reads it), that step too, so an answer meant for
+/// another step is refused.
 pub fn hash_of(found: &Prompt) -> String {
-    prompt_hash(&found.question, &found.options)
+    match found.shown {
+        Some(at) => prompt_hash(&format!("{}\nstep {at}", found.question), &found.options),
+        None => prompt_hash(&found.question, &found.options),
+    }
 }
 
 /// A dialog Claude Code shows before a session starts ("trust this
@@ -1034,6 +1040,9 @@ impl Dialog {
             free: None,
             cursor: None,
             more: Vec::new(),
+            steps: Vec::new(),
+            shown: None,
+            review: Vec::new(),
         })
     }
 }

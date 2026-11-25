@@ -107,6 +107,22 @@ pub fn prompt_json(found: &Prompt) -> Value {
             .collect::<Vec<_>>(),
         "multi": found.multi,
         "free": found.free,
+        "cursor": match found.cursor {
+            Some(answer::Cursor::Option(n)) => json!(n),
+            Some(answer::Cursor::Submit) => json!("submit"),
+            None => Value::Null,
+        },
+        "steps": found
+            .steps
+            .iter()
+            .map(|s| json!({"name": s.name, "answered": s.answered, "submit": s.submit}))
+            .collect::<Vec<_>>(),
+        "shown": found.shown,
+        "review": found
+            .review
+            .iter()
+            .map(|r| json!({"question": r.question, "answer": r.answer, "step": r.step}))
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -162,7 +178,11 @@ impl Server {
     /// The prompt a Claude pane shows, read off its screen.
     fn phone_prompt_of(&self, pane: PaneId) -> Option<Prompt> {
         let slot = self.panes.get(&pane)?;
-        answer::options_in(&slot.pane.text(60))
+        let mut found = answer::options_in(&slot.pane.text(60))?;
+        if !found.steps.is_empty() {
+            answer::read_shown(&mut found, &slot.pane.styled_lines());
+        }
+        Some(found)
     }
 
     /// Whether a pane's Claude waits on you: marked waiting, or, in auto
@@ -210,15 +230,22 @@ impl Server {
     /// a Claude that shows none. `expect`, the prompt's id as `prompt` gave
     /// it (the relay's hash of its question and options), refuses an answer
     /// meant for a prompt no longer showing, so a tap on a card a moment old
-    /// never answers the next question. `from` names who asked, for the log.
+    /// never answers the next question. `step`, in place of a reply, steps
+    /// over a prompt of several questions (`back`, `forward` or a step's
+    /// name), pressing ← or → as Claude Code takes them. `from` names who
+    /// asked, for the log.
     pub(crate) fn phone_answer(
         &mut self,
         pane: PaneId,
         reply: &str,
         message: bool,
+        step: Option<&str>,
         expect: Option<&str>,
         from: Option<&str>,
     ) -> Result<Reply, String> {
+        if step.is_some() && (message || !reply.trim().is_empty()) {
+            return Err("a step takes no reply or message".into());
+        }
         self.phone_claude_pane(pane)?;
         let found = self.phone_prompt_of(pane);
         // A numbered list in a finished reply reads as options too, so a
@@ -261,6 +288,12 @@ impl Server {
                 if expect.is_some_and(|id| id != crate::relay::tabs::hash_of(&found)) =>
             {
                 return Err("its prompt changed since: look at it again".into());
+            }
+            (false, Some(found)) if step.is_some() => {
+                let to = answer::StepTo::parse(step.unwrap_or_default());
+                let (presses, said) = answer::step_presses(&found, &to)?;
+                self.press(pane, presses);
+                said
             }
             (false, Some(found)) => {
                 let a = answer::answer_for(&found, reply)
@@ -1000,5 +1033,39 @@ mod tests {
         let v = prompt_json(&explained);
         assert_eq!(v["options"][0]["detail"], "Skips the checks");
         assert_eq!(v["options"][1]["detail"], "Runs every check");
+    }
+
+    #[test]
+    fn a_prompt_of_several_questions_carries_its_steps_and_the_step_shown() {
+        let screen = "\
+ ← ☒ Colors  ☐ Size  ✔ Submit  →
+
+Which size should it open at?
+
+❯ 1. Compact
+  2. Roomy
+  3. Type something
+──────────────────
+  4. Chat about this";
+        let mut found = answer::options_in(screen).unwrap();
+        let plain = prompt_json(&found);
+        assert_eq!(
+            plain["steps"][0],
+            json!({"name": "Colors", "answered": true, "submit": false})
+        );
+        assert_eq!(plain["steps"][2]["submit"], true);
+        assert_eq!(plain["shown"], Value::Null);
+        assert_eq!(plain["cursor"], 1);
+        assert_eq!(plain["review"], json!([]));
+        let lit = ratatui::style::Style::new().bg(ratatui::style::Color::Indexed(4));
+        let row = vec![
+            ratatui::text::Span::raw(" ←  ☒ Colors "),
+            ratatui::text::Span::styled(" ☐ Size ", lit),
+            ratatui::text::Span::raw(" ✔ Submit  →"),
+        ];
+        answer::read_shown(&mut found, &[row]);
+        let v = prompt_json(&found);
+        assert_eq!(v["shown"], 1);
+        assert_ne!(v["id"], plain["id"], "the step shown is part of its id");
     }
 }
