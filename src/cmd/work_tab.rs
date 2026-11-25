@@ -7,8 +7,9 @@
 //!
 //! On the server, `Server::open_work_tab` opens every work tab, whoever
 //! asks (the workspace's keys, mission control's menus, the Extras view,
-//! autopilot), from a `Work`, whose `command` is also what `wt-batch` asks
-//! the server to run in each tab. Each tab runs its command as an
+//! autopilot, and the phone app through `open_work_tab_in`), from a `Work`,
+//! whose `command` is also what `wt-batch` asks the server's `new-tab` to
+//! run in each tab, from outside the server. Each tab runs its command as an
 //! interactive shell of yours that defines the command's shell function
 //! from its `init` (`worktree::tab_running`), so the shell stays in the
 //! worktree once Claude exits.
