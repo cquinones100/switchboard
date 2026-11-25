@@ -15,41 +15,13 @@
 use serde_json::Value;
 
 use super::post::Button;
-use super::tabs::{Tab, hash_of};
+use super::tabs::Tab;
 use crate::facts::PrFacts;
 use crate::mission::answer::Prompt;
+use crate::remote::screen::hash_of;
 use crate::sidebar::text::ordinal;
 
-/// A tab's direct landing, from `list`'s `landing` and its pane's phase.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct LandingAt {
-    pub holding: bool,
-    /// Its place in the queue, 1 holding the lock.
-    pub line: u32,
-    /// Since when it holds the lock or waits, in ms.
-    pub since: i64,
-    pub branch: String,
-    /// Waiting first in line while its change is reviewed again.
-    pub reviewing: bool,
-    /// What the landing recorded of itself (`land-lock record`).
-    pub record: Value,
-    /// The step queue-and-clean last named (`land-lock phase`).
-    pub phase: String,
-}
-
-/// `list`'s `landing` for a tab, or `None` when it isn't landing.
-pub fn landing_of(value: Option<&Value>) -> Option<LandingAt> {
-    let v = value.filter(|v| v.is_object())?;
-    Some(LandingAt {
-        holding: v["holding"].as_bool() == Some(true),
-        line: v["line"].as_u64().unwrap_or(1) as u32,
-        since: v["since"].as_i64().unwrap_or(0),
-        branch: v["branch"].as_str().unwrap_or("").to_string(),
-        reviewing: v["reviewing"].as_bool() == Some(true),
-        record: v["record"].clone(),
-        phase: String::new(),
-    })
-}
+pub use crate::remote::protocol::{LandingAt, landing_of};
 
 /// The header's lines for a landing tab, in place of its state's line: its
 /// place, its PR, and its steps once it holds the lock.

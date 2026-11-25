@@ -33,12 +33,11 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::mission::answer::{self, Prompt};
 use crate::mission::remind;
-use crate::mux::input::{Key, KeyCode, Mods};
 use crate::mux::proto::{self, ServerMsg};
 use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
+use crate::remote::serve::prompt_json;
 use crate::sidebar::model::Rules;
 use crate::{settings, util};
 
@@ -49,8 +48,6 @@ use super::{cli, drawer, images, looks, tab_views};
 /// How long after a change `watch` waits before it sends, so a burst of
 /// changes goes as one.
 const SETTLE: Duration = Duration::from_millis(250);
-/// The longest a message's words run in the log's line.
-const SAID_WIDTH: usize = 80;
 
 /// The phone's watchers and what they were last sent, and the pictures
 /// each Claude pane's Claude showed with `look` (`looks`), the newest
@@ -95,37 +92,6 @@ pub enum PhoneEvent {
 const STOPPING: Duration = Duration::from_secs(10);
 const STARTING: Duration = Duration::from_secs(15);
 
-/// A prompt as the phone reads it.
-pub fn prompt_json(found: &Prompt) -> Value {
-    json!({
-        "id": crate::relay::tabs::hash_of(found),
-        "question": found.question,
-        "options": found
-            .options
-            .iter()
-            .map(|o| json!({"n": o.n, "label": o.label, "checked": o.checked, "detail": o.detail}))
-            .collect::<Vec<_>>(),
-        "multi": found.multi,
-        "free": found.free,
-        "cursor": match found.cursor {
-            Some(answer::Cursor::Option(n)) => json!(n),
-            Some(answer::Cursor::Submit) => json!("submit"),
-            None => Value::Null,
-        },
-        "steps": found
-            .steps
-            .iter()
-            .map(|s| json!({"name": s.name, "answered": s.answered, "submit": s.submit}))
-            .collect::<Vec<_>>(),
-        "shown": found.shown,
-        "review": found
-            .review
-            .iter()
-            .map(|r| json!({"question": r.question, "answer": r.answer, "step": r.step}))
-            .collect::<Vec<_>>(),
-    })
-}
-
 /// The reminder box's times with the clock time each means at `now`, as
 /// the phone's reminder sheet lists them.
 pub fn remind_times(now: &jiff::Zoned) -> Vec<Value> {
@@ -151,330 +117,7 @@ fn doing_json(doing: &crate::agent::Doing) -> Value {
     })
 }
 
-/// What a message said, cut to fit the log's line.
-fn short(text: &str) -> String {
-    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.chars().count() <= SAID_WIDTH {
-        return line;
-    }
-    let cut: String = line.chars().take(SAID_WIDTH - 1).collect();
-    format!("{cut}…")
-}
-
 impl Server {
-    /// Whether a pane runs Claude, as the sidebar last read it.
-    fn phone_runs_claude(&self, pane: PaneId) -> bool {
-        self.sidebar.panes.get(&pane).is_some_and(|r| r.claude)
-    }
-
-    fn phone_claude_pane(&self, pane: PaneId) -> Result<(), String> {
-        if self.phone_runs_claude(pane) {
-            Ok(())
-        } else {
-            Err(format!("pane {pane} isn't running Claude"))
-        }
-    }
-
-    /// The prompt a Claude pane shows, read off its screen.
-    fn phone_prompt_of(&self, pane: PaneId) -> Option<Prompt> {
-        let slot = self.panes.get(&pane)?;
-        let mut found = answer::options_in(&slot.pane.text(60))?;
-        if !found.steps.is_empty() {
-            answer::read_shown(&mut found, &slot.pane.styled_lines());
-        }
-        Some(found)
-    }
-
-    /// Whether a pane's Claude waits on you: marked waiting, or, in auto
-    /// mode, asked a permission its Notification hook hasn't yet marked
-    /// (`asked`), while the prompt is already on screen.
-    fn phone_asking(&self, pane: PaneId) -> bool {
-        self.agents.state(pane) == Some(crate::agent::State::Waiting)
-            || self.agents.get(pane).is_some_and(|a| a.asked.is_some())
-    }
-
-    fn phone_dialog(&self, pane: PaneId) -> bool {
-        self.panes
-            .get(&pane)
-            .is_some_and(|slot| crate::relay::tabs::dialog_in(&slot.pane.text(0)).is_some())
-    }
-
-    /// Whether Claude's fullscreen view is scrolled back, so what it waits
-    /// on is out of sight and a message's keys would reach it unseen.
-    fn phone_scrolled_back(&self, pane: PaneId) -> bool {
-        self.panes
-            .get(&pane)
-            .is_some_and(|slot| answer::scrolled_back(&slot.pane.text(0)))
-    }
-
-    fn phone_draft(&self, pane: PaneId) -> bool {
-        self.panes.get(&pane).is_some_and(|slot| {
-            crate::relay::tabs::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0)).is_some()
-        })
-    }
-
-    /// `prompt`: the prompt the pane's Claude waits on as JSON, `null` with
-    /// none.
-    pub(crate) fn phone_prompt(&self, pane: PaneId) -> Result<Reply, String> {
-        self.phone_claude_pane(pane)?;
-        let found = self.phone_prompt_of(pane);
-        Ok(Reply::ok(format!(
-            "{}\n",
-            found.as_ref().map(prompt_json).unwrap_or(Value::Null)
-        )))
-    }
-
-    /// `answer`: `reply` pressed in the prompt the pane's Claude shows (an
-    /// option's number or the start of its label, `submit`, or your own
-    /// words where it takes them), or, with `message`, typed as a message to
-    /// a Claude that shows none. `expect`, the prompt's id as `prompt` gave
-    /// it (the relay's hash of its question and options), refuses an answer
-    /// meant for a prompt no longer showing, so a tap on a card a moment old
-    /// never answers the next question. `step`, in place of a reply, steps
-    /// over a prompt of several questions (`back`, `forward` or a step's
-    /// name), pressing ← or → as Claude Code takes them. `from` names who
-    /// asked, for the log.
-    pub(crate) fn phone_answer(
-        &mut self,
-        pane: PaneId,
-        reply: &str,
-        message: bool,
-        step: Option<&str>,
-        expect: Option<&str>,
-        from: Option<&str>,
-    ) -> Result<Reply, String> {
-        if step.is_some() && (message || !reply.trim().is_empty()) {
-            return Err("a step takes no reply or message".into());
-        }
-        self.phone_claude_pane(pane)?;
-        let found = self.phone_prompt_of(pane);
-        // A numbered list in a finished reply reads as options too, so a
-        // message waits on a prompt only while its Claude is waiting, as
-        // the drawer shows one and the relay reads one.
-        let waiting = self.phone_asking(pane);
-        let said = match (message, found) {
-            (true, Some(_)) if waiting => {
-                return Err("its Claude is showing a prompt: answer that first".into());
-            }
-            (true, None) if waiting && self.phone_scrolled_back(pane) => {
-                return Err(
-                    "its Claude's view is scrolled up past what it waits on: scroll it down at the computer"
-                        .into(),
-                );
-            }
-            (true, _) if reply.trim().is_empty() => return Err("nothing to send".into()),
-            // A dialog before its session starts (trust this folder, a new
-            // MCP server), which Enter would confirm unseen, and a draft in
-            // its prompt box, which would go with the words, are left for
-            // the computer, as mission control's answer box leaves them.
-            (true, _) if self.phone_dialog(pane) => {
-                return Err(
-                    "its Claude is showing a dialog before it starts: answer it at the computer"
-                        .into(),
-                );
-            }
-            (true, _) if self.phone_draft(pane) => {
-                return Err(
-                    "its Claude has a draft in its prompt box, which would go with this: send it or clear it at the computer"
-                        .into(),
-                );
-            }
-            (true, _) => {
-                self.type_into_claude(pane, answer::message_presses(reply));
-                format!("Sent \"{}\"", short(reply))
-            }
-            (false, None) => return Err("its Claude isn't showing a prompt".into()),
-            (false, Some(found))
-                if expect.is_some_and(|id| id != crate::relay::tabs::hash_of(&found)) =>
-            {
-                return Err("its prompt changed since: look at it again".into());
-            }
-            (false, Some(found)) if step.is_some() => {
-                let to = answer::StepTo::parse(step.unwrap_or_default());
-                let (presses, said) = answer::step_presses(&found, &to)?;
-                self.press(pane, presses);
-                said
-            }
-            (false, Some(found)) => {
-                let a = answer::answer_for(&found, reply)
-                    .ok_or_else(|| format!("\"{reply}\" isn't one of its options"))?;
-                self.press(pane, answer::presses(&found, &a));
-                answer::answer_said(&a)
-            }
-        };
-        if let Some(from) = from
-            && let Some(tab) = self.panes.get(&pane).map(|slot| slot.tab)
-        {
-            self.phone_did(from, tab, &short(&said));
-        }
-        Ok(Reply::ok(format!("{said}\n")))
-    }
-
-    /// `kill-tab -s from`: the tab of a pane running Claude closed for
-    /// `from` (the phone, which asks first), written in the server's log
-    /// as answering and messaging are; refused for a pane not running
-    /// Claude, as they are.
-    pub(crate) fn phone_close(&mut self, pane: PaneId, from: &str) -> Result<Reply, String> {
-        if !crate::settings::is_on("phone_close_tabs") {
-            return Err("closing tabs from the phone is off in Settings".into());
-        }
-        self.phone_claude_pane(pane)?;
-        let tab = self.panes[&pane].tab;
-        let n = self.tab_number(tab);
-        let name = self
-            .tabs
-            .get(&tab)
-            .map(|t| t.display_name().to_string())
-            .unwrap_or_default();
-        self.phone_did(from, tab, "closed it");
-        self.kill_tab(tab);
-        Ok(Reply::ok(format!("Closed tab {n} {name}\n")))
-    }
-
-    /// Whether Esc in a Claude pane would stop its turn, else why not: the
-    /// one test `stop` refuses by and `watch` tells the phone (`stoppable`),
-    /// so the phone offers ■ exactly when the server takes it.
-    fn phone_stoppable(&self, pane: PaneId) -> Result<(), String> {
-        if self.agents.state(pane) != Some(crate::agent::State::Working) {
-            return Err("its Claude isn't working".into());
-        }
-        // A permission auto mode asks while still working, or a dialog,
-        // which Esc would refuse or close rather than stop the turn. A
-        // prompt counts as `watch` sends the phone one, while the pane is
-        // marked asked, so a numbered list in Claude's own words, with
-        // nothing asked, leaves it allowed.
-        let prompt_shown = self.phone_asking(pane) && self.phone_prompt_of(pane).is_some();
-        if prompt_shown || self.phone_dialog(pane) {
-            return Err("its Claude is asking something: answer it first".into());
-        }
-        // Scrolled back, Esc would scroll the view down, or reach a prompt
-        // hidden below it, rather than stop the turn.
-        if self.phone_scrolled_back(pane) {
-            return Err(
-                "its Claude's view is scrolled back: scroll it down at the computer first".into(),
-            );
-        }
-        Ok(())
-    }
-
-    /// `stop`: Esc pressed in a pane's Claude, which stops its turn as Esc
-    /// at the computer does; refused for a pane not running Claude, for one
-    /// whose Claude isn't working and for one asking a permission or showing
-    /// a dialog, which Esc would answer instead. `from` names who asked, for the log.
-    pub(crate) fn phone_stop(&mut self, pane: PaneId, from: Option<&str>) -> Result<Reply, String> {
-        self.phone_claude_pane(pane)?;
-        self.phone_stoppable(pane)?;
-        let tab = self.panes[&pane].tab;
-        self.press(
-            pane,
-            vec![answer::Press::Key(Key::new(KeyCode::Esc, Mods::NONE))],
-        );
-        if let Some(from) = from {
-            self.phone_did(from, tab, "Stopped");
-        }
-        let n = self.tab_number(tab);
-        let name = self
-            .tabs
-            .get(&tab)
-            .map(|t| t.display_name().to_string())
-            .unwrap_or_default();
-        Ok(Reply::ok(format!("Stopped tab {n} {name}\n")))
-    }
-
-    /// `remind`: the reminder of a pane's tab set for `when` (one of the
-    /// box's times, or one typed, read as the box reads it) with `note`,
-    /// or, with `None`, cleared, as the workspace's box sets and clears
-    /// one; refused with Settings' "Reminders" off, for a pane not running
-    /// Claude, and for a time that can't be read, in the box's words.
-    /// `from` names who asked, for the log.
-    pub(crate) fn phone_remind(
-        &mut self,
-        pane: PaneId,
-        when: Option<&str>,
-        note: &str,
-        from: Option<&str>,
-    ) -> Result<Reply, String> {
-        if !settings::is_on("reminders") {
-            return Err("reminders are off in Settings".into());
-        }
-        self.phone_claude_pane(pane)?;
-        let tab = self.panes[&pane].tab;
-        let name = format!(
-            "tab {} {}",
-            self.tab_number(tab),
-            self.tabs
-                .get(&tab)
-                .map(|t| t.display_name().to_string())
-                .unwrap_or_default()
-        );
-        let (said, what) = match when {
-            None => {
-                self.write_reminder(tab, None);
-                (
-                    format!("Cleared the reminder for {name}"),
-                    "Cleared its reminder".to_string(),
-                )
-            }
-            Some(text) => {
-                let text = text.trim();
-                let at = remind::when(text, &util::local_now())
-                    .ok_or_else(|| format!("\"{text}\" {}", remind::NOT_A_TIME))?;
-                self.write_reminder(tab, Some((at, note.trim())));
-                let at = remind::said(at);
-                (
-                    format!("Reminder for {name} at {at}"),
-                    format!("Reminder at {at}"),
-                )
-            }
-        };
-        if let Some(from) = from {
-            self.phone_did(from, tab, &what);
-        }
-        Ok(Reply::ok(format!("{said}\n")))
-    }
-
-    /// `pin`: the tab of a pane running Claude pinned, or with `pin` false
-    /// unpinned, as M-f does; refused for a pane not running Claude.
-    /// `from` names who asked, for the log.
-    pub(crate) fn phone_pin(
-        &mut self,
-        pane: PaneId,
-        pin: bool,
-        from: Option<&str>,
-    ) -> Result<Reply, String> {
-        self.phone_claude_pane(pane)?;
-        let tab = self.panes[&pane].tab;
-        self.set_pin(tab, pin);
-        let (did, what) = if pin {
-            ("Pinned", "Pinned it")
-        } else {
-            ("Unpinned", "Unpinned it")
-        };
-        if let Some(from) = from {
-            self.phone_did(from, tab, what);
-        }
-        let n = self.tab_number(tab);
-        let name = self
-            .tabs
-            .get(&tab)
-            .map(|t| t.display_name().to_string())
-            .unwrap_or_default();
-        Ok(Reply::ok(format!("{did} tab {n} {name}\n")))
-    }
-
-    /// Something done from elsewhere (`from`, the phone), written in the
-    /// server's log alone: no notification, since the tab shows what was
-    /// done there.
-    pub(crate) fn phone_did(&self, from: &str, tab: TabId, what: &str) {
-        let n = self.tab_number(tab);
-        let name = self
-            .tabs
-            .get(&tab)
-            .map(|t| t.display_name().to_string())
-            .unwrap_or_default();
-        eprintln!("switchboard server: from your {from}: tab {n} ({name}): {what}");
-    }
-
     /// `phone-pair`: a box asking you to type the code `device` shows
     /// (board 168), over the screen of the client used last. A typed code
     /// rather than a yes, so a stray Enter pairs nothing: Enter with the
@@ -752,9 +395,9 @@ impl Server {
             .filter_map(|(stage, t)| {
                 let pane = t.claude_pane?;
                 let waiting =
-                    t.state == crate::sidebar::TabState::Waiting || self.phone_asking(pane);
+                    t.state == crate::sidebar::TabState::Waiting || self.remote_asking(pane);
                 let prompt = waiting
-                    .then(|| self.phone_prompt_of(pane))
+                    .then(|| self.remote_prompt_of(pane))
                     .flatten()
                     .map(|p| prompt_json(&p));
                 let file = self
@@ -806,7 +449,7 @@ impl Server {
                     })),
                     "doing": t.doing.as_ref().map(doing_json),
                     "prompt": prompt,
-                    "stoppable": self.phone_stoppable(pane).is_ok(),
+                    "stoppable": self.remote_stoppable(pane).is_ok(),
                     "tab_views": self.phone_tab_rows(t.id),
                 });
                 if let Some(tab) = tab.as_object_mut() {
@@ -921,7 +564,7 @@ impl Server {
         }
         let kind = tab_views::Kind::of(kind)
             .ok_or_else(|| format!("phone-tab takes pr, ticket or note, not {kind}"))?;
-        self.phone_claude_pane(pane)?;
+        self.remote_claude_pane(pane)?;
         let tab = self
             .panes
             .get(&pane)
@@ -996,15 +639,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_long_message_is_cut_to_a_line() {
-        assert_eq!(short("one\ntwo  three"), "one two three");
-        let long = "x".repeat(200);
-        let cut = short(&long);
-        assert_eq!(cut.chars().count(), SAID_WIDTH);
-        assert!(cut.ends_with('…'));
-    }
-
-    #[test]
     fn a_working_panes_tool_call_reads_as_its_tool_first_line_and_start() {
         let doing = crate::agent::Doing {
             tool: "Bash".into(),
@@ -1016,56 +650,5 @@ mod tests {
             doing_json(&doing),
             json!({"tool": "Bash", "arg": "cargo test phone", "since": 1_700_000_000})
         );
-    }
-
-    #[test]
-    fn a_prompt_reads_as_its_options() {
-        let found = answer::options_in("Do you want to proceed?\n❯ 1. Yes\n  2. No\n").unwrap();
-        let v = prompt_json(&found);
-        assert_eq!(v["question"], "Do you want to proceed?");
-        assert_eq!(v["options"][1]["label"], "No");
-        assert_eq!(v["multi"], false);
-        assert_eq!(v["options"][1]["detail"], "", "no explainer under it");
-        let explained = answer::options_in(
-            "Which way?\n❯ 1. Fast\n     Skips the checks\n  2. Slow\n     Runs every check\n",
-        )
-        .unwrap();
-        let v = prompt_json(&explained);
-        assert_eq!(v["options"][0]["detail"], "Skips the checks");
-        assert_eq!(v["options"][1]["detail"], "Runs every check");
-    }
-
-    #[test]
-    fn a_prompt_of_several_questions_carries_its_steps_and_the_step_shown() {
-        let screen = "\
- ← ☒ Colors  ☐ Size  ✔ Submit  →
-
-Which size should it open at?
-
-❯ 1. Compact
-  2. Roomy
-  3. Type something
-──────────────────
-  4. Chat about this";
-        let mut found = answer::options_in(screen).unwrap();
-        let plain = prompt_json(&found);
-        assert_eq!(
-            plain["steps"][0],
-            json!({"name": "Colors", "answered": true, "submit": false})
-        );
-        assert_eq!(plain["steps"][2]["submit"], true);
-        assert_eq!(plain["shown"], Value::Null);
-        assert_eq!(plain["cursor"], 1);
-        assert_eq!(plain["review"], json!([]));
-        let lit = ratatui::style::Style::new().bg(ratatui::style::Color::Indexed(4));
-        let row = vec![
-            ratatui::text::Span::raw(" ←  ☒ Colors "),
-            ratatui::text::Span::styled(" ☐ Size ", lit),
-            ratatui::text::Span::raw(" ✔ Submit  →"),
-        ];
-        answer::read_shown(&mut found, &[row]);
-        let v = prompt_json(&found);
-        assert_eq!(v["shown"], 1);
-        assert_ne!(v["id"], plain["id"], "the step shown is part of its id");
     }
 }

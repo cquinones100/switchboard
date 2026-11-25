@@ -109,7 +109,7 @@ fn choice_blocks(cx: &Relay, tab: &Tab) -> Vec<Value> {
         .flatten();
     let buttons = match &found {
         Some(f) => option_buttons(tab, f),
-        None => tabs::dialog_in(&shown)
+        None => crate::remote::screen::dialog_in(&shown)
             .map(|d| dialog_buttons(tab, &d))
             .unwrap_or_default(),
     };
@@ -737,7 +737,7 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
         // and in the sidebar.
         let reminder_due = tab.remind_at.is_some_and(|at| at <= util::now_secs());
         if tab.state == "done" || reminder_due {
-            match cx.mux.mark_seen(&tab.id) {
+            match cx.mux.mark_seen(&tab.id, None) {
                 Ok(()) => refresh_dashboard(cx, Refresh::opened_quick()).await?,
                 Err(e) => cx.log(&format!("couldn't mark tab {} seen: {e}", tab.index)),
             }

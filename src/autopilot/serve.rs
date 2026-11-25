@@ -428,7 +428,7 @@ pub fn target_refused(branch: &str, repo: &Path, landing: &crate::repos::Landing
 
 /// The longest `autopilot-start`'s check may take and still start it:
 /// shorter than the Slack relay waits for its answer
-/// (`relay::mux::START_WAIT`), so the relay never says it didn't start
+/// (`remote::protocol::START_WAIT`), so the relay never says it didn't start
 /// while it still may.
 pub const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(240);
 

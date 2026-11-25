@@ -564,7 +564,7 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             .alerts
             .dialog_checked
             .insert(tab.id.clone(), now);
-        let Some(dialog) = tabs::dialog_in(&tabs::screen(cx, &tab.id)) else {
+        let Some(dialog) = crate::remote::screen::dialog_in(&tabs::screen(cx, &tab.id)) else {
             let was_dialog = cx
                 .state
                 .borrow()
@@ -612,7 +612,7 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             };
             let text = format!(
                 "🤖 {who} is showing a dialog before its session starts, **waiting on you**:\n\n{}",
-                dialog.text()
+                tabs::prompt_text(&dialog.as_prompt())
             );
             settle_choice(cx, &tab.id, PROMPT_GONE, None).await;
             let notice = tab_notice(&tab.name, "showing a dialog, waiting on you");

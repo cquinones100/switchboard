@@ -276,7 +276,7 @@ impl Server {
         // A message you left half written in its prompt waits too, rather
         // than going in with the events after it.
         let drafted = self.panes.get(&pane).is_some_and(|slot| {
-            crate::relay::tabs::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
+            crate::remote::screen::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
                 .is_some_and(|d| !d.trim().is_empty())
         });
         let asleep = !drafted

@@ -91,7 +91,7 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
     let mut out: Vec<Message> = Vec::new();
     // Whether the last reply so far waits on a tool, so its turn runs on
     // until something other than the tool's result is said, as the relay
-    // reads it (`relay::tabs`).
+    // reads it.
     let mut running = false;
     let mut offset = base;
     for line in bytes.split(|b| *b == b'\n') {
