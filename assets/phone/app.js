@@ -2149,8 +2149,8 @@ function render(stick) {
 // Notifications and Usage views as the computer sends them (src/phone/mission.rs),
 // each a 56 row with what needs you counted; a tap on one slides its items
 // in full screen, over the panel, under mission control's groups, with ‹
-// (a swipe right from its left edge, or the phone's back) back to the
-// panel's list; a tap on an item opens its menu,
+// (or the phone's back) back to the panel's list, and a swipe right from
+// its left edge putting the panel away with it; a tap on an item opens its menu,
 // the options the phone can do: going to a tab opens its channel, opening
 // or copying a link happens here, and the rest runs on the computer, asked
 // first where the option says so. A swipe right, or a tap on the dimmed
@@ -2159,12 +2159,13 @@ function render(stick) {
 //
 // A tab's own views (boards 189 and 190): on a channel whose tab the stream
 // gives `tab_views` (Settings' phone_tab_views, null while it is off), the
-// panel is full screen, with no strip, and the swipe opens it on the
-// first the tab has of its PR, its ticket and its note, read only, as
-// `phone-tab` answers them; ‹ (a swipe right from its left edge, or the
-// phone's back) goes to the list, which lists the tab's section above
-// mission control's views, and a swipe right on the list puts it away.
-// A tab with none of them opens on the list, its section saying so.
+// panel is full screen, with no strip, and the swipe opens it on its list,
+// the tab's section (its PR, its ticket and its note, only those it has)
+// above mission control's views, a tab with none saying so. A tap on a row
+// opens its view, read only, as `phone-tab` answers it; ‹ (or the phone's
+// back) goes to the list, and a swipe right on the list, or on a view from
+// its left edge, puts the whole panel away, the view and the list sliding
+// out together as one.
 
 const EDGE = 24; // px from the right edge a swipe starts the panel from
 const REFRESH_MS = 60000; // the least time between asking PRs or CI again
@@ -2196,21 +2197,16 @@ function tabViews() {
 
 const tabRowOf = (key) => (tabViews() || []).find((r) => "tab:" + r.kind === key);
 
-// The first the open tab has, which the swipe opens the panel on.
-function firstTabView() {
-  const rows = tabViews();
-  return rows && rows[0] ? "tab:" + rows[0].kind : null;
-}
-
 // The panel put away, and the history step an open view added taken back
 // before `then` runs, so a tab it opens is named on the page's own step.
 function closePanel(then) {
   state.panel = null;
   state.tabView = null;
   if (panelLayer) {
-    const { layer, panel } = panelLayer;
+    const { layer } = panelLayer;
+    const nodes = moving(panelLayer);
     panelLayer = null;
-    slidePanel(layer, panel, false, () => layer.remove());
+    slidePanel(layer, nodes, false, () => layer.remove());
   }
   unwind(then);
 }
@@ -2227,27 +2223,35 @@ function unwind(then) {
   history.back();
 }
 
+// What moves as the panel slides: the panel, and a view open over it
+// beside the strip, which isn't in it as a full-screen panel's view is.
+function moving(pl) {
+  return pl.screen && !pl.panel.contains(pl.screen) ? [pl.panel, pl.screen] : [pl.panel];
+}
+
 // The panel slides in or out as swipeable slides a channel: over --slide, or,
 // with Reduce Motion, fading.
-function slidePanel(layer, panel, opens, then) {
+function slidePanel(layer, nodes, opens, then) {
   const lasts = still() ? ms("--quick") : ms("--slide");
   const strip = layer.querySelector(".panel-strip");
   if (still()) {
     // Where a swipe left it, it comes to rest at once and only fades.
-    panel.style.transform = "";
+    for (const n of nodes) n.style.transform = "";
     if (strip) strip.style.opacity = "";
     layer.style.transition = "opacity " + lasts + "ms " + EASE;
     layer.style.opacity = opens ? "1" : "0";
   } else {
-    panel.style.transition = "transform " + lasts + "ms " + EASE;
-    panel.style.transform = opens ? "" : "translateX(100%)";
+    for (const n of nodes) {
+      n.style.transition = "transform " + lasts + "ms " + EASE;
+      n.style.transform = opens ? "" : "translateX(100%)";
+    }
     if (strip) {
       strip.style.transition = "opacity " + lasts + "ms " + EASE;
       strip.style.opacity = opens ? "1" : "0";
     }
   }
   setTimeout(() => {
-    panel.style.transition = "";
+    for (const n of nodes) n.style.transition = "";
     if (strip) strip.style.transition = "";
     if (then) then();
   }, lasts);
@@ -2259,23 +2263,17 @@ function panelLayerNode() {
   const strip = el("div", { class: "panel-strip", onclick: () => closePanel() });
   const panel = el("div", { class: "panel", role: "dialog", "aria-label": full ? "Views" : "Mission control" });
   const layer = el("div", { class: "panel-layer" + (full ? " whole" : "") }, strip, panel);
-  panelSwipe(panel, 0, () => closePanel(), () => slidePanel(panelLayer.layer, panel, true));
+  panelSwipe(panel, 0, () => [panel], () => closePanel(), () => slidePanel(panelLayer.layer, [panel], true));
   return { layer, panel, strip, screen: null, full };
 }
 
-// Opened from ⋯ (on the list) or a swipe that went far enough (on the
-// view it drew as it came in): slid in from where it is; a tab's view a
-// step in the page's history, as one tapped in the list is.
+// Opened from ⋯ or a swipe that went far enough, on its list, slid in
+// from where it is.
 function openPanel(from) {
   if (!state.views) return;
   hinted(true);
   if (state.menu) closeMenu();
-  const first = from && state.panel ? state.panel.view : null;
-  state.panel = { view: first, shown: first };
-  if (first) {
-    if (typeof history.pushState === "function") history.pushState({ view: first }, "");
-    loadTabView(first);
-  }
+  state.panel = { view: null, shown: null };
   if (!panelLayer) {
     panelLayer = from || panelLayerNode();
     if (!from) {
@@ -2288,7 +2286,7 @@ function openPanel(from) {
     }
   }
   drawPanel();
-  slidePanel(panelLayer.layer, panelLayer.panel, true);
+  slidePanel(panelLayer.layer, [panelLayer.panel], true);
 }
 
 // The panel on its list of views, and the view open over it, if any, each
@@ -2315,8 +2313,8 @@ function drawPanel() {
     el("button", { class: "icon", "aria-label": "Close mission control", onclick: () => closePanel() }, "›"),
     el("span", { class: "title" }, panelLayer.full ? "Views" : "Mission control"),
   );
-  // A view of a full-screen panel is in it, so it moves with the swipe that
-  // brings the panel in.
+  // A view of a full-screen panel is in it, so it moves with the panel as a
+  // swipe puts it away.
   const inside = panelLayer.full && panelLayer.screen;
   fill(panelLayer.panel, head, viewList(), "", inside && panelLayer.panel.contains(panelLayer.screen) ? panelLayer.screen : null);
   if (!view) return;
@@ -2324,12 +2322,13 @@ function drawPanel() {
   const items = tabbed ? tabViewBody(view) : viewItems(view);
   if (!panelLayer.screen) {
     const screen = el("div", { class: "panel-view", role: "dialog", "aria-label": view.title });
-    panelSwipe(screen, EDGE, () => back(), () => slideView(screen, true));
+    // A swipe right on the view puts the whole panel away, the view and
+    // the list moving as one, so the list never shows alone beside the channel.
+    panelSwipe(screen, EDGE, () => moving(panelLayer), () => closePanel(), () => slidePanel(panelLayer.layer, moving(panelLayer), true));
     panelLayer.screen = screen;
     (panelLayer.full ? panelLayer.panel : panelLayer.layer).append(screen);
     fill(screen, top, items, key);
-    // The view the swipe opens the panel on comes in with it.
-    if (state.panel.view !== state.panel.coming) slideView(screen, true, true);
+    slideView(screen, true, true);
     return;
   }
   fill(panelLayer.screen, top, items, key);
@@ -2759,11 +2758,11 @@ function staleMenu() {
 }
 
 // A swipe right on the panel, or from an open view's left edge (starting
-// within `within` px of it; 0 for anywhere), follows the finger and, let go
-// past a third of its width or flicked, puts it `away`, else lets it `stay`;
-// a swipe left from the right edge, on a channel or the drawer, brings the
-// panel in under the finger.
-function panelSwipe(panel, within, away, stay) {
+// within `within` px of it; 0 for anywhere), moves what `nodes` gives with
+// the finger and, let go past a third of its width or flicked, puts it
+// `away`, else lets it `stay`; a swipe left from the right edge, on a
+// channel or the drawer, brings the panel in under the finger.
+function panelSwipe(panel, within, nodes, away, stay) {
   let s = null;
   panel.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1) return (s = null);
@@ -2789,7 +2788,7 @@ function panelSwipe(panel, within, away, stay) {
     if (elapsed > 0) s.speed = (dx - s.dx) / elapsed;
     s.at = e.timeStamp;
     s.dx = Math.max(0, dx);
-    panel.style.transform = "translateX(" + s.dx + "px)";
+    for (const n of nodes()) n.style.transform = "translateX(" + s.dx + "px)";
   }, { passive: false });
   const end = (e) => {
     const done = s;
@@ -2827,9 +2826,7 @@ function edgeSwipe() {
       edge.opening = panelLayerNode();
       edge.opening.panel.style.transform = "translateX(100%)";
       edge.opening.strip.style.opacity = "0";
-      // A tab's first view comes in with the panel, the list under it.
-      const first = firstTabView();
-      state.panel = { view: first, coming: first };
+      state.panel = { view: null, shown: null };
       panelLayer = edge.opening;
       drawPanel();
       document.body.append(edge.opening.layer);

@@ -3962,14 +3962,15 @@ fn the_phone_reads_a_tabs_pr_ticket_and_note() {
 
 /// A tab's own views in the panel (assets/phone/app.js, boards 189 and
 /// 190), run in Node over a page made of plain objects: the swipe from a
-/// channel's right edge opens the panel full screen, with no strip, on the
-/// first the tab has in the PR, ticket, note order, read from its route;
-/// ‹ shows the list with the tab's section on top, the view shown marked,
-/// and a row opens its view; a tab with none opens on the list saying so,
-/// and with its views off the swipe opens mission control's list beside
-/// the strip, as before; skipped without Node.
+/// channel's right edge opens the panel full screen, with no strip, on its
+/// list, the tab's section on top, reading nothing; a tap on a row opens
+/// its view, read from its route; ‹ shows the list again, the view shown
+/// marked; a swipe right on an open view moves the view and the list as
+/// one and puts the whole panel away; a tab with none opens on the list
+/// saying so, and with its views off the swipe opens mission control's list
+/// beside the strip, as before; skipped without Node.
 #[test]
-fn the_swipe_opens_a_tabs_first_view_and_back_shows_the_list() {
+fn the_swipe_opens_a_tabs_list_and_a_swipe_on_a_view_puts_the_panel_away() {
     let script = PRELUDE.to_string()
         + r##"let popstate = null;
 const read = [];
@@ -4021,6 +4022,10 @@ const out = [];
 (async () => {
   swipe();
   await settle();
+  out.push("opened=" + of("panel-layer")[0].className + " views=" + of("panel-view").length + " read=" + read.length + " list=" + list());
+  body.all((x) => x.attrs["data-tab-view"] === "ticket")[0].fire("click");
+  timers.splice(0).forEach((f) => f && f());
+  await settle();
   const screen = of("panel-view")[0];
   out.push("layer=" + of("panel-layer")[0].className + " in=" + screen.parent.className + " head=" + screen.kids[0].text + " read=" + read.join(","));
   out.push("body=" + screen.kids[1].text);
@@ -4029,9 +4034,23 @@ const out = [];
   out.push("views=" + of("panel-view").length + " list=" + list());
   out.push("held=" + of("shown").map((r) => r.attrs["data-tab-view"]).join(","));
   body.all((x) => x.attrs["data-tab-view"] === "note")[0].fire("click");
+  timers.splice(0).forEach((f) => f && f());
   await settle();
   out.push("note=" + of("panel-view")[0].kids[0].text + " read=" + read.join(","));
-  vm.runInContext("closePanel(); openTab('13')", ctx);
+  // A swipe right from the note's left edge: the panel, with the note in
+  // it, follows the finger, and let go past a third it all goes away.
+  const note = of("panel-view")[0];
+  const panel = of("panel")[0];
+  note.offsetWidth = 400;
+  const at = (x, type) => ({ type, timeStamp: 0, touches: type === "touchend" ? [] : [{ clientX: x, clientY: 300 }] });
+  note.fire("touchstart", at(10, "touchstart"));
+  note.fire("touchmove", at(30, "touchmove"));
+  note.fire("touchmove", at(250, "touchmove"));
+  out.push("mid=" + panel.style.transform + " note=" + (note.style.transform || "none") + " in=" + note.parent.className);
+  note.fire("touchend", at(250, "touchend"));
+  timers.splice(0).forEach((f) => f && f());
+  out.push("away=" + of("panel-layer").length + " " + vm.runInContext("state.panel", ctx) + " " + ctx.history.state);
+  vm.runInContext("openTab('13')", ctx);
   timers.splice(0).forEach((f) => f && f());
   swipe();
   out.push("none=" + of("panel-view").length + " list=" + list());
@@ -4057,11 +4076,14 @@ const out = [];
     assert_eq!(
         lines,
         [
+            "opened=panel-layer whole views=0 read=0 list=Tab 2 · stable note IDs◇Ticket #163open◇NoteRedraw|Mission control|✕CI11 failing",
             "layer=panel-layer whole in=panel head=‹Issue #163tab 2 read=/api/tabs/12/ticket",
             "body=Time itopenToday it reads one.",
             "views=0 list=Tab 2 · stable note IDs◇Ticket #163open◇NoteRedraw|Mission control|✕CI11 failing",
             "held=ticket",
             "note=‹Redrawtab 2 read=/api/tabs/12/ticket,/api/tabs/12/note",
+            "mid=translateX(240px) note=none in=panel",
+            "away=0 null null",
             "none=0 list=Tab 3 · uncommittedNo PR, ticket or note yet.|Mission control|✕CI11 failing",
             "off=panel-layer list=✕CI11 failing",
             "gone=panel-layer ›Mission control",
