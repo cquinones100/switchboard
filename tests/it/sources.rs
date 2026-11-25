@@ -162,7 +162,7 @@ fn a_tab_s_pr_facts_and_the_views_arrive_from_the_background() {
     // the repository's merge queue, in order.
     assert_eq!(
         views["views"]["landing"]["items"][0]["title"],
-        "acme/widgets"
+        "acme/widgets · lands by GitHub's merge queue"
     );
     assert_eq!(
         views["views"]["landing"]["items"][0]["data"]["way"],

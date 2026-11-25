@@ -3450,7 +3450,10 @@ fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     let waiting = || stage_cell(Stage::Waiting, "waiting");
     let place = q["place"].as_u64().unwrap_or(1);
     let train = q["train"].as_str().map(crate::sources::landing::train_name);
-    let testing = q["testing"].as_bool() == Some(true);
+    // A PR in the train ahead is next, though the queue counts it as
+    // testing too.
+    let next = q["next"].as_bool() == Some(true);
+    let testing = !next && q["testing"].as_bool() == Some(true);
     let (queued, train_cell) = if testing {
         let ago = text::ago(q["since"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
         let label = if q["rerun"].as_bool() == Some(true) {
@@ -3470,7 +3473,7 @@ fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
                 },
             },
         )
-    } else if q["next"].as_bool() == Some(true) {
+    } else if next {
         (
             stage_cell(Stage::Done, "✓ next"),
             StageCell {
@@ -4113,7 +4116,14 @@ fn stage_rows(
             if let Some(col) = at[0] {
                 // The repository's name, then the way it lands by and when
                 // a tab there is done, dim (board 193).
-                let mut name = vec![Span::styled(format!(" {}", item.title), bold(theme.bright))];
+                // The repository's name alone where its words follow it.
+                let shown = item
+                    .data
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|_| item.data.get("words").is_some())
+                    .unwrap_or(&item.title);
+                let mut name = vec![Span::styled(format!(" {shown}"), bold(theme.bright))];
                 if let Some(words) = item
                     .data
                     .get("words")

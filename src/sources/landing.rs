@@ -538,14 +538,26 @@ pub struct ViewTab {
 /// A section's heading (board 193): the repository's name as its title,
 /// the way it lands by and when a tab there is done as its words, its
 /// count, and what UX 2.0 draws at its right edge in place of the count.
-/// `way` names the section's columns.
-fn header(id: &str, name: &str, way: Way, words: &str, count: usize, right: &str) -> Item {
-    Item::new(format!("header:{id}"), name).data(serde_json::json!({
+/// `way` names the section's columns. Its title says the way too
+/// ("repo · lands by GitHub's merge queue"), for the list a narrow screen
+/// shows and the phone's groups, which draw the title alone.
+fn header(
+    id: &str,
+    name: &str,
+    way: Way,
+    onto: &str,
+    unasked: &str,
+    count: usize,
+    right: &str,
+) -> Item {
+    let title = format!("{name} · {}{unasked}", way.lands_words(onto));
+    Item::new(format!("header:{id}"), title).data(serde_json::json!({
         "header": true,
         "count": count,
         "right": right,
         "way": way.key(),
-        "words": words,
+        "name": name,
+        "words": way_words(way, onto, unasked),
     }))
 }
 
@@ -615,7 +627,8 @@ pub fn view_items(
                 &id,
                 &r.name,
                 Way::Direct,
-                &way_words(Way::Direct, onto, unasked),
+                onto,
+                unasked,
                 direct.len(),
                 &right,
             ));
@@ -689,7 +702,8 @@ pub fn view_items(
                 &format!("{}:queue", r.common.display()),
                 &r.name,
                 Way::GithubQueue,
-                &way_words(Way::GithubQueue, default, ""),
+                default,
+                "",
                 queue.len(),
                 &format!("{} in GitHub's queue", queue.len()),
             ));
@@ -722,7 +736,8 @@ pub fn view_items(
                     &format!("{}:landed", r.common.display()),
                     &r.name,
                     way,
-                    &way_words(way, default, ""),
+                    default,
+                    "",
                     landed.len(),
                     &format!("{} landed", landed.len()),
                 ));
@@ -788,11 +803,8 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
         &format!("{}:prqueue", r.common.display()),
         &r.name,
         Way::SwitchboardQueue,
-        &way_words(
-            Way::SwitchboardQueue,
-            r.branch.as_deref().unwrap_or("the default branch"),
-            "",
-        ),
+        r.branch.as_deref().unwrap_or("the default branch"),
+        "",
         q.prs.len(),
         &right,
     )];
@@ -850,7 +862,7 @@ fn our_queue_items(r: &RepoLanding, tabs: &[ViewTab]) -> Vec<Item> {
                 "tab": tab.map(|t| t.id.to_string()),
                 "testing": testing,
                 "rerun": train.filter(|_| q.in_train(p.number)).is_some_and(|t| t.rerun.is_some()),
-                "next": !testing && q.in_ahead(p.number),
+                "next": q.in_ahead(p.number) && !q.in_train(p.number),
                 "train": train.filter(|_| q.in_train(p.number)).or(ahead.filter(|_| q.in_ahead(p.number))).map(|t| t.branch.clone()),
                 "place": match train.filter(|_| q.in_train(p.number)) {
                     Some(t) => t.prs.iter().position(|x| x.number == p.number).map(|n| n + 1),
@@ -1081,7 +1093,11 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("repo", "", State::Idle),
+                (
+                    "repo · lands straight on the default branch",
+                    "",
+                    State::Idle
+                ),
                 ("1. lander", "landing · pushing · tab 1", State::Active),
                 ("2. three", "waiting · no tab", State::Idle),
                 ("3. waiter", "waiting · tab 2", State::Attention),
@@ -1211,7 +1227,13 @@ mod tests {
         let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(
             titles,
-            vec!["repo", "1. first", "repo", "1. second", "2. third",]
+            vec![
+                "repo · lands straight on the default branch",
+                "1. first",
+                "repo · lands straight on team/next",
+                "1. second",
+                "2. third",
+            ]
         );
         assert!(
             items[2].data["words"]
@@ -1414,7 +1436,11 @@ mod tests {
             .into();
         let queued = |_: &str| vec![Item::new("https://pr/1", "1. #1 a PR")];
         let items = view_items(&[repo("direct")], &queued, &tabs);
-        assert_eq!(items[0].title, "me/direct");
+        assert_eq!(
+            items[0].title,
+            "me/direct · lands straight on main · lands without asking"
+        );
+        assert_eq!(items[0].data["name"], "me/direct");
         assert_eq!(
             items[0].data["words"],
             "lands straight on main  ·  done when its commit is pushed to main, then cleaned up · lands without asking"
@@ -1423,7 +1449,7 @@ mod tests {
         assert_eq!(items[1].data["landing"]["record"]["tests"]["passed"], 412);
         assert_eq!(items[2].data["landing"]["holder"]["name"], "one");
         assert_eq!(items[2].data["landing"]["holder"]["phase"], "testing");
-        assert_eq!(items[3].title, "me/direct");
+        assert_eq!(items[3].title, "me/direct · lands by GitHub's merge queue");
         assert_eq!(items[3].data["way"], "github-queue");
         assert_eq!(items[2].detail, "waiting · tab 2");
 
@@ -1436,7 +1462,10 @@ mod tests {
 
         let items = view_items(&[repo("github-queue")], &queued, &tabs);
         let heading = items.iter().find(|i| i.id.ends_with(":queue")).unwrap();
-        assert_eq!(heading.title, "me/github-queue");
+        assert_eq!(
+            heading.title,
+            "me/github-queue · lands by GitHub's merge queue"
+        );
         assert_eq!(
             heading.data["words"],
             "lands by GitHub's merge queue  ·  done when GitHub merges its PR, then cleaned up"
@@ -1502,7 +1531,15 @@ mod tests {
         }];
         let items = view_items(&[repo], &|_| Vec::new(), &tabs);
         let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, ["me/r", "1. #6 six", "2. #5 5", "3. #7 7"]);
+        assert_eq!(
+            titles,
+            [
+                "me/r · lands by Switchboard's merge queue",
+                "1. #6 six",
+                "2. #5 5",
+                "3. #7 7"
+            ]
+        );
         assert_eq!(
             items[0].data["right"],
             "3 queued · 1 testing on ci/train-abc"

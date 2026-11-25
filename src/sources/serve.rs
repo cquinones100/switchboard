@@ -1414,10 +1414,26 @@ impl Server {
                         .get(crate::mux::server::LAND)
                         .is_some_and(|v| v == "1")
                 }),
+                // Kept only while queue-and-clean lands it, its PR the
+                // repository's own: a merged PR's worktree left open
+                // otherwise isn't landing.
                 landed: t
                     .pr
-                    .filter(|_| github && t.pr_state == Some(PrState::Merged))
-                    .zip(self.sources.landing.linked.get(&t.id).cloned()),
+                    .filter(|_| {
+                        github
+                            && t.pr_state == Some(PrState::Merged)
+                            && t.loop_skill.as_deref() == Some("queue")
+                    })
+                    .zip(self.sources.landing.linked.get(&t.id).cloned())
+                    .filter(|(_, common)| {
+                        self.sources.landing.repos.iter().any(|r| {
+                            r.common == *common
+                                && r.repo
+                                    .as_deref()
+                                    .zip(t.pr_repo.as_deref())
+                                    .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+                        })
+                    }),
             })
             .collect();
         let by_repo = &self.sources.queues.by_repo;
