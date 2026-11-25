@@ -337,7 +337,7 @@ fn note_of(state: &Path, threads: bool, look: bool, search: bool, slowed: bool) 
 async fn person(client: &Client, user: &str, source: &str) -> Result<(String, String), String> {
     static KNOWN: LazyLock<Mutex<HashMap<String, (String, String)>>> =
         LazyLock::new(Mutex::default);
-    let key = format!("{}:{user}", client.base());
+    let key = format!("{}:{user}", client.base);
     if let Some(known) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Ok(known.clone());
     }
@@ -705,10 +705,10 @@ pub async fn file(
         .iter()
         .find_map(|p| said.pointer(p).and_then(Value::as_str))
         .ok_or_else(|| format!("Slack gave no address for {}", f.name))?;
-    if !slacks(url, client.base()) {
+    if !slacks(url, &client.base) {
         return Err(format!("{} isn't kept on Slack", f.name));
     }
-    let bearer = format!("Bearer {}", client.token());
+    let bearer = format!("Bearer {}", client.token);
     let got = net::get_file_following(
         url,
         &[("Authorization", bearer.as_str())],

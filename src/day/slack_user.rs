@@ -176,11 +176,14 @@ pub(super) async fn api(
         .await
         .map_err(|e| match e {
             slack::Error::Unreachable { error, .. } => error.to_string(),
-            slack::Error::RateLimited {
-                retry_after: Some(wait),
+            slack::Error::Refused {
+                status: 429,
+                retry_after,
                 ..
-            } => format!("{RATE_LIMIT}: Slack asked to wait {wait} seconds"),
-            slack::Error::RateLimited { .. } => RATE_LIMIT.to_string(),
+            } => match retry_after {
+                Some(wait) => format!("{RATE_LIMIT}: Slack asked to wait {wait} seconds"),
+                None => RATE_LIMIT.to_string(),
+            },
             slack::Error::Refused {
                 error,
                 needed,
@@ -603,7 +606,7 @@ mod tests {
             );
             assert_eq!(MARKS.load(Ordering::SeqCst), 2, "nothing marked");
             let line = look_with(
-                Ok(Client::new(client.base().to_string(), "xoxp-test".into())),
+                Ok(Client::new(client.base.clone(), "xoxp-test".into())),
                 &state,
                 10_000,
             )

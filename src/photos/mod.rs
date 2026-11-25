@@ -395,8 +395,8 @@ async fn bot_get(base: &str, token: &str, method: &str, params: Value) -> Result
     match client.call(Send::Get, method, &params, SOURCE).await {
         Ok(answer) => Ok(answer),
         Err(integrations::slack::Error::Unreachable { error, .. }) => Err(error),
-        Err(refused) => {
-            Ok(json!({ "ok": false, "error": Some(refused.code()).filter(|c| !c.is_empty()) }))
+        Err(integrations::slack::Error::Refused { error, .. }) => {
+            Ok(json!({ "ok": false, "error": Some(error).filter(|e| !e.is_empty()) }))
         }
     }
 }

@@ -1,8 +1,8 @@
 //! Slack over the network (lib/slack-relay/slack.js's `apiCall`, `putFile`,
-//! `getFile` and `socketMode`): the Web API through `integrations::slack`,
-//! as the bot, a file sent or fetched with reqwest, and Socket Mode's
-//! WebSocket with tokio-tungstenite, all on rustls. Every request is counted
-//! in the request audit as it is made.
+//! `getFile` and `socketMode`): the Web API and the files through
+//! `integrations::slack`'s client, as the bot, and Socket Mode's WebSocket
+//! with tokio-tungstenite, on rustls. Every request is counted in the
+//! request audit as it is made.
 //!
 //! A Web API call goes out form-encoded, which every method accepts, and a
 //! rate limit is waited out as Slack asks, up to three times. None of this
@@ -19,112 +19,28 @@ use serde_json::Value;
 use super::slack::Transport;
 use crate::integrations::slack::{Client, Send};
 
-/// A file sent or fetched can be a video of up to 200 MB.
-pub const FILE_TIMEOUT_SECS: u64 = 5 * 60;
-
 /// The relay's way to Slack: the Web API at `base`, as the bot.
-pub struct Https {
-    api: Client,
-    #[cfg(feature = "net")]
-    client: reqwest::Client,
-}
-
-impl Https {
-    pub fn new(base: String, bot_token: String) -> Result<Https> {
-        #[cfg(feature = "net")]
-        let client = reqwest::Client::builder()
-            .user_agent(crate::net::USER_AGENT)
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| anyhow::anyhow!("couldn't set up HTTPS: {e}"))?;
-        Ok(Https {
-            api: Client::new(base, bot_token).waiting_out_limits(3),
-            #[cfg(feature = "net")]
-            client,
-        })
+pub fn as_bot(base: String, bot_token: String) -> Client {
+    Client {
+        waits_out: 3,
+        ..Client::new(base, bot_token)
     }
 }
 
-#[cfg(feature = "net")]
-impl Transport for Https {
+impl Transport for Client {
     fn call<'a>(&'a self, method: &'a str, params: &'a Value) -> LocalBoxFuture<'a, Result<Value>> {
         Box::pin(async move {
             let source = format!("relay: {method}");
-            Ok(self.api.call(Send::Form, method, params, &source).await?)
+            Ok(Client::call(self, Send::Form, method, params, &source).await?)
         })
     }
 
     fn put<'a>(&'a self, url: &'a str, bytes: Vec<u8>) -> LocalBoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            crate::requests::count("Slack", "HTTPS", "relay: file upload");
-            let response = self
-                .client
-                .post(url)
-                .body(bytes)
-                .timeout(std::time::Duration::from_secs(FILE_TIMEOUT_SECS))
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("file upload: {}", reason(&e)))?;
-            if !response.status().is_success() {
-                anyhow::bail!("file upload: HTTP {}", response.status().as_u16());
-            }
-            Ok(())
-        })
+        Box::pin(self.upload(url, bytes, "relay: file upload"))
     }
 
     fn get<'a>(&'a self, url: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>>> {
-        Box::pin(async move {
-            crate::requests::count("Slack", "HTTPS", "relay: file download");
-            let response = self
-                .client
-                .get(url)
-                .bearer_auth(self.api.token())
-                .timeout(std::time::Duration::from_secs(FILE_TIMEOUT_SECS))
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("file download: {}", reason(&e)))?;
-            if !response.status().is_success() {
-                anyhow::bail!("file download: HTTP {}", response.status().as_u16());
-            }
-            Ok(response
-                .bytes()
-                .await
-                .map_err(|e| anyhow::anyhow!("file download: {}", reason(&e)))?
-                .to_vec())
-        })
-    }
-}
-
-/// What reqwest says went wrong, its cause rather than its wrapper.
-#[cfg(feature = "net")]
-fn reason(e: &reqwest::Error) -> String {
-    if e.is_timeout() {
-        return "it took too long to answer".into();
-    }
-    let mut why = e.to_string();
-    let mut source = std::error::Error::source(e);
-    while let Some(cause) = source {
-        why = cause.to_string();
-        source = cause.source();
-    }
-    why
-}
-
-#[cfg(not(feature = "net"))]
-const NO_NET: &str = "Switchboard was built without network support, so it can't reach Slack.";
-
-#[cfg(not(feature = "net"))]
-impl Transport for Https {
-    fn call<'a>(&'a self, method: &'a str, params: &'a Value) -> LocalBoxFuture<'a, Result<Value>> {
-        Box::pin(async move { Ok(self.api.call(Send::Form, method, params, method).await?) })
-    }
-
-    fn put<'a>(&'a self, _: &'a str, _: Vec<u8>) -> LocalBoxFuture<'a, Result<()>> {
-        Box::pin(async { Err(anyhow::anyhow!(NO_NET)) })
-    }
-
-    fn get<'a>(&'a self, _: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>>> {
-        Box::pin(async { Err(anyhow::anyhow!(NO_NET)) })
+        Box::pin(self.download(url, "relay: file download"))
     }
 }
 
@@ -223,7 +139,7 @@ async fn open_socket(app_token: &str) -> Result<String> {
 
 #[cfg(not(feature = "net"))]
 pub async fn socket_mode(cx: super::Cx, _app_token: String) {
-    cx.log(&format!("Slack: {NO_NET}"));
+    cx.log("Slack: Switchboard was built without network support, so it can't reach Slack.");
 }
 
 #[cfg(test)]
@@ -249,7 +165,7 @@ mod tests {
             ],
         );
         let base = format!("{}/api/", fake.url);
-        let https = Https::new(base, "xoxb-test".into()).unwrap();
+        let https = as_bot(base, "xoxb-test".into());
         let slack = crate::relay::slack::Slack::new(Box::new(https));
         *slack.channel.borrow_mut() = Some("D1".into());
         *slack.owner.borrow_mut() = Some("U1".into());

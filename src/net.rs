@@ -154,16 +154,6 @@ pub async fn get_json(url: &str, headers: &[(&str, &str)], audit: Audit<'_>) -> 
     request_json("GET", url, headers, None, audit).await
 }
 
-/// A POST of `body` as JSON, its answer read as JSON.
-pub async fn post_json(
-    url: &str,
-    headers: &[(&str, &str)],
-    body: &Value,
-    audit: Audit<'_>,
-) -> Result<Response> {
-    request_json("POST", url, headers, Some(body), audit).await
-}
-
 /// A request with any method, with `body` sent as JSON when there is one.
 /// Counted in the request audit as it is sent. Fails only when no answer
 /// comes (the network, a timeout, a method that isn't one); an answer with an
@@ -179,22 +169,23 @@ pub async fn request_json(
     request(method, url, headers, body.map(Body::Json), audit).await
 }
 
-/// A POST of `body`, already form-encoded, its answer read as
-/// `request_json` reads one.
-pub async fn post_form(
+/// A POST of `body`, its answer read as `request_json` reads one.
+pub async fn post(
     url: &str,
     headers: &[(&str, &str)],
-    body: String,
+    body: Body<'_>,
     audit: Audit<'_>,
 ) -> Result<Response> {
-    request("POST", url, headers, Some(Body::Form(body)), audit).await
+    request("POST", url, headers, Some(body), audit).await
 }
 
-/// What a request sends: JSON, or a form already encoded.
+/// What a request sends: JSON, a form already encoded, or a file's bytes,
+/// given the time it needs to arrive rather than the usual 30 seconds.
 #[cfg_attr(not(feature = "net"), allow(dead_code))]
-enum Body<'a> {
+pub enum Body<'a> {
     Json(&'a Value),
     Form(String),
+    File(Vec<u8>, Duration),
 }
 
 #[cfg(feature = "net")]
@@ -233,6 +224,7 @@ async fn request(
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body(body)
         }
+        Some(Body::File(body, timeout)) => request = request.body(body).timeout(timeout),
         None => {}
     }
     requests::count(audit.service, audit.protocol, audit.source);
