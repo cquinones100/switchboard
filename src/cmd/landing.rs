@@ -4,12 +4,13 @@
 //! `service`, src/repos.rs's `Way`) on the first line, then, on the second,
 //! the rest as JSON: `direct`, a direct landing's steps (`test`, `testIn`,
 //! `squash`, `review`, `beforePush`, `afterRebase`), null for any other
-//! way; `service`, a merge service's `label` and `check`, null for any
-//! other way or one not named; `steps`, the steps the way goes through, in
-//! order; where the way came from (`source`: `repos.json`, or `branch` for
-//! the way the branch started landing with, which it finishes), why, the
-//! way repos.json sets now (`set`), and the repository. `--json` prints both
-//! as one object. `--start` keeps the way on the branch (`--start=<way>`
+//! way; `service`, a merge service's `label`, `comment` (either null, not
+//! both) and `check`, null for any other way or one not named; `steps`, the
+//! steps the way goes through, in order; where the way came from
+//! (`source`: `repos.json`, or `branch` for the way the branch started
+//! landing with, which it finishes), why, the way repos.json sets now
+//! (`set`), and the repository. `--json` prints both as one object.
+//! `--start` keeps the way on the branch (`--start=<way>`
 //! the one named, the way the landing read as it began) as the one it
 //! started landing with (`branch.<branch>.wtnLands`), unless it keeps one
 //! already, which queue-and-clean runs as a landing begins, so a change of
@@ -229,7 +230,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     map.insert(
         "service".into(),
         match (&answer.service, lands) {
-            (Some(s), repos::Way::Service) => json!({ "label": s.label, "check": s.check }),
+            (Some(s), repos::Way::Service) => s.json(),
             _ => Value::Null,
         },
     );

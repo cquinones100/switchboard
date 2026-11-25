@@ -1059,7 +1059,7 @@ fn landing_says_the_one_way_a_repository_lands_and_nothing_when_none_is_set() {
     );
     assert_eq!(
         all["service"],
-        json!({ "label": "merge-ready", "check": "mergebot" })
+        json!({ "label": "merge-ready", "comment": null, "check": "mergebot" })
     );
 
     std::fs::write(

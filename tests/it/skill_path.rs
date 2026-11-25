@@ -1137,7 +1137,7 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
         .unwrap()
         .1;
     let watch = queue
-        .split("## Watching")
+        .split("\n## Watching\n")
         .nth(1)
         .and_then(|rest| rest.split("```").nth(1))
         .expect("the watch's script");
@@ -1169,8 +1169,10 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
             && !section.contains("git merge"),
         "{section}"
     );
+    let service = self::section(queue, "A merge service");
+    let elsewhere = queue.replace(service, "");
     for exit in ["- `behind`: ", "- `conflicts`: "] {
-        for line in queue.lines().filter(|l| l.starts_with(exit)) {
+        for line in elsewhere.lines().filter(|l| l.starts_with(exit)) {
             assert!(line.contains("\"Bringing it up to date\""), "{line}");
         }
     }
@@ -1243,35 +1245,81 @@ fn queue_and_clean_lands_the_one_way_landing_names_and_nothing_when_none_is_set(
             && how.contains("stop there"),
         "the way is kept on the branch, and nothing lands with none set"
     );
-    let queuing = section(&text, "Queuing");
-    for way in [
-        "`switchboard-queue`",
-        "`github-queue`",
-        "`auto-merge`",
-        "`service`",
-    ] {
-        assert!(queuing.contains(&format!("- {way}:")), "{way}");
-    }
     assert!(
-        queuing.contains("`gh pr merge <number> --auto --match-head-commit <headRefOid>`")
-            && queuing.contains("`gh pr edit <number> --add-label '<label>'`"),
-        "auto-merge and a service each their own way"
+        how.contains("When `source` is `branch` and `set` names another way, the branch finishes the way it started with, `lands`, never `set`"),
+        "a branch lands the way it recorded"
+    );
+    let queuing = section(&text, "Queuing");
+    for (way, heading) in [
+        ("switchboard-queue", "Switchboard's merge queue"),
+        ("github-queue", "GitHub's merge queue"),
+        ("auto-merge", "GitHub's auto-merge"),
+        ("service", "A merge service"),
+    ] {
+        assert!(
+            queuing.contains(&format!("- `{way}`: \"{heading}\".")),
+            "{way}"
+        );
+        let own = section(&text, heading);
+        assert!(own.contains(&format!("For `lands` `{way}`")), "{way}");
+        assert!(own.contains("Its steps: "), "{way} names its steps");
+        assert!(
+            own.contains("and the tab is cleaned up, as \"Done\" says."),
+            "{way} names its done"
+        );
+    }
+    let direct = section(&text, "Land on the default branch");
+    assert!(direct.contains("For `lands` `direct`. Its steps: "));
+    assert!(direct.contains("and the tab is cleaned up, as \"Done\" says."));
+    let done = section(&text, "Done");
+    assert!(done.contains("`landed and cleaned up: <short hash> on <name>, by <how>`"));
+    assert!(
+        section(&text, "GitHub's auto-merge")
+            .contains("gh pr merge <number> --auto --match-head-commit <headRefOid>"),
+        "auto-merge its own way"
     );
     assert!(
         !text.contains("pr_merge_queue"),
         "no setting chooses the queue for every repository"
     );
-    let ours = &queuing[queuing.find("### Switchboard's merge queue").unwrap()..];
-    let ours = &ours[..ours.find("### Waiting").unwrap()];
+    let ours = section(&text, "Switchboard's merge queue");
     assert!(ours.contains("switchboard land-lock queue-pr <number>"));
     assert!(
         !ours.contains("--auto"),
         "a PR in the queue never gets auto-merge"
     );
-    let watching = section(&text, "Watching");
-    let watch = &watching[watching.find("### Watching Switchboard's queue").unwrap()..];
-    assert!(watch.contains("switchboard land-lock pr-status <number>"));
-    assert!(watch.contains("Go to \"Fixing\""), "a dropped PR is fixed");
+    assert!(ours.contains("switchboard land-lock pr-status <number>"));
+    assert!(ours.contains("Go to \"Fixing\""), "a dropped PR is fixed");
+}
+
+// A merge service keeps the PR up to date and merges it, so a landing by one
+// hands the PR over once, by its label or its comment, and never rebases or
+// queues it.
+#[test]
+fn queue_and_clean_hands_a_pr_to_a_merge_service_once_and_never_rebases_it() {
+    let text = fs::read_to_string(skills_dir().join("queue-and-clean/SKILL.md")).unwrap();
+    let service = section(&text, "A merge service");
+    assert!(service.contains("`gh pr edit <number> --add-label '<label>'`"));
+    assert!(service.contains("`gh pr comment <number> --body '<comment>'`"));
+    assert!(
+        service
+            .contains("never runs `git rebase`, `switchboard land-lock queue-pr` or `gh pr merge`")
+    );
+    let commands = service.split("```").skip(1).step_by(2).collect::<String>()
+        + &service
+            .lines()
+            .filter(|l| l.starts_with(char::is_numeric) || l.starts_with("- "))
+            .filter(|l| !l.contains("never runs"))
+            .collect::<String>();
+    for never in [
+        "git rebase",
+        "queue-pr",
+        "gh pr merge",
+        "Bringing it up to date",
+    ] {
+        assert!(!commands.contains(never), "a service landing runs {never}");
+    }
+    assert!(section(&text, "Bringing it up to date").contains("Never for a merge service"));
 }
 
 // Claude Code's Bash tool runs the user's shell, zsh on a Mac, where `status`
