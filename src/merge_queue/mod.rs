@@ -1,5 +1,5 @@
 //! Switchboard's own merge queue, for a repository that lands through PRs
-//! (`switchboard landing` printing `pr`) and has no merge queue of
+//! (`switchboard landing` printing `switchboard-queue`) and has no merge queue of
 //! GitHub's, which only an organization's repositories get. New with the
 //! Rust version. Without one, a base branch that requires PRs to be up to
 //! date makes every merge put every other open PR behind, each updating its

@@ -428,7 +428,7 @@ fn valid(key: &str, value: &Value) -> bool {
         "testIn" => value.as_str().is_some_and(|v| TEST_IN.contains(&v)),
         "test" | "beforePush" | "afterRebase" => value.is_string(),
         "serviceLabel" => value.as_str().is_some_and(label_ok),
-        "serviceCheck" => value.as_str().is_some_and(|c| !c.trim().is_empty()),
+        "serviceCheck" => value.as_str().is_some_and(label_ok),
         "squash" => value.is_boolean(),
         _ => false,
     }
@@ -1368,7 +1368,7 @@ pub fn issue_label_of(entry: &Map<String, Value>) -> Option<String> {
 /// would break out of GitHub's search for it.
 pub fn label_ok(label: &str) -> bool {
     let label = label.trim();
-    !label.is_empty() && !label.contains(['"', '\\', '\n'])
+    !label.is_empty() && !label.contains(['"', '\\', '\n', '\''])
 }
 
 /// What a reader of a repository's tickets says while its `tickets` isn't

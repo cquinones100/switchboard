@@ -1,5 +1,5 @@
 //! The default branch's CI, watched: for each repository whose landings
-//! test in CI (repos.json's `landing` `direct` with `testIn` `ci`) and that
+//! test in CI (repos.json's `lands` `direct` with `testIn` `ci`) and that
 //! autopilot works on or has a tab in its landing queue, its default
 //! branch's tip is looked at every two minutes (src/sources/schedule.rs),
 //! with the look `wait-ci --now` makes (src/cmd/wait_ci.rs). A tip that
