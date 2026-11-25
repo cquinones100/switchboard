@@ -512,11 +512,10 @@ fn plugin_offered(check: bool, list: &mut List) {
 /// taken out without asking, and your rules imported after asking the
 /// first time.
 fn in_claude(check: bool, list: &mut List) {
-    if server_on_another_build() {
+    if old_way_waits() {
         list.optional(
-            "what an earlier version put in ~/.claude, taken out once the workspace runs this build (switchboard upgrade), since the server running now may start its panes without the plugin",
+            "what an earlier version put in ~/.claude, if anything, taken out once the workspace runs this build (switchboard upgrade), since the server running now may start its panes without the plugin",
         );
-        return;
     }
     let settings = part_named("claude").expect("a part");
     match pending(settings) {
@@ -730,7 +729,7 @@ pub fn state_of_its_own() -> bool {
 /// update look does, and your rules' import is left for the guided setup to
 /// ask about. It runs as the new build's server starts (`by_the_server`),
 /// never as a client attaches; by hand, while the workspace's server runs
-/// another build (`server_on_another_build`), it writes the plugin alone
+/// another build (`old_way_waits`), it writes the plugin alone
 /// and records nothing, since that server may start panes without the
 /// plugin, so the new build's server does the rest as it starts. Whether it
 /// worked, and whether it took an earlier version's hooks or skills out,
@@ -744,11 +743,14 @@ pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
     }
     let mut report = Report::new(false);
     report.silent = true;
+    if by_the_server {
+        BY_THE_SERVER.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let mut worked = plugin::run(&mut report).is_ok();
-    if !by_the_server && server_on_another_build() {
+    if old_way_waits() {
         return (worked, false);
     }
-    let earlier = claude_settings::set_up() || skills::installed();
+    let earlier = claude_settings::has_hooks() || skills::installed() || claude_md::imports_part();
     worked &= claude_settings::run(&mut report).is_ok();
     if claude_md::set_up() || exists(&claude_md::part_file()) {
         worked &= claude_md::migrate(&mut report).is_ok();
@@ -765,17 +767,35 @@ pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
     (worked, earlier)
 }
 
-/// Whether the workspace's server runs another build than this one (or
-/// one too old to say), which may start its panes without the plugin, so
-/// taking an earlier version's hooks out of `~/.claude` waits for this
-/// build's server. No server running, or none answering, is none.
-fn server_on_another_build() -> bool {
-    crate::mux::socket::ask_quiet(vec!["server-version".into()], None, None).is_some_and(
-        |(code, out, _)| {
+/// Set in the server's own run of `refresh_now`, which is this build.
+static BY_THE_SERVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether taking what an earlier version put in `~/.claude` out waits for
+/// this build's server: the workspace's server runs another build (or one
+/// too old to say, or doesn't answer), which may start its panes without
+/// the plugin while the hooks would already be gone. No server (no socket)
+/// waits for nothing. The `claude`, `claude-md` and `skills` parts each
+/// leave the old way as it is while it holds; asked once a run.
+pub fn old_way_waits() -> bool {
+    static WAITS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if BY_THE_SERVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    *WAITS.get_or_init(|| {
+        if !exists(&crate::mux::socket::socket_path()) {
+            return false;
+        }
+        crate::mux::socket::ask_within(
+            vec!["server-version".into()],
+            None,
+            None,
+            std::time::Duration::from_secs(5),
+        )
+        .is_none_or(|(code, out, _)| {
             code != 0
                 || String::from_utf8_lossy(&out).trim() != crate::update::version_line().trim()
-        },
-    )
+        })
+    })
 }
 
 // ── What the parts share ────────────────────────────────────────────────────

@@ -64,6 +64,13 @@ fn imports_ours(line: &str) -> bool {
     line == IMPORT
 }
 
+/// Whether your CLAUDE.md imports Switchboard's part, as earlier versions
+/// added it.
+pub fn imports_part() -> bool {
+    !is_link(&claude_md())
+        && util::read_text(claude_md()).is_some_and(|text| text.lines().any(imports_ours))
+}
+
 /// Whether claude.json (or your own `~/.config/switchboard/CLAUDE.md`)
 /// names rules for your CLAUDE.md to import.
 pub fn rules_named() -> bool {
@@ -111,8 +118,16 @@ pub fn set_up() -> bool {
         .is_some_and(|text| text.contains(MARK_START) || text.lines().any(imports_ours))
 }
 
-/// The part.
+/// The part. While an earlier version's import of Switchboard's part is
+/// still there and the workspace's server runs another build
+/// (`super::old_way_waits`), only the pull, so that server's panes keep it.
 pub fn run(r: &mut Report) -> Result<()> {
+    if super::old_way_waits() && (imports_part() || exists(&part_file())) {
+        if !r.check {
+            pull();
+        }
+        return Ok(());
+    }
     if r.check {
         return now(r, false);
     }

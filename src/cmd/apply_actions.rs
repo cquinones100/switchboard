@@ -599,8 +599,8 @@ fn install(repo: &Path) -> Result<String, String> {
         let bytes = std::fs::read(&build).map_err(|e| format!("{}: {e}", build.display()))?;
         update::install::replace(&target, &bytes).map_err(|e| format!("{e:#}"))?
     };
-    // The new build's parts: its plugin and what is set up written again,
-    // as its first attach would, so Claude started from now on loads them.
+    // The new build's plugin written, as its server would as it starts, so
+    // Claude started from now on loads it.
     let refreshed = Command::new(&target)
         .args(["setup", "--refresh"])
         .stdin(Stdio::null())

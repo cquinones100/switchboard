@@ -250,8 +250,12 @@ pub fn own_skills() -> Vec<String> {
 
 /// The part: every skill an earlier version wrote taken out of
 /// `~/.claude/skills`, each tried and the ones that couldn't be said
-/// together at the end.
+/// together at the end; left while the workspace's server runs another
+/// build (`super::old_way_waits`), whose panes may load none of the plugin.
 pub fn run(r: &mut Report) -> Result<()> {
+    if super::old_way_waits() {
+        return Ok(());
+    }
     let dir = skills_dir();
     let mut done = Vec::new();
     let mut failed = Vec::new();

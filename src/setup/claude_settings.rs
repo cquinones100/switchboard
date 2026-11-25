@@ -187,8 +187,20 @@ pub fn without_switchboard(current: &Map<String, Value>, ours: &Value) -> Map<St
     out
 }
 
-/// The part.
+/// Whether your settings file has an earlier version's hooks: what a pane
+/// named no plugin ran, the old way.
+pub fn has_hooks() -> bool {
+    let ours = hook_commands(&ours()["hooks"]);
+    util::read_json(settings_file())
+        .is_some_and(|s| hook_commands(&s["hooks"]).iter().any(|c| ours.contains(c)))
+}
+
+/// The part; left while the workspace's server runs another build
+/// (`super::old_way_waits`), whose panes may run the hooks in your file.
 pub fn run(r: &mut Report) -> Result<()> {
+    if super::old_way_waits() {
+        return Ok(());
+    }
     let file = settings_file();
     let shown = home_tilde(&file);
     let current = match fs::read_to_string(&file) {
