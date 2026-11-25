@@ -142,12 +142,11 @@ pub async fn socket_mode(cx: super::Cx, _app_token: String) {
     cx.log("Slack: Switchboard was built without network support, so it can't reach Slack.");
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "net"))]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    #[cfg(feature = "net")]
     #[test]
     fn the_api_client_form_encodes_waits_out_rate_limits_and_reports_refusals() {
         use crate::fake_http::{Fake, Reply, Service};
