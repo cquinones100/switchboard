@@ -15,9 +15,7 @@
 //! `auth.test` gave them), which is how the server knows there is a sign-in
 //! without asking the Keychain, a process, on its tick: the token itself is
 //! read only in the tasks that send it. Every request goes through
-//! `crate::net`, so each is counted in the request audit, and only to
-//! Slack's Web API (`relay::slack::api_base`, which the tests point at a
-//! server of their own).
+//! `integrations::slack`'s client, with this token.
 //!
 //! Reminders: `look` reads `reminders.list` and keeps the ones due and not
 //! complete in `slack-reminders.json`, with the ones you have seen in the
@@ -34,7 +32,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::net::{self, Audit};
+pub use crate::integrations::slack::Client;
+use crate::integrations::slack::{self, Send};
 use crate::util;
 
 /// The secret the token is stored as, and the variable read before it.
@@ -150,37 +149,14 @@ pub fn token() -> Option<String> {
         .or_else(|| crate::relay::slack::token(TOKEN_SERVICE))
 }
 
-/// Slack's Web API at `base` (ending in `/`), as you.
-#[derive(Clone)]
-pub struct Client {
-    base: String,
-    token: String,
-}
-
-impl Client {
-    pub fn new(base: String, token: String) -> Client {
-        Client { base, token }
-    }
-
-    /// The Web API's address, ending in `/`.
-    pub(super) fn base(&self) -> &str {
-        &self.base
-    }
-
-    /// The token, for a file's download, which isn't a Web API call.
-    pub(super) fn token(&self) -> &str {
-        &self.token
-    }
-
-    /// With the stored token, read off the task that asks.
-    pub(super) async fn stored() -> Result<Client, String> {
-        let token = tokio::task::spawn_blocking(token)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| format!("your Slack sign-in isn't stored any more: run {SETUP}"))?;
-        Ok(Client::new(crate::relay::slack::api_base(), token))
-    }
+/// With the stored token, read off the task that asks.
+pub(super) async fn stored() -> Result<Client, String> {
+    let token = tokio::task::spawn_blocking(token)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| format!("your Slack sign-in isn't stored any more: run {SETUP}"))?;
+    Ok(Client::new(slack::api_base(), token))
 }
 
 /// One call to Slack's Web API: a GET with its arguments in the query
@@ -194,60 +170,45 @@ pub(super) async fn api(
     params: &Value,
     source: &str,
 ) -> Result<Value, String> {
-    let base = &client.base;
-    let bearer = format!("Bearer {}", client.token);
-    let headers = [("Authorization", bearer.as_str())];
-    let audit = Audit {
-        service: "Slack",
-        protocol: "REST",
-        source,
-    };
-    let response = if get {
-        let query = crate::relay::http::form_body(params);
-        let url = if query.is_empty() {
-            format!("{base}{method}")
-        } else {
-            format!("{base}{method}?{query}")
-        };
-        net::get_json(&url, &headers, audit).await
-    } else {
-        net::post_json(&format!("{base}{method}"), &headers, params, audit).await
-    }
-    .map_err(|e| e.to_string())?;
-    if response.status == 429 {
-        return Err(match response.header("Retry-After") {
-            Some(wait) => format!("{RATE_LIMIT}: Slack asked to wait {} seconds", wait.trim()),
-            None => RATE_LIMIT.to_string(),
-        });
-    }
-    if response.body.get("ok") == Some(&Value::Bool(true)) {
-        return Ok(response.body);
-    }
-    let error = response
-        .body
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    Err(match error {
-        "missing_scope" => {
-            let needed = response
-                .body
-                .get("needed")
-                .and_then(Value::as_str)
-                .unwrap_or("a");
-            format!("your Slack sign-in lacks the {needed} scope: add it and run {SETUP} again")
-        }
-        "invalid_auth" | "not_authed" | "token_revoked" | "token_expired" | "account_inactive" => {
-            format!("Slack refused your sign-in ({error}): run {SETUP} again")
-        }
-        "" => format!("{method}: Slack answered {}", response.status),
-        other => format!("{method}: {other}"),
-    })
+    let send = if get { Send::Get } else { Send::Json };
+    client
+        .call(send, method, params, source)
+        .await
+        .map_err(|e| match e {
+            slack::Error::Unreachable { error, .. } => error.to_string(),
+            slack::Error::Refused {
+                status: 429,
+                retry_after,
+                ..
+            } => match retry_after {
+                Some(wait) => format!("{RATE_LIMIT}: Slack asked to wait {wait} seconds"),
+                None => RATE_LIMIT.to_string(),
+            },
+            slack::Error::Refused {
+                error,
+                needed,
+                status,
+                ..
+            } => match error.as_str() {
+                "missing_scope" => {
+                    let needed = needed.as_deref().unwrap_or("a");
+                    format!(
+                        "your Slack sign-in lacks the {needed} scope: add it and run {SETUP} again"
+                    )
+                }
+                "invalid_auth" | "not_authed" | "token_revoked" | "token_expired"
+                | "account_inactive" => {
+                    format!("Slack refused your sign-in ({error}): run {SETUP} again")
+                }
+                "" => format!("{method}: Slack answered {status}"),
+                other => format!("{method}: {other}"),
+            },
+        })
 }
 
 /// Who `token` is for, which also says whether Slack takes it.
 pub async fn auth_test(token: &str) -> Result<SignIn, String> {
-    let client = Client::new(crate::relay::slack::api_base(), token.to_string());
+    let client = Client::new(slack::api_base(), token.to_string());
     let said = api(&client, false, "auth.test", &json!({}), "setup: slack-user").await?;
     let get = |k: &str| {
         said.get(k)
@@ -406,7 +367,7 @@ fn save(state: &Path, found: Result<Vec<Reminder>, String>, now_ms: i64) -> std:
 /// Reads your reminders once and keeps the ones due; gives a line for the
 /// log.
 pub async fn look(state: &Path, now_ms: i64) -> Result<String, String> {
-    look_with(Client::stored().await, state, now_ms).await
+    look_with(stored().await, state, now_ms).await
 }
 
 async fn look_with(
@@ -436,7 +397,7 @@ async fn look_with(
 
 /// Marks reminder `id` complete in Slack.
 pub async fn complete(id: &str) -> Result<(), String> {
-    complete_with(&Client::stored().await?, id).await
+    complete_with(&stored().await?, id).await
 }
 
 async fn complete_with(client: &Client, id: &str) -> Result<(), String> {
@@ -458,7 +419,7 @@ async fn complete_with(client: &Client, id: &str) -> Result<(), String> {
 /// you have read that far there already; whether it moved the mark. Tried
 /// once more when it fails.
 pub async fn mark_read(channel: &str, ts: &str) -> Result<bool, String> {
-    mark_read_with(&Client::stored().await?, channel, ts).await
+    mark_read_with(&stored().await?, channel, ts).await
 }
 
 async fn mark_read_with(client: &Client, channel: &str, ts: &str) -> Result<bool, String> {

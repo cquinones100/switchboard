@@ -105,7 +105,7 @@ pub async fn graphql(query: &str, variables: Value, source: &str) -> Result<Valu
         protocol: "GraphQL",
         source,
     };
-    let response = net::post_json(&api_url(), &headers, &body, audit).await?;
+    let response = net::post(&api_url(), &headers, net::Body::Json(&body), audit).await?;
     // Linear says what went wrong in `errors` whatever the status (often a
     // 400), so they are read first, and the status only when there are none.
     if let Some(errors) = response.body.get("errors").and_then(Value::as_array)

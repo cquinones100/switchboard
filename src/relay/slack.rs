@@ -39,13 +39,6 @@ use super::config::Paths;
 pub const BOT_TOKEN_SERVICE: &str = "slack-relay-bot-token";
 pub const APP_TOKEN_SERVICE: &str = "slack-relay-app-token";
 
-/// Slack's Web API, or `SWITCHBOARD_SLACK_API`, which the tests point at a
-/// server of their own.
-pub fn api_base() -> String {
-    let base = crate::net::base_url("SWITCHBOARD_SLACK_API", "https://slack.com/api");
-    format!("{base}/")
-}
-
 /// A stored token, for this user's account, else stored for the service
 /// alone (the Keychain's generic password the Node relay read with
 /// `security find-generic-password -a $USER -s <service>`).
@@ -66,8 +59,8 @@ pub fn load_owner(paths: &Paths) -> Option<String> {
 
 /// How the relay reaches Slack: a Web API call, a file's bytes sent to the
 /// address Slack gave for it, and a file Slack keeps fetched with the bot's
-/// token. The relay's own is `http::Https`; the tests put stand-ins here,
-/// so they never reach Slack.
+/// token. The relay's own is `integrations::slack::Client` (`http::as_bot`);
+/// the tests put stand-ins here, so they never reach Slack.
 pub trait Transport {
     fn call<'a>(&'a self, method: &'a str, params: &'a Value) -> LocalBoxFuture<'a, Result<Value>>;
     fn put<'a>(&'a self, url: &'a str, bytes: Vec<u8>) -> LocalBoxFuture<'a, Result<()>>;

@@ -1,8 +1,10 @@
 //! The services Switchboard reads for you, over their own APIs through `net`:
-//! GitHub (`github`) and Linear (`linear`). Each finds its credentials the
-//! way a person already keeps them, refuses outright while its setting
-//! (`github`, `linear`) is off, so turning a service off in Settings means
-//! the workspace asks it nothing by itself, and turns its failures into
+//! GitHub (`github`) and Linear (`linear`), and Slack's Web API (`slack`, the
+//! one client every Slack call goes through, with the token its caller acts
+//! with). GitHub and Linear each find their credentials the way a person
+//! already keeps them, refuse outright while their setting (`github`,
+//! `linear`) is off, so turning a service off in Settings means the
+//! workspace asks it nothing by itself, and turn their failures into
 //! `net::ServiceError`s a view can explain.
 //!
 //! The settings are about what the workspace does on its own: its lookups,
@@ -17,6 +19,7 @@
 
 pub mod github;
 pub mod linear;
+pub mod slack;
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
