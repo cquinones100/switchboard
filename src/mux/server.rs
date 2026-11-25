@@ -729,7 +729,9 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
         }
     });
     // Switchboard's plugin, which Claude in the panes loads, as this build
-    // has it: off the server's task, and before the restored panes' Claude
+    // has it, and what earlier versions put in ~/.claude taken out, as a new
+    // build's first run does (a server restarted by `switchboard upgrade`
+    // has no client attaching to run it): off the server's task, and before the restored panes' Claude
     // sessions take the time a shell and Claude take to start. Not by a
     // server with a state directory of its own (a test's, or a worktree's
     // build run by hand), which shares your home: there it would write over
@@ -739,6 +741,7 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
             if let Err(e) = crate::setup::plugin::write_quietly() {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
             }
+            crate::setup::refresh_now();
             // The cargo, npm and pnpm the panes find first, which put heavy
             // work through the queue (src/cmd/slot.rs); not in a demo,
             // whose home links nothing outside it and builds nothing.

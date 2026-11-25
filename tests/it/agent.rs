@@ -946,7 +946,7 @@ fn plugin_dirs_in_a_pane(server: &TestServer) -> String {
 }
 
 #[test]
-fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
+fn a_pane_s_claude_loads_switchboard_s_plugin_unless_the_policy_forbids_it() {
     // A server with a state directory of its own (a test's, or a worktree's
     // build run by hand) shares your home, so it leaves the plugin your
     // workspace's panes load as it is, though its panes name it.

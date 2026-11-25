@@ -281,8 +281,10 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
         ("claude", "Claude Code"),
         ("session", "Plugins and built-in"),
     ];
-    // Switchboard's own, from its plugin.
-    let plugin = Some(cx.paths.plugin_dir.as_path());
+    // Switchboard's own, from its plugin, unless Claude Code's managed
+    // settings keep the panes from loading it.
+    let plugin =
+        crate::setup::blocked::panes_load_plugin().then_some(cx.paths.plugin_dir.as_path());
     let skills = skills_for(
         &cx.paths,
         tab.cwd.as_deref(),
