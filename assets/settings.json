@@ -2212,7 +2212,7 @@
     "key": "phone_tab_views",
     "category": "Phone app",
     "label": "A tab's PR and ticket on the phone",
-    "description": "In a tab's channel, the swipe from the phone app's right edge opens the first the tab has of its PR, its ticket and its note full screen, read only, as the PR view (M-v) and the ticket view (M-i) draw them from what the workspace last read, with ‹ to the list of views, which lists them above mission control's. Needs Mission control on the phone. Off, the swipe opens mission control's list and the server sends the phone none of them",
+    "description": "In a tab's channel, the swipe from the phone app's right edge opens a full-screen list with the tab's PR, its ticket and its note above mission control's views, each opening on a tap read only, as the PR view (M-v) and the ticket view (M-i) draw them from what the workspace last read, with ‹ back to the list. Needs Mission control on the phone. Off, the swipe opens mission control's list and the server sends the phone none of them",
     "default": true
   },
   {
