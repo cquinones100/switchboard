@@ -1300,6 +1300,7 @@ impl Pilot {
             target: mode.target.clone(),
             drained: (self.empty.is_some() || read_empty) && !self.next.failed && self.counts.1 > 0,
             failing: String::new(),
+            way: None,
         }
     }
 }

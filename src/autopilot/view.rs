@@ -544,8 +544,14 @@ pub fn items(
     if !eta.is_empty() {
         facts.push(eta.to_string());
     }
+    // The way its repository lands by through a PR (board 194), then
+    // whether it asks; straight on a branch is what the facts before say.
+    let by_pr = s.way.filter(|w| w.through_pr());
+    facts.extend(by_pr.map(|w| w.lands_words("")));
     facts.push(if s.hands_free {
         "hands-free".to_string()
+    } else if s.lands_alone && by_pr.is_some() {
+        "without asking".to_string()
     } else if s.lands_alone {
         "lands without asking".to_string()
     } else {
@@ -679,6 +685,8 @@ pub fn items(
                 "left": r.left,
                 "started": r.started,
                 "ended": r.ended,
+                // A landing card names the way it lands by (board 194).
+                "way": s.way.filter(|_| column == LANDING).map(crate::repos::Way::key),
             },
         }))));
     }
@@ -948,6 +956,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
         };
         let mut other = row(TabState::Working);
         other.tab = TabId(5);
@@ -1004,7 +1013,19 @@ mod tests {
             target: "team/next".into(),
             drained: false,
             failing: "main failing at ebde129".into(),
+            way: Some(crate::repos::Way::Direct),
         };
+        let queued = Summary {
+            way: Some(crate::repos::Way::GithubQueue),
+            target: String::new(),
+            failing: String::new(),
+            ..s.clone()
+        };
+        let heading = items(&queued, "", "", &[], &[], &[], &[], &HashMap::new());
+        assert_eq!(
+            heading[0].detail,
+            "2 of 2 working · 3 of 5 open · lands by GitHub's merge queue · without asking · paused by you"
+        );
         let items = items(
             &s,
             "",
@@ -1116,6 +1137,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
             hands_free: false,
         };
         let items = items(
@@ -1300,6 +1322,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
         };
         let items = items(
             &summary,
@@ -1349,6 +1372,7 @@ mod tests {
             target: String::new(),
             drained: true,
             failing: String::new(),
+            way: None,
         };
         let items = items(
             &s,
@@ -1447,6 +1471,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
             hands_free: false,
         };
         let list = items(&s, &words, "", &rows, &[], &[], &[], &HashMap::new());

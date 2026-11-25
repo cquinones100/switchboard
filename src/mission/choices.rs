@@ -1248,7 +1248,16 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     Do::Open(check.to_string()),
                 ));
             }
-            if !url.is_empty() {
+            // A train of Switchboard's merge queue: its branch on GitHub.
+            let train = ci.get("train").and_then(Value::as_bool) == Some(true);
+            if train && !url.is_empty() {
+                out.push(choice(
+                    'p',
+                    "Open the train's branch in the browser",
+                    Do::Open(url.clone()),
+                ));
+                out.push(choice('y', "Copy its link", Do::Copy(url)));
+            } else if !url.is_empty() {
                 out.push(choice(
                     'v',
                     "Read the PR here, in a pane beside",
@@ -1373,7 +1382,13 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             ));
         }
         ViewId::Landing => {
-            let q = &item.data["queue"];
+            // A PR in GitHub's merge queue, or a merged one kept until it
+            // is cleaned up, which has its tab and no URL.
+            let q = item
+                .data
+                .get("queue")
+                .filter(|q| q.is_object())
+                .unwrap_or(&item.data["landed"]);
             let url = text(q, "/url").to_string();
             if let Some(t) = ctx
                 .tabs

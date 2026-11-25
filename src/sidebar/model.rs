@@ -305,6 +305,9 @@ pub struct TabModel {
     /// Lines added and deleted.
     pub size: Option<(u64, u64)>,
     pub landing: Option<Landing>,
+    /// The way it lands by while it lands, named by its chip in the
+    /// Landing group and on its card (boards 193 to 196).
+    pub way: Option<crate::repos::Way>,
     /// The slot of the queue for heavy work a command in its panes waits
     /// for, else holds (src/slots).
     pub slot: Option<crate::slots::TabSlot>,
@@ -381,6 +384,7 @@ impl TabModel {
             review: None,
             size: None,
             landing: None,
+            way: None,
             slot: None,
         }
     }

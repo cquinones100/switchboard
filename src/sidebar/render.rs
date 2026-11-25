@@ -795,7 +795,11 @@ pub fn sidebar_lines(
             let by_you = model::by_hand(tab, r)
                 .is_some()
                 .then(|| kit::chip(model::BY_YOU, Tone::Dim, view.caps, theme));
-            let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
+            // Landing, the way it lands by on the kit's chip after it
+            // (boards 193 to 196).
+            let way = tab.way.map(|w| kit::way_chip(w.chip(), view.caps, theme));
+            let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c))
+                + way.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
             // A tab following several PRs: the current one's number
             // before its name, how many more after it, dim (board 127).
             let (name, more) = match tab.prs.first() {
@@ -820,7 +824,7 @@ pub fn sidebar_lines(
             if !more.is_empty() {
                 first.put(more, fg(theme.dim));
             }
-            if let Some(chip) = by_you {
+            for chip in [by_you, way].into_iter().flatten() {
                 first.put(" ", Style::new());
                 first.spans.extend(chip);
             }
@@ -1332,6 +1336,34 @@ mod tests {
             .count();
         assert_eq!(name_lines, 1);
         assert!(out.spins, "a working tab's badge spins");
+    }
+
+    #[test]
+    fn a_tab_landing_through_switchboard_s_queue_wears_its_way_s_chip_under_landing() {
+        let mut queued = tab(1, "rsvp", TabState::Idle);
+        queued.landing = Some(crate::facts::Landing {
+            holding: true,
+            line: 1,
+            method: crate::facts::Method::Pr,
+        });
+        queued.way = Some(crate::repos::Way::SwitchboardQueue);
+        let tabs = vec![queued, tab(2, "busy", TabState::Working)];
+        let out = lines(&tabs, 40, 14, &view(2));
+        let text: Vec<String> = out.lines.iter().map(Line::text).collect();
+        let heading = text
+            .iter()
+            .position(|l| l.starts_with(" LANDING"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        let row = &text[heading + 1];
+        assert!(
+            row.contains("rsvp") && row.contains("Switchboard's queue"),
+            "{row}"
+        );
+        assert!(
+            !text
+                .iter()
+                .any(|l| l.contains("busy") && l.contains("queue"))
+        );
     }
 
     #[test]

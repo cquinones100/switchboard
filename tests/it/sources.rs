@@ -157,12 +157,16 @@ fn a_tab_s_pr_facts_and_the_views_arrive_from_the_background() {
         s["views"]["prs"]["items"][0]["title"] == "#12 Fix the login"
             && s["views"]["landing"]["items"][1]["title"].is_string()
     });
-    assert_eq!(views["views"]["prs"]["items"][0]["group"], "In merge queue");
+    assert_eq!(views["views"]["prs"]["items"][0]["group"], "Landing");
     // The Landing view, while the PR is in the merge queue: a section for
     // the repository's merge queue, in order.
     assert_eq!(
         views["views"]["landing"]["items"][0]["title"],
-        "acme/widgets · merge queue"
+        "acme/widgets"
+    );
+    assert_eq!(
+        views["views"]["landing"]["items"][0]["data"]["way"],
+        "github-queue"
     );
     assert_eq!(
         views["views"]["landing"]["items"][1]["detail"],

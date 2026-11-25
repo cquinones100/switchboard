@@ -1,6 +1,6 @@
 //! Mission control's PR board, ported from lib/sidebar/prboard.js: your pull
 //! requests in the repositories your tabs are in, as columns by where they
-//! stand (Draft, In review, Approved, In merge queue, and Merged in the last
+//! stand (Draft, In review, Approved, Landing, and Merged in the last
 //! `MERGED_DAYS`), from two GitHub searches. Only those repositories, so old
 //! pull requests elsewhere stay off the board: each tab's origin, and in a
 //! fork's clone the project its `upstream` remote names, where the PRs from
@@ -27,9 +27,14 @@ pub const COLUMNS: &[&str] = &[
     "In review",
     "Changes asked",
     "Approved",
-    "In merge queue",
+    LANDING,
     "Merged",
 ];
+
+/// The column of PRs on their way in, by their repository's way (board
+/// 195): GitHub's merge queue as GitHub says, Switchboard's as the server
+/// joins it (`Server::landing_prs`).
+pub const LANDING: &str = "Landing";
 
 pub const MERGED_DAYS: i64 = 7;
 pub const MERGED_EVERY: Duration = Duration::from_secs(10 * 60);
@@ -40,7 +45,7 @@ fn column_of(pr: &Value) -> &'static str {
     if text(pr, "/state") == "MERGED" {
         "Merged"
     } else if pr.get("mergeQueueEntry").is_some_and(|e| !e.is_null()) {
-        "In merge queue"
+        LANDING
     } else if pr.get("isDraft").and_then(Value::as_bool) == Some(true) {
         "Draft"
     } else if text(pr, "/reviewDecision") == "CHANGES_REQUESTED" {
@@ -144,6 +149,9 @@ pub fn item_of(pr: &Value) -> Option<Item> {
             "additions": pr.get("additions").and_then(Value::as_u64),
             "deletions": pr.get("deletions").and_then(Value::as_u64),
             "body": text(pr, "/body"),
+            // Its place in GitHub's merge queue, as its card says it.
+            "landing": position.map(|p| format!("GitHub's · {}", crate::sidebar::text::ordinal(p as u32))),
+            "way": position.map(|_| crate::repos::Way::GithubQueue.key()),
         }));
     item.time = ms_of(pr.get("mergedAt").and_then(Value::as_str));
     Some(item)
@@ -387,7 +395,7 @@ mod tests {
             ("In review", "#2 PR 2"),
             ("Changes asked", "#3 PR 3"),
             ("Approved", "#4 PR 4"),
-            ("In merge queue", "#5 PR 5"),
+            ("Landing", "#5 PR 5"),
             ("Merged", "#7 PR 7"),
             ("Merged", "#6 PR 6"),
         ];

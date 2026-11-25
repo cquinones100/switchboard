@@ -1051,6 +1051,165 @@ impl Server {
             .find(|i| i.get("identifier").and_then(Value::as_str) == Some(id))
     }
 
+    /// Where a PR stands in Switchboard's merge queue, as its card on the
+    /// PR board (board 195) and its CI row (board 196) say it: its train
+    /// and how long its CI has run, the train it is next in, or its place
+    /// in line; `None` while the queue doesn't hold it.
+    pub fn our_queue_words(&self, repo: &str, number: u64) -> Option<String> {
+        let r = self.sources.landing.repos.iter().find(|r| {
+            r.target.is_none()
+                && r.repo
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(repo))
+                && r.prs.queued(number).is_some()
+        })?;
+        let q = &r.prs;
+        if let Some(t) = q.train.as_ref().filter(|_| q.in_train(number)) {
+            let ago = crate::sidebar::text::ago(Some(t.since / 1000), util::now_ms() / 1000);
+            return Some(match ago.as_str() {
+                "" => landing::train_name(&t.branch),
+                ago => format!("{} · CI {ago}", landing::train_name(&t.branch)),
+            });
+        }
+        if let Some(t) = q.ahead.as_ref().filter(|_| q.in_ahead(number)) {
+            return Some(format!("next, {}", landing::train_name(&t.branch)));
+        }
+        let line = q.line(number)?;
+        Some(format!(
+            "{} in Switchboard's queue",
+            crate::sidebar::text::ordinal(line)
+        ))
+    }
+
+    /// The PR board's items with each PR in Switchboard's merge queue moved
+    /// to Landing, saying where it is in it (board 195); GitHub's queue's
+    /// are there already, as GitHub said.
+    pub fn landing_prs(&self, items: Vec<Item>) -> Vec<Item> {
+        let items = items
+            .into_iter()
+            .map(|mut item| {
+                let open = !matches!(item.group.as_deref(), Some("Merged" | prboard::LANDING));
+                let pr = &item.data["pr"];
+                let words = pr["number"]
+                    .as_u64()
+                    .zip(pr["repo"].as_str())
+                    .filter(|_| open)
+                    .and_then(|(n, repo)| self.our_queue_words(repo, n));
+                if let Some(words) = words {
+                    item.group = Some(prboard::LANDING.into());
+                    item.data["landing"] = Value::from(words);
+                    item.data["way"] = Value::from(crate::repos::Way::SwitchboardQueue.key());
+                }
+                item
+            })
+            .collect();
+        super::in_columns(prboard::COLUMNS, items)
+    }
+
+    /// Each train of Switchboard's merge queue under test or ahead as a run
+    /// of its own in the CI view (board 196), listing the PRs it holds:
+    /// running until its CI passed, then passing while it merges.
+    pub fn train_runs(&self) -> Vec<Item> {
+        let mut out = Vec::new();
+        for r in self
+            .sources
+            .landing
+            .repos
+            .iter()
+            .filter(|r| r.target.is_none())
+        {
+            let repo = r.repo.clone().unwrap_or_else(|| r.name.clone());
+            for (t, ahead) in [(r.prs.train.as_ref(), false), (r.prs.ahead.as_ref(), true)] {
+                let Some(t) = t else { continue };
+                let numbers: Vec<String> = t.prs.iter().map(|p| format!("#{}", p.number)).collect();
+                let name = landing::train_name(&t.branch);
+                let (state, words) = match (&t.rerun, t.passed) {
+                    (_, true) => ("passing", "passed, merging".to_string()),
+                    (Some(rerun), _) => (
+                        "running",
+                        format!("running {} again", rerun.names.join(", ")),
+                    ),
+                    (None, _) if ahead => (
+                        "running",
+                        "testing next, on top of the train ahead of it".into(),
+                    ),
+                    (None, _) => ("running", "testing".into()),
+                };
+                let url = r
+                    .repo
+                    .as_ref()
+                    .map(|n| format!("https://github.com/{n}/tree/{}", t.branch))
+                    .unwrap_or_default();
+                let mut item = Item::new(
+                    format!("train:{}:{}", r.common.display(), t.branch),
+                    format!("{name} {}", numbers.join(" + ")),
+                )
+                .detail(words.clone())
+                .state(if state == "running" {
+                    crate::items::State::Active
+                } else {
+                    crate::items::State::Idle
+                })
+                .data(serde_json::json!({
+                    "ci": {
+                        "number": 0, "repo": repo, "url": url, "branch": t.branch,
+                        "state": state,
+                        "train": true,
+                        "landing": "Switchboard's merge queue",
+                    },
+                    "search": format!("{repo} {name} {}", numbers.join(" ")),
+                }));
+                if !url.is_empty() {
+                    item = item.target(crate::items::Target::Url(url));
+                }
+                item.time = (t.since > 0).then_some(t.since);
+                out.push(item);
+            }
+        }
+        out
+    }
+
+    /// The CI view's items with what each run means for landing in its
+    /// repository's way (board 196): a PR in Switchboard's queue or
+    /// GitHub's says where it is there, and each of Switchboard's trains is
+    /// a run of its own.
+    pub fn ci_with_landing(&self, items: Vec<Item>) -> Vec<Item> {
+        let mut out: Vec<Item> = items
+            .into_iter()
+            .map(|mut item| {
+                let ci = &item.data["ci"];
+                let (Some(n), Some(repo)) = (ci["number"].as_u64(), ci["repo"].as_str()) else {
+                    return item;
+                };
+                let github = self
+                    .sources
+                    .queues
+                    .by_repo
+                    .iter()
+                    .find(|(r, _)| r.eq_ignore_ascii_case(repo))
+                    .and_then(|(_, q)| {
+                        q.entries.iter().find(|e| {
+                            e.pointer("/pullRequest/number").and_then(Value::as_u64) == Some(n)
+                        })
+                    })
+                    .map(|e| {
+                        let p = e.get("position").and_then(Value::as_u64).unwrap_or(1) as u32;
+                        format!("GitHub's merge queue, {}", crate::sidebar::text::ordinal(p))
+                    });
+                let words = self
+                    .our_queue_words(repo, n)
+                    .map(|w| format!("Switchboard's merge queue, {w}"))
+                    .or(github);
+                if let Some(words) = words {
+                    item.data["ci"]["landing"] = Value::from(words);
+                }
+                item
+            })
+            .collect();
+        out.extend(self.train_runs());
+        out
+    }
+
     /// A PR's description as the PR board's lookup last read it, by its
     /// URL: none until it has answered, or for a PR it doesn't list.
     pub(crate) fn pr_body_held(&self, url: &str) -> Option<String> {
@@ -1255,6 +1414,10 @@ impl Server {
                         .get(crate::mux::server::LAND)
                         .is_some_and(|v| v == "1")
                 }),
+                landed: t
+                    .pr
+                    .filter(|_| github && t.pr_state == Some(PrState::Merged))
+                    .zip(self.sources.landing.linked.get(&t.id).cloned()),
             })
             .collect();
         let by_repo = &self.sources.queues.by_repo;

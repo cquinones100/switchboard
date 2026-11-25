@@ -957,7 +957,7 @@ pub fn views(now_ms: i64) -> Vec<Value> {
             Item::new("p93", "#93 stable note IDs")
                 .detail("tab 2 · 1st")
                 .state(State::Active)
-                .group("In merge queue"),
+                .group("Landing"),
             pr_options(93, Some(12)),
         ),
     ];
