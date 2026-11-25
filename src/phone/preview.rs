@@ -204,7 +204,7 @@ impl Data {
             let chosen = reply
                 .parse::<u64>()
                 .ok()
-                .filter(|&c| c >= 1 && c < labels.len() as u64)
+                .filter(|&c| c >= 1 && c <= labels.len() as u64)
                 .ok_or((
                     StatusCode::BAD_REQUEST,
                     "the preview takes one of its options here",

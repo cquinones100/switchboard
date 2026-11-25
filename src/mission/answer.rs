@@ -274,19 +274,9 @@ pub fn step_presses(found: &Prompt, to: &StepTo) -> Result<(Vec<Press>, String),
         }
         (StepTo::Back, Some(at)) => at - 1,
         (StepTo::Forward, Some(at)) => at + 1,
-        (StepTo::Back, None) => {
-            return Ok((
-                vec![Press::Key(Key::new(KeyCode::Left, Mods::NONE))],
-                "Stepped back".into(),
-            ));
-        }
-        (StepTo::Forward, None) => {
-            return Ok((
-                vec![Press::Key(Key::new(KeyCode::Right, Mods::NONE))],
-                "Stepped forward".into(),
-            ));
-        }
-        (StepTo::Named(_), None) => return Err("which step it shows can't be read".into()),
+        // Unread, a step could press past either end, where Claude Code
+        // takes the key as nothing and the phone waits on a change.
+        (_, None) => return Err("which step it shows can't be read".into()),
         (StepTo::Named(name), Some(_)) => found
             .steps
             .iter()

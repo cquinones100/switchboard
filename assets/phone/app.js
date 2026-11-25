@@ -1668,7 +1668,8 @@ function card(tab) {
       "div",
       { class: "top" },
       el("span", {}, "● Waiting on you"),
-      place ? el("span", {}, place) : p.multi ? el("span", { class: "chip y" }, "choose several") : null,
+      p.multi ? el("span", { class: "chip y" }, "choose several") : null,
+      place ? el("span", {}, place) : null,
     ),
     steps ? stepsLine(p, waiting) : null,
     review || [

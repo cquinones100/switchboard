@@ -492,17 +492,17 @@ const TABS: &[Tab] = &[
 pub const STEPPED: u32 = 32;
 
 /// The questions `theme_prompt` asks: each one's name, its question and
-/// its options, the last of them "Type something".
+/// its options, with no answer of your own, which the preview leaves out.
 pub const THEME_QUESTIONS: [(&str, &str, &[&str]); 2] = [
     (
         "Colors",
         "Which colors should the picker offer first?",
-        &["Warm", "Cool", "Both", "Type something."],
+        &["Warm", "Cool", "Both"],
     ),
     (
         "Size",
         "Which size should it open at?",
-        &["Compact", "Roomy", "Type something."],
+        &["Compact", "Roomy"],
     ),
 ];
 
@@ -555,7 +555,7 @@ pub fn theme_prompt(shown: usize, answers: [Option<u64>; 2]) -> Value {
             .map(|(i, label)| json!({"n": i + 1, "label": label, "checked": null, "detail": ""}))
             .collect::<Vec<_>>(),
         "multi": false,
-        "free": labels.len(),
+        "free": null,
         "cursor": answers[shown].unwrap_or(1),
         "steps": steps,
         "shown": shown,
