@@ -922,17 +922,26 @@ impl Server {
         if busy.is_empty() {
             return Vec::new();
         }
-        let cache = crate::repos::cache_file();
-        mainci::watched(&busy, &crate::repos::read_safely(), &|repo| {
-            crate::repos::cached_in(&cache, repo).map(|c| c.landing)
-        })
+        mainci::watched(&busy, &crate::repos::read_safely())
     }
 
     // Reads the landing queues on a blocking thread, unless a read is still
     // under way; with neither the landing_queue setting nor the Landing
     // view on, forgets them.
     fn start_landing(&mut self, tabs: &[TabInfo]) {
-        let merge_queue = settings::is_on(crate::merge_queue::SETTING);
+        // A queue holding a PR is read as long as it does, so a repository
+        // whose way changed finishes what it queued.
+        let queued = self
+            .sources
+            .landing
+            .repos
+            .iter()
+            .any(|r| r.prs.busy() || r.prs.held.is_some());
+        let merge_queue = queued
+            || crate::repos::read_safely().values().any(|e| {
+                e.as_object().and_then(crate::repos::lands_of)
+                    == Some(crate::repos::Way::SwitchboardQueue)
+            });
         if !settings::is_on("landing_queue") && !enabled(LANDING) && !merge_queue {
             self.sources.landing = Read::default();
             return;

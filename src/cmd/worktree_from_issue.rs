@@ -347,7 +347,7 @@ pub fn prompt_of(
          <issue>\n# {title}\n\n{body}\n</issue>\n\n\
          {decide}{duplicates}{check}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it, comment on the issue or close it: {after}. \
-         It comes from no note, so where landing it asks which note holds its item, take No note without asking. When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing and lands it, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
+         It comes from no note, so where landing it asks which note holds its item, take No note without asking. When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing and lands it, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open, landed the one way it names.",
         reference = issue.reference(),
         url = issue.url,
         picked = if in_autopilot {

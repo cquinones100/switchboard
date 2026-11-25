@@ -323,7 +323,6 @@ pub const COMPUTER: &[&str] = &[
     "view_calendar",
     "meeting_notes",
     "chrome_profiles",
-    "pr_merge_queue",
     "autopilot",
     "view_relay",
     "phone",
@@ -1097,14 +1096,10 @@ mod tests {
     #[test]
     fn a_computer_setting_is_read_from_the_computer_s_file_alone() {
         let map = |v: Value| v.as_object().unwrap().clone();
-        let synced = map(json!({ "pr_merge_queue": true, "view_slack": true, "tips": false }));
+        let synced = map(json!({ "keep_awake": false, "view_slack": true, "tips": false }));
         let own = map(json!({ "view_slack": false }));
         let read = with_computer_s(synced, &own);
-        assert_eq!(
-            read.get("pr_merge_queue"),
-            None,
-            "the synced value is ignored"
-        );
+        assert_eq!(read.get("keep_awake"), None, "the synced value is ignored");
         assert_eq!(read["view_slack"], json!(false), "the computer's own wins");
         assert_eq!(read["tips"], json!(false), "the rest stay synced");
     }
@@ -1121,16 +1116,16 @@ mod tests {
     #[test]
     fn the_carry_over_copies_what_the_computer_lacks_and_never_overwrites() {
         let map = |v: Value| v.as_object().unwrap().clone();
-        let synced = map(json!({ "slots_build": "2", "pr_merge_queue": true, "tips": false }));
+        let synced = map(json!({ "slots_build": "2", "keep_awake": true, "tips": false }));
         // A new computer: nothing of another computer's.
         let mut own = map(json!({ "files_from_repo": true }));
         assert!(!carry_into(&mut own, &synced, false));
         assert_eq!(own, map(json!({ "files_from_repo": true })));
         // One that ran before: its own values kept, the defaults it read
         // then written.
-        let mut own = map(json!({ "pr_merge_queue": false }));
+        let mut own = map(json!({ "keep_awake": false }));
         assert!(carry_into(&mut own, &synced, true));
-        assert_eq!(own["pr_merge_queue"], json!(false), "its own is kept");
+        assert_eq!(own["keep_awake"], json!(false), "its own is kept");
         assert_eq!(own["slots_build"], json!("2"));
         assert_eq!(own["view_slack"], json!(true), "on before, by default");
         assert_eq!(own["autopilot"], json!(true));

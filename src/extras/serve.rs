@@ -195,6 +195,11 @@ impl Server {
         }
     }
 
+    /// Something to say to the next client to attach, when none is.
+    pub fn say_on_attach(&mut self, text: String) {
+        self.extras.on_attach.push(text);
+    }
+
     /// A client attached: what the server had to say as it started, said.
     pub fn extras_attached(&mut self, client: ClientId) {
         let notes = std::mem::take(&mut self.extras.on_attach);

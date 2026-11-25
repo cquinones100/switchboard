@@ -95,9 +95,9 @@ pub struct RepoLanding {
     pub target: Option<String>,
     pub holder: Option<Entry>,
     pub waiting: Vec<Entry>,
-    /// How it lands, `pr` or `direct`, as repos.json or the last answer
-    /// worked out says (`repos::landing_by_key`), `None` when neither does.
-    pub method: Option<String>,
+    /// How it lands, as repos.json sets it (`repos::lands_by_key`),
+    /// `None` while it isn't set.
+    pub method: Option<crate::repos::Way>,
     /// Switchboard's merge queue of PRs onto the default branch
     /// (src/merge_queue), empty for a target branch's.
     pub prs: crate::merge_queue::Queue,
@@ -326,7 +326,7 @@ fn repo_landing(
                 .strip_prefix("ref: refs/remotes/origin/")
                 .map(str::to_string)
         });
-    let method = crate::repos::landing_by_key(
+    let method = crate::repos::lands_by_key(
         &repo
             .clone()
             .unwrap_or_else(|| common.to_string_lossy().into_owned()),
@@ -630,7 +630,9 @@ pub fn view_items(
             }
         }
         if !queue.is_empty() {
-            let way = if r.method.as_deref() == Some("pr") {
+            // GitHub's merge queue's entries, named as a PR repository's
+            // whatever way it is set to by now; with no way set, as before.
+            let way = if r.method.is_some_and(crate::repos::Way::through_pr) {
                 "through a PR · GitHub merge queue"
             } else {
                 "merge queue"
@@ -1261,7 +1263,7 @@ mod tests {
                 Some(serde_json::json!({ "tests": { "passed": 412 } })),
             )),
             waiting: vec![entry("/w/two", 2, None)],
-            method: Some(method.into()),
+            method: crate::repos::Way::parse(method),
             prs: Default::default(),
             pr_tabs: HashMap::new(),
         };
@@ -1295,9 +1297,12 @@ mod tests {
         let items = view_items(&[reviewing], &queued, &again);
         assert_eq!(items[2].detail, "reviewing again · keeps its turn · tab 2");
 
-        let items = view_items(&[repo("pr")], &queued, &tabs);
+        let items = view_items(&[repo("github-queue")], &queued, &tabs);
         let heading = items.iter().find(|i| i.id.ends_with(":queue")).unwrap();
-        assert_eq!(heading.title, "me/pr · through a PR · GitHub merge queue");
+        assert_eq!(
+            heading.title,
+            "me/github-queue · through a PR · GitHub merge queue"
+        );
         assert_eq!(heading.data["right"], "1 in the merge queue");
     }
 
@@ -1332,7 +1337,7 @@ mod tests {
             target: None,
             holder: None,
             waiting: Vec::new(),
-            method: Some("pr".into()),
+            method: Some(crate::repos::Way::AutoMerge),
             prs: Queue {
                 prs: vec![queued(5), queued(6), queued(7)],
                 train: Some(Train {
@@ -1406,7 +1411,7 @@ mod tests {
             target: None,
             holder: None,
             waiting: Vec::new(),
-            method: Some("pr".into()),
+            method: Some(crate::repos::Way::AutoMerge),
             prs: Queue {
                 prs: [5, 6, 7, 8, 9].map(queued).to_vec(),
                 train: Some(train("ci/train-abc", &[5, 6])),
@@ -1444,7 +1449,7 @@ mod tests {
             target: None,
             holder: None,
             waiting: Vec::new(),
-            method: Some("pr".into()),
+            method: Some(crate::repos::Way::AutoMerge),
             prs: Queue {
                 prs: vec![Queued {
                     number: 6,

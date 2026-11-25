@@ -105,13 +105,18 @@ fn entries(items: &[Item]) -> (Vec<Entry>, Vec<Entry>) {
             }),
         }
     }
-    // Each repository's landing comes before your files, as the view
-    // lists it (`Server::mission_own`), so h and l go in the panel's order.
-    files.insert(
-        0,
+    // Each repository's way comes after the categories in no group, as
+    // the view lists it (`views::settings_items_of`), so h and l go in the
+    // panel's order.
+    let after = categories
+        .iter()
+        .position(|e| e.group.is_some())
+        .unwrap_or(categories.len());
+    categories.insert(
+        after,
         Entry {
-            id: format!("header:{}", crate::usage::own::LANDING),
-            name: crate::usage::own::LANDING.to_string(),
+            id: format!("header:{}", crate::usage::own::REPOSITORIES),
+            name: crate::usage::own::REPOSITORIES.to_string(),
             group: None,
             count: 0,
             changed: 0,

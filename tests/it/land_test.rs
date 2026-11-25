@@ -122,7 +122,7 @@ fn tests_run_here_are_recorded_with_their_counts_passing_or_failing() {
     let dir = worktree(home);
     let key = common_dir(&dir);
     let run = |test: Value, args: &[&str]| {
-        repos(home, &key, json!({ "landing": "direct", "test": test }));
+        repos(home, &key, json!({ "lands": "direct", "test": test }));
         land_test(home, &dir, args).output().unwrap()
     };
 
@@ -205,7 +205,7 @@ fn tests_run_here_are_recorded_with_their_counts_passing_or_failing() {
     repos(
         home,
         &key,
-        json!({ "landing": "direct", "test": "echo local", "testIn": "ci" }),
+        json!({ "lands": "direct", "test": "echo local", "testIn": "ci" }),
     );
     let local = land_test(home, &dir, &["--base", "dev"]).output().unwrap();
     assert_eq!(
@@ -326,7 +326,7 @@ mod in_ci {
         repos(
             home,
             "o/switchboard",
-            json!({ "landing": "direct", "test": "false", "testIn": "ci" }),
+            json!({ "lands": "direct", "test": "false", "testIn": "ci" }),
         );
         as_switchboard(&dir);
 
@@ -469,7 +469,7 @@ mod in_ci {
         repos(
             home,
             "o/switchboard",
-            json!({ "landing": "direct", "testIn": "ci" }),
+            json!({ "lands": "direct", "testIn": "ci" }),
         );
         let head = git(&dir, &["rev-parse", "HEAD"]);
         let main = git(&dir, &["rev-parse", "main"]);
@@ -545,7 +545,7 @@ mod in_ci {
         repos(
             home,
             "o/switchboard",
-            json!({ "landing": "direct", "testIn": "ci" }),
+            json!({ "lands": "direct", "testIn": "ci" }),
         );
         let head = git(&dir, &["rev-parse", "HEAD"]);
         let main = git(&dir, &["rev-parse", "main"]);
@@ -619,7 +619,7 @@ mod in_ci {
         repos(
             home,
             "o/switchboard",
-            json!({ "landing": "direct", "test": "true", "testIn": "ci" }),
+            json!({ "lands": "direct", "test": "true", "testIn": "ci" }),
         );
         let failing = json!([check(json!("failure"), "completed")]);
         let fake = http::Fake::github("test-token", move |request| {
@@ -653,7 +653,7 @@ mod in_ci {
         repos(
             home,
             "o/switchboard",
-            json!({ "landing": "direct", "testIn": "ci" }),
+            json!({ "lands": "direct", "testIn": "ci" }),
         );
         let fake = github(
             json!([check(Value::Null, "in_progress")]),

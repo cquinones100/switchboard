@@ -579,7 +579,7 @@ fn a_failing_default_branch_landing_in_ci_is_in_the_ci_view_and_said_once_until_
     common::write_settings(&server.home, settings.clone());
     let repos = server.home.join(".config/switchboard/repos.json");
     let lands_in = |test_in: &str| {
-        let entry = json!({"acme/widgets": {"landing": "direct", "testIn": test_in}});
+        let entry = json!({"acme/widgets": {"lands": "direct", "testIn": test_in}});
         std::fs::write(&repos, entry.to_string()).unwrap();
     };
     lands_in("ci");

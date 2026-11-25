@@ -1328,7 +1328,7 @@ pub(crate) fn run(
     let prompt = format!(
         "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}{}{}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
-         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
+         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open, landed the one way it names.",
         file.display(),
         duplicates_first(Some(&file)),
         check_first(hands_free),
@@ -1342,7 +1342,7 @@ pub(crate) fn run(
 /// default branch.
 pub(crate) fn target_of<'a>(given: &'a Given, root: &Path) -> Result<Option<&'a str>, String> {
     Ok(match given.last("--target").filter(|t| !t.is_empty()) {
-        Some(target) if crate::repos::landing_for(root, false)?.landing != "direct" => {
+        Some(target) if crate::repos::landing_for(root)?.lands != crate::repos::Way::Direct => {
             // Where PRs land, the default branch named is the default
             // branch, cut from origin's as it is now with no target
             // recorded, since that is where its PR goes; any other is
@@ -1351,7 +1351,7 @@ pub(crate) fn target_of<'a>(given: &'a Given, root: &Path) -> Result<Option<&'a 
             if default.as_deref() != Some(target) {
                 return Err(format!(
                     "{} lands through PRs, so an item cut from {target} would land on the default branch through a PR, carrying {target}'s commits. \
-                     Start it without --target, or set \"landing\": \"direct\" for the repository in ~/.config/switchboard/repos.json",
+                     Start it without --target, or choose Straight to the default branch for the repository in Settings' Repositories",
                     paths::tilde(root)
                 ));
             }
@@ -1563,7 +1563,8 @@ fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Opt
             start.strip_prefix("refs/remotes/origin/")?;
         }
     }
-    let lands_direct = crate::repos::landing_for(path, false).is_ok_and(|l| l.landing == "direct");
+    let lands_direct =
+        crate::repos::landing_for(path).is_ok_and(|l| l.lands == crate::repos::Way::Direct);
     lands_direct.then(push_settings)
 }
 

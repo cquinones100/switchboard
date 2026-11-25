@@ -2522,11 +2522,11 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
         let key = repo.canonicalize().unwrap().join(".git");
         std::fs::write(
             &repos,
-            json!({ key.to_str().unwrap(): { "landing": way } }).to_string(),
+            json!({ key.to_str().unwrap(): { "lands": way } }).to_string(),
         )
         .unwrap();
     };
-    landing("pr");
+    landing("auto-merge");
     let refused = w.run(
         &repo,
         &[
@@ -3154,7 +3154,7 @@ fn wt_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fro
 /// label whatever autopilot.json holds.
 #[test]
 fn tickets_has_no_default_and_names_the_issue_label_whatever_autopilot_holds() {
-    let (w, fake, clone) = issue_world("tickets-unset", json!({ "landing": "pr" }));
+    let (w, fake, clone) = issue_world("tickets-unset", json!({ "lands": "auto-merge" }));
     let out = w.run(&clone, &["tickets"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
@@ -3192,7 +3192,7 @@ fn tickets_has_no_default_and_names_the_issue_label_whatever_autopilot_holds() {
 #[test]
 fn wt_by_a_number_is_refused_where_the_repository_has_no_ticket_provider_but_an_issues_hash_number_is_taken()
  {
-    let (w, fake, clone) = issue_world("wt-unset", json!({ "landing": "pr" }));
+    let (w, fake, clone) = issue_world("wt-unset", json!({ "lands": "auto-merge" }));
     let out = w.run(&clone, &["worktree-from-ticket", "--no-claude", "12"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(

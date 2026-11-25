@@ -150,7 +150,7 @@ fn set_up_in(
     let repo = repo.canonicalize().unwrap();
     std::fs::write(
         config.join("repos.json"),
-        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct", "tickets": "notes" } })
+        json!({ repo.join(".git").to_str().unwrap(): { "lands": "direct", "tickets": "notes" } })
             .to_string(),
     )
     .unwrap();
@@ -1217,7 +1217,7 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     let lands = |way: &str| {
         std::fs::write(
             config.join("repos.json"),
-            json!({ repo.join(".git").to_str().unwrap(): { "landing": way, "tickets": "notes" } })
+            json!({ repo.join(".git").to_str().unwrap(): { "lands": way, "tickets": "notes" } })
                 .to_string(),
         )
         .unwrap();
@@ -1268,7 +1268,7 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     assert!(!claude_args(&server.home).contains("--settings"));
 
     // A repository landing through a PR, and the setting off: no rule.
-    lands("pr");
+    lands("auto-merge");
     wt(&server, notes.path(), &repo, Some(&pane), &["--item", "8"]);
     assert!(!claude_args(&server.home).contains("--settings"));
     lands("direct");
@@ -1366,6 +1366,14 @@ fn a_repository_landing_through_prs_is_worked_on_its_default_branch_alone() {
     }
     assert!(!server.state.join("autopilot.json").exists());
     std::fs::write(&repos, json!({ &key: { "tickets": "notes" } }).to_string()).unwrap();
+    let (code, _, err) = server.run(&["autopilot-start", &fields("")]);
+    assert_ne!(code, 0, "no way to land set");
+    assert!(err.contains("lands nothing yet"), "{err}");
+    std::fs::write(
+        &repos,
+        json!({ &key: { "tickets": "notes", "lands": "auto-merge" } }).to_string(),
+    )
+    .unwrap();
     let (code, _, err) = server.run(&["autopilot-start", &fields("team/next")]);
     assert_ne!(code, 0);
     assert!(
@@ -1524,7 +1532,7 @@ fn the_relays_commands_start_change_show_and_pause_it_and_a_start_by_hand_is_ref
     let config = server.home.join(".config/switchboard");
     std::fs::write(
         config.join("repos.json"),
-        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct", "tickets": "notes" } })
+        json!({ repo.join(".git").to_str().unwrap(): { "lands": "direct", "tickets": "notes" } })
             .to_string(),
     )
     .unwrap();

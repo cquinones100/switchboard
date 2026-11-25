@@ -358,7 +358,7 @@ fn lands(server: &TestServer, repo: &Path, way: &str) {
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
         config.join("repos.json"),
-        serde_json::json!({ repo.join(".git").to_str().unwrap(): { "landing": way } }).to_string(),
+        serde_json::json!({ repo.join(".git").to_str().unwrap(): { "lands": way } }).to_string(),
     )
     .unwrap();
 }
@@ -970,7 +970,7 @@ fn keeps_its_work_in_notes(server: &TestServer, repo: &Path) {
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
         config.join("repos.json"),
-        r#"{ "o/r": { "tickets": "notes", "landing": "direct" } }"#,
+        r#"{ "o/r": { "tickets": "notes", "lands": "direct" } }"#,
     )
     .unwrap();
     let notes = server.home.join("Notes");

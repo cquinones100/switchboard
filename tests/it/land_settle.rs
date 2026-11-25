@@ -107,7 +107,7 @@ fn a_branch_already_on_top_lands_without_a_rebase_or_tests_run_again() {
     repos(
         home,
         "o/r",
-        json!({ "landing": "direct", "review": "none",
+        json!({ "lands": "direct", "review": "none",
             "test": format!("touch {}", ran.display()) }),
     );
     let tested = switchboard(home, &dir, &["land-lock", "test", "--base", "origin/main"])
@@ -137,7 +137,7 @@ fn a_conflict_is_left_to_resolve_with_the_lock_let_go() {
     repos(
         home,
         "o/r",
-        json!({ "landing": "direct", "review": "none", "test": "true" }),
+        json!({ "lands": "direct", "review": "none", "test": "true" }),
     );
     let asked = patch(home, &dir);
     lands_meanwhile(home, "a.txt", "theirs\n");
@@ -178,7 +178,7 @@ fn a_change_other_than_the_one_asked_about_is_requeued() {
     repos(
         home,
         "o/r",
-        json!({ "landing": "direct", "review": "none", "test": "true" }),
+        json!({ "lands": "direct", "review": "none", "test": "true" }),
     );
 
     let out = settle(home, &dir, "0000").output().unwrap();
@@ -237,7 +237,7 @@ mod after_rebase {
         repos(
             home,
             "o/r",
-            json!({ "landing": "direct", "review": "none",
+            json!({ "lands": "direct", "review": "none",
                 "test": format!("touch {}", tests.display()),
                 "afterRebase": format!("touch {}", checked.display()) }),
         );
@@ -262,7 +262,7 @@ mod after_rebase {
         repos(
             home,
             "o/r",
-            json!({ "landing": "direct", "review": "none", "test": "true",
+            json!({ "lands": "direct", "review": "none", "test": "true",
                 "afterRebase": "echo broken; false" }),
         );
         let asked = patch(home, &dir);

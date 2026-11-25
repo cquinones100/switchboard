@@ -1,5 +1,5 @@
 //! Switchboard's own merge queue, for a repository that lands through PRs
-//! (`switchboard landing` printing `pr`) and has no merge queue of
+//! (`switchboard landing` printing `switchboard-queue`) and has no merge queue of
 //! GitHub's, which only an organization's repositories get. New with the
 //! Rust version. Without one, a base branch that requires PRs to be up to
 //! date makes every merge put every other open PR behind, each updating its
@@ -40,9 +40,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::util;
-
-/// The setting that sends a PR repository's landings through this queue.
-pub const SETTING: &str = "pr_merge_queue";
 
 /// How many PRs a train tests together at most.
 pub const TRAIN_MAX: usize = 4;
@@ -286,9 +283,6 @@ impl Queue {
 /// Why the workspace's server doesn't run the queues, when a setting
 /// stops it (`serve::runs`).
 pub fn stopped() -> Option<&'static str> {
-    if !crate::settings::is_on(SETTING) {
-        return Some("Settings' pr_merge_queue is off");
-    }
     if !crate::settings::is_on("github") {
         return Some("Settings' github is off");
     }
@@ -636,14 +630,14 @@ mod tests {
             }],
             ..Train::default()
         });
-        let why = "Settings' pr_merge_queue is off";
+        let why = "Settings' github is off";
         assert_eq!(
             q.status_stopped(1, why),
-            "held Settings' pr_merge_queue is off · testing ci/train-x"
+            "held Settings' github is off · testing ci/train-x"
         );
         assert_eq!(
             q.status_stopped(2, why),
-            "held Settings' pr_merge_queue is off · queued 2 of 2"
+            "held Settings' github is off · queued 2 of 2"
         );
         q.train = None;
         q.merged_pr(1, 9);

@@ -764,7 +764,41 @@ pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item]) -> Vec<
             items.push(option(o, settings::THIS_COMPUTER, "computer"));
         }
     }
-    for category in settings::categories(all) {
+    // Each repository's way, a category of its own after the categories
+    // in no group, before Mission control's (board 191), with how many have
+    // none set on its chip.
+    let repositories: Vec<&Item> = own
+        .iter()
+        .filter(|i| i.group.as_deref() == Some(crate::usage::own::REPOSITORIES))
+        .collect();
+    let own: Vec<Item> = own
+        .iter()
+        .filter(|i| i.group.as_deref() != Some(crate::usage::own::REPOSITORIES))
+        .cloned()
+        .collect();
+    let mut repositories_listed = repositories.is_empty();
+    let list_repositories = |items: &mut Vec<Item>| {
+        let name = crate::usage::own::REPOSITORIES;
+        let ways = repositories
+            .iter()
+            .filter(|i| i.data.pointer("/repo_setting/field") == Some(&json!("lands")))
+            .count();
+        let mut heading = header(name, name, ways);
+        heading.data["changed"] = json!(
+            repositories
+                .iter()
+                .filter(|i| i.data["unset"] == true)
+                .count()
+        );
+        items.push(heading);
+        items.extend(repositories.iter().map(|i| (*i).clone()));
+    };
+    let names = settings::categories(all);
+    for &category in &names {
+        if settings::group_of(category, &names).is_some() && !repositories_listed {
+            list_repositories(&mut items);
+            repositories_listed = true;
+        }
         let members: Vec<&settings::Setting> =
             all.iter().filter(|o| o.category == category).collect();
         let mut heading = header(category, category, members.len());
@@ -773,6 +807,9 @@ pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item]) -> Vec<
         for o in members {
             items.push(option(o, category, "setting"));
         }
+    }
+    if !repositories_listed {
+        list_repositories(&mut items);
     }
     let mut group: Option<&str> = None;
     for (at, item) in own.iter().enumerate() {
@@ -2079,8 +2116,8 @@ mod tests {
         let mut all = settings::schema();
         let github = all.iter_mut().find(|o| o.key == "github").unwrap();
         github.value = serde_json::Value::Bool(true);
-        let queue = all.iter_mut().find(|o| o.key == "pr_merge_queue").unwrap();
-        queue.value = serde_json::Value::Bool(true);
+        let awake = all.iter_mut().find(|o| o.key == "keep_awake").unwrap();
+        awake.value = serde_json::Value::Bool(false);
         let items = settings_items_of(&all, &[]);
         assert_eq!(items[0].title, settings::THIS_COMPUTER);
         assert_eq!(items[0].data["changed"], 2);
@@ -2091,10 +2128,10 @@ mod tests {
         assert_eq!(items[1].data["value"], "on");
         let queued = items
             .iter()
-            .find(|i| i.id == "computer:pr_merge_queue")
+            .find(|i| i.id == "computer:keep_awake")
             .unwrap();
         assert_eq!(queued.data["changed"], true);
-        assert_eq!(queued.data["default"], "off");
+        assert_eq!(queued.data["default"], "on");
         let sessions = items.iter().position(|i| i.title == "Sessions").unwrap();
         assert_eq!(
             items[sessions].data["changed"], 1,

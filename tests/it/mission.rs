@@ -507,6 +507,188 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
     });
 }
 
+#[test]
+fn settings_repositories_lists_each_way_and_its_menu_offers_the_five() {
+    let server = start(json!({}));
+    let own = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(
+        own.join("repos.json"),
+        json!({
+            "acme/widgets": { "tickets": "github" },
+            "acme/queue": { "lands": "github-queue" },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // What GitHub said of acme/queue, asked just now: no merge queue.
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("repos-setup.json"),
+        json!({ "acme/queue": { "at": switchboard::util::now_ms(), "branch": "main",
+            "mergeQueue": false, "autoMerge": true, "canPush": false, "requiresPr": true,
+            "strict": false, "trainCi": false } })
+        .to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vsett\r");
+    client.wait_text("INTEGRATIONS");
+    // A way not set up says so, and what is missing.
+    client.type_text("/acme/queue\r");
+    client.wait_text("REPOSITORIES");
+    client.wait_text("✗ main has no merge queue on GitHub");
+    client.type_text("\x1b");
+    client.wait_text("INTEGRATIONS");
+    // With none set, nothing lands.
+    client.type_text("/acme/widgets lands\r");
+    client.wait_text("nothing lands until you choose");
+    client.wait_text("not set");
+    // Enter, Change it: the five ways, each with its facts.
+    client.type_text("\r");
+    pick(&mut client, "Change it");
+    let screen = client.wait_text("How acme/widgets lands");
+    for way in [
+        "Switchboard's merge queue",
+        "GitHub's merge queue",
+        "GitHub's auto-merge",
+        "Straight to the default branch",
+        "A merge service…",
+    ] {
+        assert!(
+            screen.iter().any(|l| l.contains(way)),
+            "{way}: {}",
+            screen.join("\n")
+        );
+    }
+    for fact in [
+        "a tab",
+        "done when",
+        "it fixes",
+        "never",
+        "it needs",
+        "Changing it",
+    ] {
+        assert!(
+            screen.iter().any(|l| l.contains(fact)),
+            "{fact}: {}",
+            screen.join("\n")
+        );
+    }
+    pick(&mut client, "GitHub's auto-merge");
+    let file = own.join("repos.json");
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap_or_default();
+        if saved["acme/widgets"]["lands"] == "auto-merge" {
+            assert_eq!(saved["acme/widgets"]["tickets"], "github", "the rest kept");
+            break;
+        }
+        assert!(Instant::now() < deadline, "not written: {saved}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_new_build_carries_landing_and_the_queue_setting_over_to_one_way_each_once() {
+    use common::http::{Fake, Reply};
+    let github = Fake::github("test-token", |request| {
+        if request.path() != "/graphql" {
+            // The default branch's rulesets: none.
+            return Some(Reply::json(200, json!([])));
+        }
+        let asked = request.text();
+        let workflow = if asked.contains("\"trains\"") {
+            "on:\n  push:\n    branches: [main, 'ci/train-*']\n"
+        } else {
+            "on: pull_request\n"
+        };
+        Some(Reply::json(
+            200,
+            json!({ "data": { "repository": {
+                "autoMergeAllowed": true, "mergeQueue": null,
+                "defaultBranchRef": { "name": "main", "refUpdateRule": null, "branchProtectionRule": null },
+                "object": { "entries": [{ "name": "ci.yml", "object": { "text": workflow } }] } } } }),
+        ))
+    });
+    let mut server = TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &github.url),
+    ]);
+    // As a clone the build before left it: the queue on, each repository's
+    // landing, and the carrying over not yet done, once this start's is.
+    let mark = server.state.join("repos-lands-migrated");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !mark.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the first start carried nothing over"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::fs::remove_file(&mark).unwrap();
+    settings(&server, json!({ "github": true, "pr_merge_queue": true }));
+    let own = server.home.join(".config/switchboard");
+    let file = own.join("repos.json");
+    std::fs::write(
+        &file,
+        json!({
+            "acme/trains": { "landing": "pr", "tickets": "github" },
+            "acme/plain": { "landing": "pr" },
+            "acme/direct": { "landing": "direct", "test": "make" },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    server.restart();
+    let mut client = server.attach(140, 36);
+    let screen = client.wait_text("acme/trains: Switchboard's merge queue");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("acme/plain: GitHub's auto-merge")),
+        "{}",
+        screen.join("\n")
+    );
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        saved,
+        json!({
+            "acme/trains": { "tickets": "github", "lands": "switchboard-queue" },
+            "acme/plain": { "lands": "auto-merge" },
+            "acme/direct": { "test": "make", "lands": "direct" },
+        })
+    );
+    let bak = std::fs::read_to_string(own.join("repos.json.bak")).unwrap();
+    assert!(
+        bak.contains("\"landing\""),
+        "the file before is kept: {bak}"
+    );
+    let settings: Value =
+        serde_json::from_str(&std::fs::read_to_string(own.join("settings.json")).unwrap()).unwrap();
+    assert!(settings.get("pr_merge_queue").is_none(), "{settings}");
+
+    // A second start changes nothing.
+    drop(client);
+    std::fs::write(
+        &file,
+        json!({ "acme/new": { "landing": "pr" } }).to_string(),
+    )
+    .unwrap();
+    server.restart();
+    let _client = server.attach(140, 36);
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        json!({ "acme/new": { "landing": "pr" } }).to_string(),
+        "carried over once"
+    );
+}
+
 /// The Settings board's category on the chosen surface, `▌` at the
 /// screen's left, by its name.
 fn chosen_category(screen: &[String]) -> Option<String> {

@@ -1234,19 +1234,32 @@ fn the_review_loop_s_cap_question_has_its_options_and_queue_and_clean_waits_on_i
 }
 
 #[test]
-fn queue_and_clean_uses_switchboard_s_merge_queue_only_with_its_setting_on() {
+fn queue_and_clean_lands_the_one_way_landing_names_and_nothing_when_none_is_set() {
     let text = fs::read_to_string(skills_dir().join("queue-and-clean/SKILL.md")).unwrap();
-    let queuing = section(&text, "Queuing");
+    let how = section(&text, "How it lands");
     assert!(
-        queuing.contains(
-            "`switchboard setting pr_merge_queue` and `switchboard setting github` both print `on`"
-        ) && queuing.contains("`queue=false`"),
-        "Switchboard's queue only with the setting on and no queue of GitHub's"
+        how.contains("switchboard landing --start=<lands> <worktree>")
+            && how.contains("lands nothing yet")
+            && how.contains("stop there"),
+        "the way is kept on the branch, and nothing lands with none set"
+    );
+    let queuing = section(&text, "Queuing");
+    for way in [
+        "`switchboard-queue`",
+        "`github-queue`",
+        "`auto-merge`",
+        "`service`",
+    ] {
+        assert!(queuing.contains(&format!("- {way}:")), "{way}");
+    }
+    assert!(
+        queuing.contains("`gh pr merge <number> --auto --match-head-commit <headRefOid>`")
+            && queuing.contains("`gh pr edit <number> --add-label '<label>'`"),
+        "auto-merge and a service each their own way"
     );
     assert!(
-        queuing.contains("the setting off among them")
-            && queuing.contains("`gh pr merge <number> --auto --match-head-commit <headRefOid>`"),
-        "with the setting off it turns on auto-merge as before"
+        !text.contains("pr_merge_queue"),
+        "no setting chooses the queue for every repository"
     );
     let ours = &queuing[queuing.find("### Switchboard's merge queue").unwrap()..];
     let ours = &ours[..ours.find("### Waiting").unwrap()];

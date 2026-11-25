@@ -632,6 +632,10 @@ impl Server {
                     Err(why) => self.say(Some(client), &why),
                 }
             }
+            // Said with no client attached yet: said to the first to attach.
+            UiEvent::Said { client: None, text } if self.latest_client().is_none() => {
+                self.say_on_attach(text)
+            }
             UiEvent::Said { client, text } => self.say(client, &text),
             UiEvent::Look {
                 client,

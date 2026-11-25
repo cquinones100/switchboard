@@ -155,6 +155,9 @@ pub struct TestServer {
     /// (src/routines/starters.rs); a test server is marked as having made
     /// them unless a test of them asks, so its routines are the test's own.
     starters: bool,
+    /// Whether it has been launched, so what marks a first start is written
+    /// once.
+    started_once: bool,
 }
 
 impl TestServer {
@@ -214,6 +217,7 @@ impl TestServer {
                 .collect(),
             bin: PathBuf::from(BIN),
             starters,
+            started_once: false,
         };
         server.launch();
         server
@@ -251,6 +255,7 @@ impl TestServer {
                 .collect(),
             bin: bin.clone(),
             starters: false,
+            started_once: false,
         };
         server.launch();
         (server, bin)
@@ -272,6 +277,7 @@ impl TestServer {
             extra_env: vec![("SWITCHBOARD_STATE_DIR".into(), String::new())],
             bin: PathBuf::from(BIN),
             starters: false,
+            started_once: false,
         };
         server.launch();
         server
@@ -326,6 +332,17 @@ impl TestServer {
             let routines = self.state.join("routines");
             std::fs::create_dir_all(&routines).unwrap();
             std::fs::write(routines.join(".starters"), "").unwrap();
+        }
+        // The old landing settings already carried over to one way each, as
+        // on a computer past that build, so a repos.json a test writes after
+        // the start is never rewritten under it; marked on the first launch
+        // alone, so a test of the carrying over takes the mark out and
+        // restarts.
+        let carried = self.state.join("repos-lands-migrated");
+        if !self.started_once {
+            std::fs::create_dir_all(&self.state).unwrap();
+            std::fs::write(carried, "").unwrap();
+            self.started_once = true;
         }
         let settings = match self
             .extra_env
