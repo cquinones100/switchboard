@@ -2149,8 +2149,8 @@ function render(stick) {
 // Notifications and Usage views as the computer sends them (src/phone/mission.rs),
 // each a 56 row with what needs you counted; a tap on one slides its items
 // in full screen, over the panel, under mission control's groups, with ‹
-// (a swipe right from its left edge, or the phone's back) back to the
-// panel's list; a tap on an item opens its menu,
+// (or the phone's back) back to the panel's list, and a swipe right from
+// its left edge putting the panel away with it; a tap on an item opens its menu,
 // the options the phone can do: going to a tab opens its channel, opening
 // or copying a link happens here, and the rest runs on the computer, asked
 // first where the option says so. A swipe right, or a tap on the dimmed
