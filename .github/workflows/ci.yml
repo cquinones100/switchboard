@@ -256,7 +256,9 @@ jobs:
             !tests { n++ }
             END { if (n > 1500) print n, file }' | sort -rn)
           echo "$long" | while read -r n file; do
-            [ -n "$file" ] && echo "::warning file=$file::$n lines before its tests, over 1,500"
+            if [ -n "$file" ]; then
+              echo "::warning file=$file::$n lines before its tests, over 1,500"
+            fi
           done
           {
             echo "### Lines of code"
