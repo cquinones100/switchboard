@@ -34,6 +34,7 @@ mod mission;
 mod mission_nav;
 mod mux;
 mod notes_workspace;
+mod one_copy;
 mod persist;
 mod phone;
 mod pr_risk;
