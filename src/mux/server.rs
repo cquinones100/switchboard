@@ -744,10 +744,16 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
             }
             if let (_, true) = crate::setup::refresh_now(true) {
-                let _ = said.send(Event::Ui(crate::ui::UiEvent::Said {
-                    client: None,
-                    text: "Switchboard took its hooks, skills and instructions out of ~/.claude: it loads as a plugin in its panes now. A tab open from before has none of it until it is reopened or the workspace restarts (switchboard kill-server, then switchboard).".into(),
-                }));
+                // Where Claude Code can't load the plugin, why, in place of
+                // saying it loads.
+                let text = match crate::setup::blocked::blocked() {
+                    Some(blocked) => format!(
+                        "Switchboard took its hooks, skills and instructions out of ~/.claude. {}",
+                        blocked.why()
+                    ),
+                    None => "Switchboard took its hooks, skills and instructions out of ~/.claude: it loads as a plugin in its panes now. A tab open from before has none of it until it is reopened or the workspace restarts (switchboard kill-server, then switchboard).".into(),
+                };
+                let _ = said.send(Event::Ui(crate::ui::UiEvent::Said { client: None, text }));
             }
             // The cargo, npm and pnpm the panes find first, which put heavy
             // work through the queue (src/cmd/slot.rs); not in a demo,
