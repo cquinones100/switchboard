@@ -402,8 +402,7 @@ fn built_binary(messages: &str) -> Option<PathBuf> {
 }
 
 /// The binary's own setup parts, run by name in the try's home, so its
-/// plugin, with the statusline it draws in the try's panes (or, the old
-/// way, its hooks, statusline, permissions, CLAUDE.md and skills), is the
+/// plugin, with the statusline it draws in the try's panes, is the
 /// worktree's. What they say is shown indented; a failure is said, and the
 /// try goes on.
 fn run_setup(env: &Env, home: &Path) {

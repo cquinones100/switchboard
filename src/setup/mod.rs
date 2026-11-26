@@ -760,7 +760,9 @@ pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
     }
     let had_hooks = claude_settings::has_hooks();
     let earlier = had_hooks || skills::installed() || claude_md::imports_part();
-    worked &= claude_settings::run(&mut report).is_ok();
+    // A settings file that can't be read holds no hooks to run twice, and
+    // the guided setup names it, so it fails nothing here.
+    worked &= claude_settings::run(&mut report).is_ok() || !claude_settings::has_hooks();
     if claude_md::set_up() || exists(&claude_md::part_file()) {
         worked &= claude_md::migrate(&mut report).is_ok();
     }

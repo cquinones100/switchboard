@@ -89,7 +89,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "setup",
         run: crate::setup::main,
-        about: "Set Claude Code up for Switchboard: its plugin (hooks, skills, instructions), statusline, permissions and CLAUDE.md",
+        about: "Set Claude Code up for Switchboard: its plugin (hooks, skills, instructions, statusline, permissions) and your CLAUDE.md",
     },
     Command {
         name: "try",

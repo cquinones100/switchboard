@@ -362,7 +362,7 @@ fn remove_part(r: &mut Report, file: &Path) -> Result<()> {
 }
 
 /// What a new build brings to a CLAUDE.md earlier versions set up
-/// (`super::refresh`): Switchboard's import taken out, as the part
+/// (`super::refresh_now`): Switchboard's import taken out, as the part
 /// would, with no pull and no clone, which wait on the network, and the
 /// lock waited on only a moment, so a run holding it is left to finish and
 /// this is tried again by the next build's first run.
