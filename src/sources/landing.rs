@@ -539,6 +539,8 @@ pub struct ViewTab {
     /// worktree is still there, with that worktree's shared git directory:
     /// the Landing view keeps its row, landed, until it is cleaned up.
     pub landed: Option<(u64, PathBuf)>,
+    /// Its Claude is at work.
+    pub working: bool,
 }
 
 /// A section's heading (board 193): the repository's name as its title,
@@ -750,10 +752,11 @@ pub fn view_items(
             }
             for t in landed {
                 let number = t.landed.as_ref().map_or(0, |(n, _)| *n);
-                // Kept only while queue-and-clean runs in its tab
-                // (`ViewTab.landed`), which after a merge is its cleaning
-                // up, whatever phase the merge left on the tab.
-                let cleaning = true;
+                // Kept while queue-and-clean is its tab's loop
+                // (`ViewTab.landed`): cleaning up while its Claude works,
+                // else stopped with the worktree left (an approval it
+                // waits for, or a cleanup that failed).
+                let cleaning = t.working;
                 let step = if cleaning {
                     "merged · cleaning up"
                 } else {
@@ -1088,6 +1091,7 @@ mod tests {
                 waiting: false,
                 autoland: false,
                 landed: None,
+                working: false,
             },
             ViewTab {
                 id: TabId(2),
@@ -1097,6 +1101,7 @@ mod tests {
                 waiting: true,
                 autoland: false,
                 landed: None,
+                working: false,
             },
         ];
         let none = |_: &str| Vec::new();
@@ -1236,6 +1241,7 @@ mod tests {
                 waiting: false,
                 autoland: false,
                 landed: None,
+                working: false,
             })
             .into();
         let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
@@ -1381,6 +1387,7 @@ mod tests {
                 waiting: false,
                 autoland: false,
                 landed: None,
+                working: false,
             })
             .into();
         let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
@@ -1447,6 +1454,7 @@ mod tests {
                 waiting: false,
                 autoland,
                 landed: None,
+                working: false,
             })
             .into();
         let queued = |_: &str| vec![Item::new("https://pr/1", "1. #1 a PR")];
@@ -1549,6 +1557,7 @@ mod tests {
             waiting: false,
             autoland: false,
             landed: None,
+            working: false,
         }];
         let items = view_items(&[repo], &|_| Vec::new(), &tabs);
         let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();

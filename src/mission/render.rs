@@ -3504,7 +3504,7 @@ fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
             stage_cell(Stage::Done, "✓ passed"),
             StageCell {
                 stage: Stage::Failed,
-                label: "✕ merge failed".into(),
+                label: "✕ not merged".into(),
                 note: format!("{n} tries"),
             },
         ),
@@ -10711,6 +10711,12 @@ mod tests {
             .data(serde_json::json!({ "prqueue": {
                 "testing": true, "train": "ci/train-4", "place": 1, "passed": true,
             } }));
+        let stuck = Item::new("prqueue:/r:2042", "4. #2042 stuck")
+            .detail("testing on ci/train-6 · tab 8")
+            .data(serde_json::json!({ "prqueue": {
+                "testing": true, "train": "ci/train-6", "place": 1, "passed": true,
+                "mergeFailures": 2,
+            } }));
         let waiting = Item::new("prqueue:/r:219", "2. #219 tab colors")
             .detail("waiting · tab 6")
             .data(serde_json::json!({ "prqueue": { "testing": false, "place": 2 } }));
@@ -10724,7 +10730,7 @@ mod tests {
             vec![list_view(
                 ViewId::Landing,
                 "Landing",
-                vec![ours, in_train, merging, waiting, landed],
+                vec![ours, in_train, merging, stuck, waiting, landed],
             )],
         );
         m.view = 1;
@@ -10761,6 +10767,7 @@ mod tests {
         );
         assert!(text[row("#219 tab colors")].contains("2nd"));
         assert!(text[row("#2041 merging")].contains("confirming"));
+        assert!(text[row("#2042 stuck")].contains("✕ not merged"));
         let merged = &text[row("#208 billing page")];
         assert!(
             merged.contains("✓ merged") && merged.contains("cleaning…"),

@@ -1421,6 +1421,7 @@ impl Server {
                         .get(crate::mux::server::LAND)
                         .is_some_and(|v| v == "1")
                 }),
+                working: t.state.busy(),
                 // Kept only while queue-and-clean lands it, its PR the
                 // repository's own: a merged PR's worktree left open
                 // otherwise isn't landing.
