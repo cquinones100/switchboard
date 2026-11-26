@@ -15,10 +15,13 @@
 //!
 //! Mission control's Landing view (`view_items`), in place of the Merge
 //! queues view, is there only while something lands, a section per
-//! repository and way: "<repo> · straight to <branch>" for the default
-//! branch and "<repo> → <branch>" for a target branch, each with the tab
-//! landing and those waiting, and "<repo> · merge queue" with every PR in
-//! it.
+//! repository and way, each titled by the way it lands by (board 193):
+//! "<repo> · lands straight on <branch>" for the default branch's or a
+//! target branch's landing queue, with the tab landing and those waiting,
+//! "<repo> · lands by GitHub's merge queue" with every PR in it, and
+//! "<repo> · lands by Switchboard's merge queue" with its trains and the
+//! PRs waiting; then the tabs whose PR merged while queue-and-clean lands
+//! it, until their worktree is gone.
 //!
 //! A holder or waiter counts while its worktree is there and the Claude
 //! session that wrote its entry runs, wherever it works, or any session
@@ -747,7 +750,10 @@ pub fn view_items(
             }
             for t in landed {
                 let number = t.landed.as_ref().map_or(0, |(n, _)| *n);
-                let cleaning = t.phase.is_some();
+                let cleaning = t
+                    .phase
+                    .as_deref()
+                    .is_some_and(|p| p.starts_with("cleaning"));
                 let step = if cleaning {
                     "merged · cleaning up"
                 } else {

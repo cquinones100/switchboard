@@ -3400,8 +3400,7 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     } else if phase.starts_with("pushing") {
         out[4] = running("pushing…");
     } else if phase.starts_with("applying") {
-        out[4] = done("pushed");
-        out[5] = running("applying…");
+        out[4] = running("applying…");
     } else if phase.starts_with("cleaning") {
         out[4] = done("pushed");
         out[5] = running("cleaning…");
@@ -3493,16 +3492,14 @@ fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     } else {
         (stage_cell(Stage::Queued, ordinal(place)), waiting())
     };
-    // Its train's CI passed: the queue merges it, or failed to and tries
-    // again.
+    // Its train's CI looked passed once: the queue merges it on the next
+    // look that agrees (a job that waits on another shows only once that
+    // one ends), or failed to merge it and tries again.
     let (train_cell, landed) = match (
         testing && q["passed"].as_bool() == Some(true),
         q["mergeFailures"].as_u64().unwrap_or(0),
     ) {
-        (true, 0) => (
-            stage_cell(Stage::Done, "✓ passed"),
-            stage_cell(Stage::Running, "merging…"),
-        ),
+        (true, 0) => (stage_cell(Stage::Running, "confirming"), waiting()),
         (true, n) => (
             stage_cell(Stage::Done, "✓ passed"),
             StageCell {
@@ -10747,7 +10744,7 @@ mod tests {
             "{first}"
         );
         assert!(text[row("#219 tab colors")].contains("2nd"));
-        assert!(text[row("#2041 merging")].contains("merging…"));
+        assert!(text[row("#2041 merging")].contains("confirming"));
         let merged = &text[row("#208 billing page")];
         assert!(
             merged.contains("✓ merged") && merged.contains("cleaning…"),

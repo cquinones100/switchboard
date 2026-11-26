@@ -1124,7 +1124,8 @@ impl Server {
                 let numbers: Vec<String> = t.prs.iter().map(|p| format!("#{}", p.number)).collect();
                 let name = landing::train_name(&t.branch);
                 let (state, words) = match (&t.rerun, t.passed) {
-                    (_, true) => ("passing", "passed, merging".to_string()),
+                    // Passed once: merged on the next look that agrees.
+                    (_, true) => ("running", "passed once, confirming".to_string()),
                     (Some(rerun), _) => (
                         "running",
                         format!("running {} again", rerun.names.join(", ")),
