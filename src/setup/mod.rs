@@ -212,6 +212,14 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if let Some(blocked) = blocked::blocked() {
         println!("{}", blocked.why());
     }
+    let takes_out_old_way = named
+        .iter()
+        .any(|p| ["claude", "claude-md", "skills"].contains(&p.name));
+    if takes_out_old_way && old_way_waits() {
+        println!(
+            "The workspace's server runs another build, which may start its panes without the plugin, so what an earlier version put in ~/.claude stays until it runs this one (switchboard upgrade)"
+        );
+    }
     let mut report = Report::new(check);
     let failed: Vec<&str> = named
         .iter()
@@ -773,8 +781,8 @@ static BY_THE_SERVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Whether taking what an earlier version put in `~/.claude` out waits for
 /// this build's server: the workspace's server runs another build (or one
 /// too old to say, or doesn't answer), which may start its panes without
-/// the plugin while the hooks would already be gone. No server (no socket)
-/// waits for nothing. The `claude`, `claude-md` and `skills` parts each
+/// the plugin while the hooks would already be gone. No server (no socket,
+/// or one nothing listens on) waits for nothing. The `claude`, `claude-md` and `skills` parts each
 /// leave the old way as it is while it holds; asked once a run.
 pub fn old_way_waits() -> bool {
     static WAITS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -782,7 +790,8 @@ pub fn old_way_waits() -> bool {
         return false;
     }
     *WAITS.get_or_init(|| {
-        if !exists(&crate::mux::socket::socket_path()) {
+        // No socket, or one left by a server that is gone: no server.
+        if std::os::unix::net::UnixStream::connect(crate::mux::socket::socket_path()).is_err() {
             return false;
         }
         crate::mux::socket::ask_within(
