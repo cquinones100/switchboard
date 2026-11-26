@@ -786,7 +786,12 @@ pub fn landing_rows(
                 (
                     "serviceLabel",
                     "  Service label",
-                    "The label a PR carries for the service to merge it, which queue-and-clean adds once its checks pass",
+                    "The label a PR carries for the service to merge it, which queue-and-clean adds once its checks pass; empty, it adds none",
+                ),
+                (
+                    "serviceComment",
+                    "  Service comment",
+                    "The comment that hands a PR to the service (a bot's command, such as /merge), which queue-and-clean posts once its checks pass; empty, it posts none",
                 ),
                 (
                     "serviceCheck",
@@ -1072,9 +1077,10 @@ mod tests {
                 ("acme/service", "service"),
                 ("  Tickets", "not set"),
                 ("  Service label", "merge-ready"),
+                ("  Service comment", "not set"),
                 ("  Service check", "not set"),
             ],
-            "each repository once with its tickets, a service its label and check, its steps only when it lands straight"
+            "each repository once with its tickets, a service its label, comment and check, its steps only when it lands straight"
         );
         assert!(
             rows[0].detail.starts_with("✓ you can push to main"),
@@ -1099,14 +1105,16 @@ mod tests {
         );
         assert_eq!(rows[11].state, State::Attention, "a way not set up");
         assert!(
-            rows[13].detail.starts_with("✗ the label and the check"),
+            rows[13]
+                .detail
+                .starts_with("✗ the label or comment and the check"),
             "{}",
             rows[13].detail
         );
         assert_eq!(rows[0].data["repo_setting"]["field"], "lands");
         assert_eq!(rows[1].data["repo_setting"]["field"], "tickets");
         assert_eq!(rows[4].data["repo_setting"]["field"], "testIn");
-        assert_eq!(rows[16].data["repo_setting"]["field"], "serviceCheck");
+        assert_eq!(rows[16].data["repo_setting"]["field"], "serviceComment");
         assert!(
             rows.iter()
                 .all(|r| r.group.as_deref() == Some(REPOSITORIES))

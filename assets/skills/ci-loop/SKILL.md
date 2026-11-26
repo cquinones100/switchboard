@@ -114,7 +114,7 @@ Instead of fixing, ask the user when:
 
 ## When queue-and-clean runs this
 
-`/queue-and-clean` hands its PR here when a check fails or the merge queue drops it for one (a PR behind or in conflict it rebases itself, through `/resolve-conflicts`), and takes it back to queue it again when this ends green. Two things differ:
+`/queue-and-clean` hands its PR here when a check fails or the merge queue drops it for one (a PR behind or in conflict it rebases itself, through `/resolve-conflicts`), and takes it back to queue it again when this ends green. Three things differ:
 
 - When the merge queue dropped the PR, the failure is usually in the queue's own run, which tests the branch merged with the latest base branch, not in the PR's checks, which may all have passed. Start from that run. Its branch is named `gh-readonly-queue/<base>/pr-<number>-<sha>`:
 
@@ -126,5 +126,6 @@ Instead of fixing, ask the user when:
   Fix what it shows as above. If it shows a failure the branch didn't cause, there is nothing to rerun on the PR: tell queue-and-clean so, and it queues the PR again unchanged.
 - When Switchboard's merge queue dropped the PR (`src/merge_queue`; its reason `CI failed on its train ci/train-<id>: <jobs> (<run link>)`), the failure is in the train's run, a push to `ci/train-<id>`, which tested the branch merged onto the default branch alone, the PRs that shared a red train having been split off until this one failed by itself. Start from the run the link names, `gh run view <run id> --log-failed`; its branch is already deleted, so never rerun it. Fix what it shows as above. If it shows a failure the branch didn't cause (a flaky test, the default branch's own failure), tell queue-and-clean so, and it queues the PR again unchanged, a new train testing it again.
 - Don't send your own final line. Hand back what you fixed or reran, or why you stopped, and queue-and-clean ends with its own.
+- When queue-and-clean says the PR is with a merge service, the service keeps it up to date and merges it: never rebase it or follow `/resolve-conflicts`, and when it conflicts with its base or must be brought up to date, stop with `ci-loop: stopped: <the base> conflicts, which a merge service landing never rebases`. Before committing a fix, take in the branch as GitHub has it, as `moved` above does (`git fetch`, then `git merge --ff-only "@{upstream}"`), since the service may have brought the branch up to date on GitHub; when that can't fast-forward, stop with `ci-loop: stopped: the PR's branch moved on GitHub past this checkout`. A fix is then a plain push, which leaves the PR with the service, its label or comment as it was.
 
 Never push anywhere but this branch, never force-push but `/resolve-conflicts`'s push with a lease, and never merge the PR: queuing and merging belong to `/queue-and-clean` or the user.

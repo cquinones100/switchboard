@@ -12,8 +12,9 @@
 //! `lands` is the one way its work lands (`Way`): `switchboard-queue`
 //! (Switchboard's merge queue), `github-queue` (GitHub's merge queue),
 //! `auto-merge` (GitHub's auto-merge), `direct` (straight on its default
-//! branch) or `service` (a merge service, by the label `serviceLabel` names
-//! and the check `serviceCheck` names). Nothing guesses it: a repository
+//! branch) or `service` (a merge service, handed a PR by the label
+//! `serviceLabel` names, the comment `serviceComment` names or both, and
+//! watched by the check `serviceCheck` names). Nothing guesses it: a repository
 //! with no `lands` lands nothing, `switchboard landing` failing with the
 //! words that name Settings' row for it (`not_set_words`), and
 //! queue-and-clean and autopilot stopping there. Settings' Repositories
@@ -164,7 +165,8 @@ pub enum Way {
     AutoMerge,
     /// Straight on the default branch, with no PR.
     Direct,
-    /// A merge service, which merges a PR carrying its label.
+    /// A merge service, which merges a PR handed to it by its label or
+    /// its comment.
     Service,
 }
 
@@ -300,7 +302,7 @@ impl Way {
             Way::Service => [
                 (
                     "a tab",
-                    "reviews, pushes and opens its PR, and adds the service's label once its checks pass; the service merges it",
+                    "reviews, pushes and opens its PR, and hands it to the service once its checks pass, by its label, its comment or both; the service merges it",
                 ),
                 (
                     "done when",
@@ -308,12 +310,15 @@ impl Way {
                 ),
                 (
                     "it fixes",
-                    "a failing check, the service's own check among them, then labels it again",
+                    "a failing check, the service's own check among them, pushing the fix to the PR the service holds; a conflict it leaves to you",
                 ),
-                ("never", "merges by itself or pushes to the default branch"),
+                (
+                    "never",
+                    "rebases or queues the PR, merges it by itself or pushes to the default branch",
+                ),
                 (
                     "it needs",
-                    "the label the service merges by and the check it reports, named in Settings",
+                    "the label or comment the service takes a PR by and the check it reports, named in Settings",
                 ),
             ],
         }
@@ -347,7 +352,7 @@ impl Way {
                 "review",
                 "open-pr",
                 "checks",
-                "label",
+                "hand-over",
                 "service",
                 "merged",
                 "cleaned-up",
@@ -412,12 +417,32 @@ impl Steps {
     }
 }
 
-/// A merge service's label and check, its `serviceLabel` and
-/// `serviceCheck`.
+/// A merge service's hand-over and check: its `serviceLabel`, the label
+/// added to a PR, and `serviceComment`, the comment posted on it (a bot's
+/// command, such as `/merge`), at least one of them, and `serviceCheck`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Service {
-    pub label: String,
+    pub label: Option<String>,
+    pub comment: Option<String>,
     pub check: String,
+}
+
+impl Service {
+    /// As JSON, with the file's names cut to `label`, `comment` and
+    /// `check`.
+    pub fn json(&self) -> Value {
+        json!({ "label": self.label, "comment": self.comment, "check": self.check })
+    }
+
+    /// How the service takes a PR, in words.
+    pub fn hand_over(&self) -> String {
+        match (&self.label, &self.comment) {
+            (Some(l), Some(c)) => format!("the {l} label and the comment {c}"),
+            (Some(l), None) => format!("the {l} label"),
+            (None, Some(c)) => format!("the comment {c}"),
+            (None, None) => unreachable!("a service has one"),
+        }
+    }
 }
 
 /// Whether a landing key holds a value it can.
@@ -428,6 +453,7 @@ fn valid(key: &str, value: &Value) -> bool {
         "testIn" => value.as_str().is_some_and(|v| TEST_IN.contains(&v)),
         "test" | "beforePush" | "afterRebase" => value.is_string(),
         "serviceLabel" => value.as_str().is_some_and(label_ok),
+        "serviceComment" => value.as_str().is_some_and(label_ok),
         "serviceCheck" => value.as_str().is_some_and(label_ok),
         "squash" => value.is_boolean(),
         _ => false,
@@ -450,7 +476,8 @@ pub fn lands_of(entry: &Map<String, Value>) -> Option<Way> {
         .and_then(Way::parse)
 }
 
-/// An entry's merge service, when it names both its label and its check.
+/// An entry's merge service, when it names its check and its label, its
+/// comment or both.
 pub fn service_of(entry: &Map<String, Value>) -> Option<Service> {
     let entry: Map<String, Value> = entry
         .iter()
@@ -463,8 +490,14 @@ pub fn service_of(entry: &Map<String, Value>) -> Option<Service> {
             .and_then(Value::as_str)
             .map(|s| s.trim().to_string())
     };
+    let label = text("serviceLabel");
+    let comment = text("serviceComment");
+    if label.is_none() && comment.is_none() {
+        return None;
+    }
     Some(Service {
-        label: text("serviceLabel")?,
+        label,
+        comment,
         check: text("serviceCheck")?,
     })
 }
@@ -488,7 +521,8 @@ pub fn steps_of(entry: &Map<String, Value>) -> Steps {
 
 /// Sets one landing key, or `tickets` or `issueLabel`, of a repository's
 /// entry, keeping the rest of it; `lands` and `tickets` `unset`, and an
-/// empty `issueLabel`, `serviceLabel` or `serviceCheck`, take the key out,
+/// empty `issueLabel`, `serviceLabel`, `serviceComment` or `serviceCheck`,
+/// take the key out,
 /// and an entry left empty goes. Never over a file that can't be read as a
 /// JSON object, the version before kept as `repos.json.bak`.
 pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
@@ -498,7 +532,13 @@ pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
 /// `set_repo` on the file at `path`.
 pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(), String> {
     let unset = (["lands", "tickets"].contains(&key) && value.as_str() == Some("unset"))
-        || (["issueLabel", "serviceLabel", "serviceCheck"].contains(&key)
+        || ([
+            "issueLabel",
+            "serviceLabel",
+            "serviceComment",
+            "serviceCheck",
+        ]
+        .contains(&key)
             && value.as_str().is_some_and(|v| v.trim().is_empty()));
     let tickets_ok = (key == "tickets"
         && value
@@ -513,6 +553,7 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
                 "issueLabel",
                 "lands",
                 "serviceLabel",
+                "serviceComment",
                 "serviceCheck",
                 "test",
                 "testIn",
@@ -533,6 +574,24 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
         Value::String(s) if key.starts_with("service") => Value::String(s.trim().to_string()),
         v => v,
     };
+    // A merge service keeps a label or a comment to hand a PR to it.
+    let other_hand_over = match key {
+        "serviceLabel" => Some("serviceComment"),
+        "serviceComment" => Some("serviceLabel"),
+        _ => None,
+    };
+    if unset && let Some(other) = other_hand_over {
+        let entry = entry_of(&read_file(path).unwrap_or_default(), repo);
+        let has_other = entry
+            .get(other)
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.trim().is_empty());
+        if lands_of(&entry) == Some(Way::Service) && !has_other {
+            return Err(
+                "a merge service needs the label or the comment that hands it a PR".to_string(),
+            );
+        }
+    }
     change_file(path, |data| {
         // The entry under the name the file has it by, in whatever case.
         let name = data
@@ -604,7 +663,7 @@ pub struct Landing {
     /// The way repos.json sets now, when the branch keeps another.
     pub set: Option<Way>,
     pub steps: Steps,
-    /// The merge service's label and check, for `service`.
+    /// The merge service's hand-over and check, for `service`.
     pub service: Option<Service>,
 }
 
@@ -840,8 +899,8 @@ pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Che
     };
     if way == Way::Service {
         return match service_of(entry) {
-            Some(s) => yes(format!("the {} label and {}'s check", s.label, s.check)),
-            None => no("the label and the check the service uses aren't named".into()),
+            Some(s) => yes(format!("{} and {}'s check", s.hand_over(), s.check)),
+            None => no("the label or comment and the check the service uses aren't named".into()),
         };
     }
     let Some(s) = setup else {
@@ -1519,12 +1578,23 @@ mod tests {
         assert_eq!(
             service_of(service.as_object().unwrap()),
             Some(Service {
-                label: "merge-ready".into(),
+                label: Some("merge-ready".into()),
+                comment: None,
                 check: "mergebot".into()
             })
         );
         let half = json!({ "serviceLabel": "merge-ready" });
         assert_eq!(service_of(half.as_object().unwrap()), None);
+        let by_comment = json!({ "serviceComment": "/merge", "serviceCheck": "mergebot" });
+        let by_comment = service_of(by_comment.as_object().unwrap()).unwrap();
+        assert_eq!(by_comment.label, None);
+        assert_eq!(by_comment.hand_over(), "the comment /merge");
+        let check_alone = json!({ "serviceCheck": "mergebot" });
+        assert_eq!(
+            service_of(check_alone.as_object().unwrap()),
+            None,
+            "no hand-over"
+        );
     }
 
     use crate::tabs::git::tests::{Scratch, git, repo};
@@ -1671,6 +1741,12 @@ mod tests {
             "unset, the steps kept"
         );
         set_repo_in(&path, "acme/direct", "serviceLabel", json!(" merge-ready ")).unwrap();
+        set_repo_in(&path, "acme/direct", "lands", json!("service")).unwrap();
+        assert!(
+            set_repo_in(&path, "acme/direct", "serviceLabel", json!("")).is_err(),
+            "a merge service keeps its hand-over"
+        );
+        set_repo_in(&path, "acme/direct", "lands", json!("unset")).unwrap();
         assert_eq!(
             read_file(&path).unwrap()["acme/direct"]["serviceLabel"],
             json!("merge-ready")

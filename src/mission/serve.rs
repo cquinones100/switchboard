@@ -6861,6 +6861,9 @@ impl Server {
                 let title = match field {
                     "issueLabel" => format!("{name}: the label autopilot takes issues by"),
                     "serviceLabel" => format!("{name}: the label the service merges by"),
+                    "serviceComment" => {
+                        format!("{name}: the comment that hands a PR to the service")
+                    }
                     "serviceCheck" => format!("{name}: the check the service reports"),
                     "test" => format!("{name}: the tests"),
                     "afterRebase" => format!("{name}: the check after a clean rebase"),
@@ -6870,6 +6873,8 @@ impl Server {
                     "One GitHub label, with no quotes; empty for none, so autopilot takes no issues."
                 } else if field == "serviceLabel" {
                     "The one GitHub label the service merges a PR by; empty for none."
+                } else if field == "serviceComment" {
+                    "One comment, such as a bot's /merge, posted on a PR to hand it to the service; empty for none."
                 } else if field == "serviceCheck" {
                     "The name of the check the service reports on a PR; empty for none."
                 } else {
@@ -6966,14 +6971,21 @@ impl Server {
                 server.save_way(client, &repo, way, None);
                 return;
             }
-            let (label, check) = label_now
-                .map(|s| (s.label, s.check))
+            let (label, comment, check) = label_now
+                .map(|s| {
+                    (
+                        s.label.unwrap_or_default(),
+                        s.comment.unwrap_or_default(),
+                        s.check,
+                    )
+                })
                 .unwrap_or_default();
             let ask = Ask::new(
                 format!("{repo}: the label the service merges by"),
-                "The one GitHub label queue-and-clean adds once a PR's checks pass, for the service to merge it.",
+                "The one GitHub label queue-and-clean adds once a PR's checks pass, for the service to merge it; empty for none, when a comment hands it over.",
             )
-            .text(label);
+            .text(label)
+            .empty_ok();
             server.open(
                 client,
                 Box::new(ask),
@@ -6983,18 +6995,47 @@ impl Server {
                     };
                     let label = p.value.trim().to_string();
                     let ask = Ask::new(
-                        format!("{repo}: the check the service reports"),
-                        "The name of the check the service reports on a PR, which queue-and-clean waits on.",
+                        format!("{repo}: the comment that hands a PR to the service"),
+                        "The comment queue-and-clean posts once a PR's checks pass, such as a bot's /merge; empty for none, when the label hands it over.",
                     )
-                    .text(check);
+                    .text(comment)
+                    .empty_ok();
                     server.open(
                         client,
                         Box::new(ask),
                         Some(Box::new(move |server: &mut Server, client, outcome| {
-                            if let Outcome::Picked(p) = outcome {
-                                let check = p.value.trim().to_string();
-                                server.save_way(client, &repo, Way::Service, Some((label, check)));
+                            let Outcome::Picked(p) = outcome else {
+                                return;
+                            };
+                            let comment = p.value.trim().to_string();
+                            if label.is_empty() && comment.is_empty() {
+                                server.mission.own = None;
+                                server.mission_note(
+                                    client,
+                                    "Not saved: a merge service needs the label or the comment that hands it a PR",
+                                );
+                                return;
                             }
+                            let ask = Ask::new(
+                                format!("{repo}: the check the service reports"),
+                                "The name of the check the service reports on a PR, which queue-and-clean waits on.",
+                            )
+                            .text(check);
+                            server.open(
+                                client,
+                                Box::new(ask),
+                                Some(Box::new(move |server: &mut Server, client, outcome| {
+                                    if let Outcome::Picked(p) = outcome {
+                                        let check = p.value.trim().to_string();
+                                        server.save_way(
+                                            client,
+                                            &repo,
+                                            Way::Service,
+                                            Some([label, comment, check]),
+                                        );
+                                    }
+                                })),
+                            );
                         })),
                     );
                 })),
@@ -7002,19 +7043,27 @@ impl Server {
         });
     }
 
-    /// Saves a repository's way in repos.json, a merge service's label
-    /// and check first, and says so.
+    /// Saves a repository's way in repos.json, a merge service's label,
+    /// comment and check first, and says so.
     fn save_way(
         &mut self,
         client: ClientId,
         repo: &str,
         way: crate::repos::Way,
-        service: Option<(String, String)>,
+        service: Option<[String; 3]>,
     ) {
         let saved = service
-            .map(|(label, check)| {
-                crate::repos::set_repo(repo, "serviceLabel", Value::String(label)).and_then(|()| {
-                    crate::repos::set_repo(repo, "serviceCheck", Value::String(check))
+            .map(|values| {
+                let mut keys: Vec<(&str, String)> =
+                    ["serviceLabel", "serviceComment", "serviceCheck"]
+                        .into_iter()
+                        .zip(values)
+                        .collect();
+                // What is set goes first, so taking the other hand-over out
+                // never leaves the service with none in between.
+                keys.sort_by_key(|(_, v)| v.is_empty());
+                keys.into_iter().try_for_each(|(key, value)| {
+                    crate::repos::set_repo(repo, key, Value::String(value))
                 })
             })
             .unwrap_or(Ok(()))
