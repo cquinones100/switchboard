@@ -1108,7 +1108,8 @@ impl Server {
 
     /// Each train of Switchboard's merge queue under test or ahead as a run
     /// of its own in the CI view (board 196), listing the PRs it holds:
-    /// running until its CI passed, then passing while it merges.
+    /// running while it tests or confirms a CI that looked passed once, and
+    /// failing once a merge of it failed.
     pub fn train_runs(&self) -> Vec<Item> {
         let mut out = Vec::new();
         for r in self
@@ -1124,6 +1125,11 @@ impl Server {
                 let numbers: Vec<String> = t.prs.iter().map(|p| format!("#{}", p.number)).collect();
                 let name = landing::train_name(&t.branch);
                 let (state, words) = match (&t.rerun, t.passed) {
+                    // Passed, and a merge of it failed: the queue tries again.
+                    (_, true) if t.merge_failures > 0 => (
+                        "failing",
+                        format!("passed, merge failed {} times", t.merge_failures),
+                    ),
                     // Passed once: merged on the next look that agrees.
                     (_, true) => ("running", "passed once, confirming".to_string()),
                     (Some(rerun), _) => (
@@ -1146,10 +1152,10 @@ impl Server {
                     format!("{name} {}", numbers.join(" + ")),
                 )
                 .detail(words.clone())
-                .state(if state == "running" {
-                    crate::items::State::Active
-                } else {
-                    crate::items::State::Idle
+                .state(match state {
+                    "running" => crate::items::State::Active,
+                    "failing" => crate::items::State::Attention,
+                    _ => crate::items::State::Idle,
                 })
                 .data(serde_json::json!({
                     "ci": {
