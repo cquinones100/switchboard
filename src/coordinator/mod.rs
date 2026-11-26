@@ -360,8 +360,8 @@ pub fn permissions(note: &Path, posts: &Path) -> Value {
                 format!("Read({}/**)", abs(&crate::paths::plugin_dir().join("skills"))),
             ],
             // What Switchboard's own rules allow every pane, which reach
-            // this session too when they are in your settings (Settings'
-            // claude_plugin off), and are no part of its work.
+            // this session too when an earlier version left them in your
+            // settings, and are no part of its work.
             "deny": [
                 "Bash(switchboard respawn *)",
                 "Bash(switchboard item-done *)",

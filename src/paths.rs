@@ -60,15 +60,6 @@ pub fn plugin_dir() -> PathBuf {
     home_join(PLUGIN)
 }
 
-/// Where earlier builds wrote the plugin, which setup leaves as a link to
-/// `PLUGIN` for the tabs opened before, whose environment still names it.
-pub const FORMER_PLUGIN: &str = ".local/share/switchboard/plugin";
-
-/// `~/.local/share/switchboard/plugin`.
-pub fn former_plugin_dir() -> PathBuf {
-    home_join(FORMER_PLUGIN)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

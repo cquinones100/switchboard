@@ -1,6 +1,6 @@
 # Switchboard
 
-What every Switchboard user's Claude Code needs to know about the workspace. Switchboard's plugin gives it to each Claude session in Switchboard's panes as it starts (or, with the plugin off, your own ~/.claude/CLAUDE.md imports it, as `switchboard setup` writes it), so an update brings changes to it.
+What every Switchboard user's Claude Code needs to know about the workspace. Switchboard's plugin gives it to each Claude session in Switchboard's panes as it starts, so an update brings changes to it.
 
 # Notes
 

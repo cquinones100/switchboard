@@ -4733,7 +4733,7 @@ fn skill_under_a_finished_turn_opens_a_menu_of_the_tabs_skills_and_run_types_it(
 }
 
 #[test]
-fn a_skill_menu_lists_switchboard_s_from_its_plugin_as_the_relay_s_settings_say() {
+fn a_skill_menu_lists_switchboard_s_from_its_plugin() {
     // The menu's names, as the relay with `settings` draws it for a Claude
     // tab, Switchboard's plugin holding a today.
     let menu = |settings: super::Settings| -> Vec<String> {
@@ -4766,12 +4766,8 @@ fn a_skill_menu_lists_switchboard_s_from_its_plugin_as_the_relay_s_settings_say(
     };
     assert!(
         menu(Box::new(|_| None)).contains(&"today".to_string()),
-        "on by default"
+        "Switchboard's skills listed"
     );
-    let off = menu(Box::new(|key| {
-        (key == crate::setup::way::SETTING).then_some(Value::Bool(false))
-    }));
-    assert!(!off.contains(&"today".to_string()), "{off:?}");
 }
 
 #[test]

@@ -1,9 +1,6 @@
 //! Switchboard's permissions for the Claude in its panes, as a plugin: the
 //! rules in `assets/claude-settings.json` that its skills and instructions
 //! need to run unattended, without a line in any settings file of yours.
-//! New with the plugin's hooks modules; the old way (Settings' "Load
-//! Switchboard as a plugin" off) still merges every rule into
-//! `~/.claude/settings.json` (src/setup/claude_settings.rs).
 //!
 //! Claude Code takes permission rules from its settings files alone: a
 //! plugin's own settings keep only `agent`, and a `settings.read` hook's

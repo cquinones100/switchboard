@@ -110,9 +110,9 @@ fn usage() -> ExitCode {
 /// `status` is a read-only special variable in zsh.
 ///
 /// With it comes a `claude` function: in one of Switchboard's panes, each
-/// Claude it starts takes Switchboard's plugin as Settings has it now
-/// (`claude-plugin-dirs`), since a shell open from before `claude_plugin`
-/// changed keeps the value its pane started with. Only Switchboard's entry
+/// Claude it starts takes Switchboard's plugin as it should now
+/// (`claude-plugin-dirs`), since a shell open from before keeps the value
+/// its pane started with. Only Switchboard's entry
 /// changes; one process a launch, none outside the workspace.
 pub fn shell_function() -> String {
     format!(

@@ -1178,7 +1178,7 @@
     "key": "tab_note_context",
     "category": "Notes",
     "label": "Point Claude at the tab's note",
-    "description": "As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, while Switchboard loads as a plugin (claude_plugin), whose session-start hook does it; off, a session reads the note only when asked to. Off by default, since it has Claude read a note on its own",
+    "description": "As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, from Switchboard's plugin's session-start hook; off, a session reads the note only when asked to. Off by default, since it has Claude read a note on its own",
     "default": false
   },
   {
@@ -1384,13 +1384,6 @@
     "default": true
   },
   {
-    "key": "claude_plugin",
-    "category": "Sessions",
-    "label": "Load Switchboard as a plugin",
-    "description": "Claude in Switchboard's panes loads its hooks (the tabs' Claude states), skills and instructions as a plugin, and setup keeps them out of ~/.claude, so Claude elsewhere has only your own; it needs Claude Code 2.1.280 or later, and managed settings that don't set disableSideloadFlags; a managed plugin that answers Claude Code's settings before Switchboard's leaves its panes without Switchboard's statusline, which Switchboard says when it happens. Off, setup puts them in ~/.claude as before, for every Claude of yours. Changing it moves them over",
-    "default": true
-  },
-  {
     "key": "statusline_context",
     "category": "Sessions",
     "label": "Context in Claude's status line",
@@ -1401,14 +1394,14 @@
     "key": "pane_statusline",
     "category": "Sessions",
     "label": "Switchboard's statusline in its panes",
-    "description": "With Switchboard loaded as a plugin, Claude in its panes draws Switchboard's statusline, which keeps each session's context and spend for mission control's Usage view, and your own statusline is drawn everywhere else; nothing is written to your Claude Code settings either way. Off, the plugin leaves the statusline alone, so a Claude started in a pane after the change draws yours too, and that view gets nothing from it",
+    "description": "Claude in Switchboard's panes draws Switchboard's statusline, which keeps each session's context and spend for mission control's Usage view, and your own statusline is drawn everywhere else; nothing is written to your Claude Code settings either way. Off, the plugin leaves the statusline alone, so a Claude started in a pane after the change draws yours too, and that view gets nothing from it",
     "default": true
   },
   {
     "key": "pane_permissions",
     "category": "Sessions",
     "label": "Switchboard's permissions in its panes",
-    "description": "With Switchboard loaded as a plugin, Claude in its panes runs the few of Switchboard's own commands its instructions name (switchboard tabs, show, set and the like) without asking, and the landing's own as queue-and-clean writes them, switchboard land-lock open-pr (which pushes the branch and opens its PR only once it has checked the tab lands without asking and its review came back clean) and switchboard item-done (which comments on and closes the landed issue and removes the worktree and its branch), unless a rule of yours says otherwise, and is refused reading .env files and running git pull; nothing is written to your Claude Code settings either way. Its skills allow their own commands themselves, whatever this says. Off, a Claude started in a pane after the change asks for those commands as for any other, auto mode judging them itself, and refuses nothing for Switchboard",
+    "description": "Claude in Switchboard's panes runs the few of Switchboard's own commands its instructions name (switchboard tabs, show, set and the like) without asking, and the landing's own as queue-and-clean writes them, switchboard land-lock open-pr (which pushes the branch and opens its PR only once it has checked the tab lands without asking and its review came back clean) and switchboard item-done (which comments on and closes the landed issue and removes the worktree and its branch), unless a rule of yours says otherwise, and is refused reading .env files and running git pull; nothing is written to your Claude Code settings either way. Its skills allow their own commands themselves, whatever this says. Off, a Claude started in a pane after the change asks for those commands as for any other, auto mode judging them itself, and refuses nothing for Switchboard",
     "default": true
   },
   {

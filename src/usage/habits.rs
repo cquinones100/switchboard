@@ -317,19 +317,6 @@ pub const TRIES: &[Try] = &[
             )
         },
     },
-    // Off where an install made before the plugin kept Switchboard in
-    // ~/.claude (src/setup/way.rs); turning it on moves it over.
-    Try {
-        key: "claude_plugin",
-        keys: &["M-a", "M-c"],
-        times: 20,
-        title: "Load Switchboard as a plugin?",
-        body: |n| {
-            format!(
-                "You went to a tab's Claude {n} times this week. As a plugin, Switchboard's hooks, skills and instructions reach only the Claude in its panes, and come out of ~/.claude, so Claude elsewhere has only your own; turning it on moves them over. It needs Claude Code 2.1.280 or later."
-            )
-        },
-    },
 ];
 
 /// The setting a suggestion changes, and its menu's words for doing it.

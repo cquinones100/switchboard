@@ -1,18 +1,15 @@
 //! The `plugin` part: Switchboard's skills, hooks and instructions as a
 //! Claude Code plugin, `~/.local/share/switchboard/claude/plugin`, which the Claude
-//! sessions in Switchboard's panes load and Claude elsewhere doesn't. New
-//! with this build: earlier ones (and setup.sh before them) wrote the hooks
-//! into your `~/.claude/settings.json`, an import of Switchboard's part into
-//! your `~/.claude/CLAUDE.md` and the skills into `~/.claude/skills`, so
-//! every Claude of yours had them; the `claude`, `claude-md` and `skills`
-//! parts now take those out.
+//! sessions in Switchboard's panes load and Claude elsewhere doesn't: the
+//! one way Switchboard reaches Claude Code. The `claude`, `claude-md` and
+//! `skills` parts take out what earlier versions put in `~/.claude`.
 //!
 //! The plugin is:
 //!
 //! - `.claude-plugin/plugin.json`: its name, `switchboard`, the build's
 //!   version and a line about it;
 //! - `skills/`: every skill the binary carries (`assets/skills`, compiled in
-//!   by build.rs), as the skills part wrote them, named `/switchboard:<name>`
+//!   by build.rs), named `/switchboard:<name>`
 //!   by Claude Code, and `/<name>` too while no skill of a project's or of
 //!   yours has that name;
 //! - `hooks/hooks.json`: `assets/claude-settings.json`'s hooks as they are
@@ -43,9 +40,9 @@
 //! statusline's answer for the permission rules wouldn't reach Claude
 //! Code's permission check, which reads them from its files alone, so they
 //! reach it through the skills and the permissions module, in no file
-//! Switchboard writes. Every pane's environment
-//! names the plugin in `CLAUDE_CODE_PLUGIN_DIRS` while Settings'
-//! `claude_plugin` is on (`env_value`, src/mux/server.rs), which Claude Code
+//! Switchboard writes. Every pane's environment names the plugin in
+//! `CLAUDE_CODE_PLUGIN_DIRS` (`env_value`, src/mux/server.rs), but where
+//! Claude Code's managed settings forbid it (src/setup/blocked.rs), which Claude Code
 //! 2.1.280 and later load for the session as `--plugin-dir` does, beside
 //! your own plugins, whoever starts it there.
 //!
@@ -208,47 +205,9 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
     files
 }
 
-/// The part: the plugin written to `~/.local/share/switchboard/claude/plugin`,
-/// moved there first from where earlier builds wrote it.
+/// The part: the plugin written to `~/.local/share/switchboard/claude/plugin`.
 pub fn run(r: &mut Report) -> Result<()> {
-    let now = dir();
-    move_former(&paths::former_plugin_dir(), &now, r)?;
-    write_to(&now, r)
-}
-
-/// The folder earlier builds wrote the plugin to (`paths::FORMER_PLUGIN`)
-/// moved to where it is now, what a skill installed beside its scripts
-/// (`npm ci`'s `node_modules`) with it, and a link left in its place: a tab
-/// opened before still names it in `CLAUDE_CODE_PLUGIN_DIRS`, and a session
-/// started there its skills' scripts by that path. Switchboard's own folder,
-/// so when the plugin is already where it is now, the old one is removed.
-/// A link already there, or nothing, is left alone.
-fn move_former(former: &Path, now: &Path, r: &mut Report) -> Result<()> {
-    let Ok(meta) = fs::symlink_metadata(former) else {
-        return Ok(());
-    };
-    if meta.file_type().is_symlink() {
-        return Ok(());
-    }
-    if !r.check {
-        if meta.is_dir() && !now.exists() {
-            if let Some(parent) = now.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::rename(former, now)?;
-        } else if meta.is_dir() {
-            fs::remove_dir_all(former)?;
-        } else {
-            fs::remove_file(former)?;
-        }
-        std::os::unix::fs::symlink(now, former)?;
-    }
-    r.change(format!(
-        "move Switchboard's plugin from {} to {}, a link left where it was for the tabs open now",
-        home_tilde(former),
-        home_tilde(now)
-    ));
-    Ok(())
+    write_to(&dir(), r)
 }
 
 /// The plugin written as the server starts, saying nothing but what went
@@ -266,7 +225,7 @@ pub const ASSETS_LOOK: std::time::Duration = std::time::Duration::from_secs(10);
 /// `ASSETS_LOOK`, off its task, a hash of the paths, sizes and modified
 /// times of the clone's
 /// skills, Claude settings and part of CLAUDE.md, and the plugin and the
-/// parts already set up brought up to date (`switchboard setup --refresh`, whose
+/// parts brought up to date (`switchboard setup --refresh`, whose
 /// mark hashes what they are made from) when it moved,
 /// or when where the assets come from changed (Settings'
 /// `assets_from_checkout` turned on or off), so a skill landed in the clone
@@ -293,12 +252,9 @@ pub async fn follow_clone() {
             .as_deref()
             .and_then(std::path::Path::parent)
             .map(std::path::Path::to_path_buf);
-        // The plugin and every part already set up (Claude's settings, the
-        // part of CLAUDE.md and the skills the old way), by the writers a new
-        // build's first run uses, which keep what is yours: in a process of
-        // its own, `switchboard setup --refresh`, since a run settles the
-        // way setup puts Switchboard once (src/setup/way.rs) and Settings
-        // may have moved it since the server's last refresh.
+        // The plugin, by the writer a new build's first run uses: in a
+        // process of its own, `switchboard setup --refresh`, which runs the
+        // build that changed rather than the one this server started with.
         let refreshed = tokio::task::spawn_blocking(move || {
             // A server started from a worktree's build outlives the
             // worktree: then the `switchboard` on the PATH refreshes.
@@ -444,7 +400,7 @@ pub fn env_value(inherited: Option<&str>, plugin: &Path, home: &Path) -> String 
     let mut parts: Vec<String> = inherited
         .unwrap_or_default()
         .split(':')
-        .filter(|p| !p.is_empty() && !former(p, home))
+        .filter(|p| !p.is_empty())
         .map(str::to_string)
         .collect();
     if !parts.iter().any(|p| names(p, plugin, home)) {
@@ -459,15 +415,6 @@ fn names(entry: &str, plugin: &Path, home: &Path) -> bool {
     entry_path(entry, home).components().eq(plugin.components())
 }
 
-/// Whether an entry of the variable is where earlier builds wrote the
-/// plugin, which a tab opened before them still names: dropped where the
-/// plugin's directory goes in, so its one plugin isn't loaded twice.
-fn former(entry: &str, home: &Path) -> bool {
-    entry_path(entry, home)
-        .components()
-        .eq(home.join(paths::FORMER_PLUGIN).components())
-}
-
 /// An entry of the variable as a path, `~` taken as the home.
 fn entry_path(entry: &str, home: &Path) -> PathBuf {
     match entry.strip_prefix('~') {
@@ -479,8 +426,8 @@ fn entry_path(entry: &str, home: &Path) -> PathBuf {
 }
 
 /// `CLAUDE_CODE_PLUGIN_DIRS` for a Claude started now, from the value it
-/// has: the plugin's directory added while Settings' `claude_plugin` is
-/// `on`, taken out while it isn't, any other folder kept; `None` to leave
+/// has: the plugin's directory added while panes load it (`on`,
+/// `blocked::panes_load_plugin`), taken out while they don't, any other folder kept; `None` to leave
 /// it unset. A new pane's (src/mux/server.rs) and `claude-plugin-dirs`'s.
 pub fn value_now(current: Option<&str>, on: bool, plugin: &Path, home: &Path) -> Option<String> {
     if on {
@@ -496,7 +443,7 @@ pub fn without_plugin(inherited: Option<&str>, plugin: &Path, home: &Path) -> Op
     let kept: Vec<&str> = inherited
         .unwrap_or_default()
         .split(':')
-        .filter(|p| !p.is_empty() && !names(p, plugin, home) && !former(p, home))
+        .filter(|p| !p.is_empty() && !names(p, plugin, home))
         .collect();
     (!kept.is_empty()).then(|| kept.join(":"))
 }
@@ -707,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_started_now_takes_the_plugin_as_the_setting_says() {
+    fn a_claude_started_now_takes_the_plugin_unless_the_policy_forbids_it() {
         let home = Path::new("/home/u");
         let plugin = home.join(".local/share/switchboard/claude/plugin");
         let p = plugin.to_string_lossy().into_owned();
@@ -728,61 +675,6 @@ mod tests {
         );
         assert_eq!(value_now(Some(&p), false, &plugin, home), None);
         assert_eq!(value_now(None, false, &plugin, home), None);
-    }
-
-    #[test]
-    fn where_earlier_builds_wrote_the_plugin_gives_way_to_where_it_is_now() {
-        let home = Path::new("/home/u");
-        let plugin = home.join(paths::PLUGIN);
-        let p = plugin.to_string_lossy().into_owned();
-        for old in [
-            "/home/u/.local/share/switchboard/plugin",
-            "~/.local/share/switchboard/plugin/",
-        ] {
-            assert_eq!(
-                env_value(Some(&format!("/opt/mine:{old}")), &plugin, home),
-                format!("/opt/mine:{p}"),
-                "a shell from an earlier build's tab: {old}"
-            );
-            assert_eq!(
-                value_now(Some(&format!("{old}:/opt/mine")), false, &plugin, home),
-                Some("/opt/mine".to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn the_plugin_moves_from_where_earlier_builds_wrote_it_leaving_a_link() {
-        let base = std::env::temp_dir().join(format!("sb-plugin-move-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let former = base.join("switchboard/plugin");
-        let now = base.join("switchboard/claude/plugin");
-        let modules = former.join("skills/walkthrough/scripts/node_modules/x");
-        fs::create_dir_all(&modules).unwrap();
-        fs::write(modules.join("index.js"), "").unwrap();
-
-        let mut r = quiet(false);
-        move_former(&former, &now, &mut r).unwrap();
-        assert_eq!(r.changes, 1);
-        assert_eq!(fs::read_link(&former).unwrap(), now);
-        assert!(
-            now.join("skills/walkthrough/scripts/node_modules/x/index.js")
-                .is_file(),
-            "what a skill installed moves with it"
-        );
-        // Again: the link is left as it is.
-        let mut r = quiet(false);
-        move_former(&former, &now, &mut r).unwrap();
-        assert_eq!(r.changes, 0);
-
-        // An earlier build's copy written again beside the plugin is removed.
-        fs::remove_file(&former).unwrap();
-        fs::create_dir_all(former.join("skills")).unwrap();
-        let mut r = quiet(false);
-        move_former(&former, &now, &mut r).unwrap();
-        assert_eq!(fs::read_link(&former).unwrap(), now);
-        assert!(now.join("skills/walkthrough").is_dir());
-        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

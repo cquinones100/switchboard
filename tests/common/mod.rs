@@ -427,6 +427,12 @@ impl TestServer {
             // clone among them.
             .env("SWITCHBOARD_CHECKOUT", "")
             .env("SWITCHBOARD_MAIN_CLONE", "")
+            // Nor its Claude Code policy, which may keep the panes from
+            // naming Switchboard's plugin: none, unless a test writes one.
+            .env(
+                "SWITCHBOARD_CLAUDE_MANAGED_SETTINGS",
+                home.join("managed-settings.json"),
+            )
             .env_remove("SWITCHBOARD")
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_SETTINGS")

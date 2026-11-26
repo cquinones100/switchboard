@@ -946,7 +946,7 @@ fn plugin_dirs_in_a_pane(server: &TestServer) -> String {
 }
 
 #[test]
-fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
+fn a_pane_s_claude_loads_switchboard_s_plugin_unless_the_policy_forbids_it() {
     // A server with a state directory of its own (a test's, or a worktree's
     // build run by hand) shares your home, so it leaves the plugin your
     // workspace's panes load as it is, though its panes name it.
@@ -975,15 +975,15 @@ fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
         format!("dirs=[{}]", plugin.display())
     );
 
-    // Off: setup keeps Switchboard in ~/.claude, and the panes name no
-    // plugin.
+    // Where Claude Code's managed settings turn sideloading off, which
+    // would keep their Claude from starting, the panes name no plugin.
     let dir = TempDir::new("sbt-plugin-off");
-    let file = dir.path().join("settings.json");
-    common::write_settings_to(
-        &file,
-        serde_json::json!({"claude_plugin": false, "notifications": false}),
-    );
-    let off = TestServer::start_with_env(&[("SWITCHBOARD_SETTINGS", file.to_str().unwrap())]);
+    let file = dir.path().join("managed-settings.json");
+    std::fs::write(&file, r#"{"disableSideloadFlags": true}"#).unwrap();
+    let off = TestServer::start_with_env(&[(
+        "SWITCHBOARD_CLAUDE_MANAGED_SETTINGS",
+        file.to_str().unwrap(),
+    )]);
     assert_eq!(plugin_dirs_in_a_pane(&off), "dirs=[]");
 }
 

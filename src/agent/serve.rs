@@ -184,11 +184,7 @@ impl Server {
         // plugin is watched until its statusline speaks (`statusline_tick`).
         if hook.agent.is_empty() {
             match hook.event.as_str() {
-                "SessionStart"
-                    if hook.source != "compact"
-                        && setting_on(crate::setup::way::SETTING)
-                        && setting_on("pane_statusline") =>
-                {
+                "SessionStart" if hook.source != "compact" && setting_on("pane_statusline") => {
                     self.agents.watch_statusline(pane);
                 }
                 "Stop" => self.agents.statusline_turn_ended(pane, util::now_ms()),
@@ -474,15 +470,11 @@ impl Server {
     /// whose statusline never drew had Switchboard's skipped, by a plugin
     /// outside its tier (an administrator's) answering Claude Code's
     /// settings.read first. Said once a pane, while the settings still want
-    /// it; the old way, which puts the statusline in `~/.claude/settings.json`,
-    /// isn't skipped so.
+    /// it.
     pub fn statusline_tick(&mut self) {
         // Kept until someone is attached to be told, and while the settings
         // don't want it.
-        if self.latest_client().is_none()
-            || !settings::is_on(crate::setup::way::SETTING)
-            || !settings::is_on("pane_statusline")
-        {
+        if self.latest_client().is_none() || !settings::is_on("pane_statusline") {
             return;
         }
         let newly = self.agents.statusline_overdue(util::now_ms());
@@ -512,7 +504,7 @@ impl Server {
             [] => return,
         };
         let text = format!(
-            "Claude's statusline is off in {named}: a managed plugin answers Claude Code's settings before Switchboard's. Turn off \"Load Switchboard as a plugin\" in Settings to bring it back."
+            "Claude's statusline is off in {named}: a managed plugin answers Claude Code's settings before Switchboard's, so mission control's Usage view goes without its context and spend there."
         );
         let client = self
             .session_of_tab(tab)

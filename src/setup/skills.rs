@@ -1,41 +1,20 @@
 //! The skills that ship with Switchboard (/wt, /shape, /review-loop,
 //! /ci-loop and the rest), as the binary carries them (`assets/skills`,
-//! compiled in by build.rs), and the `skills` part, which puts them in
-//! `~/.claude/skills` or takes them out of it, as the way setup puts
-//! Switchboard says (src/setup/way.rs). Ported from setup.sh's
-//! `part_skills`, which linked each from a clone's `claude/skills`; the
-//! binary carries them instead.
+//! compiled in by build.rs), which its plugin holds (src/setup/plugin.rs),
+//! loaded only by the Claude sessions in Switchboard's panes, so Claude
+//! elsewhere has your own skills and none of Switchboard's.
 //!
-//! As a plugin, the skills are the plugin's (src/setup/plugin.rs), loaded
-//! only by the Claude sessions in Switchboard's panes, so Claude elsewhere
-//! has your own skills and none of Switchboard's. A copy left in
-//! `~/.claude/skills` would take the skill's bare name (`/wt`) everywhere,
-//! the plugin's too, so the part removes each one Switchboard put there:
-//! the files its list names, the list, and what the skill installed for
-//! itself beside them (`npm ci`'s `node_modules`), and the folder once
-//! nothing else is in it. A file you added there is yours, so the folder is
-//! left with it, which the part says; without a SKILL.md it is no skill
-//! Claude Code runs, and the old way writes Switchboard's into it again
-//! beside your files.
-//!
-//! The old way, each is written into `~/.claude/skills`, where Claude Code
-//! finds a personal skill, as a folder of its own, written out again
-//! whenever what the binary carries differs from it. A skill folder
-//! Switchboard wrote holds `.switchboard-skill`, the list of the files it
-//! wrote, so a later run knows the folder is Switchboard's to bring up to
-//! date, removes a file a newer version no longer ships, and leaves alone
-//! what the skill made for itself.
-//!
-//! Either way, a skill of your own by the same name, a folder without that
-//! list or a link elsewhere, is yours and kept as it is (as a plugin, Claude
-//! Code runs it for the bare name, and Switchboard's as
-//! `/switchboard:<name>`); a link into a Switchboard clone's skills, as
-//! setup.sh made, is Switchboard's.
-//!
-//! Beside them, `skill-path` and `codex-review` are linked into
-//! `~/.local/bin` to the binary (`link_commands`), as setup.sh linked its
-//! scripts there, since a repository's own copy of a skill, written for the
-//! tmux version, runs them by those names.
+//! The `skills` part takes out the copies earlier versions wrote into
+//! `~/.claude/skills`, which would take each skill's bare name (`/wt`)
+//! everywhere, the plugin's too. A skill folder Switchboard wrote holds
+//! `.switchboard-skill`, the list of the files it wrote: the part removes
+//! those files, the list, and what the skill installed for itself beside
+//! them (`npm ci`'s `node_modules`), and the folder once nothing else is
+//! in it. A file you added there is yours, so the folder is left with it,
+//! which the part says; without a SKILL.md it is no skill Claude Code runs.
+//! A skill of your own by the same name, a folder without that list or a
+//! link, is yours and kept as it is: Claude Code runs it for the bare name,
+//! and Switchboard's as `/switchboard:<name>`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -43,7 +22,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use super::way::Way;
 use super::{Report, exists, home_tilde, is_link};
 use crate::paths;
 
@@ -88,11 +66,9 @@ enum Found {
     Nothing,
     /// A folder Switchboard wrote, with the files its list names.
     Ours(Vec<String>),
-    /// A link into a Switchboard clone's skills, as setup.sh made.
-    Linked,
     /// A folder with neither the list nor a SKILL.md: what was left of one
     /// of Switchboard's taken out with files of yours in it, which isn't a
-    /// skill. The old way writes Switchboard's into it, beside them.
+    /// skill.
     Left,
     /// Yours: kept.
     Own,
@@ -104,11 +80,7 @@ fn found(name: &str) -> Found {
         return Found::Nothing;
     }
     if is_link(&dest) {
-        return if from_switchboard(name) {
-            Found::Linked
-        } else {
-            Found::Own
-        };
+        return Found::Own;
     }
     match fs::read_to_string(dest.join(MANIFEST)) {
         Ok(list) if dest.is_dir() => Found::Ours(
@@ -234,69 +206,33 @@ fn take_out(dest: &Path, list: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Whether `~/.claude/skills/<name>` links into a Switchboard clone, known by
-/// what is in it, whatever its folder is called: one gone (a clone moved or
-/// renamed) counts too, since the link leads nowhere. setup.sh's
-/// `from_switchboard`, which knew a clone by its setup.sh, tmux.conf and
-/// sidebar; a clone of the Rust version is known by its Cargo.toml and
-/// skills.
-fn from_switchboard(name: &str) -> bool {
-    let link = skills_dir().join(name);
-    let Ok(target) = fs::read_link(&link) else {
-        return false;
-    };
-    // Written by hand, it may end in a /.
-    let text = target.to_string_lossy();
-    let text = text.trim_end_matches('/');
-    let clone = [
-        format!("/claude/skills/{name}"),
-        format!("/assets/skills/{name}"),
-    ]
-    .iter()
-    .find_map(|tail| text.strip_suffix(tail.as_str()).map(str::to_string));
-    let Some(clone) = clone else {
-        return false;
-    };
-    // A relative link leads from the folder it is in.
-    let base = |p: &str| {
-        let p = PathBuf::from(p);
-        if p.is_absolute() {
-            p
-        } else {
-            skills_dir().join(p)
-        }
-    };
-    let (target, clone) = (base(text), base(&clone));
-    !target.exists()
-        || (clone.join("setup.sh").is_file()
-            && clone.join("tmux/tmux.conf").is_file()
-            && clone.join("lib/sidebar").is_dir())
-        || (clone.join("Cargo.toml").is_file() && clone.join("assets/skills").is_dir())
+/// The skill folders earlier versions wrote into `~/.claude/skills`, by
+/// name, each with the files its list names.
+fn written() -> Vec<(String, Vec<String>)> {
+    let names = fs::read_dir(skills_dir()).into_iter().flatten().flatten();
+    names
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|name| match found(&name) {
+            Found::Ours(list) => Some((name, list)),
+            _ => None,
+        })
+        .collect()
 }
 
-/// Whether Switchboard's skills are in `~/.claude/skills`: any of them
-/// written there, or linked from a clone, or a skill folder Switchboard
-/// wrote that it no longer ships, which `run` takes out.
+/// Whether an earlier version's skills are in `~/.claude/skills`.
 pub fn installed() -> bool {
-    let names = fs::read_dir(skills_dir()).into_iter().flatten().flatten();
-    let wrote_one = names
-        .filter_map(|e| e.file_name().into_string().ok())
-        .any(|name| matches!(found(&name), Found::Ours(_)));
-    wrote_one
-        || shipped()
-            .keys()
-            .any(|name| matches!(found(name), Found::Linked))
+    !written().is_empty()
 }
 
 /// Whether `~/.claude/skills/<name>` is Switchboard's skill by that name,
-/// for `skill-path` to follow: one the old way wrote there (its folder holds
-/// `MANIFEST`) or a link into a clone's, or a copy of it made yours as the
-/// guide says to change one (its `MANIFEST` deleted), known by its opening
-/// still running `skill-path <name>`. A skill of yours that only shares the
-/// name isn't, so Switchboard's own (the plugin's) is followed in its place.
+/// for `skill-path` to follow: one an earlier version wrote there (its
+/// folder holds `MANIFEST`), or a copy of it made yours as the guide says
+/// to change one (its `MANIFEST` deleted), known by its opening still
+/// running `skill-path <name>`. A skill of yours that only shares the name
+/// isn't, so Switchboard's own (the plugin's) is followed in its place.
 pub fn switchboard_s(name: &str) -> bool {
     match found(name) {
-        Found::Ours(_) | Found::Linked => true,
+        Found::Ours(_) => true,
         Found::Own => fs::read_to_string(skills_dir().join(name).join("SKILL.md"))
             .is_ok_and(|text| text.contains(&format!("skill-path {name}`"))),
         Found::Nothing | Found::Left => false,
@@ -312,79 +248,32 @@ pub fn own_skills() -> Vec<String> {
         .collect()
 }
 
-/// The part, the way setup puts Switchboard: each skill written or brought
-/// up to date in `~/.claude/skills` the old way, taken out of it as a
-/// plugin; every one tried and the ones that couldn't be said together at
-/// the end; and the commands linked.
+/// The part: every skill an earlier version wrote taken out of
+/// `~/.claude/skills`, each tried and the ones that couldn't be said
+/// together at the end; left while the workspace's server runs another
+/// build (`super::old_way_waits`), whose panes may load none of the plugin.
 pub fn run(r: &mut Report) -> Result<()> {
+    if super::old_way_waits() {
+        return Ok(());
+    }
     let dir = skills_dir();
-    let way = super::way::current();
     let mut done = Vec::new();
     let mut failed = Vec::new();
     // The folders taken out but for files of yours, with those files.
     let mut left: Vec<(PathBuf, Vec<String>)> = Vec::new();
-    if way == Way::Old && !r.check {
-        fs::create_dir_all(&dir)?;
-    }
-    let shipped = shipped();
-    // Either way, a skill Switchboard wrote that it ships no longer (one
-    // removed or renamed, or the clone's own once the build went back to
-    // what it carries, src/assets.rs) is taken out, keeping files of yours.
-    let mut retired = Vec::new();
-    {
-        let names = fs::read_dir(&dir).into_iter().flatten().flatten();
-        for name in names.filter_map(|e| e.file_name().into_string().ok()) {
-            if shipped.contains_key(&name) {
-                continue;
-            }
-            if let Found::Ours(list) = found(&name) {
-                let dest = dir.join(&name);
-                let yours = yours_in(&dest, &list);
-                if !yours.is_empty() {
-                    left.push((dest.clone(), yours));
-                }
-                if r.check || take_out(&dest, &list).is_ok() {
-                    retired.push(name);
-                } else {
-                    failed.push(name);
-                }
-            }
-        }
-    }
-    if !retired.is_empty() {
-        r.change(format!(
-            "take the skills Switchboard no longer ships out of {} ({})",
-            home_tilde(&dir),
-            retired.join(" ")
-        ));
-    }
-    for (name, files) in shipped {
+    for (name, list) in written() {
         let dest = dir.join(&name);
-        let result = match way {
-            Way::Old => write_skill(r, &dest, &name, &files),
-            Way::Plugin => match found(&name) {
-                Found::Ours(list) => {
-                    let yours = yours_in(&dest, &list);
-                    if !yours.is_empty() {
-                        left.push((dest.clone(), yours));
-                    }
-                    if r.check {
-                        Ok(())
-                    } else {
-                        take_out(&dest, &list)
-                    }
-                }
-                Found::Linked if !r.check => fs::remove_file(&dest).map_err(Into::into),
-                Found::Linked => Ok(()),
-                Found::Nothing | Found::Left | Found::Own => continue,
-            },
-        };
-        match result {
-            Ok(()) => done.push(name),
-            Err(_) => failed.push(name),
+        let yours = yours_in(&dest, &list);
+        if !yours.is_empty() {
+            left.push((dest.clone(), yours));
+        }
+        if r.check || take_out(&dest, &list).is_ok() {
+            done.push(name);
+        } else {
+            failed.push(name);
         }
     }
-    if way == Way::Plugin && !done.is_empty() {
+    if !done.is_empty() {
         r.change(format!(
             "take Switchboard's skills out of {} ({}): its plugin carries them for the Claude in its panes",
             home_tilde(&dir),
@@ -398,146 +287,14 @@ pub fn run(r: &mut Report) -> Result<()> {
             yours.join(", ")
         ));
     }
-    if let Err(e) = link_commands(r) {
-        bail!("could not link the commands skills run into ~/.local/bin: {e}");
-    }
     if failed.is_empty() {
         return Ok(());
     }
     bail!(
-        "could not {} these skills {} {}: {}",
-        if way == Way::Old { "write" } else { "take" },
-        if way == Way::Old { "into" } else { "out of" },
+        "could not take these skills out of {}: {}",
         home_tilde(&dir),
         failed.join(" ")
     )
-}
-
-/// The commands a repository's own copy of a skill, written for the tmux
-/// version, runs by their bare names: setup.sh linked them into
-/// `~/.local/bin`, and the binary runs the command a link is named after.
-const COMMAND_LINKS: [&str; 2] = ["skill-path", "codex-review"];
-
-/// Each of `COMMAND_LINKS` in `~/.local/bin` as a link to this binary: made
-/// where nothing is, and in place of a link that leads nowhere (one into a
-/// clone of the tmux version, whose script is gone). A file there, or a link
-/// to something that is there, is yours and left alone.
-fn link_commands(r: &mut Report) -> Result<()> {
-    let exe = crate::util::exe()?;
-    let exe = fs::canonicalize(&exe).unwrap_or(exe);
-    let bin = paths::home_join(".local/bin");
-    for name in COMMAND_LINKS {
-        let link = bin.join(name);
-        let shown = home_tilde(&link);
-        if fs::canonicalize(&link).is_ok_and(|to| to == exe) {
-            continue;
-        }
-        if exists(&link) {
-            if !is_link(&link) || link.exists() {
-                continue;
-            }
-            r.change(format!(
-                "replace {shown}, a link leading nowhere, with one to switchboard"
-            ));
-            if !r.check {
-                fs::remove_file(&link)?;
-            }
-        } else {
-            r.change(format!("link {shown} to switchboard"));
-        }
-        if !r.check {
-            fs::create_dir_all(&bin)?;
-            std::os::unix::fs::symlink(&exe, &link)?;
-        }
-    }
-    Ok(())
-}
-
-/// One skill written into `~/.claude/skills`, the old way.
-fn write_skill(r: &mut Report, dest: &Path, name: &str, files: &[(String, Vec<u8>)]) -> Result<()> {
-    let shown = home_tilde(dest);
-    // A skill new here, or a link replaced, is said in one line; one
-    // already written, by what changed in it.
-    let (before, said) = match found(name) {
-        Found::Own => return Ok(()),
-        Found::Linked => {
-            if !r.check {
-                fs::remove_file(dest)?;
-            }
-            r.change(format!("replace the link {shown} with Switchboard's skill"));
-            (Vec::new(), true)
-        }
-        Found::Nothing => {
-            r.change(format!("write {shown}"));
-            (Vec::new(), true)
-        }
-        Found::Left => {
-            r.change(format!("write {shown}, beside the files of yours in it"));
-            (Vec::new(), true)
-        }
-        Found::Ours(list) => (list, false),
-    };
-    let mut written = 0;
-    for (rel, bytes) in files {
-        let file = dest.join(rel);
-        if fs::read(&file).is_ok_and(|now| now == *bytes) {
-            continue;
-        }
-        if !r.check {
-            if let Some(parent) = file.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&file, bytes)?;
-        }
-        written += 1;
-    }
-    let mut gone = 0;
-    for rel in &before {
-        if files.iter().any(|(f, _)| f == rel) || rel.split('/').any(|p| p == ".." || p.is_empty())
-        {
-            continue;
-        }
-        let file = dest.join(rel);
-        if file.is_file() {
-            if !r.check {
-                fs::remove_file(&file)?;
-                // The folders it leaves empty go with it.
-                let mut parent = file.parent();
-                while let Some(p) = parent.filter(|p| *p != dest) {
-                    if fs::remove_dir(p).is_err() {
-                        break;
-                    }
-                    parent = p.parent();
-                }
-            }
-            gone += 1;
-        }
-    }
-    let list: String = files.iter().map(|(f, _)| format!("{f}\n")).collect();
-    let list_changed = fs::read_to_string(dest.join(MANIFEST)).ok().as_deref() != Some(&list);
-    if list_changed && !r.check {
-        fs::create_dir_all(dest)?;
-        fs::write(dest.join(MANIFEST), &list)?;
-    }
-    if said {
-        return Ok(());
-    }
-    if written + gone > 0 {
-        let mut what = Vec::new();
-        if written > 0 {
-            what.push(format!(
-                "{written} file{} written",
-                if written == 1 { "" } else { "s" }
-            ));
-        }
-        if gone > 0 {
-            what.push(format!("{gone} no longer shipped removed"));
-        }
-        r.change(format!("bring {shown} up to date ({})", what.join(", ")));
-    } else if list_changed {
-        r.change(format!("mark {shown} as Switchboard's"));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ It is opinionated: the defaults are how it is meant to be used, and Settings (`M
 ## Requirements
 
 - Linux on x86_64 (another architecture builds from source), or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
-- [Claude Code](https://claude.com/claude-code), which the tabs run, 2.1.280 or later to load Switchboard as a plugin (an older one gets it in `~/.claude`, as before), and git.
+- [Claude Code](https://claude.com/claude-code), which the tabs run, 2.1.280 or later, which loads Switchboard as a plugin, and git.
 - To install a release, OpenSSH's `ssh-keygen`, 8.1 or later, which the installer checks the release's signature with. macOS and most Linux distributions ship it; a minimal Linux image may need its OpenSSH client package.
 - A terminal with 24-bit color. On a Mac, Option has to act as Alt, since every `M-` key is Alt: in Ghostty, `macos-option-as-alt = true`; in iTerm2, Settings, Profiles, Keys, "Left Option key: Esc+"; in Terminal, Settings, Profiles, Keyboard, "Use Option as Meta key". `switchboard setup` offers to set it in Ghostty, Terminal and iTerm2, and in Ghostty to send the Cmd keys Notes' easy mode reads. Pictures in notes need a terminal that draws kitty's graphics protocol, such as Ghostty or kitty, or one that draws sixel and says so when asked (Windows Terminal 1.22 or later, foot, WezTerm, xterm with sixel), for which the workspace draws them as sixel by default; for one that draws sixel but doesn't say, set Settings' "Image protocol" to sixel.
 
@@ -89,12 +89,12 @@ sh install.sh --notes)
 `switchboard setup` puts in place what Claude Code needs for the workspace. It asks before it changes anything, and run again changes only what isn't in place (`switchboard setup --check` only says what would change):
 
 - **A Claude Code plugin** (`~/.local/share/switchboard/claude/plugin`) holds Switchboard's hooks, which tell each tab what its Claude is doing, its instructions, its statusline and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest). Only the Claude in Switchboard's panes loads it, so Claude elsewhere stays as you set it up.
-- **Your `~/.claude/settings.json` stays yours.** Nothing of Switchboard's goes in it; setup only takes out the statusline and hooks an earlier version added there. Each skill allows the commands it runs itself, and the plugin lets the few Switchboard commands its instructions use run without asking, and keeps Claude from reading `.env` files or running `git pull`.
-- **Without the plugin** (Settings' "Load Switchboard as a plugin" off, Claude Code older than 2.1.280, or your organization's managed settings setting `disableSideloadFlags`), setup puts the hooks, statusline, permissions, an import of Switchboard's part of CLAUDE.md and the skills in `~/.claude` instead, for every Claude of yours. An install of an earlier version is asked once which it wants.
-- **Your terminal and tools:** it offers to make Option act as Alt in a Mac's terminal (in Ghostty, with Notes' easy mode's Cmd keys), and to tidy what a tmux version of Switchboard left; lazygit in a pane's place gets Switchboard's settings at launch, layered under your config, which is never written.
+- **Your `~/.claude` stays yours.** Nothing of Switchboard's goes in it; setup only takes out the hooks, statusline, skills and CLAUDE.md import an earlier version put there. Each skill allows the commands it runs itself, and the plugin lets the few Switchboard commands its instructions use run without asking, and keeps Claude from reading `.env` files or running `git pull`.
+- **Where the plugin can't load** (Claude Code older than 2.1.280, or your organization's managed settings setting `disableSideloadFlags`), setup says so, and the Claude in Switchboard's panes runs without it.
+- **Your terminal and tools:** it offers to make Option act as Alt in a Mac's terminal (in Ghostty, with Notes' easy mode's Cmd keys), and lazygit in a pane's place gets Switchboard's settings at launch, layered under your config, which is never written.
 - **What's missing:** it lists the optional parts not set up (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for.
 
-As a plugin, a Claude session outside Switchboard runs none of its hooks, so the Slack relay hears only of sessions in the workspace.
+A Claude session outside Switchboard runs none of its hooks, so the Slack relay hears only of sessions in the workspace.
 
 ## First keys
 
@@ -127,7 +127,7 @@ The PR, ticket and link views read with Vim's keys too, read-only (`w`, `/`, `v`
 
 ## Staying up to date
 
-A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings, then offers to restart the workspace on it, which keeps every tab and what runs in it (`switchboard upgrade`). `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull`, `cargo build --release` and `switchboard setup` again. The skills, hooks and Switchboard's part of CLAUDE.md are compiled into the binary, and a build from a clone reads them from the clone's `assets/` first while it is there, so a skill or instruction that lands there is live within seconds, with no rebuild (Settings' "Skills and instructions from the clone"); the server writes a new build's plugin as it starts, and the setup takes them to `~/.claude` when Switchboard is set up there; the first time a new build attaches, it brings the parts you have set up up to date by itself, and `switchboard setup` says what it did.
+A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings, then offers to restart the workspace on it, which keeps every tab and what runs in it (`switchboard upgrade`). `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull`, `cargo build --release` and `switchboard setup` again. The skills, hooks and Switchboard's part of CLAUDE.md are compiled into the binary, and a build from a clone reads them from the clone's `assets/` first while it is there, so a skill or instruction that lands there is live within seconds, with no rebuild (Settings' "Skills and instructions from the clone"); the server writes a new build's plugin as it starts, and the first time it does, takes out of `~/.claude` what an earlier version put there; `switchboard setup` says what it did.
 
 ## Making it yours
 

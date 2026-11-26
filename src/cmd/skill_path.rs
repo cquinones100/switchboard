@@ -8,7 +8,7 @@
 //! main clone's (a branch cut before the repository added the skill has none
 //! of its own), then Switchboard's own: the personal one,
 //! `~/.claude/skills/<name>/SKILL.md`, when it is Switchboard's (written
-//! there the old way, src/setup/way.rs, or a copy of it made yours,
+//! there by an earlier version, or a copy of it made yours,
 //! `skills::switchboard_s`), else the plugin's,
 //! `~/.local/share/switchboard/claude/plugin/skills/<name>/SKILL.md`
 //! (src/setup/plugin.rs). Outside a git repository, Switchboard's own alone.

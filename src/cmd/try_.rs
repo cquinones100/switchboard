@@ -11,10 +11,7 @@
 //! server and socket, and the binary's own `switchboard setup` parts run
 //! there by name, asking nothing (`plugin`, `claude`, `claude-md`,
 //! `skills`), so setup is tried too: its plugin, the hooks, skills and
-//! instructions its panes' Claude loads, and its Claude Code statusline and
-//! permissions, or, with Settings' "Load Switchboard as a plugin" off in
-//! the settings it copies, its hooks, CLAUDE.md and skills in its own
-//! `~/.claude` as before (src/setup/way.rs). Its `~/.local/bin/switchboard`
+//! instructions its panes' Claude loads. Its `~/.local/bin/switchboard`
 //! is the worktree's build, first on the try's PATH, so Claude Code's hooks
 //! and statusline in its panes, which run `switchboard` by name, reach the
 //! try's server.
@@ -405,8 +402,7 @@ fn built_binary(messages: &str) -> Option<PathBuf> {
 }
 
 /// The binary's own setup parts, run by name in the try's home, so its
-/// plugin, with the statusline it draws in the try's panes (or, the old
-/// way, its hooks, statusline, permissions, CLAUDE.md and skills), is the
+/// plugin, with the statusline it draws in the try's panes, is the
 /// worktree's. What they say is shown indented; a failure is said, and the
 /// try goes on.
 fn run_setup(env: &Env, home: &Path) {

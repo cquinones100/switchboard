@@ -729,15 +729,31 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
         }
     });
     // Switchboard's plugin, which Claude in the panes loads, as this build
-    // has it: off the server's task, and before the restored panes' Claude
+    // has it, and, on a new build's first start, what earlier versions put
+    // in ~/.claude taken out (`setup::refresh_now`), said to the client
+    // used last, since a tab kept through `switchboard upgrade` names no
+    // plugin until it is reopened: off the server's task, and before the restored panes' Claude
     // sessions take the time a shell and Claude take to start. Not by a
     // server with a state directory of its own (a test's, or a worktree's
     // build run by hand), which shares your home: there it would write over
     // the plugin every pane of your workspace loads.
     if !crate::setup::state_of_its_own() {
-        tokio::task::spawn_blocking(|| {
+        let said = tx.clone();
+        tokio::task::spawn_blocking(move || {
             if let Err(e) = crate::setup::plugin::write_quietly() {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
+            }
+            if let (_, true) = crate::setup::refresh_now(true) {
+                // Where Claude Code can't load the plugin, why, in place of
+                // saying it loads.
+                let text = match crate::setup::blocked::blocked() {
+                    Some(blocked) => format!(
+                        "Switchboard took its hooks, skills and instructions out of ~/.claude. {}",
+                        blocked.why()
+                    ),
+                    None => "Switchboard took its hooks, skills and instructions out of ~/.claude: it loads as a plugin in its panes now. A tab open from before has none of it until it is reopened or the workspace restarts (switchboard kill-server, then switchboard).".into(),
+                };
+                let _ = said.send(Event::Ui(crate::ui::UiEvent::Said { client: None, text }));
             }
             // The cargo, npm and pnpm the panes find first, which put heavy
             // work through the queue (src/cmd/slot.rs); not in a demo,
@@ -1822,7 +1838,7 @@ impl Server {
 
     /// A program started for pane `id`, as every pane's is: `command` (the
     /// login shell when `None`) in `cwd`, its environment naming the server,
-    /// the pane and, while Settings' "Load Switchboard as a plugin" is on,
+    /// the pane and, unless Claude Code's managed settings forbid it,
     /// Switchboard's plugin for the Claude Code that runs there.
     pub(crate) fn start_program(
         &self,
@@ -1864,13 +1880,13 @@ impl Server {
         // Claude Code loads the plugin directories this names for the
         // session (src/setup/plugin.rs): Switchboard's skills, hooks and
         // instructions, for Claude here alone. Any the server was started
-        // with are kept. Off, setup has put them in ~/.claude instead
-        // (src/setup/way.rs), and the plugin would run them twice.
+        // with are kept. Left out where Claude Code's managed settings
+        // forbid it (src/setup/blocked.rs), whose Claude wouldn't start.
         let plugin = crate::setup::plugin::ENV;
         let inherited = std::env::var(plugin).ok();
         let now = crate::setup::plugin::value_now(
             inherited.as_deref(),
-            crate::settings::is_on(crate::setup::way::SETTING),
+            crate::setup::blocked::panes_load_plugin(),
             &paths::plugin_dir(),
             &paths::home(),
         );

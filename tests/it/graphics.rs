@@ -534,10 +534,6 @@ const NAMES_ALLOWED: &[(&str, &str)] = &[
         "src/setup/terminal.rs",
         "sets up Ghostty's own configuration",
     ),
-    (
-        "src/setup/leftovers.rs",
-        "tidies Ghostty's own configuration",
-    ),
 ];
 
 /// What a file's code reads a terminal by: its name in a test of a string
