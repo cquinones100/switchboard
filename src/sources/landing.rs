@@ -750,10 +750,10 @@ pub fn view_items(
             }
             for t in landed {
                 let number = t.landed.as_ref().map_or(0, |(n, _)| *n);
-                let cleaning = t
-                    .phase
-                    .as_deref()
-                    .is_some_and(|p| p.starts_with("cleaning"));
+                // Kept only while queue-and-clean runs in its tab
+                // (`ViewTab.landed`), which after a merge is its cleaning
+                // up, whatever phase the merge left on the tab.
+                let cleaning = true;
                 let step = if cleaning {
                     "merged · cleaning up"
                 } else {
