@@ -58,9 +58,12 @@ use super::push;
 use super::tailnet::{Peer, Status, peer_from};
 use super::turns;
 use super::{images, looks};
-use crate::mux::proto::{self, ClientMsg, ServerMsg};
-use crate::mux::socket;
+use crate::remote::notify::{self, Front, Kind};
+use crate::remote::protocol::{self, How, Refused, Remote, Server};
 use crate::{assets, platform, settings, util};
+
+/// Who the phone's asks name, for the server's log.
+const FROM: &str = "phone";
 
 /// How long the server's stream is given before trying again when it
 /// can't be reached.
@@ -573,7 +576,8 @@ async fn pair_start(device: Option<axum::Extension<Device>>) -> Response {
     }
     super::log::line(&format!("{device} asked to pair"));
     let asked = device.clone();
-    let _ = tokio::task::spawn_blocking(move || socket::ask(&["phone-pair", &asked])).await;
+    let _ =
+        tokio::task::spawn_blocking(move || Server::current().ask(&["phone-pair", &asked])).await;
     axum::Json(json!({
         "code": pairing::shown(&code),
         "expires": util::now_ms() + pairing::CODE_LIFE_MS,
@@ -783,25 +787,34 @@ fn sender_name(address: &str, tabs: &[Value]) -> (Option<u64>, String) {
         .unwrap_or((None, "Another tab".to_string()))
 }
 
-/// Asks the server, off this task.
-async fn ask(args: Vec<String>) -> Response {
-    let answer = tokio::task::spawn_blocking(move || {
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        socket::ask(&args)
-    })
-    .await;
+/// Asks the server through the protocol, off this task: what it said,
+/// or why not.
+async fn asked(
+    ask: impl FnOnce(&Server) -> Result<String> + Send + 'static,
+) -> Result<String, Box<Response>> {
+    let answer = tokio::task::spawn_blocking(move || ask(&Server::current())).await;
     match answer {
-        Ok(Ok((0, out, _))) => axum::Json(json!({"said": out.trim()})).into_response(),
-        Ok(Ok((_, _, err))) => (
-            StatusCode::CONFLICT,
-            axum::Json(json!({"error": err.trim()})),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(json!({"error": "Switchboard isn't running"})),
-        )
-            .into_response(),
+        Ok(Ok(out)) => Ok(out),
+        // Refused in the server's words, shown whole; anything else (no
+        // server, or one that hung up) as Switchboard not running.
+        Ok(Err(ref e)) if let Some(Refused::No(why)) = e.downcast_ref() => Err(Box::new(
+            (StatusCode::CONFLICT, axum::Json(json!({"error": why}))).into_response(),
+        )),
+        _ => Err(Box::new(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({"error": "Switchboard isn't running"})),
+            )
+                .into_response(),
+        )),
+    }
+}
+
+/// `asked`, answered as `{"said": ...}`.
+async fn ask(ask: impl FnOnce(&Server) -> Result<String> + Send + 'static) -> Response {
+    match asked(ask).await {
+        Ok(said) => axum::Json(json!({"said": said.trim()})).into_response(),
+        Err(refused) => *refused,
     }
 }
 
@@ -832,20 +845,16 @@ async fn answer(
     // name) is a field of its own, never `reply`, which carries words typed
     // in the composer.
     let step = text_of(&body, "step");
-    let mut args: Vec<String> = vec![
-        "answer".into(),
-        "-t".into(),
-        pane,
-        "-h".into(),
-        id,
-        "-s".into(),
-        "phone".into(),
-    ];
-    if !step.is_empty() {
-        args.extend(["-g".into(), step]);
-    }
-    args.extend(["--".into(), reply]);
-    ask(args).await
+    ask(move |s| {
+        let how = How {
+            from: Some(FROM),
+            expect: Some(&id),
+            step: Some(step.as_str()).filter(|s| !s.is_empty()),
+            ..How::default()
+        };
+        s.answer(&pane, &reply, how)
+    })
+    .await
 }
 
 async fn message(
@@ -876,16 +885,13 @@ async fn message(
         paths.push(path);
     }
     let text = images::typed(&text_of(&body, "text"), &paths);
-    ask(vec![
-        "answer".into(),
-        "-t".into(),
-        pane,
-        "-m".into(),
-        "-s".into(),
-        "phone".into(),
-        "--".into(),
-        text,
-    ])
+    ask(move |s| {
+        let how = How {
+            from: Some(FROM),
+            ..How::default()
+        };
+        s.message(&pane, &text, how)
+    })
     .await
 }
 
@@ -944,28 +950,15 @@ async fn seen(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
     let tab = tab["tab"].as_str().unwrap_or("").to_string();
-    ask(vec![
-        "seen".into(),
-        "-t".into(),
-        tab,
-        "-s".into(),
-        "phone".into(),
-    ])
-    .await
+    ask(move |s| s.mark_seen(&tab, Some(FROM)).map(|_| String::new())).await
 }
 
 async fn close(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response {
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
-    ask(vec![
-        "kill-tab".into(),
-        "-t".into(),
-        pane_of(&tab),
-        "-s".into(),
-        "phone".into(),
-    ])
-    .await
+    let pane = pane_of(&tab);
+    ask(move |s| s.close(&pane, FROM)).await
 }
 
 /// A working tab's Claude stopped as Esc stops it, which the phone asks
@@ -974,14 +967,8 @@ async fn stop(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
-    ask(vec![
-        "stop".into(),
-        "-t".into(),
-        pane_of(&tab),
-        "-s".into(),
-        "phone".into(),
-    ])
-    .await
+    let pane = pane_of(&tab);
+    ask(move |s| s.stop(&pane, Some(FROM), false)).await
 }
 
 /// A tab's PR, ticket or note as its view on the phone shows it (boards
@@ -995,19 +982,9 @@ async fn tab_view(
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
-    let args = [
-        "phone-tab".to_string(),
-        "-t".into(),
-        pane_of(&tab),
-        kind.into(),
-    ];
-    let answer = tokio::task::spawn_blocking(move || {
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        socket::ask(&args)
-    })
-    .await;
-    match answer {
-        Ok(Ok((0, out, _))) => match serde_json::from_str::<Value>(out.trim()) {
+    let pane = pane_of(&tab);
+    match asked(move |s| s.tab_view(&pane, kind)).await {
+        Ok(out) => match serde_json::from_str::<Value>(out.trim()) {
             Ok(v) => axum::Json(v).into_response(),
             Err(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1015,16 +992,7 @@ async fn tab_view(
             )
                 .into_response(),
         },
-        Ok(Ok((_, _, err))) => (
-            StatusCode::CONFLICT,
-            axum::Json(json!({"error": err.trim()})),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(json!({"error": "Switchboard isn't running"})),
-        )
-            .into_response(),
+        Err(refused) => *refused,
     }
 }
 
@@ -1032,18 +1000,14 @@ async fn tab_view(
 /// item's ID and the option's label: the server builds the menu again and
 /// runs it, refusing one the phone leaves out or no longer offered.
 async fn view_item(Path(view): Path<String>, axum::Json(body): axum::Json<Value>) -> Response {
-    ask(vec![
-        "phone-item".into(),
-        view,
-        text_of(&body, "id"),
-        text_of(&body, "label"),
-    ])
-    .await
+    let (id, label) = (text_of(&body, "id"), text_of(&body, "label"));
+    ask(move |s| s.view_option(&view, Some(&id), &label)).await
 }
 
 /// An option of a view's own menu, by its label, as `view_item`.
 async fn view_act(Path(view): Path<String>, axum::Json(body): axum::Json<Value>) -> Response {
-    ask(vec!["phone-view".into(), view, text_of(&body, "label")]).await
+    let label = text_of(&body, "label");
+    ask(move |s| s.view_option(&view, None, &label)).await
 }
 
 /// A tab's reminder set for `when` (one of the box's times, or one
@@ -1056,24 +1020,10 @@ async fn remind(
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
-    let mut args = vec![
-        "remind".into(),
-        "-t".into(),
-        pane_of(&tab),
-        "-s".into(),
-        "phone".into(),
-    ];
-    if body["clear"] == true {
-        args.push("-c".into());
-    } else {
-        args.extend([
-            "-n".into(),
-            text_of(&body, "note"),
-            "--".into(),
-            text_of(&body, "when"),
-        ]);
-    }
-    ask(args).await
+    let pane = pane_of(&tab);
+    let when = (body["clear"] != true).then(|| text_of(&body, "when"));
+    let note = text_of(&body, "note");
+    ask(move |s| s.remind(&pane, when.as_deref(), &note, Some(FROM))).await
 }
 
 /// A tab pinned, or, with `pin` false, unpinned.
@@ -1085,17 +1035,9 @@ async fn pin(
     let Some(tab) = claude_tab(&app, &pane) else {
         return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
     };
-    let mut args = vec![
-        "pin".into(),
-        "-t".into(),
-        pane_of(&tab),
-        "-s".into(),
-        "phone".into(),
-    ];
-    if body["pin"] != true {
-        args.push("-u".into());
-    }
-    ask(args).await
+    let pane = pane_of(&tab);
+    let pin = body["pin"] == true;
+    ask(move |s| s.pin(&pane, pin, Some(FROM))).await
 }
 
 async fn push_key(State(app): State<Arc<App>>) -> Response {
@@ -1182,61 +1124,51 @@ async fn follow_once(
     push_key: &Option<Arc<EcdsaKeyPair>>,
     last: &mut Option<Value>,
 ) -> Result<()> {
-    use tokio::io::AsyncWriteExt;
-    let mut stream = tokio::net::UnixStream::connect(socket::socket_path()).await?;
-    let msg = ClientMsg::Command {
-        args: vec!["watch".into()],
-        cwd: crate::paths::home(),
-        pane: None,
-        stdin: None,
-        by_hand: false,
-    };
-    stream.write_all(&proto::encode_client(&msg)).await?;
-    let mut held = String::new();
-    loop {
-        match proto::read_server_async(&mut stream).await? {
-            Some(ServerMsg::Output(bytes)) => {
-                held.push_str(&String::from_utf8_lossy(&bytes));
-                while let Some(at) = held.find('\n') {
-                    let line: String = held.drain(..=at).collect();
-                    let Ok(mut now) = serde_json::from_str::<Value>(&line) else {
-                        continue;
-                    };
-                    now["live"] = json!(true);
-                    // Turned off while it runs, it pushes nothing.
-                    let pushing = settings::setting("phone") == Some(Value::Bool(true));
-                    if let (true, Some(before), Some(key)) = (pushing, last.as_ref(), push_key) {
-                        let waiting = started_waiting(before, &now).into_iter().map(|t| (t, ""));
-                        let due = came_due(before, &now).into_iter().map(|t| (t, "Reminder"));
-                        for (tab, body) in waiting.chain(due) {
-                            let title = format!(
-                                "Tab {} · {}",
-                                tab["index"],
-                                tab["name"].as_str().unwrap_or("")
-                            );
-                            let (key, id) = (
-                                key.clone(),
-                                tab["pane"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .trim_start_matches('%')
-                                    .to_string(),
-                            );
-                            tokio::spawn(async move {
-                                push::send(&key, &title, body, &id).await;
-                            });
-                        }
-                    }
-                    *last = Some(now.clone());
-                    let _ = tx.send(now);
+    protocol::watch(|mut now| {
+        now["live"] = json!(true);
+        if let (Some(before), Some(key)) = (last.as_ref(), push_key) {
+            let waiting = started_waiting(before, &now)
+                .into_iter()
+                .map(|t| (t, Kind::Prompts));
+            let due = came_due(before, &now)
+                .into_iter()
+                .map(|t| (t, Kind::Notices));
+            for (tab, kind) in waiting.chain(due) {
+                // Read as each push goes, so turned off while it runs, it
+                // pushes nothing.
+                let hour = util::local_now().hour() as u32;
+                if notify::decide(Front::Phone, &settings::setting, kind, false, hour)
+                    != notify::Send::Notify
+                {
+                    continue;
                 }
+                let title = format!(
+                    "Tab {} · {}",
+                    tab["index"],
+                    tab["name"].as_str().unwrap_or("")
+                );
+                let body = if kind == Kind::Notices {
+                    "Reminder"
+                } else {
+                    ""
+                };
+                let (key, id) = (
+                    key.clone(),
+                    tab["pane"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim_start_matches('%')
+                        .to_string(),
+                );
+                tokio::spawn(async move {
+                    push::send(&key, &title, body, &id).await;
+                });
             }
-            Some(ServerMsg::Reply { stderr, .. }) => {
-                return Err(anyhow!("{}", String::from_utf8_lossy(&stderr).trim()));
-            }
-            Some(ServerMsg::Exit { .. }) | None => return Err(anyhow!("it hung up")),
         }
-    }
+        *last = Some(now.clone());
+        let _ = tx.send(now);
+    })
+    .await
 }
 
 #[cfg(test)]

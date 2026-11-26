@@ -17,12 +17,14 @@ use futures_util::future::LocalBoxFuture;
 use serde_json::{Value, json};
 
 use super::config::Paths;
-use super::mux::{Mux, PaneInfo, Window};
+use super::mux::{How, Mux, PaneInfo, Window};
 use super::slack::Transport;
 use super::state::Dm;
 use super::summaries::{Asked, Haiku};
 use super::{Cx, Relay, presence};
+use crate::mission::answer::{self, Press};
 use crate::presence::Presence as Reading;
+use crate::remote::screen;
 use crate::util;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -188,6 +190,61 @@ impl FakeMux {
         }
         None
     }
+
+    pub fn send_keys(&self, pane: &str, keys: &[&str]) -> Result<()> {
+        for key in keys {
+            self.sent.borrow_mut().push(format!("{pane} key {key}"));
+            let echoed = match *key {
+                "Enter" => "\n".to_string(),
+                "Escape" => "^[".to_string(),
+                "Up" => "^[[A".to_string(),
+                "Down" => "^[[B".to_string(),
+                // Claude Code's prompt line emptied, as Ctrl-U empties it.
+                "C-u" => {
+                    self.with_pane(pane, |p| p.screen = cleared(&p.screen))
+                        .ok_or_else(|| anyhow!("no pane {pane}"))?;
+                    continue;
+                }
+                other => format!("<{other}>"),
+            };
+            self.with_pane(pane, |p| p.screen.push_str(&echoed))
+                .ok_or_else(|| anyhow!("no pane {pane}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn type_text(&self, pane: &str, text: &str) -> Result<()> {
+        self.sent.borrow_mut().push(format!("{pane} type {text}"));
+        self.with_pane(pane, |p| p.screen.push_str(text))
+            .ok_or_else(|| anyhow!("no pane {pane}"))
+    }
+
+    pub fn paste(&self, pane: &str, text: &str) -> Result<()> {
+        self.sent.borrow_mut().push(format!("{pane} paste {text}"));
+        self.with_pane(pane, |p| p.screen.push_str(text))
+            .ok_or_else(|| anyhow!("no pane {pane}"))
+    }
+
+    /// Presses keys and text as the server would, recorded as typed.
+    fn apply(&self, pane: &str, presses: Vec<Press>) -> Result<()> {
+        for p in presses {
+            match p {
+                Press::Key(k) => self.send_keys(pane, &[&k.notation()])?,
+                Press::Text(t) => self.type_text(pane, &t)?,
+                Press::Paste(t) => self.paste(pane, &t)?,
+                Press::Settle => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The screen as the relay reads it.
+    fn shown(&self, pane: &str) -> Result<String> {
+        self.with_pane(pane, |p| {
+            super::tabs::screen_of(&p.screen.replace(['⟨', '⟩'], ""))
+        })
+        .ok_or_else(|| anyhow!("no pane {pane}"))
+    }
 }
 
 impl Mux for Rc<FakeMux> {
@@ -222,38 +279,72 @@ impl Mux for Rc<FakeMux> {
         Ok(())
     }
 
-    fn send_keys(&self, pane: &str, keys: &[&str]) -> Result<()> {
-        for key in keys {
-            self.sent.borrow_mut().push(format!("{pane} key {key}"));
-            let echoed = match *key {
-                "Enter" => "\n".to_string(),
-                "Escape" => "^[".to_string(),
-                "Up" => "^[[A".to_string(),
-                "Down" => "^[[B".to_string(),
-                // Claude Code's prompt line emptied, as Ctrl-U empties it.
-                "C-u" => {
-                    self.with_pane(pane, |p| p.screen = cleared(&p.screen))
-                        .ok_or_else(|| anyhow!("no pane {pane}"))?;
-                    continue;
-                }
-                other => format!("<{other}>"),
-            };
-            self.with_pane(pane, |p| p.screen.push_str(&echoed))
-                .ok_or_else(|| anyhow!("no pane {pane}"))?;
+    fn answer(&self, pane: &str, reply: &str, how: How) -> Result<String> {
+        let shown = self.shown(pane)?;
+        let dialog = screen::dialog_in(&shown).filter(|_| how.dialog);
+        if dialog.is_none()
+            && let Some(found) = answer::options_in(&shown)
+        {
+            let a = answer::answer_for(&found, reply).ok_or_else(|| anyhow!("not an option"))?;
+            self.apply(pane, answer::presses(&found, &a))?;
+            return Ok(answer::answer_said(&a));
+        }
+        let dialog = dialog.ok_or_else(|| anyhow!("no prompt"))?;
+        let picked = answer::chosen_option(&dialog.options, reply)
+            .ok_or_else(|| anyhow!("not an option"))?;
+        self.apply(pane, dialog.presses(&picked))?;
+        Ok(format!("Chose {}. {}", picked.n, picked.label))
+    }
+
+    fn message(&self, pane: &str, text: &str, _how: How) -> Result<String> {
+        let screen = self
+            .capture(pane, 0)
+            .ok_or_else(|| anyhow!("no pane {pane}"))?;
+        self.apply(
+            pane,
+            answer::into_prompt(&screen, answer::message_presses(text)),
+        )?;
+        Ok(format!("Sent \"{text}\""))
+    }
+
+    fn clear_draft(&self, pane: &str) -> Result<()> {
+        let (screen, typed) = (self.capture(pane, 0), self.capture_typed(pane));
+        if let (Some(screen), Some(typed)) = (screen, typed)
+            && let Some(draft) = screen::draft_in(&screen, &typed)
+        {
+            self.apply(pane, screen::clearing(&screen, &draft))?;
         }
         Ok(())
     }
 
-    fn type_text(&self, pane: &str, text: &str) -> Result<()> {
-        self.sent.borrow_mut().push(format!("{pane} type {text}"));
-        self.with_pane(pane, |p| p.screen.push_str(text))
-            .ok_or_else(|| anyhow!("no pane {pane}"))
+    fn stop(&self, pane: &str, _from: Option<&str>, _force: bool) -> Result<String> {
+        self.send_keys(pane, &["Escape"])?;
+        Ok("Stopped".into())
     }
 
-    fn paste(&self, pane: &str, text: &str) -> Result<()> {
-        self.sent.borrow_mut().push(format!("{pane} paste {text}"));
-        self.with_pane(pane, |p| p.screen.push_str(text))
-            .ok_or_else(|| anyhow!("no pane {pane}"))
+    fn remind(&self, _: &str, _: Option<&str>, _: &str, _: Option<&str>) -> Result<String> {
+        Err(anyhow!("the relay sets no reminder"))
+    }
+
+    fn pin(&self, _pane: &str, _pin: bool, _from: Option<&str>) -> Result<String> {
+        Err(anyhow!("the relay pins no tab"))
+    }
+
+    fn close(&self, _pane: &str, _from: &str) -> Result<String> {
+        Err(anyhow!("the relay closes a tab with kill_tab"))
+    }
+
+    fn tab_view(&self, _pane: &str, _kind: &str) -> Result<String> {
+        Err(anyhow!("the relay reads no tab view"))
+    }
+
+    fn view_option(&self, _view: &str, _id: Option<&str>, _label: &str) -> Result<String> {
+        Err(anyhow!("the relay runs no view option"))
+    }
+
+    fn run_in_shell(&self, pane: &str, line: &str) -> Result<()> {
+        self.type_text(pane, line)?;
+        self.send_keys(pane, &["Enter"])
     }
 
     fn capture(&self, pane: &str, _back: usize) -> Option<String> {
@@ -328,7 +419,7 @@ impl Mux for Rc<FakeMux> {
         Ok(())
     }
 
-    fn mark_seen(&self, tab: &str) -> Result<()> {
+    fn mark_seen(&self, tab: &str, _from: Option<&str>) -> Result<()> {
         self.seen.borrow_mut().push(tab.to_string());
         let mut windows = self.windows.borrow_mut();
         let (_, panes) = windows

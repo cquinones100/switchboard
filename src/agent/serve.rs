@@ -564,7 +564,7 @@ impl Server {
         self.panes.get(&pane).is_some_and(|slot| {
             let screen = slot.pane.text(0);
             (answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
-                || crate::relay::tabs::dialog_in(&screen).is_some()
+                || crate::remote::screen::dialog_in(&screen).is_some()
         })
     }
 

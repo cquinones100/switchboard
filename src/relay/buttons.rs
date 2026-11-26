@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use super::Relay;
 use super::post::Button;
 use super::state::Dm;
-use super::tabs::{self, Dialog, Tab};
+use super::tabs::{self, Tab};
 use crate::mission::answer::{Prompt, PromptOption};
+use crate::remote::screen::Dialog;
 
 /// What an option's button says: its number, its box when it takes a tick,
 /// and its label.
@@ -30,7 +31,7 @@ pub fn option_text(o: &PromptOption) -> String {
 /// choices button (option 0) after them. The free option has no button: it
 /// needs your text, which you reply with instead.
 pub fn option_buttons(tab: &Tab, found: &Prompt) -> Vec<Button> {
-    let key = tabs::hash_of(found);
+    let key = crate::remote::screen::hash_of(found);
     let value = |n: u32| json!({ "a": "opt", "w": tab.id, "n": n, "s": tab.since, "k": key });
     let mut buttons: Vec<Button> = found
         .options
@@ -71,7 +72,7 @@ pub fn still_showing(cx: &Relay, value: &Value) -> Option<(Tab, Chosen)> {
     let dialog = text("a").ends_with("dialog");
     let shown = tabs::screen(cx, w);
     let (hash, option) = if dialog {
-        let found = tabs::dialog_in(&shown)?;
+        let found = crate::remote::screen::dialog_in(&shown)?;
         let o = found.options.iter().find(|o| o.n == n)?;
         (
             found.hash(),
@@ -101,7 +102,7 @@ pub fn still_showing(cx: &Relay, value: &Value) -> Option<(Tab, Chosen)> {
                 said: format!("{}. {}", o.n, o.label),
             }
         };
-        (tabs::hash_of(&found), option)
+        (crate::remote::screen::hash_of(&found), option)
     };
     let same = hash == text("k") && (dialog || (tab.state == "waiting" && tab.since == text("s")));
     same.then_some((tab, option))

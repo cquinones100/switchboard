@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use super::buttons::{Pick, dialog_buttons, option_buttons, picker_buttons, short_id};
 use super::cleanup::{cleanup_button, closed_threads};
 use super::homes::{home_of, home_thread, thread_link};
+use super::mux::How;
 use super::post::{Button, PostOpts, offer_choice, post, react, settle_choice};
 use super::slack::Message;
 use super::state::{Follow, Target};
@@ -394,8 +395,7 @@ pub async fn handle(cx: &Cx, message: Message) -> Result<Option<String>> {
         let _ = cx.mux.set_option(&window, tabs::CLAUDE_PANE, Some(&pane));
         let prompt = c.get(2).map(|m| m.as_str().trim()).unwrap_or("");
         cx.mux
-            .type_text(&pane, &format!("claude {}", shell_quote(prompt)))?;
-        cx.mux.send_keys(&pane, &["Enter"])?;
+            .run_in_shell(&pane, &format!("claude {}", shell_quote(prompt)))?;
         let opened = cx
             .mux
             .windows()
@@ -599,7 +599,7 @@ pub async fn interrupt(cx: &Cx, tab: &Tab, reply: &Reply) -> Result<Option<Strin
         )
         .await;
     }
-    cx.mux.send_keys(&pane, &["Escape"])?;
+    cx.mux.stop(&pane, None, true)?;
     cx.state.borrow_mut().following.shift_remove(&tab.id);
     cx.log(&format!("⎋ {name}"));
     let ts = say(
@@ -723,7 +723,7 @@ pub async fn send_waiting(
 fn showing_choice(cx: &Cx, tab: &Tab, screen: &str) -> bool {
     let waiting_on_you = tabs::tab(cx, &tab.id).is_some_and(|t| t.state == "waiting");
     (waiting_on_you && (tabs::options_in(screen).is_some() || tabs::scrolled_back(screen)))
-        || tabs::dialog_in(screen).is_some()
+        || crate::remote::screen::dialog_in(screen).is_some()
 }
 
 fn choice_now(tab: &Tab) -> String {
@@ -768,15 +768,10 @@ async fn ask_about_draft(
     say(cx, &reply, &body, buttons).await
 }
 
-/// Clears a prompt box's draft with Ctrl-U, once a line and once more, `i`
-/// first in vim's Normal mode, giving whether it is gone.
-async fn clear_draft(cx: &Cx, pane: &str, draft: &str) -> bool {
-    let screen = cx.mux.capture(pane, 0).unwrap_or_default();
-    if crate::mission::answer::normal_mode(&screen) {
-        let _ = cx.mux.type_text(pane, "i");
-    }
-    for _ in 0..=draft.lines().count() {
-        let _ = cx.mux.send_keys(pane, &["C-u"]);
+/// Clears a prompt box's draft (`clear-draft`), giving whether it is gone.
+async fn clear_draft(cx: &Cx, pane: &str) -> bool {
+    if cx.mux.clear_draft(pane).is_err() {
+        return false;
     }
     let until = std::time::Instant::now() + Duration::from_secs(2);
     while tabs::draft(cx, pane).is_some() {
@@ -824,7 +819,25 @@ async fn send_to_tab(
         .and_then(|_| tabs::options_in(&before));
     let answer = prompt.as_ref().and_then(|p| tabs::answer_for(p, text));
     if let (Some(prompt), Some(answer)) = (&prompt, &answer) {
-        tabs::answer_prompt(cx, &pane, prompt, answer).await;
+        if let Err(e) = cx.mux.answer(&pane, &tabs::typeable(text), How::default()) {
+            return say(
+                cx,
+                reply,
+                &format!("I couldn't answer {name}: {e}."),
+                vec![],
+            )
+            .await;
+        }
+        // The server sends what follows a settle a moment later (a choice
+        // beside a preview, then Enter), so the screen read next waits too.
+        if crate::mission::answer::presses(prompt, answer)
+            .contains(&crate::mission::answer::Press::Settle)
+        {
+            tokio::time::sleep(Duration::from_millis(
+                crate::mission::answer::PASTE_SETTLE_MS,
+            ))
+            .await;
+        }
         let did = tabs::answer_said(answer);
         cx.log(&format!("→ {name}: {did}"));
         let noted = settle_choice(cx, &tab.id, &format!("{did}."), None).await;
@@ -847,7 +860,8 @@ async fn send_to_tab(
         // The same prompt still up after a pick that takes one answer only
         // means Claude Code hasn't drawn what comes next yet.
         if let (Some(next), Some(now)) = (&next, &now)
-            && (prompt.multi || tabs::hash_of(next) != tabs::hash_of(prompt))
+            && (prompt.multi
+                || crate::remote::screen::hash_of(next) != crate::remote::screen::hash_of(prompt))
         {
             let moved = next.question != prompt.question;
             let body = format!(
@@ -903,17 +917,24 @@ async fn send_to_tab(
     }
     // A dialog before the session starts is answered with the arrow keys:
     // up or down to the chosen option, then Enter.
-    let dialog = tabs::dialog_in(&before);
+    let dialog = crate::remote::screen::dialog_in(&before);
     let picked = dialog
         .as_ref()
         .and_then(|d| tabs::chosen_option(&d.options, text));
-    if let (Some(dialog), Some(picked)) = (&dialog, &picked) {
-        let moves = picked.n as i64 - dialog.cursor as i64;
-        let key = if moves > 0 { "Down" } else { "Up" };
-        for _ in 0..moves.abs() {
-            cx.mux.send_keys(&pane, &[key])?;
+    if let (Some(_), Some(picked)) = (&dialog, &picked) {
+        let how = How {
+            dialog: true,
+            ..How::default()
+        };
+        if let Err(e) = cx.mux.answer(&pane, text, how) {
+            return say(
+                cx,
+                reply,
+                &format!("I couldn't answer {name}: {e}."),
+                vec![],
+            )
+            .await;
         }
-        cx.mux.send_keys(&pane, &["Enter"])?;
         cx.log(&format!("→ {name}: chose \"{}\" in a dialog", picked.label));
         if let Some(t) = thread {
             cx.state
@@ -943,7 +964,7 @@ async fn send_to_tab(
                 "wait",
             ),
             (None, Some(d)) => (
-                d.text(),
+                tabs::prompt_text(&d.as_prompt()),
                 dialog_buttons(current.as_ref().unwrap_or(tab), d),
                 "dialog",
             ),
@@ -989,8 +1010,8 @@ async fn send_to_tab(
             }
             return ask_about_draft(cx, tab, &draft, waiting).await;
         }
-        (OverDraft::Replace, Some(draft)) => {
-            if !clear_draft(cx, &pane, &draft).await {
+        (OverDraft::Replace, Some(_)) => {
+            if !clear_draft(cx, &pane).await {
                 let body =
                     format!("I couldn't clear the draft in {name}, so I didn't type your message.");
                 return say(cx, reply, &body, vec![]).await;
@@ -1007,7 +1028,21 @@ async fn send_to_tab(
     // Typed while Claude is mid-turn, the message waits in Claude Code's
     // queue until the turn ends.
     let busy = current.as_ref().is_some_and(|t| t.state == "working");
-    tabs::type_into(cx, &pane, text).await;
+    // A draft left by now was asked about, or the setting says to type
+    // after it.
+    let how = How {
+        after_draft: true,
+        ..How::default()
+    };
+    if let Err(e) = cx.mux.message(&pane, &tabs::typeable(text), how) {
+        return say(
+            cx,
+            reply,
+            &format!("I couldn't type into {name}: {e}."),
+            vec![],
+        )
+        .await;
+    }
     cx.log(&format!(
         "→ {name}: {}",
         text.chars().take(80).collect::<String>()

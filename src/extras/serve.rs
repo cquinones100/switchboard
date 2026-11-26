@@ -650,7 +650,7 @@ impl Server {
         let dialog = self
             .panes
             .get(&pane)
-            .is_some_and(|slot| crate::relay::tabs::dialog_in(&slot.pane.text(0)).is_some());
+            .is_some_and(|slot| crate::remote::screen::dialog_in(&slot.pane.text(0)).is_some());
         let asking = submit
             && model.claude_pane.is_some()
             && (dialog
@@ -665,7 +665,8 @@ impl Server {
         let has_draft = submit
             && model.claude_pane.is_some()
             && self.panes.get(&pane).is_some_and(|slot| {
-                crate::relay::tabs::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0)).is_some()
+                crate::remote::screen::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
+                    .is_some()
             });
         let paste = vec![crate::mission::answer::Press::Paste(reply.to_string())];
         if asking {

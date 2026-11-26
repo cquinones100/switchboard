@@ -420,7 +420,7 @@ fn home_choices(cx: &Cx, tab: &Tab) -> Vec<Button> {
     }
     .or_else(|| {
         (tab.state == "idle")
-            .then(|| tabs::dialog_in(&shown).map(|d| dialog_buttons(tab, &d)))
+            .then(|| crate::remote::screen::dialog_in(&shown).map(|d| dialog_buttons(tab, &d)))
             .flatten()
     })
     .unwrap_or_default();

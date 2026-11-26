@@ -62,20 +62,24 @@
 //! seen [-t tab] [-s from]                the tab seen, as if looked at: its
 //!                                        finished Claude and a reminder come
 //!                                        due (the Slack relay's Open); -s
-//!                                        names who asked (src/phone)
+//!                                        names who asked (src/remote)
 //! prompt [-t pane]                       the prompt a Claude pane waits on,
-//!                                        as JSON, null with none (src/phone)
-//! answer [-t pane] [-m] [-h id] [-s from] reply
-//!                                        the prompt (the one -h names) answered as mission
+//!                                        as JSON, null with none (src/remote)
+//! answer [-t pane] [-m] [-h id] [-s from] [-d] [-a] reply
+//!                                        the prompt (the one -h names), or
+//!                                        with -d a dialog, answered as mission
 //!                                        control answers it, or with -m a
-//!                                        message typed to its Claude; never
-//!                                        typed in a pane (src/phone)
+//!                                        message typed to its Claude, -a after
+//!                                        a draft; never typed in a pane
+//!                                        (src/remote)
+//! clear-draft [-t pane]                  a Claude pane's unsent draft cleared
+//!                                        (src/remote)
 //! remind [-t pane] [-s from] [-n note] (-c | when)
 //!                                        a Claude pane's tab's reminder set
 //!                                        for when (as the reminder box reads
-//!                                        it) or cleared (src/phone)
+//!                                        it) or cleared (src/remote)
 //! pin [-t pane] [-s from] [-u]           a Claude pane's tab pinned as M-f
-//!                                        pins it, or unpinned (src/phone)
+//!                                        pins it, or unpinned (src/remote)
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up
@@ -133,6 +137,7 @@ pub const NAMES: &[&str] = &[
     "seen",
     "prompt",
     "answer",
+    "clear-draft",
     "remind",
     "pin",
     "stop",
@@ -245,7 +250,11 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "answer",
-        "answer [-t pane] [-m] [-g step] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; with -g and no reply, a prompt of several questions stepped back, forward or to a step by its name (back, forward or the name), pressing ← or → as many times as it takes; -s names who asked (phone), written in the server's log; refused for a pane not running Claude, and typed in a pane",
+        "answer [-t pane] [-m] [-g step] [-h id] [-s from] [-d] [-a] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), with -d a dialog before its session starts too, refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none and has no draft in its prompt box, -a typing it after the draft; with -g and no reply, a prompt of several questions stepped back, forward or to a step by its name (back, forward or the name), pressing ← or → as many times as it takes; -s names who asked (phone), written in the server's log; refused for a pane not running Claude, and typed in a pane",
+    ),
+    (
+        "clear-draft",
+        "clear-draft [-t pane]: what is typed and unsent in the prompt box of the pane's Claude cleared; refused for a pane not running Claude",
     ),
     (
         "remind",
@@ -257,7 +266,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "stop",
-        "stop [-t pane] [-s from]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude, for one whose Claude isn't working and for one showing a permission prompt or dialog; -s names who asked (phone), written in the server's log",
+        "stop [-t pane] [-s from] [-f]: Esc pressed in a pane's Claude, stopping its turn as Esc at the computer does; refused for a pane not running Claude, for one whose Claude isn't working and for one showing a permission prompt or dialog; with -f taken for one working or waiting whatever it shows, where Esc answers no to a prompt, and refused only for one neither working nor waiting; -s names who asked (phone), written in the server's log",
     ),
     (
         "watch",
@@ -512,7 +521,7 @@ impl Server {
             "kill-tab" => Args::parse(rest, "ts").and_then(|a| match a.value('s') {
                 Some(from) => {
                     let pane = self.pane_from(&a, caller)?;
-                    self.phone_close(pane, from)
+                    self.remote_close(pane, from)
                 }
                 None => {
                     let tab = self.tab_from(&a, caller)?;
@@ -563,25 +572,28 @@ impl Server {
                 let tab = self.tab_from(&a, caller)?;
                 self.mark_seen(tab);
                 if let Some(from) = a.value('s') {
-                    self.phone_did(from, tab, "Marked seen");
+                    self.remote_did(from, tab, "Marked seen");
                 }
                 Ok(Reply::ok(""))
             }),
             "prompt" => Args::parse(rest, "t")
                 .and_then(|a| self.pane_from(&a, caller))
-                .and_then(|pane| self.phone_prompt(pane)),
+                .and_then(|pane| self.remote_prompt(pane)),
             "answer" => Args::parse(rest, "tshg").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
                 let reply = a.rest.join(" ");
-                self.phone_answer(
-                    pane,
-                    &reply,
-                    a.has('m'),
-                    a.value('g'),
-                    a.value('h'),
-                    a.value('s'),
-                )
+                let how = crate::remote::protocol::How {
+                    from: a.value('s'),
+                    expect: a.value('h'),
+                    step: a.value('g'),
+                    dialog: a.has('d'),
+                    after_draft: a.has('a'),
+                };
+                self.remote_answer(pane, &reply, a.has('m'), how)
             }),
+            "clear-draft" => Args::parse(rest, "t")
+                .and_then(|a| self.pane_from(&a, caller))
+                .and_then(|pane| self.remote_clear_draft(pane)),
             "remind" => Args::parse(rest, "tsn").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
                 let when = a.rest.join(" ");
@@ -591,7 +603,7 @@ impl Server {
                     (true, false) => return Err("remind takes -c or a time, not both".into()),
                     (false, true) => return Err("remind takes a time, or -c to clear it".into()),
                 };
-                self.phone_remind(
+                self.remote_remind(
                     pane,
                     when.as_deref(),
                     a.value('n').unwrap_or(""),
@@ -600,11 +612,11 @@ impl Server {
             }),
             "pin" => Args::parse(rest, "ts").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
-                self.phone_pin(pane, !a.has('u'), a.value('s'))
+                self.remote_pin(pane, !a.has('u'), a.value('s'))
             }),
             "stop" => Args::parse(rest, "ts").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
-                self.phone_stop(pane, a.value('s'))
+                self.remote_stop(pane, a.value('s'), a.has('f'))
             }),
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.

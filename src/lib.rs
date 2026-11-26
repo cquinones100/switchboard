@@ -71,6 +71,9 @@
 //! - `phone`: the phone app, `switchboard phone`, a web app served on your
 //!   tailnet alone for answering, messaging, reminding you of, pinning and
 //!   closing your Claude tabs.
+//! - `remote`: what the relay and the phone share: one protocol of the
+//!   server's commands for a remote front-end, one reading of a Claude
+//!   tab's screen, and one policy for what notifies you.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the
 //!   hourly look for a new release, offered in a box.
 //! - `notes`: the server's side of Notes, whose app is a crate of its own
@@ -134,6 +137,7 @@ pub mod photos;
 pub mod platform;
 pub mod presence;
 pub mod relay;
+pub mod remote;
 pub mod repos;
 pub mod requests;
 pub mod routines;

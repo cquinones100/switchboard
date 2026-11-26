@@ -2810,17 +2810,23 @@ switchboard seen [-t tab] [-s from]      mark the tab seen, as looking at it
                                          server's log
 switchboard prompt [-t pane]             the prompt a Claude pane waits on,
                                          as JSON, null with none
-switchboard answer [-t pane] [-m] [-g step] [-h id] [-s from] <reply>
+switchboard answer [-t pane] [-m] [-g step] [-h id] [-s from] [-d] [-a] <reply>
                                          answer the Claude pane's prompt as
                                          mission control's answer box does
                                          (with -h, only the prompt whose id
-                                         prompt gave), or with -m send it a
-                                         message; with -g and no reply, step
-                                         a prompt of several questions back,
-                                         forward or to a step by its name,
-                                         pressing ← or →;
+                                         prompt gave; with -d, a dialog
+                                         before its session starts too), or
+                                         with -m send it a message, refused
+                                         over a draft in its prompt box
+                                         unless -a types it after the draft;
+                                         with -g and no reply, step a prompt
+                                         of several questions back, forward
+                                         or to a step by its name, pressing
+                                         ← or →;
                                          refused typed in a pane, and for a
                                          pane not running Claude
+switchboard clear-draft [-t pane]        clear what is typed and unsent in
+                                         a Claude pane's prompt box
 switchboard remind [-t pane] [-s from] [-n note] (-c | <when>)
                                          set the reminder of a Claude pane's
                                          tab for <when> (a reminder box's
@@ -2836,14 +2842,18 @@ switchboard pin [-t pane] [-s from] [-u]
                                          it with -u; refused for a pane not
                                          running Claude; -s names who asked
                                          (phone), written in the server's log
-switchboard stop [-t pane] [-s from]     press Esc in a working Claude pane,
+switchboard stop [-t pane] [-s from] [-f] press Esc in a working Claude pane,
                                          stopping its turn as Esc at the
                                          computer does; refused for a pane
                                          not running Claude, for one whose
                                          Claude isn't working and for one
-                                         asking a permission; -s names who
-                                         asked (phone), written in the
-                                         server's log
+                                         asking a permission (with -f, taken
+                                         for one waiting too, where Esc
+                                         answers no to a prompt, and refused
+                                         only for one neither working nor
+                                         waiting); -s
+                                         names who asked (phone), written
+                                         in the server's log
 switchboard watch                        every Claude tab's state, last turn
                                          and prompt, a JSON line now and each
                                          time they change
