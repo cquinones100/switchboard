@@ -543,7 +543,7 @@ impl Ci {
         .ok()
         .filter(|t| !t.is_empty());
         let remote = match given.or(target) {
-            Some(target) => super::worktree_from_note::tracked(top, &target)?.0,
+            Some(target) => super::work_tab::tracked(top, &target)?.0,
             None => "origin".to_string(),
         };
         let url =

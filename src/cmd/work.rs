@@ -26,11 +26,10 @@
 //!
 //! What has to read the disk, the clipboard or git is done off the server's
 //! task and comes back as `Event::Work`, so a slow clipboard or a large
-//! cache never holds up drawing. Each tab's work runs as its own command, a
-//! shell of yours that defines `wt`, `wtb` or `wtpr` from the
-//! command's `init` (`worktree::tab_running`), where the scripts typed it
-//! into the new tab's shell; the tabs go at the end, in the order asked
-//! for, and the first is brought to the front.
+//! cache never holds up drawing. Each work tab opens through
+//! `Server::open_work_tab` (src/cmd/work_tab.rs), where the scripts typed
+//! the command into the new tab's shell; the tabs go at the end, in the
+//! order asked for, and the first is brought to the front.
 
 use crate::tickets::{self, Kept, Source};
 use std::collections::HashSet;
@@ -42,6 +41,7 @@ use regex::Regex;
 use crate::cmd::work_item_box::{
     self, Chosen, Context as BoxContext, PlanChip, Repo as BoxRepo, WorkItemBox,
 };
+use crate::cmd::work_tab::Work;
 use crate::cmd::{work_recent, worktree_from_note};
 use crate::integrations::github;
 use crate::mux::keys::Action;
@@ -51,16 +51,6 @@ use crate::ui::picker::TYPED;
 use crate::ui::{Confirm, Menu, MenuOption, Outcome, PickItem, Picker};
 use crate::worktree;
 use crate::{paths, platform, settings, util};
-
-/// `wt`'s arguments for a note's item: its line, and `--target` with the
-/// branch it lands on, none for the default branch.
-fn item_args(line: usize, target: &str) -> Vec<String> {
-    let mut args = vec!["--item".to_string(), line.to_string()];
-    if !target.is_empty() {
-        args.extend(["--target".to_string(), target.to_string()]);
-    }
-    args
-}
 
 /// What a note is known by in the repositories its items were started in:
 /// its ID, else its path within the notes folder.
@@ -594,7 +584,7 @@ impl Server {
 
     /// Opens a tab at the end of the client's session, in `dir`, running
     /// `command`, in front or behind as `opened` says. Says why when it can't.
-    pub(crate) fn work_tab(
+    pub(crate) fn tab_at_end(
         &mut self,
         client: ClientId,
         dir: &Path,
@@ -644,7 +634,7 @@ impl Server {
             return;
         }
         let command = worktree::tab_command("claude", "claude", &[]);
-        if let Some(tab) = self.work_tab(client, dir, command, Opened::Front) {
+        if let Some(tab) = self.tab_at_end(client, dir, command, Opened::Front) {
             self.front(client, &[tab]);
             // Then what to call it, as new-tab.zsh ended in tab-name.zsh.
             if settings::is_on("name_new_tabs") {
@@ -718,9 +708,7 @@ impl Server {
         let tabs: Vec<TabId> = tickets
             .iter()
             .filter_map(|t| {
-                let command =
-                    worktree::tab_running("worktree-from-ticket", "wt", std::slice::from_ref(t));
-                self.work_tab(client, repo, command, Opened::Background)
+                self.open_work_tab(client, repo, Work::Ticket(t.clone()), Opened::Background)
             })
             .collect();
         self.front(client, &tabs);
@@ -861,12 +849,9 @@ impl Server {
                     );
                     return;
                 }
-                let command = worktree::tab_running(
-                    "worktree-from-branch",
-                    "wtb",
-                    &["--prompt".to_string(), task],
-                );
-                if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) {
+                if let Some(tab) =
+                    server.open_work_tab(client, &repo, Work::Task(task), Opened::Front)
+                {
                     server.front(client, &[tab]);
                 }
             })),
@@ -914,8 +899,8 @@ impl Server {
                         );
                         return;
                     }
-                    let command = worktree::tab_running("worktree-from-branch", "wtb", &[name]);
-                    if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) {
+                    let work = Work::Branch(name);
+                    if let Some(tab) = server.open_work_tab(client, &repo, work, Opened::Front) {
                         server.front(client, &[tab]);
                     }
                 });
@@ -944,9 +929,9 @@ impl Server {
             };
             match parse_pr(&picked.value) {
                 Some(PrAsked::Url(url, _)) => {
-                    let command = worktree::tab_running("worktree-from-pr", "wtpr", &[url]);
+                    let work = Work::Pr { url, prompt: None };
                     let here = found.here.clone();
-                    if let Some(tab) = server.work_tab(client, &here, command, Opened::Front) {
+                    if let Some(tab) = server.open_work_tab(client, &here, work, Opened::Front) {
                         server.front(client, &[tab]);
                     }
                 }
@@ -956,12 +941,11 @@ impl Server {
                     found,
                     Wanted::Repo,
                     move |s, c, dir, _| {
-                        let command = worktree::tab_running(
-                            "worktree-from-pr",
-                            "wtpr",
-                            &[number.to_string()],
-                        );
-                        if let Some(tab) = s.work_tab(c, &dir, command, Opened::Front) {
+                        let work = Work::Pr {
+                            url: number.to_string(),
+                            prompt: None,
+                        };
+                        if let Some(tab) = s.open_work_tab(c, &dir, work, Opened::Front) {
                             s.front(c, &[tab]);
                         }
                     },
@@ -1168,9 +1152,11 @@ impl Server {
                         return;
                     };
                     let reference = format!("{name}#{number}");
-                    if let Some(tab) =
-                        server.open_issue_tab(client, &repo, &reference, "", Opened::Front)
-                    {
+                    let work = Work::Issue {
+                        reference,
+                        target: String::new(),
+                    };
+                    if let Some(tab) = server.open_work_tab(client, &repo, work, Opened::Front) {
                         server.front(client, &[tab]);
                     }
                 });
@@ -1223,7 +1209,7 @@ impl Server {
                     "claude",
                     &[format!("/review-pr {number}")],
                 );
-                if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front)
+                if let Some(tab) = server.tab_at_end(client, &repo, command, Opened::Front)
                     && let Some(t) = server.tabs.get_mut(&tab)
                 {
                     let name = match title.as_deref().map(str::trim) {
@@ -1373,14 +1359,13 @@ impl Server {
                         let tabs: Vec<TabId> = chosen
                             .iter()
                             .filter_map(|item| {
-                                server.open_item_tab(
-                                    client,
-                                    &repo,
-                                    &note,
-                                    item,
-                                    &target,
-                                    Opened::Background,
-                                )
+                                let work = Work::Item {
+                                    note: note.clone(),
+                                    line: item.line,
+                                    text: item.text.clone(),
+                                    target: target.clone(),
+                                };
+                                server.open_work_tab(client, &repo, work, Opened::Background)
                             })
                             .collect();
                         server.front(client, &tabs);
@@ -1699,14 +1684,15 @@ impl Server {
                             default,
                             move |server, client, target| {
                                 keep_note_repo(key, &repo);
-                                if let Some(tab) = server.open_item_tab(
-                                    client,
-                                    &repo,
-                                    &note,
-                                    &item,
-                                    &target,
-                                    Opened::Front,
-                                ) {
+                                let work = Work::Item {
+                                    note,
+                                    line: item.line,
+                                    text: item.text,
+                                    target,
+                                };
+                                if let Some(tab) =
+                                    server.open_work_tab(client, &repo, work, Opened::Front)
+                                {
                                     server.front(client, &[tab]);
                                 }
                             },
@@ -1868,7 +1854,7 @@ impl Server {
                 "claude",
                 &[format!("/shape --notes {text}")],
             );
-            let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) else {
+            let Some(tab) = server.tab_at_end(client, &repo, command, Opened::Front) else {
                 return;
             };
             if let Some(t) = server.tabs.get_mut(&tab) {
@@ -1925,69 +1911,6 @@ impl Server {
         });
     }
 
-    /// A tab for one of a note's items, in front or behind as `opened` says
-    /// (autopilot's behind, one you start in front), in the note's
-    /// repository: named after the item, cut short, its whole first line
-    /// its full title, and linked to its note (`@tab_name`, `@tab_title`,
-    /// `@tab_note`), running `wt --item <line>` with the
-    /// note's path in WT_NOTE, so only the line number is a word of the
-    /// command. What autopilot opens for each item it
-    /// takes too (wtn-open.zsh's `open_tab`), with `--target` naming the
-    /// branch its worktree is cut from and lands on (autopilot's target);
-    /// empty for the default branch.
-    pub fn open_item_tab(
-        &mut self,
-        client: ClientId,
-        repo: &Path,
-        note: &str,
-        item: &worktree_from_note::Item,
-        target: &str,
-        opened: Opened,
-    ) -> Option<TabId> {
-        let mut command = vec!["env".to_string(), format!("WT_NOTE={note}")];
-        command.extend(worktree::tab_running(
-            "worktree-from-ticket",
-            "wt",
-            &item_args(item.line, target),
-        ));
-        let tab = self.work_tab(client, repo, command, opened)?;
-        // Named with the item cut short, for the header and the sidebar,
-        // its whole first line kept as the tab's full title,
-        // which M-T, the sidebar and mission control show.
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.insert(
-                "@tab_name".into(),
-                crate::tabs::title::short_name(&item.text),
-            );
-            t.opts.insert("@tab_title".into(), item.text.clone());
-            t.opts.insert("@tab_note".into(), note.to_string());
-        }
-        self.dirty_tab(tab);
-        Some(tab)
-    }
-
-    /// A tab for one of the repository's GitHub issues, as `open_item_tab`
-    /// opens one for a note's item, running `wt --issue
-    /// <owner>/<repo>#<number>`, with `--target` as an item's. It is given
-    /// no name: once `wt` has made the issue's worktree, the tab is named
-    /// `<number>: <title>` from its branch, as every way of starting an issue
-    /// names it (src/tabs/names.rs), and follows the title as it changes.
-    pub fn open_issue_tab(
-        &mut self,
-        client: ClientId,
-        repo: &Path,
-        reference: &str,
-        target: &str,
-        opened: Opened,
-    ) -> Option<TabId> {
-        let mut args = vec!["--issue".to_string(), reference.to_string()];
-        if !target.is_empty() {
-            args.extend(["--target".to_string(), target.to_string()]);
-        }
-        let command = worktree::tab_running("worktree-from-ticket", "wt", &args);
-        self.work_tab(client, repo, command, opened)
-    }
-
     /// The palette's "Continue shaping Linear tickets": which tickets, the
     /// clipboard's when it holds only tickets, then which directory to shape
     /// them in, which must be in a repository so `shape` has code to read; a
@@ -2033,7 +1956,7 @@ impl Server {
                     .iter()
                     .filter_map(|t| {
                         let command = worktree::tab_command(&script, "shape", std::slice::from_ref(t));
-                        s.work_tab(c, &dir, command, Opened::Background)
+                        s.tab_at_end(c, &dir, command, Opened::Background)
                     })
                     .collect();
                 s.front(c, &tabs);
@@ -2045,15 +1968,6 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_items_tab_names_its_target_only_when_one_was_chosen() {
-        assert_eq!(item_args(12, ""), ["--item", "12"]);
-        assert_eq!(
-            item_args(12, "team/next"),
-            ["--item", "12", "--target", "team/next"]
-        );
-    }
 
     #[test]
     fn tickets_are_ids_or_urls_each_once_in_capitals() {

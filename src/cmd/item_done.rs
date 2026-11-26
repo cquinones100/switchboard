@@ -58,7 +58,8 @@ use std::process::ExitCode;
 
 use crate::autopilot::issues::{self, Closed};
 use crate::cmd::landing;
-use crate::cmd::worktree_from_note::{notes_dir, tracked};
+use crate::cmd::work_tab::tracked;
+use crate::cmd::worktree_from_note::notes_dir;
 use crate::integrations::github::Repo;
 use crate::notes::format::{Doc, toggle_check};
 use crate::notes::render;

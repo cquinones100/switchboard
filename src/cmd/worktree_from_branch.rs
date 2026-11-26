@@ -4,6 +4,8 @@
 //! first. Plain git: no Linear key, no GitHub. Ported from
 //! `bin/worktree-from-branch`.
 //!
+//! Its tab starts as every work tab does (src/cmd/work_tab.rs).
+//!
 //! `<path>` defaults to `.claude/worktrees`, resolved against the main
 //! clone, and the worktree is named after the branch made flat
 //! (`feature/login` → `feature-login`), so a branch with a slash doesn't
@@ -97,54 +99,44 @@ fn default_branch(root: &Path, remote: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn add_worktree(root: &Path, args: &[&str]) -> Result<(), String> {
-    let mut all = vec!["worktree", "add"];
-    all.extend_from_slice(args);
-    if worktree::git_loud(root, &all, true) {
-        Ok(())
-    } else {
-        Err("git worktree creation failed (see output above)".into())
-    }
-}
-
+/// The branch's worktree, made by `worktree::add_worktree`: a local branch
+/// as it is, caught up with the remote's; else the remote's, tracking it;
+/// else a new branch off the remote's default branch as it is now, with no
+/// upstream until its first push.
 fn create_worktree(path: &Path, branch: &str, root: &Path) -> Result<(), String> {
     let remote = worktree::default_remote(root);
     let on_remote = remote
         .as_deref()
-        .is_some_and(|r| worktree::fetch_branch(root, r, branch, SOURCE));
-    let at = path.to_string_lossy().into_owned();
-
-    // A local branch keeps its own commits, caught up with the remote's when
-    // it only falls behind; --ff-only so unpushed work is reported, never
-    // rewritten.
+        .filter(|r| worktree::fetch_branch(root, r, branch, SOURCE));
+    let tracks = on_remote.map(|r| (r, branch));
     if worktree::branch_exists(root, branch) {
-        add_worktree(root, &[&at, branch])?;
-        if let (true, Some(remote)) = (on_remote, &remote)
-            && !worktree::git_ok(path, &["merge", "--ff-only", &format!("{remote}/{branch}")])
-        {
-            eprintln!("Note: {branch} has diverged from {remote}/{branch} and was left as-is.");
-        }
-        return Ok(());
+        let start = worktree::Start { at: None, tracks };
+        return worktree::add_worktree(root, path, branch, &start);
     }
-    if let (true, Some(remote)) = (on_remote, &remote) {
-        add_worktree(root, &["-b", branch, &at, &format!("{remote}/{branch}")])?;
-        worktree::set_upstream(root, branch, remote, branch);
-        return Ok(());
+    if let Some(remote) = on_remote {
+        let at = format!("{remote}/{branch}");
+        let start = worktree::Start {
+            at: Some(&at),
+            tracks,
+        };
+        return worktree::add_worktree(root, path, branch, &start);
     }
-    // A new branch, off the remote's default branch as it is now, with no
-    // upstream until its first push.
     let base = remote
         .as_deref()
         .and_then(|r| default_branch(root, r).map(|b| (r.to_string(), b)));
-    let start = match &base {
+    let at = match &base {
         Some((remote, base)) => {
             worktree::fetch_branch(root, remote, base, SOURCE);
             format!("{remote}/{base}")
         }
         None => "HEAD".to_string(),
     };
-    eprintln!("New branch, off {start}.");
-    add_worktree(root, &["--no-track", "-b", branch, &at, &start])
+    eprintln!("New branch, off {at}.");
+    let start = worktree::Start {
+        at: Some(&at),
+        tracks: None,
+    };
+    worktree::add_worktree(root, path, branch, &start)
 }
 
 /// The branch a task with none given is worked on: its words made a slug,
@@ -291,21 +283,5 @@ fn run(
         }
         crate::trust::branch_yours_or_listed(&crate::paths::home(), &finished)?;
     }
-    crate::cmd::clone_build::start(&finished);
-    worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
-    if let Some(cd_file) = &given.cd_file {
-        worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", finished.display()))
-            .map_err(|e| e.to_string())?;
-    }
-    if given.no_claude {
-        return Ok(ExitCode::SUCCESS);
-    }
-    // After `--`, so a task typed with a leading dash is the prompt, never
-    // one of Claude's flags.
-    let args: Vec<String> = if prompt.is_empty() {
-        Vec::new()
-    } else {
-        vec!["--".to_string(), prompt.to_string()]
-    };
-    Ok(worktree::run_in("claude", &args, &finished))
+    crate::cmd::work_tab::hand_over(given, &root, &finished, prompt, None, None)
 }

@@ -19,10 +19,10 @@
 //! `wt` runs in each new tab's interactive shell, for the same reason `wt` is
 //! a shell function in the first place: the shell has to be the thing that
 //! cd's, so it stays in the worktree after Claude exits and new panes split
-//! from it open there too. The tab's shell defines `wt` from
-//! `worktree-from-ticket init` and runs it as its command
-//! (`worktree::tab_running`), where tmux's version typed `wt <ticket>` into
-//! a shell that might not have started yet.
+//! from it open there too. Each tab runs the command every work tab runs
+//! for a ticket (src/cmd/work_tab.rs's `Work::command`), asked of the
+//! server, where tmux's version typed `wt <ticket>` into a shell that might
+//! not have started yet.
 
 use std::process::ExitCode;
 
@@ -75,8 +75,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".into());
     for ticket in tickets {
-        let command =
-            worktree::tab_running("worktree-from-ticket", "wt", std::slice::from_ref(&ticket));
+        let command = crate::cmd::work_tab::Work::Ticket(ticket.clone()).command();
         let mut ask: Vec<&str> = vec!["new-tab", "-d", "-E", "-c", &cwd, "--"];
         ask.extend(command.iter().map(String::as_str));
         match socket::ask_ok(&ask) {

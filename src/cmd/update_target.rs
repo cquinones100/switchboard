@@ -179,7 +179,7 @@ fn update(branch: &str, dir: &Path, found: &mut Option<PathBuf>) -> Result<Strin
             "{branch} is the default branch; update-target brings another branch up to date with it"
         )));
     }
-    let (up_remote, up_branch) = crate::cmd::worktree_from_note::tracked(&root, branch)
+    let (up_remote, up_branch) = crate::cmd::work_tab::tracked(&root, branch)
         .unwrap_or_else(|| (remote.clone(), branch.to_string()));
     let refs = Refs {
         root: root.clone(),

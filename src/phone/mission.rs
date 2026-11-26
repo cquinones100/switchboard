@@ -333,19 +333,11 @@ impl Server {
                 } else {
                     crate::paths::home()
                 };
-                match self.new_tab(
-                    &session,
-                    Some(dir),
-                    Some(work.command()),
-                    None,
-                    Opened::Background,
-                ) {
-                    Ok((tab, _)) => Ok(Ran::Said(format!(
-                        "Opened tab {} for it.",
-                        self.tab_number(tab)
-                    ))),
-                    Err(e) => Err(format!("Couldn't open a tab: {e}")),
-                }
+                let tab = self.open_work_tab_in(&session, &dir, work, Opened::Background)?;
+                Ok(Ran::Said(format!(
+                    "Opened tab {} for it.",
+                    self.tab_number(tab)
+                )))
             }
             act => self
                 .mission_run(act)

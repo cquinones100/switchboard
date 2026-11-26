@@ -818,7 +818,7 @@ impl Server {
                 }
             }
             let opened = crate::mux::server::Opened::Front;
-            if let Some(tab) = server.work_tab(client, &root, tab_command(&branch), opened) {
+            if let Some(tab) = server.tab_at_end(client, &root, tab_command(&branch), opened) {
                 if let Some(t) = server.tabs.get_mut(&tab) {
                     t.opts.insert(TAB_OPTION.into(), mark);
                     t.opts
@@ -1006,9 +1006,9 @@ impl Server {
         self.choose(client, menu, move |server, client, chose| match chose {
             Some(0) => server.open_link(client, url),
             Some(_) => {
-                let command = worktree::tab_running("worktree-from-pr", "wtpr", &[url]);
+                let work = crate::cmd::work_tab::Work::Pr { url, prompt: None };
                 if let Some(tab) =
-                    server.work_tab(client, &dir, command, crate::mux::server::Opened::Front)
+                    server.open_work_tab(client, &dir, work, crate::mux::server::Opened::Front)
                 {
                     server.front(client, &[tab]);
                 }
@@ -1115,9 +1115,9 @@ impl Server {
                     );
                     return;
                 };
-                let command = worktree::tab_running("worktree-from-ticket", "wt", &[id]);
+                let work = crate::cmd::work_tab::Work::Ticket(id);
                 if let Some(tab) =
-                    server.work_tab(client, &repo, command, crate::mux::server::Opened::Front)
+                    server.open_work_tab(client, &repo, work, crate::mux::server::Opened::Front)
                 {
                     server.front(client, &[tab]);
                 }
