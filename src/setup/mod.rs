@@ -527,16 +527,16 @@ fn in_claude(check: bool, list: &mut List) {
     }
     let settings = part_named("claude").expect("a part");
     match pending(settings) {
-            Err(e) => list.todo(format!("Claude Code's settings: {e:#}")),
-            Ok(0) => {}
-            Ok(_) if check => list.todo(
-                "your ~/.claude/settings.json has what an earlier version added there and Switchboard's plugin carries now: switchboard setup claude takes it out",
-            ),
-            Ok(_) if apply(settings) => list.ok(
-                "what an earlier version added to your ~/.claude/settings.json and Switchboard's plugin carries now, taken out (a statusline of yours kept)",
-            ),
-            Ok(_) => list.todo("switchboard setup claude failed"),
-        }
+        Err(e) => list.todo(format!("Claude Code's settings: {e:#}")),
+        Ok(0) => {}
+        Ok(_) if check => list.todo(
+            "your ~/.claude/settings.json has what an earlier version added there and Switchboard's plugin carries now: switchboard setup claude takes it out",
+        ),
+        Ok(_) if apply(settings) => list.ok(
+            "what an earlier version added to your ~/.claude/settings.json and Switchboard's plugin carries now, taken out (a statusline of yours kept)",
+        ),
+        Ok(_) => list.todo("switchboard setup claude failed"),
+    }
     let statusline_skipped = || {
         crate::mux::socket::ask_quiet(
             vec!["show".into(), "@statusline_skipped".into()],
@@ -758,7 +758,8 @@ pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
     if old_way_waits() {
         return (worked, false);
     }
-    let earlier = claude_settings::has_hooks() || skills::installed() || claude_md::imports_part();
+    let had_hooks = claude_settings::has_hooks();
+    let earlier = had_hooks || skills::installed() || claude_md::imports_part();
     worked &= claude_settings::run(&mut report).is_ok();
     if claude_md::set_up() || exists(&claude_md::part_file()) {
         worked &= claude_md::migrate(&mut report).is_ok();
@@ -772,7 +773,11 @@ pub fn refresh_now(by_the_server: bool) -> (bool, bool) {
         }
         let _ = util::write_atomic(&file, format!("{mark}\n"));
     }
-    (worked, earlier && !claude_settings::has_hooks())
+    // Said when the hooks went (a tab opened before then runs none), or
+    // when all of it went; not when what stays in place failed to go.
+    let gone = !claude_settings::has_hooks();
+    let all_gone = gone && !skills::installed() && !claude_md::imports_part();
+    (worked, (had_hooks && gone) || (earlier && all_gone))
 }
 
 /// Set in the server's own run of `refresh_now`, which is this build.
