@@ -5260,6 +5260,12 @@ fn ci_rows(
         if let (Some(f), Some(t)) = (ci["failed"].as_u64(), ci["total"].as_u64()) {
             facts.push(format!("{f} of {t} failed"));
         }
+        // A train has no checks of its own: its detail says why it fails,
+        // in place of its branch, which its title names.
+        if ci["train"].as_bool() == Some(true) && !item.detail.is_empty() {
+            facts.retain(|f| Some(f.as_str()) != ci["branch"].as_str());
+            facts.push(item.detail.clone());
+        }
         facts.extend(landing.map(str::to_string));
         let line = kit::row(
             vec![Span::styled(
@@ -8081,7 +8087,13 @@ mod tests {
                 "number": 0, "repo": "acme/switchboard", "state": "running", "train": true,
                 "landing": "Switchboard's merge queue",
             } }));
-        let items = views::ci_sections(&[failing, github, train]);
+        let stuck = Item::new("train:/r:ci/train-5", "train 5 #31")
+            .detail("passed, merge failed 2 times")
+            .data(serde_json::json!({ "ci": {
+                "number": 0, "repo": "acme/switchboard", "state": "failing", "train": true,
+                "branch": "ci/train-5", "landing": "Switchboard's merge queue",
+            } }));
+        let items = views::ci_sections(&[failing, github, train, stuck]);
         let mut m = mission(Vec::new(), vec![list_view(ViewId::Ci, "CI", items)]);
         m.view = 1;
         let text = texts(&screen(&m, 200, 30).0);
@@ -8097,6 +8109,10 @@ mod tests {
         assert!(
             text[line("#208 billing page") + 1]
                 .contains("web-app · GitHub's merge queue, 3rd · 4 of 5 passed")
+        );
+        assert!(
+            text[line("train 5 #31") + 1].contains("passed, merge failed 2 times"),
+            "{text:#?}"
         );
         let at = line("train 3 #2040 + #219");
         assert!(
