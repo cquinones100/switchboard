@@ -1843,8 +1843,11 @@ impl Server {
             }
             if let Some(d) = self.sources.view(name) {
                 let mut d = d.clone();
+                if id == ViewId::Prs {
+                    d.items = self.landing_prs(d.items);
+                }
                 if id == ViewId::Ci {
-                    d.items = views::ci_sections(&d.items);
+                    d.items = views::ci_sections(&self.ci_with_landing(d.items));
                 }
                 let loaded = views::loaded(&d);
                 out.push(view(id, title, d, loaded));
@@ -10087,6 +10090,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
         });
         m.cursor = 0;
         let to = row_step(&m, -1);

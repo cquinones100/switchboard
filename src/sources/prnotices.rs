@@ -231,7 +231,7 @@ mod tests {
     fn approved_is_news_in_the_merge_queue_too() {
         let mut k = Known::default();
         k.take(&[pr(3, "In review", "")], SCOPE, 5);
-        let mut queued = pr(3, "In merge queue", "");
+        let mut queued = pr(3, "Landing", "");
         queued.data["review"] = json!("APPROVED");
         let news = k.take(&[queued], SCOPE, 6);
         assert_eq!(news.len(), 1);

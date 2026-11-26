@@ -632,6 +632,13 @@ pub fn chip(text: &str, tone: Tone, caps: bool, theme: &Theme) -> Vec<Span<'stat
     out
 }
 
+/// The way a repository lands by, named on its chip in landing's tone
+/// (`Switchboard's queue`, `GitHub's queue`, boards 193 to 196): the same
+/// chip in the sidebar's Landing group, on a tab's card and in the views.
+pub fn way_chip(name: &str, caps: bool, theme: &Theme) -> Vec<Span<'static>> {
+    chip(name, Tone::Landing, caps, theme)
+}
+
 /// A chip that turns something on or off (search everything's sources,
 /// board 78): dark and bold on the accent while on, faint on the neutral
 /// tint while off, underlined while it has Tab's focus or the mouse is

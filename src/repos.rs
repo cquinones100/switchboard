@@ -225,6 +225,86 @@ impl Way {
         self != Way::Direct
     }
 
+    /// Its name on the kit's chip, in the sidebar's Landing group and on a
+    /// tab's card (boards 193 to 196).
+    pub fn chip(self) -> &'static str {
+        match self {
+            Way::SwitchboardQueue => "Switchboard's queue",
+            Way::GithubQueue => "GitHub's queue",
+            Way::AutoMerge => "auto-merge",
+            Way::Direct => "straight on",
+            Way::Service => "merge service",
+        }
+    }
+
+    /// How a repository lands, as a Landing view's section names it
+    /// (board 193), onto `branch`.
+    pub fn lands_words(self, branch: &str) -> String {
+        match self {
+            Way::SwitchboardQueue => "lands by Switchboard's merge queue".into(),
+            Way::GithubQueue => "lands by GitHub's merge queue".into(),
+            Way::AutoMerge => "lands by GitHub's auto-merge".into(),
+            Way::Direct => format!("lands straight on {branch}"),
+            Way::Service => "lands by a merge service".into(),
+        }
+    }
+
+    /// When a tab landing this way onto `branch` is done, as a Landing
+    /// view's section says it (board 193).
+    pub fn done_words(self, branch: &str) -> String {
+        match self {
+            Way::SwitchboardQueue => {
+                format!("done when its PR merges on {branch}, then cleaned up")
+            }
+            Way::GithubQueue | Way::AutoMerge => {
+                "done when GitHub merges its PR, then cleaned up".into()
+            }
+            Way::Direct => format!("done when its commit is pushed to {branch}, then cleaned up"),
+            Way::Service => "done when the service merges its PR, then cleaned up".into(),
+        }
+    }
+
+    /// The Landing view's columns after the first (the worktree, or the
+    /// pull request), as board 193 heads them: the way's own steps, then
+    /// landed and cleaned up, in every way.
+    pub fn columns(self) -> &'static [&'static str] {
+        match self {
+            Way::SwitchboardQueue => &[
+                "review",
+                "checks",
+                "queued",
+                "train",
+                "landed",
+                "cleaned up",
+            ],
+            Way::GithubQueue => &[
+                "review",
+                "checks",
+                "approved",
+                "queued",
+                "landed",
+                "cleaned up",
+            ],
+            Way::AutoMerge => &["review", "checks", "auto-merge", "landed", "cleaned up"],
+            Way::Direct => &[
+                "tests",
+                "review",
+                "leak check",
+                "lock",
+                "landed",
+                "cleaned up",
+            ],
+            Way::Service => &[
+                "review",
+                "checks",
+                "handed over",
+                "its queue",
+                "landed",
+                "cleaned up",
+            ],
+        }
+    }
+
     /// What a tab does, when it is done, what it fixes, what it never does
     /// and what the way needs, as the menu shows them (board 192).
     pub fn facts(self) -> [Fact; 5] {

@@ -59,6 +59,9 @@ pub struct Summary {
     /// What fails on the default branches it lands on, as "main failing at
     /// abc1234" (src/sources/mainci.rs); empty while none does.
     pub failing: String,
+    /// The way its repository lands by (board 194), as the landing read
+    /// last found it; `None` before it has, or while none is set.
+    pub way: Option<crate::repos::Way>,
 }
 
 impl Summary {
@@ -493,6 +496,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
         }
     }
 

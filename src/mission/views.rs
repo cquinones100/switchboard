@@ -288,7 +288,7 @@ impl ViewId {
                 "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
             }
             ViewId::Prs => {
-                "Columns Draft, In review, Changes asked, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
+                "Columns Draft, In review, Changes asked, Approved, Landing (each PR's place in its repository's way) and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
             }
             ViewId::Ci => {
                 "Failing, running and passing, each failed check with the log line that says why; the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
@@ -2166,6 +2166,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
             hands_free: false,
         };
         let row = crate::autopilot::view::Row {

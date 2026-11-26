@@ -27,13 +27,14 @@ use super::render::{self, Filter, Notice, Owner, View};
 use super::walk::{Next, Place, Stop, Why};
 use super::{Drawn, PaneRead, SidebarEvent, claude, config, notices, text};
 use crate::agent::State;
-use crate::facts::{Merge, PrState};
+use crate::facts::{Merge, Method, PrState};
 use crate::mission::TabMenuFrom;
 use crate::mux::compose::colors;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Server, Session, place_usable};
 use crate::mux::{PaneId, TabId};
+use crate::repos::Way;
 use crate::ui::{Outcome, PickItem, Picker, Theme};
 use crate::{paths, settings, util};
 
@@ -1002,6 +1003,25 @@ impl Server {
             t.size = Some((p.additions, p.deletions));
         }
         t.landing = facts.and_then(|f| f.landing);
+        // Straight on its branch behind the lock, else Switchboard's
+        // merge queue when it holds the PR, else GitHub's.
+        t.way = t.landing.map(|l| match l.method {
+            Method::Direct => Way::Direct,
+            Method::Pr
+                if t.pr.is_some_and(|n| {
+                    self.sources.landing.repos.iter().any(|r| {
+                        r.repo
+                            .as_deref()
+                            .zip(t.pr_repo.as_deref())
+                            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+                            && r.prs.line(n).is_some()
+                    })
+                }) =>
+            {
+                Way::SwitchboardQueue
+            }
+            Method::Pr => Way::GithubQueue,
+        });
         // Landed straight on a branch (`land-lock landed`): Merged, as a
         // merged PR is, unless GitHub answered for a PR of its own.
         // Only while the tab is still in the landed repository's main

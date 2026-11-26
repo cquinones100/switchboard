@@ -318,6 +318,10 @@ pub struct Lines {
     pub buttons_at: Vec<(Owner, usize, usize)>,
 }
 
+/// The columns a landing tab's name keeps before the way's chip after it
+/// is left out of its row.
+const NAME_KEPT: usize = 12;
+
 fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
@@ -795,7 +799,10 @@ pub fn sidebar_lines(
             let by_you = model::by_hand(tab, r)
                 .is_some()
                 .then(|| kit::chip(model::BY_YOU, Tone::Dim, view.caps, theme));
-            let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
+            // Landing, the way it lands by on the kit's chip after it
+            // (boards 193 to 196).
+            let way = tab.way.map(|w| kit::way_chip(w.chip(), view.caps, theme));
+            let by_you_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
             // A tab following several PRs: the current one's number
             // before its name, how many more after it, dim (board 127).
             let (name, more) = match tab.prs.first() {
@@ -806,7 +813,13 @@ pub fn sidebar_lines(
                 Some(_) => (tab.name.clone(), format!(" +{}", tab.prs.len())),
                 None => (tab.name.clone(), String::new()),
             };
-            let room = cols.saturating_sub(4 + width(&number) + tick_cols + chip_w + width(&more));
+            let room =
+                cols.saturating_sub(4 + width(&number) + tick_cols + by_you_w + width(&more));
+            // The chip only where the name keeps room to be read: the row
+            // under it says the tab lands already.
+            let way_w = way.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
+            let way = way.filter(|_| room.saturating_sub(way_w) >= width(&name).min(NAME_KEPT));
+            let room = room.saturating_sub(way.as_ref().map_or(0, |_| way_w));
             let mut first = Row::default();
             tick(&mut first, tab.id);
             first
@@ -820,7 +833,7 @@ pub fn sidebar_lines(
             if !more.is_empty() {
                 first.put(more, fg(theme.dim));
             }
-            if let Some(chip) = by_you {
+            for chip in [by_you, way].into_iter().flatten() {
                 first.put(" ", Style::new());
                 first.spans.extend(chip);
             }
@@ -1332,6 +1345,48 @@ mod tests {
             .count();
         assert_eq!(name_lines, 1);
         assert!(out.spins, "a working tab's badge spins");
+    }
+
+    #[test]
+    fn a_tab_landing_through_switchboard_s_queue_wears_its_way_s_chip_under_landing() {
+        let mut queued = tab(1, "rsvp", TabState::Idle);
+        queued.landing = Some(crate::facts::Landing {
+            holding: true,
+            line: 1,
+            method: crate::facts::Method::Pr,
+        });
+        queued.way = Some(crate::repos::Way::SwitchboardQueue);
+        let tabs = vec![queued, tab(2, "busy", TabState::Working)];
+        // At the default width a long name keeps its room, the chip left out.
+        let mut long = tabs.clone();
+        long[0].name = "note-stable-ids-for-every-note".into();
+        let narrow: Vec<String> = lines(&long, 34, 14, &view(2))
+            .lines
+            .iter()
+            .map(Line::text)
+            .collect();
+        assert!(
+            narrow
+                .iter()
+                .any(|l| l.contains("note-stable-ids") && !l.contains("queue")),
+            "{narrow:#?}"
+        );
+        let out = lines(&tabs, 40, 14, &view(2));
+        let text: Vec<String> = out.lines.iter().map(Line::text).collect();
+        let heading = text
+            .iter()
+            .position(|l| l.starts_with(" LANDING"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        let row = &text[heading + 1];
+        assert!(
+            row.contains("rsvp") && row.contains("Switchboard's queue"),
+            "{row}"
+        );
+        assert!(
+            !text
+                .iter()
+                .any(|l| l.contains("busy") && l.contains("queue"))
+        );
     }
 
     #[test]

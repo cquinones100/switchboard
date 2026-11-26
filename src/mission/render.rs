@@ -36,6 +36,7 @@ use super::views::{self, View, ViewId};
 use super::{Focus, HitBox, Mission, Spot};
 use crate::items::{Item, State};
 use crate::mux::input::{Key, KeyCode, Mods};
+use crate::repos::Way;
 use crate::sidebar::model::{self, Rules, TabModel, TabState};
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, Badge, width};
@@ -1048,6 +1049,9 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
             };
             chips.extend(kit::chip(&slot.chip(), tone, false, theme));
         }
+        if let Some(way) = tab.way {
+            chips.extend(kit::way_chip(way.chip(), false, theme));
+        }
         if let Some(phase) = tab.phase.as_deref().filter(|p| !p.is_empty()) {
             chips.extend(kit::chip(phase, Tone::Working, false, theme));
         }
@@ -1346,7 +1350,13 @@ fn shelf_line(
             right_aligned(when, at[3].map_or(0, |(_, w)| w)),
             Tone::Dim.style(theme),
         )],
-        vec![Span::styled(what, Tone::Dim.style(theme))],
+        // A landing tab's line leads with the way it lands by (board 193).
+        tab.way
+            .map(|w| kit::way_chip(w.chip(), m.snap.caps, theme))
+            .unwrap_or_default()
+            .into_iter()
+            .chain([Span::styled(what, Tone::Dim.style(theme))])
+            .collect(),
     ];
     let mut spans = vec![Span::raw(" ")];
     for (part, place) in parts.into_iter().zip(at) {
@@ -1646,7 +1656,7 @@ fn board(
             .collect();
         let color = match *column {
             "Merged" => Badge::Merged.color(),
-            "In merge queue" => Badge::Queued.color(),
+            "Landing" => Badge::Queued.color(),
             "Approved" | "Done" => Badge::Done.color(),
             "Draft" => Some(theme.dim),
             _ => Badge::Working.color(),
@@ -2140,7 +2150,7 @@ fn column_tone(column: &str) -> Tone {
         "In review" => Tone::Working,
         "Changes asked" => Tone::Failed,
         "Approved" | "Done" => Tone::Done,
-        "In merge queue" => Tone::Landing,
+        "Landing" => Tone::Landing,
         _ => Tone::Dim,
     }
 }
@@ -2207,8 +2217,25 @@ fn pr_face(item: &Item, m: &Mission, theme: &Theme) -> Face {
         .map_or(item.title.as_str(), |(_, t)| t);
     let repo = item.data["pr"]["repo"].as_str().unwrap_or("");
     let tab = number.and_then(|n| m.pr_tab(n, repo));
-    let queued = item.group.as_deref() == Some("In merge queue");
+    let queued = item.group.as_deref() == Some(crate::sources::prboard::LANDING);
+    // Landing, its place in its repository's way (board 195): its train,
+    // or its place in GitHub's queue.
+    let landing = item.data["landing"]
+        .as_str()
+        .filter(|w| queued && !w.is_empty());
     let meta = match (tab, item.data["reviewers"].as_str()) {
+        // Its place in its way, then the tab it is open in.
+        _ if landing.is_some() => {
+            let mut words = vec![Span::styled(
+                landing.unwrap_or_default().to_string(),
+                Tone::Landing.style(theme),
+            )];
+            if let Some(t) = tab {
+                words.push(Span::styled(" · ", fg(theme.dim)));
+                words.extend(tab_words(t, m, theme));
+            }
+            words
+        }
         (Some(t), _) => tab_words(t, m, theme),
         (None, Some(r)) if !queued && !r.is_empty() => {
             vec![Span::styled(r.to_string(), fg(theme.dim))]
@@ -2660,6 +2687,20 @@ fn pr_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images>) 
         }
         fact_line.push(kit::mark(mark, 0, theme));
         fact_line.push(Span::styled(" checks", fg(theme.dim)));
+    }
+    // Landing, the way it lands by and when it is done there (board 195).
+    if let Some(way) = d["way"].as_str().and_then(Way::parse) {
+        let done = way.facts()[1].1;
+        let mut named = vec![Span::styled(
+            way.label().to_string(),
+            Tone::Landing.style(theme),
+        )];
+        named.push(Span::styled(format!(" · done when {done}"), fg(theme.dim)));
+        if !fact_line.iter().all(|s| s.content.is_empty()) {
+            named.push(Span::styled(" · ", fg(theme.dim)));
+        }
+        named.extend(fact_line);
+        fact_line = named;
     }
     let head = kit::pane(&item.title, fact_line, inner, theme);
     with_description(
@@ -3184,11 +3225,9 @@ pub(super) fn tone_named(name: &str) -> Tone {
     }
 }
 
-/// UX 2.0's Landing view, as board 5 draws it and board 45 lays it out:
-/// the stages a worktree goes through landing straight on its branch, and
-/// a merge queue's PR's.
-const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
-const QUEUE_STAGES: [&str; 5] = ["CI", "approved", "merge queue", "merge", "deploy test"];
+/// UX 2.0's Landing view, as board 193 draws it and board 45 lays it out:
+/// each section's columns are the steps of the way its repository lands
+/// by (`repos::Way::columns`), every way ending in landed and cleaned up.
 /// A cell's widest, its two ends in it: 13 columns of words ("3rd in queue").
 const CELL_MAX: usize = 15;
 /// From this wide every cell is `CELL_MAX`; narrower, each column is as
@@ -3308,37 +3347,7 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
         },
         _ => done("passed"),
     };
-    let review = match &record["review"] {
-        r if r.is_object() && number(r, "clean_rounds").unwrap_or(0) >= 2 => {
-            done(&format!("{} clean", number(r, "clean_rounds").unwrap_or(2)))
-        }
-        r if r.is_object() => {
-            let ago = text::ago(
-                r.get("at")
-                    .and_then(serde_json::Value::as_i64)
-                    .map(|ms| ms / 1000),
-                now_ms / 1000,
-            );
-            let at_cap = r["at_cap"].as_bool() == Some(true);
-            StageCell {
-                stage: if at_cap { Stage::Asks } else { Stage::Running },
-                label: round_of_cap(r),
-                note: [
-                    if at_cap {
-                        "waiting on you".to_string()
-                    } else {
-                        words(r, "reviewer")
-                    },
-                    ago,
-                ]
-                .into_iter()
-                .filter(|w| !w.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · "),
-            }
-        }
-        _ => done("clean"),
-    };
+    let review = review_cell(&record["review"], now_ms);
     let leak = match number(&record["leak"], "found") {
         Some(n) if n > 0 => stage_cell(Stage::Failed, "✕ found"),
         _ if record["leak"]["skipped"] == true => stage_cell(Stage::Waiting, "not run"),
@@ -3391,22 +3400,156 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     } else if phase.starts_with("pushing") {
         out[4] = running("pushing…");
     } else if phase.starts_with("applying") {
-        out[4] = done("pushed");
-        out[5] = running("applying…");
+        out[4] = running("applying…");
     } else if phase.starts_with("cleaning") {
         out[4] = done("pushed");
-        out[5] = done("applied");
+        out[5] = running("cleaning…");
     }
     out
 }
 
-/// A merge queue row's stages from what the view holds of it
-/// (`data.queue.state` and `position`): GitHub lets a PR into the queue only
-/// once its checks pass and it is approved, so those are done; the queue
-/// cell is its place, its checks running, or a failure when it can't merge;
-/// merging is the merge stage running. The deploy test waits, since the row
-/// leaves the queue once it merges.
-fn queue_stages(queue: &serde_json::Value) -> [StageCell; 5] {
+/// A review loop's cell from what its landing recorded (`record.review`):
+/// its clean rounds once there are two, else its round, its reviewer and
+/// how long ago, waiting on you at its cap; "✓ clean" with no record, since
+/// a tab lands only once its review is clean.
+fn review_cell(r: &serde_json::Value, now_ms: i64) -> StageCell {
+    let number = |k: &str| r.get(k).and_then(serde_json::Value::as_u64);
+    if !r.is_object() {
+        return stage_cell(Stage::Done, "✓ clean");
+    }
+    if number("clean_rounds").unwrap_or(0) >= 2 {
+        return stage_cell(
+            Stage::Done,
+            format!("✓ {} clean", number("clean_rounds").unwrap_or(2)),
+        );
+    }
+    let ago = text::ago(
+        r.get("at")
+            .and_then(serde_json::Value::as_i64)
+            .map(|ms| ms / 1000),
+        now_ms / 1000,
+    );
+    let at_cap = r["at_cap"].as_bool() == Some(true);
+    StageCell {
+        stage: if at_cap { Stage::Asks } else { Stage::Running },
+        label: round_of_cap(r),
+        note: [
+            if at_cap {
+                "waiting on you".to_string()
+            } else {
+                printable(r["reviewer"].as_str().unwrap_or(""))
+            },
+            ago,
+        ]
+        .into_iter()
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · "),
+    }
+}
+
+/// A PR in Switchboard's merge queue's cells (`data.prqueue`), as board 193
+/// draws them: its review from its landing's record, its checks passed
+/// (the queue takes a PR only once they have), its place among those
+/// queued or in its train, the train testing, rerunning or next, and
+/// landed and cleaned up waiting, since a PR leaves the queue as it merges.
+fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
+    let waiting = || stage_cell(Stage::Waiting, "waiting");
+    let place = q["place"].as_u64().unwrap_or(1);
+    let train = q["train"].as_str().map(crate::sources::landing::train_name);
+    // A PR in the train ahead is next, though the queue counts it as
+    // testing too.
+    let next = q["next"].as_bool() == Some(true);
+    let testing = !next && q["testing"].as_bool() == Some(true);
+    let (queued, train_cell) = if testing {
+        let ago = text::ago(q["since"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
+        let label = if q["rerun"].as_bool() == Some(true) {
+            "rerunning"
+        } else {
+            "testing"
+        };
+        (
+            stage_cell(Stage::Done, format!("✓ {}", ordinal(place))),
+            StageCell {
+                stage: Stage::Running,
+                label: label.into(),
+                note: if ago.is_empty() {
+                    String::new()
+                } else {
+                    format!("CI · {ago}")
+                },
+            },
+        )
+    } else if next {
+        (
+            stage_cell(Stage::Done, "✓ next"),
+            StageCell {
+                stage: Stage::Queued,
+                label: "next".into(),
+                note: train.unwrap_or_default(),
+            },
+        )
+    } else {
+        (stage_cell(Stage::Queued, ordinal(place)), waiting())
+    };
+    // Its train's CI looked passed once: the queue merges it on the next
+    // look that agrees (a job that waits on another shows only once that
+    // one ends), or failed to merge it and tries again.
+    let (train_cell, landed) = match (
+        testing && q["passed"].as_bool() == Some(true),
+        q["mergeFailures"].as_u64().unwrap_or(0),
+    ) {
+        (true, 0) => (stage_cell(Stage::Running, "confirming"), waiting()),
+        (true, n) => (
+            stage_cell(Stage::Done, "✓ passed"),
+            StageCell {
+                stage: Stage::Failed,
+                label: "✕ not merged".into(),
+                note: format!("{n} tries"),
+            },
+        ),
+        _ => (train_cell, waiting()),
+    };
+    [
+        review_cell(&q["record"]["review"], now_ms),
+        stage_cell(Stage::Done, "✓ passed"),
+        queued,
+        train_cell,
+        landed,
+        waiting(),
+    ]
+}
+
+/// A merged PR's cells while its worktree is still there (`data.landed`):
+/// every step done, landed merged, and cleaned up under way while
+/// queue-and-clean cleans it up, else waiting on its worktree.
+fn landed_stages(landed: &serde_json::Value) -> Vec<StageCell> {
+    let way = landed["way"]
+        .as_str()
+        .and_then(Way::parse)
+        .unwrap_or(Way::GithubQueue);
+    let columns = way.columns();
+    let mut out: Vec<StageCell> = columns[..columns.len() - 2]
+        .iter()
+        .map(|_| stage_cell(Stage::Done, "✓"))
+        .collect();
+    out.push(stage_cell(Stage::Done, "✓ merged"));
+    out.push(if landed["cleaning"].as_bool() == Some(true) {
+        stage_cell(Stage::Running, "cleaning…")
+    } else {
+        stage_cell(Stage::Waiting, "worktree left")
+    });
+    out
+}
+
+/// A GitHub merge queue row's stages from what the view holds of it
+/// (`data.queue.state` and `position`), as board 193 draws them: GitHub
+/// lets a PR into the queue only once its checks pass and it is approved,
+/// so those are done, its review unknown to the workspace (a dash); the
+/// queued cell is its place, its checks running, or a failure when it
+/// can't merge; merging is the landed stage running. Cleaned up waits,
+/// since the row leaves the queue once it merges.
+fn queue_stages(queue: &serde_json::Value) -> [StageCell; 6] {
     let state = queue
         .get("state")
         .and_then(serde_json::Value::as_str)
@@ -3417,22 +3560,20 @@ fn queue_stages(queue: &serde_json::Value) -> [StageCell; 5] {
         .unwrap_or(0);
     let waiting = || stage_cell(Stage::Waiting, "waiting");
     let mut out = [
-        stage_cell(Stage::Done, "✓ CI"),
+        stage_cell(Stage::Waiting, "—"),
+        stage_cell(Stage::Done, "✓ passed"),
         stage_cell(Stage::Done, "✓ approved"),
-        stage_cell(
-            Stage::Queued,
-            format!("{} in queue", ordinal(position.max(1))),
-        ),
+        stage_cell(Stage::Queued, ordinal(position.max(1))),
         waiting(),
         waiting(),
     ];
     match state {
-        "AWAITING_CHECKS" => out[2] = stage_cell(Stage::Running, "checks…"),
-        "UNMERGEABLE" => out[2] = stage_cell(Stage::Failed, "✕ can't merge"),
-        "MERGEABLE" => out[2] = stage_cell(Stage::Done, "✓ ready"),
+        "AWAITING_CHECKS" => out[3] = stage_cell(Stage::Running, "checks…"),
+        "UNMERGEABLE" => out[3] = stage_cell(Stage::Failed, "✕ can't merge"),
+        "MERGEABLE" => out[3] = stage_cell(Stage::Done, "✓ ready"),
         "LOCKED" => {
-            out[2] = stage_cell(Stage::Done, "✓ ready");
-            out[3] = stage_cell(Stage::Running, "merging…");
+            out[3] = stage_cell(Stage::Done, "✓ ready");
+            out[4] = stage_cell(Stage::Running, "merging…");
         }
         _ => {}
     }
@@ -3450,29 +3591,34 @@ fn ordinal(n: u64) -> String {
     format!("{n}{suffix}")
 }
 
-/// An item's stage cells, none for a row that isn't a landing or a PR in
-/// a merge queue.
+/// An item's stage cells, none for a row that isn't a landing, a PR in a
+/// merge queue or a merged PR kept until it is cleaned up.
 fn stages_of(item: &Item, now_ms: i64) -> Vec<StageCell> {
-    if let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) {
+    let of = |k: &str| item.data.get(k).filter(|v| v.is_object());
+    if let Some(landing) = of("landing") {
         landing_stages(landing, now_ms).to_vec()
-    } else if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
+    } else if let Some(queue) = of("queue") {
         queue_stages(queue).to_vec()
+    } else if let Some(q) = of("prqueue") {
+        prqueue_stages(q, now_ms).to_vec()
+    } else if let Some(landed) = of("landed") {
+        landed_stages(landed)
     } else {
         Vec::new()
     }
 }
 
-/// The stage names a section's heading puts over its cells.
+/// The way a section's heading names (`data.way`).
+fn way_of(item: &Item) -> Option<Way> {
+    item.data
+        .get("way")
+        .and_then(serde_json::Value::as_str)
+        .and_then(Way::parse)
+}
+
+/// The stage names a section's heading puts over its cells: its way's.
 fn heads_of(item: &Item) -> &'static [&'static str] {
-    // A direct landing's heading names its target after `:direct:`, which
-    // may be a branch called queue, so it is told apart first.
-    if item.id.contains(":direct") {
-        &STAGES
-    } else if item.id.ends_with(":queue") {
-        &QUEUE_STAGES
-    } else {
-        &[]
-    }
+    way_of(item).map_or(&[], Way::columns)
 }
 
 /// A section of the Landing view laid out across `cols`: the worktree
@@ -3993,11 +4139,25 @@ fn stage_rows(
             );
             let mut heading = Vec::new();
             if let Some(col) = at[0] {
-                kit::place(
-                    &mut heading,
-                    vec![Span::styled(format!(" {}", item.title), bold(theme.bright))],
-                    col,
-                );
+                // The repository's name, then the way it lands by and when
+                // a tab there is done, dim (board 193).
+                // The repository's name alone where its words follow it.
+                let shown = item
+                    .data
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|_| item.data.get("words").is_some())
+                    .unwrap_or(&item.title);
+                let mut name = vec![Span::styled(format!(" {shown}"), bold(theme.bright))];
+                if let Some(words) = item
+                    .data
+                    .get("words")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|w| !w.is_empty())
+                {
+                    name.push(Span::styled(format!("   {words}"), fg(theme.dim)));
+                }
+                kit::place(&mut heading, name, col);
             }
             if let Some(col) = at[1] {
                 kit::place(&mut heading, vec![Span::styled(right, fg(theme.dim))], col);
@@ -4008,7 +4168,7 @@ fn stage_rows(
             });
             let names = heads_of(item);
             if let Some(layout) = layout.filter(|_| !names.is_empty()) {
-                let first = if names.len() == STAGES.len() {
+                let first = if way_of(item) == Some(Way::Direct) {
                     "worktree"
                 } else {
                     "pull request"
@@ -4570,6 +4730,10 @@ fn pilot_card(item: &Item, at: usize, chosen: bool, hovered: bool, m: &Mission) 
     if let Some(words) = pilot.and_then(|p| pilot_timer(p, m.snap.now_secs)) {
         facts.push(vec![Span::styled(words, fg(theme.dim))]);
     }
+    // A landing card names the way its repository lands by (board 194).
+    if let Some(way) = pilot.and_then(|p| p["way"].as_str()).and_then(Way::parse) {
+        facts.push(kit::way_chip(way.chip(), m.snap.caps, theme));
+    }
     let blockers = after.map_or(&[][..], Vec::as_slice);
     for (n, on) in blockers.iter().take(PILOT_BLOCKERS_SHOWN).enumerate() {
         let lit = m.hover == Some(Spot::Part(at as isize, n));
@@ -5066,10 +5230,27 @@ fn ci_rows(
             theme,
         );
         entries.push((if hover { lit(line, theme) } else { line }, Some(spot)));
+        let ci = &item.data["ci"];
+        // What the run means for landing in its repository's way (board
+        // 196), under its title: its repository, the way and where it is
+        // there, and the run's counts.
+        let landing = ci["landing"].as_str().filter(|w| !w.is_empty());
         if state != "failing" {
+            if let Some(words) = landing {
+                let short = repo.rsplit('/').next().unwrap_or(repo);
+                let line = kit::row(
+                    vec![Span::styled(
+                        format!("  {short} · {words} · {}", item.detail),
+                        fg(theme.dim),
+                    )],
+                    list_w,
+                    row_chosen,
+                    theme,
+                );
+                entries.push((if hover { lit(line, theme) } else { line }, Some(spot)));
+            }
             continue;
         }
-        let ci = &item.data["ci"];
         let mut facts: Vec<String> = [ci["repo"].as_str(), ci["branch"].as_str()]
             .into_iter()
             .flatten()
@@ -5079,6 +5260,13 @@ fn ci_rows(
         if let (Some(f), Some(t)) = (ci["failed"].as_u64(), ci["total"].as_u64()) {
             facts.push(format!("{f} of {t} failed"));
         }
+        // A train has no checks of its own: its detail says why it fails,
+        // in place of its branch, which its title names.
+        if ci["train"].as_bool() == Some(true) && !item.detail.is_empty() {
+            facts.retain(|f| Some(f.as_str()) != ci["branch"].as_str());
+            facts.push(item.detail.clone());
+        }
+        facts.extend(landing.map(str::to_string));
         let line = kit::row(
             vec![Span::styled(
                 format!("  {}", facts.join(" · ")),
@@ -6223,6 +6411,13 @@ pub(super) fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Landing view's section heading for a repository landing `way`.
+    fn landing_header(way: &str, id: &str, title: &str, count: usize) -> Item {
+        let mut h = views::header(id, title, count);
+        h.data["way"] = serde_json::json!(way);
+        h
+    }
     use crate::items::ViewData;
     use crate::mission::Snapshot;
     use crate::mux::TabId;
@@ -7071,6 +7266,29 @@ mod tests {
     }
 
     #[test]
+    fn a_landing_tab_s_card_wears_its_way_s_chip() {
+        let tabs: Vec<TabModel> = (1..=3)
+            .map(|n| {
+                let mut t = tab(n, &format!("land {n}"));
+                t.state = TabState::Working;
+                t.landing = Some(crate::facts::Landing {
+                    holding: n == 1,
+                    line: n,
+                    method: crate::facts::Method::Pr,
+                });
+                t.way = Some(Way::SwitchboardQueue);
+                t
+            })
+            .collect();
+        let m = mission(tabs, Vec::new());
+        let text = texts(&screen(&m, 240, 60).0);
+        assert!(
+            text.iter().any(|l| l.contains("Switchboard's queue")),
+            "{text:#?}"
+        );
+    }
+
+    #[test]
     fn the_cards_fill_any_width_and_give_way_in_board_45_s_order() {
         let mut tabs: Vec<TabModel> = (1..=5)
             .map(|n| {
@@ -7165,6 +7383,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
         });
         m.cursor = -1;
         let (lines, hits) = screen(&m, 120, 30);
@@ -7850,6 +8069,59 @@ mod tests {
     }
 
     #[test]
+    fn a_train_is_a_run_of_its_own_and_each_run_says_what_it_means_for_landing() {
+        let failing = Item::new("f", "#2027 sidebar header").data(serde_json::json!({ "ci": {
+            "number": 2027, "repo": "acme/switchboard", "state": "failing",
+            "failed": 2, "total": 9,
+            "landing": "Switchboard's merge queue, 3rd in Switchboard's queue",
+        } }));
+        let github = Item::new("g", "#208 billing page")
+            .detail("4 of 5 passed, 1 running")
+            .data(serde_json::json!({ "ci": {
+                "number": 208, "repo": "acme/web-app", "state": "running",
+                "landing": "GitHub's merge queue, 3rd",
+            } }));
+        let train = Item::new("train:/r:ci/train-3", "train 3 #2040 + #219")
+            .detail("testing")
+            .data(serde_json::json!({ "ci": {
+                "number": 0, "repo": "acme/switchboard", "state": "running", "train": true,
+                "landing": "Switchboard's merge queue",
+            } }));
+        let stuck = Item::new("train:/r:ci/train-5", "train 5 #31")
+            .detail("passed, merge failed 2 times")
+            .data(serde_json::json!({ "ci": {
+                "number": 0, "repo": "acme/switchboard", "state": "failing", "train": true,
+                "branch": "ci/train-5", "landing": "Switchboard's merge queue",
+            } }));
+        let items = views::ci_sections(&[failing, github, train, stuck]);
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Ci, "CI", items)]);
+        m.view = 1;
+        let text = texts(&screen(&m, 200, 30).0);
+        let line = |words: &str| {
+            text.iter()
+                .position(|l| l.contains(words))
+                .unwrap_or_else(|| panic!("{words}: {text:#?}"))
+        };
+        assert!(
+            text[line("#2027 sidebar header") + 1]
+                .contains("2 of 9 failed · Switchboard's merge queue, 3rd")
+        );
+        assert!(
+            text[line("#208 billing page") + 1]
+                .contains("web-app · GitHub's merge queue, 3rd · 4 of 5 passed")
+        );
+        assert!(
+            text[line("train 5 #31") + 1].contains("passed, merge failed 2 times"),
+            "{text:#?}"
+        );
+        let at = line("train 3 #2040 + #219");
+        assert!(
+            text[at + 1].contains("switchboard · Switchboard's merge queue · testing"),
+            "{text:#?}"
+        );
+    }
+
+    #[test]
     fn a_footer_label_clicks_the_key_it_names() {
         let key = |k: &str| crate::mux::input::Key::parse(k);
         assert_eq!(footer_key("↵"), key("Enter"));
@@ -8354,6 +8626,49 @@ mod tests {
         // diagrams are still asked for.
         m.size = (120, 20);
         assert!(description_beside(&m).is_some());
+    }
+
+    #[test]
+    fn the_pr_board_s_landing_column_says_where_each_pr_is_in_its_way() {
+        let item = |n: u32, landing: &str, way: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .group(crate::sources::prboard::LANDING)
+                .data(serde_json::json!({
+                    "pr": { "number": n }, "checks": "success",
+                    "landing": landing, "way": way, "body": "",
+                }))
+        };
+        let items = vec![
+            item(2040, "train 3 · CI 6m", "switchboard-queue"),
+            item(208, "GitHub's · 3rd", "github-queue"),
+        ];
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.view = 1;
+        m.cursor = 1;
+        let mut lines = Vec::new();
+        let mut hits = Vec::new();
+        board_cards(
+            &m.snap.views[0],
+            crate::sources::prboard::COLUMNS,
+            200,
+            24,
+            &m,
+            &Theme::DARK,
+            0,
+            &mut lines,
+            &mut hits,
+        );
+        let text = texts(&lines);
+        assert!(text[0].contains("LANDING 2"), "{}", text[0]);
+        for words in ["train 3 · CI 6m", "GitHub's · 3rd"] {
+            assert!(text.iter().any(|l| l.contains(words)), "{words}: {text:#?}");
+        }
+        // The pane names the chosen PR's way and when it is done there.
+        assert!(
+            text.iter()
+                .any(|l| l.contains("GitHub's merge queue · done when GitHub merges")),
+            "{text:#?}"
+        );
     }
 
     #[test]
@@ -8921,7 +9236,7 @@ mod tests {
         assert!(text[0].ends_with("2 more ›"), "{}", text[0]);
         assert!(!text[0].contains("‹"), "{}", text[0]);
         assert!(
-            text[1].starts_with(&columns[0].to_uppercase()) && !text[1].contains("MERGE"),
+            text[1].starts_with(&columns[0].to_uppercase()) && !text[1].contains("LANDING"),
             "{}",
             text[1]
         );
@@ -8938,7 +9253,7 @@ mod tests {
         let (text, hits) = draw(&m);
         assert!(text[0].starts_with("‹ 2 more"), "{}", text[0]);
         assert!(!text[0].contains("›"), "{}", text[0]);
-        assert!(text[1].contains("IN MERGE QUEUE 1"), "{}", text[1]);
+        assert!(text[1].contains("LANDING 1"), "{}", text[1]);
         assert!(text.iter().any(|l| l.contains("╭ #2")), "{text:?}");
         assert!(
             hits.iter()
@@ -9235,6 +9550,7 @@ mod tests {
             target: String::new(),
             drained: false,
             failing: String::new(),
+            way: None,
             note: "Switchboard".into(),
             busy: 1,
             open: 2,
@@ -9392,6 +9708,50 @@ mod tests {
         assert!(
             text.contains("its last start failed"),
             "beside the board: {text}"
+        );
+    }
+
+    #[test]
+    fn autopilot_names_its_repository_s_way_in_its_heading_and_on_a_landing_card() {
+        let mut landing = pilot_row(3, "Give notes stable IDs", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        landing.phase = Some("pushing".into());
+        landing.landing = Some(serde_json::json!({ "holding": true, "phase": "pushing" }));
+        let summary = crate::autopilot::Summary {
+            way: Some(Way::SwitchboardQueue),
+            ..pilot_summary()
+        };
+        let list = crate::autopilot::view::items(
+            &summary,
+            "",
+            "",
+            &[
+                landing,
+                pilot_row(4, "Port the PR board", TabState::Working),
+            ],
+            &[],
+            &[],
+            &[],
+            &std::collections::HashMap::new(),
+        );
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.view = 1;
+        let text = texts(&drawn(&m, 200, 30).0);
+        assert!(
+            text.iter()
+                .any(|l| l.contains("lands by Switchboard's merge queue · without asking")),
+            "{text:#?}"
+        );
+        // The landing card's chip, and none on the working one's.
+        assert_eq!(
+            text.iter()
+                .filter(|l| l.contains("Switchboard's queue"))
+                .count(),
+            1,
+            "{text:#?}"
         );
     }
 
@@ -9838,9 +10198,19 @@ mod tests {
                 .detail("waiting")
                 .data(serde_json::json!({ "landing": { "holding": false, "place": n } }))
         };
-        let mut items = vec![views::header("/a:direct", "app · straight to main", 4)];
+        let mut items = vec![landing_header(
+            "direct",
+            "/a:direct",
+            "app · straight to main",
+            4,
+        )];
         items.extend((1..=4).map(landing));
-        items.push(views::header("/b:direct", "api · straight to main", 5));
+        items.push(landing_header(
+            "direct",
+            "/b:direct",
+            "api · straight to main",
+            5,
+        ));
         items.extend((5..=9).map(landing));
         let last = items.len() - 1;
         let mut m = mission(
@@ -9866,7 +10236,8 @@ mod tests {
         };
         let mut items = Vec::new();
         for n in 1..=12 {
-            items.push(views::header(
+            items.push(landing_header(
+                "direct",
                 &format!("/r{n}:direct"),
                 &format!("repo-{n}"),
                 1,
@@ -10006,7 +10377,8 @@ mod tests {
                     "holder": { "name": "note-stable-ids", "phase": "pushing" },
                 } }))
         };
-        let mut heading = views::header("/r:direct", "switchboard · straight on main", 3);
+        let mut heading =
+            landing_header("direct", "/r:direct", "switchboard · straight on main", 3);
         heading.data["right"] = "3 landing · 1 holds the lock".into();
         let items = vec![
             heading,
@@ -10205,7 +10577,7 @@ mod tests {
                 } }))
         };
         let items = vec![
-            views::header("/r:direct", "switchboard · straight to main", 2),
+            landing_header("direct", "/r:direct", "switchboard · straight to main", 2),
             landing("note-stable-ids", true, None, Some("pushing")),
             landing("note-benchmark", false, Some(2), None),
         ];
@@ -10226,7 +10598,10 @@ mod tests {
             "the dashed rule under the heads"
         );
         assert!(
-            heads.contains("worktree") && heads.contains("leak check") && heads.contains("applied"),
+            heads.contains("worktree")
+                && heads.contains("leak check")
+                && heads.contains("landed")
+                && heads.contains("cleaned up"),
             "{heads}"
         );
         let holder = &text[at + 3];
@@ -10276,9 +10651,9 @@ mod tests {
             }))
         };
         let more = vec![
-            views::header("/r:direct", "switchboard · straight to main", 1),
+            landing_header("direct", "/r:direct", "switchboard · straight to main", 1),
             failing,
-            views::header("/r:queue", "web-app · merge queue", 2),
+            landing_header("github-queue", "/r:queue", "web-app · merge queue", 2),
             queued("QUEUED"),
             queued("UNMERGEABLE"),
         ];
@@ -10299,10 +10674,10 @@ mod tests {
             .find(|s| s.content.contains("✕ 2 of 401"))
             .unwrap();
         assert_eq!(cell.style.bg, Some(Color::Indexed(52)));
-        // A merge queue's PR is a row of its own stages.
+        // A GitHub merge queue's PR is a row of that way's stages.
         let heads = ftext.iter().find(|l| l.contains("pull request")).unwrap();
         assert!(
-            heads.contains("CI") && heads.contains("deploy test"),
+            heads.contains("approved") && heads.contains("queued") && heads.contains("cleaned up"),
             "{heads}"
         );
         let pr = ftext
@@ -10310,13 +10685,94 @@ mod tests {
             .position(|l| l.contains("#2031 settings page"))
             .unwrap();
         assert!(
-            ftext[pr].contains("✓ CI")
+            ftext[pr].contains("✓ passed")
                 && ftext[pr].contains("✓ approved")
-                && ftext[pr].contains("3rd in queue"),
+                && ftext[pr].contains("3rd"),
             "{}",
             ftext[pr]
         );
         assert!(ftext[pr + 2].contains("✕ can't merge"), "{}", ftext[pr + 2]);
+    }
+
+    #[test]
+    fn each_way_s_section_names_it_and_ends_in_landed_and_cleaned_up() {
+        let mut ours = landing_header("switchboard-queue", "/r:prqueue", "switchboard", 2);
+        ours.data["words"] = serde_json::json!(
+            "lands by Switchboard's merge queue  ·  done when its PR merges on main, then cleaned up"
+        );
+        let in_train = Item::new("prqueue:/r:2040", "1. #2040 calendar RSVP")
+            .detail("testing on ci/train-3 · tab 5")
+            .data(serde_json::json!({ "prqueue": {
+                "testing": true, "train": "ci/train-3", "place": 1,
+                "record": { "review": { "clean_rounds": 2 } },
+            } }));
+        let merging = Item::new("prqueue:/r:2041", "3. #2041 merging")
+            .detail("testing on ci/train-4 · tab 7")
+            .data(serde_json::json!({ "prqueue": {
+                "testing": true, "train": "ci/train-4", "place": 1, "passed": true,
+            } }));
+        let stuck = Item::new("prqueue:/r:2042", "4. #2042 stuck")
+            .detail("testing on ci/train-6 · tab 8")
+            .data(serde_json::json!({ "prqueue": {
+                "testing": true, "train": "ci/train-6", "place": 1, "passed": true,
+                "mergeFailures": 2,
+            } }));
+        let waiting = Item::new("prqueue:/r:219", "2. #219 tab colors")
+            .detail("waiting · tab 6")
+            .data(serde_json::json!({ "prqueue": { "testing": false, "place": 2 } }));
+        let landed = Item::new("landed:@9", "3. #208 billing page")
+            .detail("merged · cleaning up · tab 4")
+            .data(
+                serde_json::json!({ "landed": { "way": "switchboard-queue", "cleaning": true } }),
+            );
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(
+                ViewId::Landing,
+                "Landing",
+                vec![ours, in_train, merging, stuck, waiting, landed],
+            )],
+        );
+        m.view = 1;
+        let text = texts(&screen(&m, 180, 20).0);
+        let at = text
+            .iter()
+            .position(|l| l.contains("switchboard   lands by Switchboard's merge queue"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        assert!(
+            text[at].contains("done when its PR merges on main"),
+            "{}",
+            text[at]
+        );
+        let heads = &text[at + 1];
+        for head in [
+            "pull request",
+            "review",
+            "checks",
+            "queued",
+            "train",
+            "landed",
+            "cleaned up",
+        ] {
+            assert!(heads.contains(head), "{head}: {heads}");
+        }
+        let row = |name: &str| text.iter().position(|l| l.contains(name)).unwrap();
+        let first = &text[row("#2040 calendar RSVP")];
+        assert!(
+            first.contains("✓ 2 clean")
+                && first.contains("✓ passed")
+                && first.contains("✓ 1st")
+                && first.contains("testing"),
+            "{first}"
+        );
+        assert!(text[row("#219 tab colors")].contains("2nd"));
+        assert!(text[row("#2041 merging")].contains("confirming"));
+        assert!(text[row("#2042 stuck")].contains("✕ not merged"));
+        let merged = &text[row("#208 billing page")];
+        assert!(
+            merged.contains("✓ merged") && merged.contains("cleaning…"),
+            "{merged}"
+        );
     }
 
     /// A description of `n` paragraphs, "Line 1" to "Line <n>".

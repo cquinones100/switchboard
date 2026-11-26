@@ -1437,12 +1437,31 @@ impl Server {
         }
     }
 
+    /// The way the mode's repository lands by, from the landing read: a
+    /// target branch's landings straight on it, else repos.json's `lands`
+    /// for the repository, as the read last found it.
+    fn autopilot_way(&self) -> Option<crate::repos::Way> {
+        let mode = &self.autopilot.mode;
+        if !mode.target.is_empty() {
+            return Some(crate::repos::Way::Direct);
+        }
+        let repo = Path::new(&mode.repo);
+        self.sources
+            .landing
+            .repos
+            .iter()
+            .filter(|r| r.target.is_none())
+            .find(|r| r.common.parent() == Some(repo) || r.common == repo.join(".git"))
+            .and_then(|r| r.method)
+    }
+
     /// What mission control's line shows, while the mode is on and has no
     /// view of its own (src/autopilot/view.rs) to say it in instead.
     pub fn autopilot_summary(&self) -> Option<Summary> {
         let mode = &self.autopilot.mode;
         (settings::is_on("autopilot") && mode.on && !super::has_view()).then(|| Summary {
             failing: self.sources.main_failing(),
+            way: self.autopilot_way(),
             ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         })
     }
@@ -1600,6 +1619,7 @@ impl Server {
         let mode = &self.autopilot.mode;
         let summary = Summary {
             failing: self.sources.main_failing(),
+            way: self.autopilot_way(),
             ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         };
         // Paused, away, past today's spend limit or at the weekly limit, it
