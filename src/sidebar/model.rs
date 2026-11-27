@@ -1157,7 +1157,7 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
             let finished = if since.is_empty() {
                 "finished".to_string()
             } else {
-                format!("finished {}", when::ago(tab.since, now, Said::Ago))
+                format!("finished {since} ago")
             };
             // The watches it left running, named as Monitoring names them.
             let watching = if tab.monitors.is_empty() {
