@@ -309,6 +309,11 @@ body { position: fixed; inset: 0; height: auto; }
   text-align: left;
 }
 .label.fold:focus-visible { background: var(--chosen); outline: none; }
+/* The header's repository chip, a control drawn as a chip: 44 tall to press,
+   its name cut short; blue while the drawer is filtered to one. */
+.repo-chip { flex: none; min-height: var(--tap); max-width: 40%; display: flex; align-items: center; }
+.repo-chip .chip { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.repo-chip:focus-visible .chip { outline: 1px solid var(--accent); }
 .row {
   display: grid;
   grid-template-columns: 1.5ch 1fr;

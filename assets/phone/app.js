@@ -618,10 +618,10 @@ function groupOf(t) {
   return [stage, OLD_GROUPS[stage], stage];
 }
 
-function groups(typed) {
+function groups(typed, keep) {
   const all = [];
   for (const t of state.tabs) {
-    if (!matches(t, typed || [])) continue;
+    if (!matches(t, typed || []) || (keep && !keep(t))) continue;
     const [stage, name, tone] = groupOf(t);
     const group = all.find((g) => g.stage === stage);
     if (group) group.tabs.push(t);
@@ -728,18 +728,20 @@ function clearSearch() {
 function drawerList() {
   const words = wordsOf(state.search);
   const list = el("div", { class: "drawer" + (state.live ? "" : " off") });
-  const all = groups(words);
+  // The search covers every tab, the repository filter or not.
+  const searching = words.length > 0;
+  const filtered = !searching && repoFilter !== null;
+  const all = groups(words, filtered ? (t) => t.repo === repoFilter : null);
   if (!state.tabs.length) list.append(el("div", { class: "empty" }, "No tab is running Claude."));
-  else if (!all.length) {
+  else if (searching && !all.length) {
     list.append(
       el("div", { class: "empty" }, "No tab matches ", el("b", {}, state.search.trim())),
       el("button", { class: "big again", onclick: () => clearSearch() }, "Clear the search"),
     );
-  }
+  } else if (filtered && !all.length) list.append(el("div", { class: "empty" }, "No Claude tab in ", el("b", {}, repoFilter), "."));
   for (const { stage, name, tone, tabs } of all) {
     // While the search has words, every group with a match shows open, and
     // its heading folds nothing, so no fold changes out of sight.
-    const searching = words.length > 0;
     const folded = !searching && folds.has(stage);
     const g = el(
       "div",
@@ -753,27 +755,132 @@ function drawerList() {
         el("span", {}, tabs.length),
       ),
     );
-    for (const t of folded ? [] : tabs) {
-      const [m, kind] = markOf(t);
-      g.append(
-        held(
-          el(
-            "button",
-            { class: "row" + (state.menu && state.menu.pane === number(t) ? (state.menu.sheet || state.menu.remind ? " held" : " held lifted") : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
-            follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
-            el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
-            el("span", { class: "sub" }, lit(sayingOf(t), words)),
-            reminded(t) ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words)) : null,
-            where(t, words),
-          ),
-          t,
-        ),
-      );
-    }
+    for (const t of folded ? [] : tabs) g.append(tabRow(t, words, false));
     list.append(g);
   }
+  if (filtered) list.append(...elsewhere());
   list.append(buildLine());
   return list;
+}
+
+// Filtered to a repository, the other repositories' tabs: those waiting on
+// you or whose reminder has come due under Elsewhere, each naming its
+// repository, so nothing that needs you is hidden; the rest under one
+// Other repos line at the bottom, closed until tapped, as the sidebar folds
+// them.
+function elsewhere() {
+  const others = state.tabs.filter((t) => t.repo !== repoFilter);
+  const needsYou = (t) => t.needs || Boolean(t.remind && t.remind.due);
+  const shown = others.filter(needsYou);
+  const rest = others.filter((t) => !needsYou(t));
+  const out = [];
+  if (shown.length) {
+    out.push(
+      el(
+        "div",
+        { class: "group elsewhere" },
+        el("div", { class: "label needs", "data-stage": "elsewhere" }, el("span", {}, "Elsewhere"), el("span", {}, shown.length)),
+        shown.map((t) => tabRow(t, [], true)),
+      ),
+    );
+  }
+  if (rest.length) {
+    out.push(
+      el(
+        "div",
+        { class: "group other-repos" },
+        el(
+          "button",
+          { class: "label fold idle", "aria-expanded": String(otherReposOpen), "data-stage": "other-repos", onclick: () => { otherReposOpen = !otherReposOpen; drawer(); } },
+          el("span", {}, (otherReposOpen ? "▾ " : "▸ ") + "Other repos"),
+          el("span", {}, rest.length),
+        ),
+        otherReposOpen ? rest.map((t) => tabRow(t, [], true)) : [],
+      ),
+    );
+  }
+  return out;
+}
+
+// A tab's row in the drawer, its repository named under what it is doing
+// where it sits apart from the repository the drawer is filtered to.
+function tabRow(t, words, named) {
+  const [m, kind] = markOf(t);
+  return held(
+    el(
+      "button",
+      { class: "row" + (state.menu && state.menu.pane === number(t) ? (state.menu.sheet || state.menu.remind ? " held" : " held lifted") : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
+      follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
+      el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
+      el("span", { class: "sub" }, lit(sayingOf(t), words)),
+      reminded(t) ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words)) : null,
+      named ? el("span", { class: "sub where-line" }, el("span", { class: "faint" }, "repository "), t.repo || "none") : where(t, words),
+    ),
+    t,
+  );
+}
+
+// ── The drawer's repository filter ──
+
+// The repository the drawer is filtered to on this phone, or null for every
+// one, kept across reloads; nothing of it reaches the computer, whose
+// sidebar keeps its own filter (M-R).
+const REPO = "drawer-repo";
+let repoFilter = (() => {
+  try {
+    return localStorage.getItem(REPO) || null;
+  } catch (_) {
+    return null;
+  }
+})();
+// Whether Other repos is open, which it isn't until tapped, nor once the
+// filter changes.
+let otherReposOpen = false;
+
+function filterTo(repo) {
+  repoFilter = repo;
+  otherReposOpen = false;
+  try {
+    if (repo === null) localStorage.removeItem(REPO);
+    else localStorage.setItem(REPO, repo);
+  } catch (_) {}
+  closeMenu();
+}
+
+// The repositories the open Claude tabs are in, most tabs first, each with
+// its count.
+function repos() {
+  const counts = new Map();
+  for (const t of state.tabs) if (t.repo) counts.set(t.repo, (counts.get(t.repo) || 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+// The sheet the header's repository chip opens at the screen's foot, as New
+// tab's: each repository with its tab count, the one chosen lit, and Every
+// repository last, which clears the filter.
+function repoSheet() {
+  if (state.menu) closeMenu();
+  state.menu = { pane: null, asking: true };
+  document.addEventListener("keydown", menuKeys);
+  const option = (label, count, repo) =>
+    el(
+      "button",
+      { class: "menu-option place" + (repo === repoFilter ? " chosen" : ""), role: "radio", "aria-checked": String(repo === repoFilter), "data-repo": repo === null ? "" : repo, onclick: () => filterTo(repo) },
+      el("span", {}, label),
+      el("span", { class: "where" }, count),
+    );
+  const box = el(
+    "div",
+    { class: "box sheet", role: "dialog", "aria-label": "Repository" },
+    boxHead("Repository"),
+    el(
+      "div",
+      { class: "places", role: "radiogroup", "aria-label": "Repository" },
+      repos().map(([repo, n]) => option(repo, n, repo)),
+      option("Every repository", state.tabs.length, null),
+    ),
+  );
+  layer(box);
 }
 
 // ── A long press on a tab's row, which opens its sheet (board 197), and the menu a channel's ⋯ opens (board 175) ──
@@ -1445,6 +1552,7 @@ function drawerParts() {
   box.show();
   const head = header(
     el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)),
+    el("button", { class: "repo-chip", "aria-haspopup": "dialog", "aria-label": "Filter by repository", onclick: () => repoSheet() }, el("span", { class: "chip" + (repoFilter ? " b" : "") }, repoFilter || "All repos")),
     state.newTab ? el("button", { class: "icon new-tab", "aria-label": "New tab", onclick: () => newTabSheet(null) }, "+") : null,
   );
   const offline = el("div", { class: "offline-slot" }, state.live ? null : el("div", { class: "offline-line" }, reconnecting() ? "Reconnecting…" : "Last heard " + ago(state.lastHeard) + " · trying again"));
