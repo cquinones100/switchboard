@@ -816,7 +816,8 @@ pub fn landing_for(dir: &Path) -> Result<Landing, String> {
 
 /// `landing_for` for the landing and for starting work that lands
 /// (`switchboard landing`, which queue-and-clean reads the way from,
-/// autopilot's start and pick checks, `wt --target`): a repository whose
+/// autopilot's start and pick checks, the work box's branch check,
+/// `wt --target`): a repository whose
 /// entry still has `landing` and no `lands`, with no way kept on the
 /// branch, gets it carried over then, as the migration would, so a
 /// migration whose change didn't stay in the file never strands it. May

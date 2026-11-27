@@ -1768,7 +1768,7 @@ impl Server {
         }
         self.off_task(
             client,
-            move || crate::repos::landing_for(&repo).map(|l| (l, repo)),
+            move || crate::repos::landing_carrying(&repo).map(|l| (l, repo)),
             move |server, client, landing| match landing {
                 Ok((l, _)) if l.lands == crate::repos::Way::Direct => {
                     keep(branch.clone());
