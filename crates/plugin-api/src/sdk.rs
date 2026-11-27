@@ -15,6 +15,60 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
+use crate::{Action, Answer, Folders, Host};
+
+/// A plugin answering for the workspace itself, with none running (its
+/// binary alone): its settings are its defaults with what you saved over
+/// them, its folders its own, nothing it reads is untrusted, what it copies
+/// or counts is done, and whatever needs a workspace (a server, a PR, a
+/// link, a picture, a checklist item, the pointer, a tab) answers
+/// `Answer::None`. A plugin overrides only what differs, in `exception`.
+pub trait AloneHost: Send + Sync {
+    /// What a setting is while you haven't set it, `None` for one not listed.
+    fn default_of(&self, key: &str) -> Option<Value>;
+    /// What you saved for a setting, `None` with nothing saved or read.
+    fn saved(&self, key: &str) -> Option<Value>;
+    /// The plugin's own state and cache folders.
+    fn own_folders(&self) -> Folders;
+    /// The plugin's own answer where it differs from the default one.
+    fn exception(&self, _action: &Action) -> Option<Answer> {
+        None
+    }
+}
+
+/// A setting alone: what was saved, when it is of the default's kind
+/// (on/off for an on/off option, a word for a choice), else the default.
+pub fn saved_over_default(saved: Option<Value>, default: Option<Value>) -> Option<Value> {
+    match (saved, default) {
+        (Some(v), Some(d)) if v.is_boolean() == d.is_boolean() => Some(v),
+        (Some(v), None) => Some(v),
+        (_, default) => default,
+    }
+}
+
+impl<T: AloneHost> Host for T {
+    fn ask(&self, action: Action) -> Answer {
+        if let Some(answer) = self.exception(&action) {
+            return answer;
+        }
+        match action {
+            Action::Setting { key } => {
+                match saved_over_default(self.saved(&key), self.default_of(&key)) {
+                    Some(value) => Answer::Value { value },
+                    None => Answer::None,
+                }
+            }
+            Action::Folders => Answer::Folders {
+                folders: self.own_folders(),
+            },
+            Action::InPane | Action::Untrusted { .. } => Answer::Flag { on: false },
+            // The terminal's own clipboard (OSC 52) is the plugin's to write.
+            Action::Copy { .. } | Action::Request { .. } | Action::Fetch { .. } => Answer::Done,
+            _ => Answer::None,
+        }
+    }
+}
+
 /// `$HOME`, read every time, so a test or a try that changes it is followed.
 pub fn home() -> PathBuf {
     match env::var_os("HOME") {

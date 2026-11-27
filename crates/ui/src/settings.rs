@@ -56,7 +56,8 @@ pub const DEFAULTS: &[(&str, Default)] = &[
     ("tab_focus", Default::On),
 ];
 
-fn default_of(key: &str) -> Option<Value> {
+/// What an option is while nobody has said otherwise.
+pub fn default_of(key: &str) -> Option<Value> {
     DEFAULTS
         .iter()
         .find(|(k, _)| *k == key)
