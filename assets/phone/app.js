@@ -39,6 +39,7 @@ const state = {
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
   newTab: true, // whether New tab is offered (Settings' phone_new_tab), from the stream
+  tabsOpened: 0, // how many times a tab's channel was opened, so Start's answer knows whether you went elsewhere meanwhile
   opening: null, // { pane, until }: a tab opened from the phone, its channel opened once the stream lists it, given up at `until`
   menu: null, // { pane, asking, sheet, remind }: the tab whose menu or sheet shows, whether Close tab's question or the reminder's sheet does, and the sheet's { messages } (null until read)
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
@@ -1319,11 +1320,14 @@ function askStart(place, prompt) {
 
 async function openPlace(place, prompt) {
   closeMenu();
+  const opened = state.tabsOpened;
   try {
     const r = await api("/api/places", { place: place.value, prompt });
     buzz();
     toast(r.said || "Started.");
-    // Its channel opens once the stream lists it as a Claude tab.
+    // Its channel opens once the stream lists it as a Claude tab, unless
+    // you went to another tab while it was started.
+    if (state.tabsOpened !== opened) return;
     state.opening = { pane: String(r.pane || ""), until: Date.now() + OPENING_MS };
     openOpened();
   } catch (e) {
@@ -1480,6 +1484,7 @@ async function openTab(n) {
   // Gone to a tab, by the user or as one opened from the phone is listed:
   // nothing to go to after.
   state.opening = null;
+  state.tabsOpened++;
   if (state.menu) closeMenu();
   // A view open over it (a push tapped meanwhile) closes first, its step in
   // the page's history taken back, so the tab is named on the page's own.
