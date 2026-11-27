@@ -18,8 +18,8 @@
 //! followed to the job that carries it on), where the Node relay asked
 //! tmux for each pane's command and walked `ps` for its sessions.
 //!
-//! The prompts are read with mission control's reading of them
-//! (src/mission/answer.rs, which was ported from here).
+//! The prompts are read with the one reading of Claude's screen
+//! (src/agent/screen.rs, which was ported from here).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

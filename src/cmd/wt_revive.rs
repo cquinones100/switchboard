@@ -153,7 +153,10 @@ fn prompts_in(text: &str) -> Vec<String> {
         .filter(|line| transcript::may_be(line, Kind::User))
         .filter_map(Entry::parse)
         .filter(|e| e.is(Kind::User) && !e.meta())
-        .filter_map(|e| e.typed(" "))
+        .filter_map(|e| match e.content() {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => e.typed(" "),
+        })
         .map(|c| c.replace(['\n', '\t'], " "))
         .filter(|p| !p.starts_with('<'))
         .collect()

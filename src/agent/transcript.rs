@@ -309,8 +309,8 @@ impl Cursor {
             }
             whole += end as u64 + 1;
             pending.drain(..=end);
+            self.offset = whole;
         }
-        self.offset = whole;
         Ok(false)
     }
 }
@@ -329,10 +329,12 @@ pub fn from_end<T>(
     let size = f.metadata().ok()?.len();
     let mut length = first;
     loop {
+        // A byte before the piece too, so a piece that starts a line keeps it.
         let start = size.saturating_sub(length);
-        f.seek(SeekFrom::Start(start)).ok()?;
+        let before = start.saturating_sub(1);
+        f.seek(SeekFrom::Start(before)).ok()?;
         let mut bytes = Vec::new();
-        (&mut f).take(size - start).read_to_end(&mut bytes).ok()?;
+        (&mut f).take(size - before).read_to_end(&mut bytes).ok()?;
         let whole = start == 0;
         let from = match whole {
             true => 0,
