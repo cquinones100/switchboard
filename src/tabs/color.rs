@@ -145,8 +145,8 @@ impl TabColors {
     }
 }
 
-/// The one gray every tab wears with `tab_colors` `gray`. Only the tabs
-/// follow it; the statusline keeps its colors.
+/// The one gray every tab wears with `tab_colors` `gray`. The statusline
+/// keeps the soft colors then.
 pub const GRAY: Rgb = Rgb::new(0x8a, 0x8a, 0x8a);
 
 /// The last part of a directory's path, as `basename` gives it (`/` for the

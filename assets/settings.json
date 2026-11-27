@@ -1199,7 +1199,7 @@
     "key": "tab_colors",
     "category": "Tabs and header",
     "label": "Tab colors",
-    "description": "The colors tabs wear, in the sidebar, the header and Claude's statusline. soft and vivid give each tab the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart: soft as pastels, as the UX 2.0 canvas draws them, vivid as the stronger colors from before. The project choices give a tab its directory's color instead, the same for every tab of one checkout. gray makes every tab gray; the statusline keeps its colors",
+    "description": "The colors tabs wear, in the sidebar, the header and Claude's statusline. soft and vivid give each tab the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart: soft as pastels, as the UX 2.0 canvas draws them, vivid as the stronger colors from before. The project choices give a tab its directory's color instead, the same for every tab of one checkout. gray makes every tab gray, the statusline keeping the soft colors",
     "choices": [
       {
         "value": "soft",

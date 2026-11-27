@@ -655,6 +655,13 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
     }
     let file = file_of(key);
     let mut mine = read_to_change(&file)?;
+    // A choice of `tab_colors` is the one that counts from now, over what
+    // the settings it took in said.
+    if key == "tab_colors" {
+        for old in MERGED {
+            mine.shift_remove(*old);
+        }
+    }
     // A computer setting is kept even at its default, since one left unset
     // is a service not yet seen working here (`turn_on_where_it_works`).
     if value == option.default && !is_computer(key) {
