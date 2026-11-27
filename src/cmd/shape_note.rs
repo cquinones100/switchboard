@@ -7,7 +7,8 @@
 //! that one instead. M-p's "Shape a new ticket" is the same with one idea
 //! typed in place of a note's items, in an ask box drawn as a text box
 //! (`Ask::text_box`) titled after where the pane's repository keeps its
-//! tickets, and filed where the chosen repository's `tickets` says: while
+//! tickets, and filed where the chosen repository's `tickets` says (Linear
+//! ticket IDs alone each shaped further as a ticket of their own): while
 //! that is unset, its source is off, or the directory chosen isn't in a
 //! repository, the box comes back with what was typed and why. Ported from
 //! tmux/note-shape.sh.
@@ -440,9 +441,9 @@ impl Server {
     }
 
     /// Asks which repository `text` is a ticket for, the pane's own first,
-    /// and opens a tab there running `shape`, filed where the repository's
-    /// `tickets` says; where it can't be, the box comes back with `text`
-    /// and why.
+    /// and opens a tab there running `shape`, an idea filed where the
+    /// repository's `tickets` says, Linear ticket IDs alone a tab each;
+    /// where it can't be, the box comes back with `text` and why.
     fn shape_typed(&mut self, client: ClientId, text: String) {
         self.pick_dir_for(
             client,
@@ -459,37 +460,40 @@ impl Server {
                     return again(server, None, why);
                 };
                 let kept = crate::tickets::kept_known(&repo);
-                let Some(kept) = kept else {
-                    let name = crate::repos::name_known(&repo);
-                    return again(server, None, crate::repos::unset_words(&name));
-                };
-                if let Some(source) = kept.source().filter(|s| !s.is_on()) {
-                    let why = format!(
-                        "{} keeps its tickets in {}, which is off in Settings.",
-                        crate::repos::name_known(&repo),
-                        source.name()
-                    );
-                    return again(server, Some(kept), why);
-                }
-                // Ticket IDs typed are a tab each, as shape-batch takes them,
-                // and an item led by one is Linear's whatever the repository
-                // keeps, as /shape reads it, so it needs Linear.
+                // Ticket IDs alone are a tab each, as shape-batch takes them,
+                // each a Linear ticket to shape further whatever the
+                // repository keeps, so they need Linear alone; anything else
+                // is an idea, filed in the repository's own source, named so
+                // a leading word shaped like an ID stays part of it.
                 let items = shape_batch::items_of(std::slice::from_ref(&text));
-                let typed_ids = items.iter().any(|i| {
-                    i.split_whitespace()
-                        .next()
-                        .is_some_and(worktree::looks_like_ticket)
-                });
-                if typed_ids && !settings::is_on("linear") {
-                    let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
-                    return again(server, Some(kept), why);
-                }
+                let only_ids = items.iter().all(|i| worktree::looks_like_ticket(i));
+                let source = if only_ids {
+                    if !settings::is_on("linear") {
+                        let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
+                        return again(server, kept, why);
+                    }
+                    None
+                } else {
+                    let Some(kept) = kept else {
+                        let name = crate::repos::name_known(&repo);
+                        return again(server, None, crate::repos::unset_words(&name));
+                    };
+                    if let Some(source) = kept.source().filter(|s| !s.is_on()) {
+                        let why = format!(
+                            "{} keeps its tickets in {}, which is off in Settings.",
+                            crate::repos::name_known(&repo),
+                            source.name()
+                        );
+                        return again(server, Some(kept), why);
+                    }
+                    Some(kept.key())
+                };
                 let mut opened: Vec<TabId> = Vec::new();
                 for item in items {
                     match server.tab_at_end(
                         client,
                         &repo,
-                        shape_tab(&item, None),
+                        shape_tab(&item, source),
                         crate::mux::server::Opened::Background,
                     ) {
                         Some(tab) => opened.push(tab),

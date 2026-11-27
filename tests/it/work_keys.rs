@@ -1109,7 +1109,7 @@ fn trying_a_tabs_branch_runs_try_in_a_tab_behind_and_says_so_where_theres_none()
 
 /// M-p's "Shape a new ticket" in a repository whose `tickets` is `github`:
 /// a text box titled after it, two lines typed and sent, and `shape` run in
-/// a new tab with no source of its own, filing where repos.json says.
+/// a new tab filing where repos.json says.
 #[test]
 fn shape_a_new_ticket_is_a_text_box_titled_after_the_repository_s_tickets() {
     let (server, repo, mut client) = world();
@@ -1145,12 +1145,12 @@ fn shape_a_new_ticket_is_a_text_box_titled_after_the_repository_s_tickets() {
     wait("a tab running shape", || tabs(&server).len() == before + 1);
     wait("Claude to run /shape", || {
         std::fs::read_to_string(server.home.join("claude-ran"))
-            .is_ok_and(|t| t.contains("/shape first line"))
+            .is_ok_and(|t| t.contains("first line"))
     });
     let ran = std::fs::read_to_string(server.home.join("claude-ran")).unwrap();
     assert!(
         ran.starts_with(&format!(
-            "{} /shape first line\nsecond line",
+            "{} /shape --github first line\nsecond line",
             repo.display()
         )),
         "{ran}"
