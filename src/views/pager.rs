@@ -1520,6 +1520,11 @@ impl Pager {
         for effect in effects {
             match effect {
                 Effect::Copy(text) => {
+                    let text = if self.boxes.is_empty() {
+                        text
+                    } else {
+                        unboxed(&text)
+                    };
                     let lines = text.trim_end_matches('\n').lines().count().max(1);
                     self.note = Some(match (self.copy)(&text) {
                         Err(e) => format!("Couldn't copy: {e}"),
@@ -1993,6 +1998,26 @@ impl Pager {
             })
             .collect()
     }
+}
+
+/// Copied text with a comment box's sides taken off each line: the
+/// margin and `│ ` before its words, and the padding and ` │` after them,
+/// so a yank from a box copies what the comment says.
+fn unboxed(text: &str) -> String {
+    let end = if text.ends_with('\n') { "\n" } else { "" };
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|line| {
+            let line = line.trim_end();
+            let line = line.strip_suffix('│').map_or(line, str::trim_end);
+            let start = line.trim_start();
+            match start.strip_prefix('│') {
+                Some(rest) => rest.strip_prefix(' ').unwrap_or(rest),
+                None => line,
+            }
+        })
+        .collect();
+    format!("{}{end}", lines.join("\n"))
 }
 
 /// The word (letters, digits and `_`) at or after byte `at` of `line`,
@@ -3004,5 +3029,18 @@ mod tests {
         let mut plain = Pager::new(markdown("# A file"), 80, 10);
         plain.focus(false, start);
         assert!(!plain.focus(true, after(900)));
+    }
+}
+
+#[cfg(test)]
+mod unboxed_tests {
+    #[test]
+    fn a_yank_from_a_box_leaves_its_sides_behind() {
+        let copied = "       │ The test reads only small.json.     │\n       │    will add it                      │\n";
+        assert_eq!(
+            super::unboxed(copied),
+            "The test reads only small.json.\n   will add it\n"
+        );
+        assert_eq!(super::unboxed("plain text"), "plain text");
     }
 }
