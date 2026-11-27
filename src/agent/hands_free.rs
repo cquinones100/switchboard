@@ -28,7 +28,8 @@
 //! - Stop, on a turn whose last message asks something without saying
 //!   `[always ask]` (what Claude says of a question a rule or skill says
 //!   must reach you), is blocked, its
-//!   reason telling Claude to carry on with what it recommends, at most
+//!   reason telling Claude to carry on with what it recommends and land
+//!   the one way `switchboard landing` prints for the repository, at most
 //!   `NUDGES` times a tab (an item, since autopilot opens a tab an item),
 //!   counted in `@autopilot_nudged`, and never once the tab has landed.
 //!   Claude Code runs StopFailure, not Stop, for a turn an API error ended,
@@ -209,7 +210,7 @@ pub fn block_stop(record: Record) -> String {
         }
     };
     let reason = format!(
-        "Hands-free (autopilot): don't wait for an answer. Carry on with what you recommend; {write}; then go on to land it. {EXCEPTIONS} For one of those, stop again with `{ALWAYS_ASK}` in your message, saying which rule or skill says it must be asked."
+        "Hands-free (autopilot): don't wait for an answer. Carry on with what you recommend; {write}; then go on to land it the one way `switchboard landing` prints for the repository, as queue-and-clean does, never by a `gh pr merge` or a push to the default branch that way doesn't make. {EXCEPTIONS} For one of those, stop again with `{ALWAYS_ASK}` in your message, saying which rule or skill says it must be asked."
     );
     json!({ "decision": "block", "reason": reason }).to_string()
 }

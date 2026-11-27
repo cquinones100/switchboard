@@ -11,6 +11,8 @@ allowed-tools:
   - Bash(git fetch origin)
   - Bash(git rev-parse *)
   - Bash(git branch --show-current)
+  - Bash(switchboard landing)
+  - Bash(switchboard landing *)
   - Bash(gh pr view*)
   - Bash(gh pr checks *)
   - Bash(gh run view *)
@@ -43,6 +45,14 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR.
 
 2. Stop and ask when the PR's `headRefName` is not the branch checked out here, since fixes would land on the wrong branch. If the PR is `MERGED` or `CLOSED`, reply `ci-loop: stopped: PR is <state>`. A draft is fine.
 3. If there is no PR for this branch, say so and stop.
+4. Read how the repository lands, `switchboard landing --json`, and keep its `lands` and `defaultBranch` for "Fixing". Fixing the PR's checks is the same in every way, and merging it is never this loop's in any; what differs is bringing it up to date:
+   - `switchboard-queue`: Switchboard's merge queue tests the PR merged onto the default branch with the PRs ahead of it, so a PR only behind its base is left as it is; one in conflict is rebased, as "Fixing" says.
+   - `github-queue` and `auto-merge`: a PR in conflict, or behind a base that requires it to be up to date, is rebased, as "Fixing" says.
+   - `service`: the merge service keeps the PR up to date, so it is never rebased: "When queue-and-clean runs this" says what to do instead, run by queue-and-clean or not.
+   - `direct`: the repository lands straight on its default branch, so this PR has no way to land: fix its checks as usual, rebasing as for `auto-merge`, and say in the final line that `/queue-and-clean` lands the branch on the default branch, never through the PR.
+   - When it fails (no way set), go on as for `auto-merge`.
+
+   In every way, never push to the default branch (`defaultBranch`), and never run `gh pr merge`.
 
 ## Watching
 
@@ -99,7 +109,7 @@ Then decide what kind of failure it is:
 - **Not caused by this branch:** a test that fails on code the branch didn't touch, a timeout, a runner or network error, a cancelled job, or a failure that also shows on the base branch. Rerun the failed jobs once, `gh run rerun <run-id> --failed`, and go back to watching the same commit. If the same job fails again, treat it as the branch's after all, or stop and ask if you can't see how the branch causes it.
 - **Can't tell from the logs:** stop and ask, with the failing job's name and the relevant lines of its log.
 
-**Merge conflicts, or a branch that has to be up to date.** Rebase the branch onto its base and push it with a lease, as `/resolve-conflicts` does, rather than merging the base in: read the file `switchboard skill-path resolve-conflicts` prints and follow it, with `origin/<baseRefName>` as its `<base>` rather than the remote's default branch. It resolves the conflicts so both sides' intent survives, checks with `git range-diff` that nothing was lost, and force-pushes the branch to its own remote copy with a lease on the tip it recorded. Run the tests that cover the conflicted files before that push. When it stops (a conflict it can't resolve without choosing between two behaviors, a resolution that dropped content, a lease refused, commits on the branch's remote copy this checkout lacks), ask what it would ask, with `AskUserQuestion` headed `[always ask]` (so autopilot's hands-free mode still asks it); never `--abort`, `--skip` or `--force` without that answer. Then read the new head and start "Watching" again, as after any fix.
+**Merge conflicts, or a branch that has to be up to date.** With the way `service`, rebase nothing, as "When queue-and-clean runs this" says; with `switchboard-queue`, only a conflict. Otherwise, rebase the branch onto its base and push it with a lease, as `/resolve-conflicts` does, rather than merging the base in: read the file `switchboard skill-path resolve-conflicts` prints and follow it, with `origin/<baseRefName>` as its `<base>` rather than the remote's default branch. It resolves the conflicts so both sides' intent survives, checks with `git range-diff` that nothing was lost, and force-pushes the branch to its own remote copy with a lease on the tip it recorded. Run the tests that cover the conflicted files before that push. When it stops (a conflict it can't resolve without choosing between two behaviors, a resolution that dropped content, a lease refused, commits on the branch's remote copy this checkout lacks), ask what it would ask, with `AskUserQuestion` headed `[always ask]` (so autopilot's hands-free mode still asks it); never `--abort`, `--skip` or `--force` without that answer. Then read the new head and start "Watching" again, as after any fix.
 
 **After each fix:** push with a plain `git push`, never `--force` or `--force-with-lease` (only `/resolve-conflicts`'s push, above, takes a lease). Read the new head with `gh pr view <number> --json headRefOid`, and start "Watching" again with it. Keep track of what each round fixed or reran, for the final message.
 
@@ -126,6 +136,6 @@ Instead of fixing, ask the user when:
   Fix what it shows as above. If it shows a failure the branch didn't cause, there is nothing to rerun on the PR: tell queue-and-clean so, and it queues the PR again unchanged.
 - When Switchboard's merge queue dropped the PR (`src/merge_queue`; its reason `CI failed on its train ci/train-<id>: <jobs> (<run link>)`), the failure is in the train's run, a push to `ci/train-<id>`, which tested the branch merged onto the default branch alone, the PRs that shared a red train having been split off until this one failed by itself. Start from the run the link names, `gh run view <run id> --log-failed`; its branch is already deleted, so never rerun it. Fix what it shows as above. If it shows a failure the branch didn't cause (a flaky test, the default branch's own failure), tell queue-and-clean so, and it queues the PR again unchanged, a new train testing it again.
 - Don't send your own final line. Hand back what you fixed or reran, or why you stopped, and queue-and-clean ends with its own.
-- When queue-and-clean says the PR is with a merge service, the service keeps it up to date and merges it: never rebase it or follow `/resolve-conflicts`, and when it conflicts with its base or must be brought up to date, stop with `ci-loop: stopped: <the base> conflicts, which a merge service landing never rebases`. Before committing a fix, take in the branch as GitHub has it, as `moved` above does (`git fetch`, then `git merge --ff-only "@{upstream}"`), since the service may have brought the branch up to date on GitHub; when that can't fast-forward, stop with `ci-loop: stopped: the PR's branch moved on GitHub past this checkout`. A fix is then a plain push, which leaves the PR with the service, its label or comment as it was.
+- When the way is `service` (queue-and-clean saying the PR is with a merge service, or `lands` in step 4 of "Before watching"), the service keeps it up to date and merges it: never rebase it or follow `/resolve-conflicts`, and when it conflicts with its base or must be brought up to date, stop with `ci-loop: stopped: <the base> conflicts, which a merge service landing never rebases`. Before committing a fix, take in the branch as GitHub has it, as `moved` above does (`git fetch`, then `git merge --ff-only "@{upstream}"`), since the service may have brought the branch up to date on GitHub; when that can't fast-forward, stop with `ci-loop: stopped: the PR's branch moved on GitHub past this checkout`. A fix is then a plain push, which leaves the PR with the service, its label or comment as it was.
 
 Never push anywhere but this branch, never force-push but `/resolve-conflicts`'s push with a lease, and never merge the PR: queuing and merging belong to `/queue-and-clean` or the user.

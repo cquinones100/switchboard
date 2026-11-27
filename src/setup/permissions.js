@@ -22,7 +22,10 @@
 //   git commands Switchboard allows that write a file, run a program or
 //   fetch with a program or from an address of the command's choosing
 //   (git log --output, git diff --ext-diff, git fetch --upload-pack,
-//   git fetch --multiple).
+//   git fetch --multiple); and what the repository's way to land
+//   (`switchboard landing`) forbids: `gh pr merge` where GitHub doesn't
+//   merge its PRs, and a push to its default branch where it doesn't land
+//   straight on it, naming the way and Settings' row that sets it.
 //
 // Both lists are assets/claude-settings.json's rules, filled in below as
 // the plugin is written. Settings' pane_permissions off leaves every call
@@ -519,6 +522,149 @@ export function denied(tool, input) {
   return r ? `Switchboard's permissions in its panes deny this (${r.rule})` : null;
 }
 
+// What a repository's way to land forbids: `gh pr merge` where the way
+// doesn't merge PRs through GitHub, and a push to the default branch where
+// the way isn't straight on it (`switchboard landing`'s `lands`, src/repos.rs's
+// `Way`). A stacked PR, whose base isn't the default branch, is merged by
+// GitHub's auto-merge whatever the way but a merge service, as
+// queue-and-clean's "GitHub's auto-merge" says. A repository with no way set,
+// or a push whose branch can't be read from its words (`git push origin
+// "$b"`), is left to the rules above: this keeps a Claude from landing
+// another way by mistake, and reads the directory a `-C` names, else the
+// session's, never one a `cd` before it moves to.
+const MERGES = new Set(['auto-merge', 'github-queue']);
+const WAYS = {
+  'switchboard-queue': "Switchboard's merge queue",
+  'github-queue': "GitHub's merge queue",
+  'auto-merge': "GitHub's auto-merge",
+  direct: 'Straight to the default branch',
+  service: 'A merge service',
+};
+
+// Options of git's and of `git push`'s and `gh pr merge`'s that take the
+// next word as their value.
+const GIT_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']);
+const PUSH_VALUES = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec']);
+const PUSH_ALL = new Set(['--all', '--mirror', '--branches']);
+const MERGE_VALUES = new Set([
+  '-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit',
+  '-A', '--author-email',
+]);
+
+// Each `git push` and `gh pr merge` a command runs, as what has to be looked
+// up to judge it: a push's directory (`-C`) and the branches it pushes to
+// (null for a bare push, which goes where `@{push}` says; `*` for every
+// branch; `HEAD` for the current one), a merge's arguments. Read from each
+// command of the line with its quotes taken out and its redirects dropped.
+export function landingCalls(command) {
+  const text = uncommented(withoutHeredocs(String(command)));
+  const found = [];
+  for (const [from, to] of commands(text)) {
+    const w = plain(text.slice(from, to)).trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    while (i < w.length && (/^\w+=/.test(w[i]) || BEFORE.has(last(w[i])))) i++;
+    const program = last(w[i] ?? '');
+    if (program === 'git') {
+      let dir = null;
+      i++;
+      while (i < w.length && w[i].startsWith('-')) {
+        if (w[i] === '-C') dir = w[i + 1] ?? null;
+        i += GIT_VALUES.has(w[i]) ? 2 : 1;
+      }
+      if (w[i] !== 'push') continue;
+      const positional = [];
+      let all = false;
+      for (i++; i < w.length; i++) {
+        if (w[i] === '--') {
+          positional.push(...w.slice(i + 1));
+          break;
+        }
+        if (PUSH_ALL.has(w[i])) all = true;
+        else if (PUSH_VALUES.has(w[i])) i++;
+        else if (!w[i].startsWith('-')) positional.push(w[i]);
+      }
+      const branches = positional.slice(1).map((r) => {
+        const spec = r.replace(/^\+/, '');
+        const dest = spec.includes(':') ? spec.slice(spec.indexOf(':') + 1) : spec;
+        return dest.replace(/^refs\/heads\//, '');
+      });
+      found.push({ kind: 'push', dir, to: all ? ['*'] : branches.length > 0 ? branches : null });
+    } else if (program === 'gh' && w[i + 1] === 'pr' && w[i + 2] === 'merge') {
+      const args = [];
+      for (let k = i + 3; k < w.length; k++) {
+        if (MERGE_VALUES.has(w[k])) {
+          if (w[k] === '-R' || w[k] === '--repo') args.push(w[k], w[k + 1] ?? '');
+          k++;
+        } else if (/^--repo=/.test(w[k]) || !w[k].startsWith('-')) {
+          args.push(w[k]);
+        }
+      }
+      found.push({ kind: 'merge', args });
+    }
+  }
+  return found;
+}
+
+// Why the repository's way refuses a command, or null. `look` answers what
+// the command's words can't: `landing(dir)` (`switchboard landing --json`,
+// null when it fails, as it does with no way set), `branch(dir, ref)` (the
+// branch `HEAD` or `@{push}` names, null when none) and `prBase(args)` (the
+// PR's base branch, null when it can't be read).
+export async function landingRefused(command, look) {
+  for (const call of landingCalls(command)) {
+    const landing = await look.landing(call.kind === 'push' ? call.dir : null);
+    const way = landing?.lands;
+    const main = landing?.defaultBranch;
+    if (!way || !main) continue;
+    const name = `${landing.repo ?? 'This repository'} lands by ${WAYS[way] ?? way} (\`${way}\`)`;
+    const change = "land it as /queue-and-clean does, or choose another way on the repository's row in Settings' Repositories";
+    if (call.kind === 'push' && way !== 'direct') {
+      let to = call.to ?? [await look.branch(call.dir, '@{push}')];
+      to = await Promise.all(to.map((t) => (t === 'HEAD' ? look.branch(call.dir, 'HEAD') : t)));
+      if (to.some((t) => t === '*' || t === main)) {
+        return `Switchboard's permissions in its panes deny this: ${name}, not a push to its default branch, ${main}: ${change}`;
+      }
+    } else if (call.kind === 'merge' && !MERGES.has(way)) {
+      const base = way === 'service' ? main : await look.prBase(call.args);
+      if (base === null || base === main) {
+        return `Switchboard's permissions in its panes deny this: ${name}, not \`gh pr merge\`: ${change}`;
+      }
+    }
+  }
+  return null;
+}
+
+// The lookups `landingRefused` asks for, on the host, each only for a
+// command that pushes or merges.
+function lookOn($) {
+  const run = async (argv, cwd) => {
+    try {
+      const init = cwd ? { cwd, timeoutMs: 15000 } : { timeoutMs: 15000 };
+      const { exitCode, stdout } = await $.process.run(argv, init);
+      return exitCode === 0 ? stdout.trim() : null;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    landing: async (dir) => {
+      const out = await run(['switchboard', 'landing', '--json'], dir);
+      try {
+        return out ? JSON.parse(out) : null;
+      } catch {
+        return null;
+      }
+    },
+    branch: async (dir, ref) => {
+      const out = await run(['git', 'rev-parse', '--abbrev-ref', ref], dir);
+      if (!out || out === 'HEAD') return null;
+      // `@{push}` names the remote's branch, `origin/main`.
+      return ref === 'HEAD' ? out : out.slice(out.indexOf('/') + 1);
+    },
+    prBase: (args) => run(['gh', 'pr', 'view', ...args, '--json', 'baseRefName', '--jq', '.baseRefName']),
+  };
+}
+
 // Claude Code's verdict for a call no rule, hook, check or limit decided.
 function plainAsk(v) {
   return v?.decision === 'ask' && !v.rule && !v.hook && !v.setting && !v.plugin && !v.ceiling;
@@ -547,6 +693,8 @@ export function register(hook) {
     if (!(await on($))) return next(e);
     const no = denied('Bash', e.input);
     if (no) return { decision: 'deny', reason: no };
+    const way = await landingRefused(String(e.input?.command ?? ''), lookOn($));
+    if (way) return { decision: 'deny', reason: way };
     const verdict = await next(e);
     if (plainAsk(verdict) && allows(e.input?.command ?? '')) {
       return { decision: 'allow', reason: "One of Switchboard's own commands, which its instructions run" };

@@ -6,6 +6,8 @@ disable-model-invocation: true
 allowed-tools:
   - Bash(switchboard skill-path *)
   - Bash(switchboard wait-deploy *)
+  - Bash(switchboard landing)
+  - Bash(switchboard landing *)
   - Bash(gh pr view*)
   - Bash(gh pr diff*)
   - Bash(gh run list*)
@@ -20,6 +22,13 @@ Wait for a merged PR to reach the site it deploys to, walk through what it chang
 When it is done, the final message is `deploy-test: approved (tested: <video>)`, `deploy-test: approved (not tested: <why>)` or `deploy-test: fail: <reason>`, and nothing else. The questions in "Settling", "Testing in a browser" and "Approval" are still asked, because they pause the work rather than end it.
 
 Arguments: a PR number. Otherwise use the current branch's PR. If it isn't `MERGED`, say so and stop: there is nothing deployed to test yet.
+
+**By the way it landed.** Run `switchboard landing --json` and read its `lands`, which says what reached the base branch and so which commit to wait for:
+
+- `switchboard-queue`: Switchboard's merge queue squash-merges each PR of a train in order, so the PR's `mergeCommit` is its own squashed commit, with the train's PRs before it already on the base branch.
+- `github-queue`, `auto-merge` and `service`: GitHub, or the merge service through it, merged the PR, and `mergeCommit` is that merge.
+- `direct`: the repository lands straight on its default branch, never through a PR: with no PR number given, reply `deploy-test: approved (not tested: <owner>/<repo> lands straight on its default branch, with no PR to test)`, since queue-and-clean's direct landing has no deploy or test step; a PR given, merged some other way, is tested as below.
+- When it fails (no way set), test the PR as below: the way only names which commit reached the base branch, and a merged PR's `mergeCommit` says that whatever merged it.
 
 ## Settling
 
