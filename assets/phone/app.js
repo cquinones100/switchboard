@@ -922,7 +922,7 @@ function showMenu(tab) {
 // The channel's ⋯ keeps the menu under its header (`showMenu`).
 
 const SHEET_DRAG_CLOSES = 80; // px a drag down on the sheet's top closes it past
-let sheetShown = null; // { box, head, turn, options, words, drawn }: the sheet while it shows
+let sheetShown = null; // { box, info, turn, options, words, drawn }: the sheet while it shows
 
 const sheetTab = () => (state.menu && state.menu.sheet ? state.tabs.find((t) => number(t) === state.menu.pane) || null : null);
 
@@ -932,7 +932,9 @@ function openSheet(pane) {
   state.menu = { pane, asking: false, sheet: { messages: null } };
   if (!state.open) drawer();
   document.addEventListener("keydown", menuKeys);
-  const head = el("div", { class: "sheet-head" });
+  // × is made once, so it keeps its focus and its tap as the stream redraws the rest.
+  const info = el("span", { class: "sheet-info" });
+  const head = el("div", { class: "sheet-head" }, info, el("button", { class: "icon", "aria-label": "Close", onclick: () => closeMenu() }, "×"));
   const top = el("div", { class: "sheet-top" }, el("div", { class: "grabber", "aria-hidden": "true" }), head);
   dragDown(top);
   const n = number(tab);
@@ -951,7 +953,7 @@ function openSheet(pane) {
   });
   const options = el("div", { class: "sheet-options", role: "menu", "aria-label": "Tab " + tab.index + "'s options" });
   const box = el("div", { class: "box tab-sheet", role: "dialog", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, top, turn, options);
-  sheetShown = { box, head, turn, options, words: null, drawn: false };
+  sheetShown = { box, info, turn, options, words: null, drawn: false };
   layer(box);
   drawSheet();
   const first = options.children[0];
@@ -1020,9 +1022,7 @@ function drawSheet() {
   const s = sheetShown;
   const list = s.turn;
   const atEnd = !s.drawn || list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
-  const head = sheetHead(tab);
-  s.head.replaceWith(head);
-  s.head = head;
+  s.info.replaceChildren(...sheetInfo(tab));
   const card = tab.prompt ? askedCard(tab.prompt) : null;
   const turn = m.sheet.messages === null
     ? [el("div", { class: "empty" }, m.sheet.failed ? "Couldn't read its last turn. Tap to open the channel." : "Reading its last turn…")]
@@ -1039,18 +1039,16 @@ function drawSheet() {
   if (atEnd) list.scrollTop = list.scrollHeight;
 }
 
-function sheetHead(tab) {
+// The head's tab: its mark, number and name, and what it is doing as a chip.
+function sheetInfo(tab) {
   const [mark, kind] = markOf(tab);
   const worked = stepOf(tab)[1];
   const chip = tab.state === "waiting" ? ["needs you", "y"] : tab.state === "done" ? ["done", "g"] : tab.state === "working" ? ["working" + (worked ? " " + worked : ""), "b"] : tab.state === "background" ? ["working", "b"] : ["idle", ""];
-  return el(
-    "div",
-    { class: "sheet-head" },
+  return [
     el("span", { class: "mark " + kind }, mark),
     el("span", { class: "name" }, el("span", { class: "num " + hue(tab) }, tab.index), " " + (tab.name || "")),
     el("span", { class: "chip " + chip[1] }, chip[0]),
-    el("button", { class: "icon", "aria-label": "Close", onclick: () => closeMenu() }, "×"),
-  );
+  ];
 }
 
 // The last turn of a tab's messages, grouped as the channel groups them:
