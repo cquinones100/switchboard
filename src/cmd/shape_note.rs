@@ -472,9 +472,14 @@ impl Server {
                     return again(server, Some(kept), why);
                 }
                 // Ticket IDs typed are a tab each, as shape-batch takes them,
-                // and Linear's whatever the repository keeps, so they need it.
+                // and an item led by one is Linear's whatever the repository
+                // keeps, as /shape reads it, so it needs Linear.
                 let items = shape_batch::items_of(std::slice::from_ref(&text));
-                let typed_ids = items.iter().any(|i| worktree::looks_like_ticket(i));
+                let typed_ids = items.iter().any(|i| {
+                    i.split_whitespace()
+                        .next()
+                        .is_some_and(worktree::looks_like_ticket)
+                });
                 if typed_ids && !settings::is_on("linear") {
                     let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
                     return again(server, Some(kept), why);
