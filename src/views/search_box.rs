@@ -1264,13 +1264,15 @@ impl Overlay for SearchBox {
             KeyCode::Char('c' | 'g') if ctrl => return Step::Close(Outcome::Dismissed),
             KeyCode::Tab => return self.step_focus(1, look),
             KeyCode::BackTab => return self.step_focus(-1, look),
-            KeyCode::Down if !self.arrows => return self.step(true),
-            KeyCode::Up if !self.arrows => return self.step(false),
+            _ if let Some(by) =
+                crate::ui::kit::nav::typing_rows(key).filter(|_| !self.arrows || ctrl) =>
+            {
+                return self.step(by > 0);
+            }
             KeyCode::Down => return self.down(),
-            KeyCode::Char('n' | 'j') if ctrl => return self.step(true),
             KeyCode::Up => return self.up(),
             // C-k is the field's, to the line's end.
-            KeyCode::Char('p') if ctrl => return self.step(false),
+            KeyCode::Char('j') if ctrl => return self.step(true),
             KeyCode::PageDown => return self.move_to(self.cursor + self.room),
             KeyCode::PageUp => return self.move_to(self.cursor.saturating_sub(self.room)),
             KeyCode::Char('o') if ctrl => return self.take(true),

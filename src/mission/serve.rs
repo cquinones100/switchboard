@@ -3507,8 +3507,7 @@ impl Server {
     /// the arrows move. In M-j's and M-o's picker, Enter opens the chosen
     /// row's menu, the filter typing on once it closes, and Esc closes.
     fn filter_key(&mut self, client: ClientId, m: &mut Mission, k: Key) {
-        let moving = matches!(k.code, KeyCode::Up | KeyCode::Down)
-            || (k.mods == Mods::CTRL && matches!(k.code, KeyCode::Char('p' | 'n')));
+        let moving = nav::typing_rows(k).is_some();
         let tabbing = matches!(k.code, KeyCode::Tab | KeyCode::BackTab) && m.snap.tab_focus;
         // In a picker, Tab and Shift-Tab go round its rows, still typing,
         // and past either end to easy mode's × (when it has one), which
@@ -8498,7 +8497,9 @@ fn remove_one_worktree(dir: &Path) -> String {
 fn alone_key(m: &mut Mission, k: Key) -> bool {
     let i = k.code == KeyCode::Char('i') && plain(&k);
     let alone = m.current().is_some_and(|v| m.alone.contains(&v.id));
-    let back = alone && k.code == KeyCode::Esc && m.filter.is_none();
+    // Esc goes back first, but past a kept filter on Slack, as it always has.
+    let slack = m.current().is_some_and(|v| v.id == ViewId::Slack);
+    let back = alone && k.code == KeyCode::Esc && !(slack && m.filter.is_some());
     if (i && alone_label(m).is_some()) || back {
         toggle_alone(m);
         return true;

@@ -5,7 +5,7 @@
 //! `gt`, `zo`, `y`...), `v` and `V`, Left and Right, Enter, Ctrl-E and Ctrl-Y.
 
 use switchboard_ui::draw::width;
-use switchboard_ui::input::Key;
+use switchboard_ui::input::{Key, KeyCode as KC};
 use switchboard_ui::kit::nav::{self, Move};
 use switchboard_vim::{Effect, Mode, Text};
 
@@ -76,7 +76,11 @@ impl App {
         if self.vim.doc.text != text {
             self.vim.change_outside(|doc| doc.text = text);
         }
-        self.vim.go_to(row, byte);
+        // Re-seated only where the diff moved the cursor itself, so Vim
+        // keeps the column j and k aim for.
+        if (row, byte) != (self.vim.row(), self.vim.col()) {
+            self.vim.go_to(row, byte);
+        }
         self.vim.top = if self.view == self.at { self.top } else { 0 };
         self.vim.height = self.body_height().max(1);
         self.vim.begin();
@@ -102,7 +106,11 @@ impl App {
         self.vim.center = false;
         let (to, byte) = (self.vim.row(), self.vim.col());
         let line = self.vim.line();
-        let down = keys.last().copied().and_then(nav::step) == Some(Move::Down);
+        let down = keys.last().is_some_and(|k| {
+            let pages = matches!(k.code, KC::PageDown)
+                || k.mods.ctrl && matches!(k.code, KC::Char('d' | 'f'));
+            pages || nav::step(*k) == Some(Move::Down)
+        });
         if down && to == row && at_end && !self.said_end {
             self.said_end = true;
             let path = self.current().map(|e| e.path.clone()).unwrap_or_default();
