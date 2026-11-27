@@ -159,7 +159,7 @@ pub fn start_prompt(pr: &PrDetails, me: Option<&str>) -> String {
 /// configured, before any `insteadOf` rewrite: the name it stands for.
 fn remote_repo(root: &Path) -> Option<Repo> {
     let remote = worktree::default_remote(root)?;
-    let url = worktree::git_at(root, &["config", "--get", &format!("remote.{remote}.url")]).ok()?;
+    let url = worktree::git(root, &["config", "--get", &format!("remote.{remote}.url")]).ok()?;
     github::parse_remote(&url)
 }
 
@@ -171,7 +171,7 @@ fn same_repo(a: &Repo, b: &str) -> bool {
 /// clone), by its URL as configured.
 fn remote_for(root: &Path, repo: &str) -> Option<String> {
     worktree::remotes(root).into_iter().find(|remote| {
-        worktree::git_at(root, &["config", "--get", &format!("remote.{remote}.url")])
+        worktree::git(root, &["config", "--get", &format!("remote.{remote}.url")])
             .ok()
             .and_then(|url| github::parse_remote(&url))
             .is_some_and(|r| same_repo(&r, repo))
@@ -267,7 +267,7 @@ fn fork_remote(pr: &PrDetails, base: &str, root: &Path) -> Result<Option<String>
     };
     let repo = format!("{owner}/{name}");
     let url_of = |remote: &str| {
-        worktree::git_at(root, &["config", "--get", &format!("remote.{remote}.url")])
+        worktree::git(root, &["config", "--get", &format!("remote.{remote}.url")])
             .unwrap_or_default()
     };
     let remotes = worktree::remotes(root);
@@ -301,7 +301,7 @@ fn fork_remote(pr: &PrDetails, base: &str, root: &Path) -> Result<Option<String>
 /// `@{upstream}` and ahead/behind don't resolve. `set-branches --add` widens
 /// the refspec for just this branch; failing is not fatal.
 fn ensure_refspec_covers(branch: &str, remote: &str, root: &Path) {
-    let specs = worktree::git_at(
+    let specs = worktree::git(
         root,
         &["config", "--get-all", &format!("remote.{remote}.fetch")],
     )
@@ -635,7 +635,7 @@ fn others_on_pr(
     // The default branch of the PR's repository alone, fetched now: a
     // stacked PR's base is a branch like any other, whose commits are
     // checked with the PR's. Never another remote's, which may hold them.
-    let named = worktree::git_at(
+    let named = worktree::git(
         root,
         &[
             "symbolic-ref",
@@ -733,7 +733,7 @@ fn quiet(off: &[(String, String)]) -> Vec<String> {
 /// `.gitattributes` choose among, each emptied and not required, so a
 /// checkout or status there runs none of them: the keys and their values.
 fn filters_off(root: &Path) -> Vec<(String, String)> {
-    let listed = worktree::git_at(
+    let listed = worktree::git(
         root,
         &[
             "config",
@@ -768,12 +768,12 @@ fn filters_off(root: &Path) -> Vec<(String, String)> {
 fn git_with(dir: &Path, before: &[String], args: &[&str]) -> Result<String, String> {
     let mut all: Vec<&str> = before.iter().map(String::as_str).collect();
     all.extend(args);
-    worktree::git_at(dir, &all).map_err(|e| e.to_string())
+    worktree::git(dir, &all).map_err(|e| e.to_string())
 }
 
 /// The repository's own git directory, the same for every worktree of it.
 fn common_dir(dir: &Path) -> Option<PathBuf> {
-    let common = worktree::git_at(dir, &["rev-parse", "--git-common-dir"]).ok()?;
+    let common = worktree::git(dir, &["rev-parse", "--git-common-dir"]).ok()?;
     dir.join(common).canonicalize().ok()
 }
 

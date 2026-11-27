@@ -935,7 +935,8 @@ pub fn tab_landing(read: &Read, tab: TabId) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::git::tests::{Scratch, git, repo};
+    use crate::tabs::git::tests::{Scratch, repo};
+    use crate::worktree::git_scratch;
     use serde_json::json;
 
     #[test]
@@ -1001,16 +1002,13 @@ mod tests {
         // turn are a Landing group in the landing queue's order".
         let scratch = Scratch::new("landing");
         let main = scratch.0.join("repo");
-        if !repo(&main) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&main);
         let sessions = scratch.0.join("sessions");
         fs::create_dir_all(&sessions).unwrap();
         let pid = std::process::id();
         let [one, two, three] = ["one", "two", "three"].map(|name| {
             let worktree = scratch.0.join(name);
-            assert!(git(
+            git_scratch(
                 &main,
                 &[
                     "worktree",
@@ -1018,9 +1016,9 @@ mod tests {
                     "-q",
                     "-b",
                     name,
-                    worktree.to_str().unwrap()
-                ]
-            ));
+                    worktree.to_str().unwrap(),
+                ],
+            );
             fs::write(
                 sessions.join(format!("landing-{name}.json")),
                 serde_json::json!({ "sessionId": name, "cwd": worktree, "pid": pid }).to_string(),
@@ -1165,16 +1163,13 @@ mod tests {
     fn a_target_branch_s_queue_is_a_section_of_its_own_and_places_its_tabs() {
         let scratch = Scratch::new("landing-target");
         let main = scratch.0.join("repo");
-        if !repo(&main) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&main);
         let sessions = scratch.0.join("sessions");
         fs::create_dir_all(&sessions).unwrap();
         let pid = std::process::id();
         let [one, two, three] = ["one", "two", "three"].map(|name| {
             let worktree = scratch.0.join(name);
-            assert!(git(
+            git_scratch(
                 &main,
                 &[
                     "worktree",
@@ -1182,9 +1177,9 @@ mod tests {
                     "-q",
                     "-b",
                     name,
-                    worktree.to_str().unwrap()
-                ]
-            ));
+                    worktree.to_str().unwrap(),
+                ],
+            );
             fs::write(
                 sessions.join(format!("target-{name}.json")),
                 serde_json::json!({ "sessionId": name, "cwd": worktree, "pid": pid }).to_string(),
@@ -1271,15 +1266,12 @@ mod tests {
     fn a_holder_counts_while_its_session_runs_wherever_it_works() {
         let scratch = Scratch::new("landing-session");
         let main = scratch.0.join("repo");
-        if !repo(&main) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&main);
         let one = scratch.0.join("one");
-        assert!(git(
+        git_scratch(
             &main,
-            &["worktree", "add", "-q", "-b", "one", one.to_str().unwrap()]
-        ));
+            &["worktree", "add", "-q", "-b", "one", one.to_str().unwrap()],
+        );
         // The landing's Claude started in the main clone and went into the
         // worktree to land it, so its session file names the clone.
         let sessions = scratch.0.join("sessions");
@@ -1332,10 +1324,7 @@ mod tests {
     fn tabs_sharing_a_directory_take_only_their_own_entry_s_place() {
         let scratch = Scratch::new("landing-shared");
         let main = scratch.0.join("repo");
-        if !repo(&main) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&main);
         // Two tabs in the main clone; the lock held from it.
         let sessions = scratch.0.join("sessions");
         fs::create_dir_all(&sessions).unwrap();

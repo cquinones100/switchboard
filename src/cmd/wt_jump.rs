@@ -29,14 +29,14 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 
 use serde_json::Value;
 
 use crate::integrations::github;
 use crate::mux::socket;
 use crate::util;
-use crate::worktree::{self, fail, mentions};
+use crate::worktree::{self, fail, git_safe, mentions};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -113,21 +113,6 @@ fn list_panes(list: &Value) -> Vec<Pane> {
     panes
 }
 
-fn git(dir: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .arg("--no-optional-locks")
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 /// Each pane with its branch, repository and PR, one git call per distinct
 /// directory rather than per pane, since a tab's panes usually share one.
 fn describe(panes: Vec<Pane>) -> Vec<Pane> {
@@ -138,13 +123,17 @@ fn describe(panes: Vec<Pane>) -> Vec<Pane> {
             let (branch, root) = known
                 .entry(p.path.clone())
                 .or_insert_with(|| {
-                    let branch = git(&p.path, &["rev-parse", "--abbrev-ref", "HEAD"])
-                        .filter(|b| b != "HEAD" && !b.is_empty());
-                    let root = git(&p.path, &["rev-parse", "--git-common-dir"]).map(|common| {
-                        let common = Path::new(&p.path).join(common);
-                        let parent = common.parent().unwrap_or(&common).to_path_buf();
-                        worktree::normalize(&parent).to_string_lossy().into_owned()
-                    });
+                    let branch =
+                        git_safe(Path::new(&p.path), &["rev-parse", "--abbrev-ref", "HEAD"])
+                            .ok()
+                            .filter(|b| b != "HEAD" && !b.is_empty());
+                    let root = git_safe(Path::new(&p.path), &["rev-parse", "--git-common-dir"])
+                        .ok()
+                        .map(|common| {
+                            let common = Path::new(&p.path).join(common);
+                            let parent = common.parent().unwrap_or(&common).to_path_buf();
+                            worktree::normalize(&parent).to_string_lossy().into_owned()
+                        });
                     (branch, root)
                 })
                 .clone();

@@ -218,7 +218,7 @@ fn commit_naming(clone: &Path, ticket: &str) -> Option<Commit> {
     // ABC-13 mustn't find ABC-138, nor xABC-13.
     let grep = format!("--grep=(^|[^A-Za-z0-9]){}([^0-9]|$)", regex::escape(ticket));
     let log = |rev: &str| {
-        crate::diff::git::git(
+        crate::worktree::git(
             clone,
             &[
                 "log",
@@ -238,7 +238,7 @@ fn commit_naming(clone: &Path, ticket: &str) -> Option<Commit> {
     let hash = parts.next().filter(|h| !h.is_empty())?.to_string();
     let at = parts.next()?.parse().ok()?;
     let subject = parts.next().unwrap_or("").to_string();
-    let files = crate::diff::git::git(clone, &["show", "--name-only", "--format=", &hash])
+    let files = crate::worktree::git(clone, &["show", "--name-only", "--format=", &hash])
         .map(|out| {
             out.lines()
                 .filter(|l| !l.is_empty())
@@ -260,35 +260,31 @@ mod tests {
 
     #[test]
     fn the_newest_commit_naming_a_ticket_with_the_files_it_touches() {
-        use crate::tabs::git::tests::{Scratch, git, repo};
+        use crate::tabs::git::tests::{Scratch, repo};
+        use crate::worktree::git_scratch;
         let dir = Scratch::new("inbox-links");
         let clone = dir.0.join("repo");
-        if !repo(&clone) {
-            return;
-        }
+        repo(&clone);
         std::fs::write(clone.join("a.rs"), "a").unwrap();
-        assert!(git(&clone, &["add", "a.rs"]));
-        assert!(git(&clone, &["commit", "-q", "-m", "Start abc-138's lock"]));
+        git_scratch(&clone, &["add", "a.rs"]);
+        git_scratch(&clone, &["commit", "-q", "-m", "Start abc-138's lock"]);
         std::fs::write(clone.join("land_lock.rs"), "b").unwrap();
-        assert!(git(&clone, &["add", "land_lock.rs"]));
-        assert!(git(
+        git_scratch(&clone, &["add", "land_lock.rs"]);
+        git_scratch(&clone, &["commit", "-q", "-m", "Finish the lock (ABC-138)"]);
+        git_scratch(
             &clone,
-            &["commit", "-q", "-m", "Finish the lock (ABC-138)"]
-        ));
-        assert!(git(
-            &clone,
-            &["commit", "-q", "--allow-empty", "-m", "ABC-1380 other"]
-        ));
-        assert!(git(
+            &["commit", "-q", "--allow-empty", "-m", "ABC-1380 other"],
+        );
+        git_scratch(
             &clone,
             &[
                 "commit",
                 "-q",
                 "--allow-empty",
                 "-m",
-                "xABC-138 another team"
-            ]
-        ));
+                "xABC-138 another team",
+            ],
+        );
         let found = links(
             std::slice::from_ref(&clone),
             &["ABC-138".to_string(), "ABC-9".to_string()],

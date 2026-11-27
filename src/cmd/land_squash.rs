@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use crate::cmd::codex_review;
-use crate::worktree::{git_at, git_ok};
+use crate::worktree::{git, git_ok};
 
 const USAGE: &str =
     "usage: land-lock squash --message-file <f> [--onto <commit>] | land-lock squash --drop-backup";
@@ -84,8 +84,10 @@ fn parse(args: &[String]) -> Option<(PathBuf, Option<String>)> {
     Some((message?, onto))
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<String, Stop> {
-    git_at(cwd, args).map_err(|e| Stop(1, e.to_string()))
+impl From<anyhow::Error> for Stop {
+    fn from(e: anyhow::Error) -> Stop {
+        Stop(1, e.to_string())
+    }
 }
 
 fn squash(

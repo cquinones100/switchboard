@@ -204,7 +204,7 @@ fn git_with_helper(helper: Option<&str>) -> Command {
 }
 
 fn origin_of(clone: &Path) -> String {
-    worktree::git_at(clone, &["remote", "get-url", "origin"]).unwrap_or_default()
+    worktree::git(clone, &["remote", "get-url", "origin"]).unwrap_or_default()
 }
 
 fn pull_clone(clone: &Path, helper: Option<&str>) {
@@ -448,7 +448,7 @@ fn now(r: &mut Report, pulled: bool) -> Result<()> {
             && clone.join(".git").is_dir()
             && !(r.check && backup.is_some())
         {
-            let helpers = worktree::git_at(
+            let helpers = worktree::git(
                 &clone,
                 &["config", "--local", "--get-all", "credential.helper"],
             )

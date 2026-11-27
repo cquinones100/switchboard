@@ -43,12 +43,13 @@
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::agent::transcript::{self, Entry, Kind};
+use crate::worktree::git_safe;
 use crate::{paths, util};
 
 const RECENT_MS: i64 = 14 * 24 * 60 * 60 * 1000;
@@ -272,21 +273,6 @@ fn recent_sessions(cache: &Map<String, Value>) -> Vec<Recent> {
     found
 }
 
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .arg("--no-optional-locks")
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 /// A directory's repository, as its main checkout, so each one's worktrees
 /// are listed once however many places point into it. A bare repository
 /// has no checkout of its own.
@@ -303,7 +289,7 @@ fn repo_of(dir: &str, repos: &mut Map<String, Value>) -> Option<String> {
     }
     // Made absolute here rather than with `--path-format=absolute`, which
     // git before 2.31 doesn't have.
-    let common = git(Path::new(dir), &["rev-parse", "--git-common-dir"]);
+    let common = git_safe(Path::new(dir), &["rev-parse", "--git-common-dir"]).ok();
     let repo = common.and_then(|c| {
         let p = crate::worktree::normalize(&Path::new(dir).join(c));
         (p.file_name().is_some_and(|n| n == ".git"))
@@ -318,7 +304,9 @@ fn repo_of(dir: &str, repos: &mut Map<String, Value>) -> Option<String> {
 }
 
 fn worktrees_of(repo: &str) -> Vec<(String, String)> {
-    let porcelain = git(Path::new(repo), &["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let porcelain = git_safe(Path::new(repo), &["worktree", "list", "--porcelain"])
+        .ok()
+        .unwrap_or_default();
     crate::worktree::parse_worktrees(&porcelain)
         .into_iter()
         .filter(|w| !w.prunable && !w.bare)

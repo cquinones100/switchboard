@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 use super::{Credential, Remembered, ensure_on};
 use crate::net::{self, Audit, ErrorKind, Response, ServiceError};
 use crate::util;
+use crate::worktree::git_async;
 
 const SERVICE: &str = "GitHub";
 
@@ -665,16 +666,6 @@ pub fn parse_remote(url: &str) -> Option<Repo> {
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
-// One git command in `dir`, its output trimmed. `--no-optional-locks`, as the
-// tab lookups ran it, so a lookup never holds the index lock a commit in a
-// pane wants.
-async fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.arg("-C").arg(dir).arg("--no-optional-locks").args(args);
-    let output = util::run_async(&mut cmd, Some(GIT_TIMEOUT)).await?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 /// The GitHub repository `dir`'s pull requests are in, picked as `gh`
 /// picked the repository it asked: the one `gh repo set-default` named (git's
 /// `remote.<name>.gh-resolved`), else an `upstream` remote when there is one
@@ -707,15 +698,19 @@ enum Remotes {
 }
 
 async fn remotes(dir: &Path) -> Result<Remotes> {
-    if git(dir, &["rev-parse", "--git-dir"]).await.is_err() {
+    if git_async(dir, &["rev-parse", "--git-dir"], GIT_TIMEOUT)
+        .await
+        .is_err()
+    {
         return Err(anyhow!(
             "{} isn't in a git repository.",
             crate::paths::tilde(dir)
         ));
     }
-    let resolved = git(
+    let resolved = git_async(
         dir,
         &["config", "--get-regexp", r"^remote\..*\.gh-resolved$"],
+        GIT_TIMEOUT,
     )
     .await
     .unwrap_or_default();
@@ -729,7 +724,7 @@ async fn remotes(dir: &Path) -> Result<Remotes> {
             return Ok(Remotes::Default(repo));
         }
     }
-    let url = git(dir, &["remote", "get-url", "origin"])
+    let url = git_async(dir, &["remote", "get-url", "origin"], GIT_TIMEOUT)
         .await
         .map_err(|_| anyhow!("This repository has no origin remote."))?;
     let origin = parse_remote(&url)
@@ -762,7 +757,9 @@ pub fn parse_name_with_owner(text: &str) -> Option<Repo> {
 
 // The GitHub repository a remote's URL names.
 async fn remote_repo(dir: &Path, remote: &str) -> Option<Repo> {
-    let url = git(dir, &["remote", "get-url", remote]).await.ok()?;
+    let url = git_async(dir, &["remote", "get-url", remote], GIT_TIMEOUT)
+        .await
+        .ok()?;
     parse_remote(&url)
 }
 
@@ -1060,15 +1057,19 @@ async fn head_pr(
 // The branch `dir` is on and its name where it is pushed: the branch it
 // tracks there, else its own. `None` on a detached HEAD.
 async fn branch_and_head(dir: &Path) -> Option<(String, String)> {
-    let branch = git(dir, &["branch", "--show-current"])
+    let branch = git_async(dir, &["branch", "--show-current"], GIT_TIMEOUT)
         .await
         .unwrap_or_default();
     if branch.is_empty() {
         return None;
     }
-    let merge = git(dir, &["config", &format!("branch.{branch}.merge")])
-        .await
-        .unwrap_or_default();
+    let merge = git_async(
+        dir,
+        &["config", &format!("branch.{branch}.merge")],
+        GIT_TIMEOUT,
+    )
+    .await
+    .unwrap_or_default();
     let tracked = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
     let head = if tracked.is_empty() {
         branch.clone()
@@ -1096,27 +1097,33 @@ pub async fn pushed_branch(dir: &Path) -> Result<Option<(Repo, String)>> {
     // tracked, to the branch it tracks unless `push.default` pushes every
     // branch under its own name.
     let own_name = matches!(
-        git(dir, &["config", "push.default"])
+        git_async(dir, &["config", "push.default"], GIT_TIMEOUT)
             .await
             .unwrap_or_default()
             .as_str(),
         "current" | "matching"
     );
-    let tracked = git(dir, &["config", &format!("branch.{branch}.remote")])
-        .await
-        .unwrap_or_default();
+    let tracked = git_async(
+        dir,
+        &["config", &format!("branch.{branch}.remote")],
+        GIT_TIMEOUT,
+    )
+    .await
+    .unwrap_or_default();
     for key in [
         format!("branch.{branch}.pushRemote"),
         "remote.pushDefault".into(),
     ] {
-        let remote = git(dir, &["config", &key]).await.unwrap_or_default();
+        let remote = git_async(dir, &["config", &key], GIT_TIMEOUT)
+            .await
+            .unwrap_or_default();
         if remote.is_empty() {
             continue;
         }
         if remote == tracked {
             break;
         }
-        let url = git(dir, &["remote", "get-url", "--push", &remote])
+        let url = git_async(dir, &["remote", "get-url", "--push", &remote], GIT_TIMEOUT)
             .await
             .unwrap_or(remote);
         if let Some(pushed) = parse_remote(&url) {
@@ -1137,11 +1144,15 @@ pub async fn pushed_branch(dir: &Path) -> Result<Option<(Repo, String)>> {
 // a URL itself, as `gh pr checkout` sets it). `None` for a branch with no
 // remote, or one not on GitHub.
 async fn pushed_to(dir: &Path, branch: &str) -> Option<Repo> {
-    let remote = git(dir, &["config", &format!("branch.{branch}.remote")])
-        .await
-        .ok()
-        .filter(|r| !r.is_empty())?;
-    let url = match git(dir, &["remote", "get-url", &remote]).await {
+    let remote = git_async(
+        dir,
+        &["config", &format!("branch.{branch}.remote")],
+        GIT_TIMEOUT,
+    )
+    .await
+    .ok()
+    .filter(|r| !r.is_empty())?;
+    let url = match git_async(dir, &["remote", "get-url", &remote], GIT_TIMEOUT).await {
         Ok(url) => url,
         Err(_) => remote,
     };

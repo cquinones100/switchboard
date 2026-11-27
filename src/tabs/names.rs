@@ -701,8 +701,9 @@ fn take<T: PartialEq>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::git::tests::{Scratch, git, repo};
+    use super::super::git::tests::{Scratch, repo};
     use super::*;
+    use crate::worktree::git_scratch;
 
     fn names(switches: Switches) -> (Names, Instant) {
         let now = Instant::now();
@@ -821,11 +822,8 @@ mod tests {
     fn a_branch_with_no_pr_is_asked_about_again_at_once_when_the_board_shows_one() {
         let scratch = Scratch::new("names-board");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "cache"]));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "cache"]);
         let (mut names, now) = names(Switches::default());
         let repo_dir = dir.join(".git");
         assert!(!names.ask_soon(&repo_dir, "cache", now), "never asked yet");
@@ -851,11 +849,8 @@ mod tests {
     fn a_ticket_branch_asks_for_its_pr_and_title_and_shows_them_once_known() {
         let scratch = Scratch::new("names");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "eng-42-fix-login"]));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "eng-42-fix-login"]);
         let (mut names, now) = names(Switches::default());
 
         let (facts, asks) = names.facts(&dir, now);
@@ -922,15 +917,12 @@ mod tests {
     fn an_issue_branch_asks_for_the_issue_s_title_and_shows_its_number() {
         let scratch = Scratch::new("issue");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]));
-        assert!(git(
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]);
+        git_scratch(
             &dir,
-            &["remote", "add", "origin", "https://github.com/acme/app.git"]
-        ));
+            &["remote", "add", "origin", "https://github.com/acme/app.git"],
+        );
         let (mut on, now) = names(Switches::default());
         let (facts, asks) = on.facts(&dir, now);
         let issue = Ticket::parse("acme/app#12");
@@ -951,13 +943,13 @@ mod tests {
         assert_eq!(facts.ticket, issue);
 
         // A project's ID before a ticket's names the ticket, as it always did.
-        assert!(git(&dir, &["checkout", "-q", "-b", "p-abc-4-eng-7-fix"]));
+        git_scratch(&dir, &["checkout", "-q", "-b", "p-abc-4-eng-7-fix"]);
         let asks = on.facts(&dir, now + FACTS_FOUND).1;
         assert!(
             asks.contains(&Ask::Title { id: "ENG-7".into() }),
             "{asks:?}"
         );
-        assert!(git(&dir, &["checkout", "-q", "issue/12-fix-login"]));
+        git_scratch(&dir, &["checkout", "-q", "issue/12-fix-login"]);
 
         // With GitHub off, no issue and nothing asked of it.
         let (mut off, now) = names(Switches {
@@ -974,14 +966,11 @@ mod tests {
     fn an_issue_branch_is_named_for_its_issue_and_follows_its_title() {
         let scratch = Scratch::new("issue");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&dir);
         let branch = "issue/12-eng-4-make-it-blue";
-        assert!(git(&dir, &["checkout", "-q", "-b", branch]));
+        git_scratch(&dir, &["checkout", "-q", "-b", branch]);
         let key = format!("branch.{branch}.wtnIssue");
-        assert!(git(&dir, &["config", &key, "acme/app#12"]));
+        git_scratch(&dir, &["config", &key, "acme/app#12"]);
         let (mut names, now) = names(Switches::default());
 
         // Its title asked for under its reference, and no Linear ticket for
@@ -1032,13 +1021,10 @@ mod tests {
     fn a_wtpr_directory_shows_its_number_at_once_and_asks_its_repository_only_in_a_fork_s_clone() {
         let scratch = Scratch::new("wtpr");
         let dir = scratch.0.join("pr-41-feature");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "feature"]));
-        let remote = |name: &str, url: &str| git(&dir, &["remote", "add", name, url]);
-        assert!(remote("origin", "https://github.com/me/app.git"));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "feature"]);
+        let remote = |name: &str, url: &str| git_scratch(&dir, &["remote", "add", name, url]);
+        remote("origin", "https://github.com/me/app.git");
 
         // A clone with no upstream: its origin's number at once, its PR asked
         // for by that number for its title.
@@ -1068,7 +1054,7 @@ mod tests {
         assert_eq!(facts.pr_title.as_deref(), Some("Retry failed fetches"));
 
         // A fork's clone: the number at once, its repository asked.
-        assert!(remote("upstream", "https://github.com/acme/app.git"));
+        remote("upstream", "https://github.com/acme/app.git");
         let (mut names, now) = names(Switches::default());
         let (facts, asks) = names.facts(&dir, now);
         assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
@@ -1099,13 +1085,10 @@ mod tests {
     fn the_answer_holds_while_the_branch_does() {
         let scratch = Scratch::new("hold");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&dir);
         let (mut names, now) = names(Switches::default());
         assert_eq!(names.facts(&dir, now).0.label, "app");
-        assert!(git(&dir, &["checkout", "-q", "-b", "feature"]));
+        git_scratch(&dir, &["checkout", "-q", "-b", "feature"]);
         // A new branch is worked out again at once.
         assert_eq!(names.facts(&dir, now).0.label, "app:feature");
     }
@@ -1114,11 +1097,8 @@ mod tests {
     fn with_lookups_off_nothing_is_asked() {
         let scratch = Scratch::new("off");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "eng-42-fix"]));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "eng-42-fix"]);
         for switches in [
             Switches {
                 github: false,
@@ -1153,11 +1133,8 @@ mod tests {
     fn a_wtpr_directory_has_its_number_without_waiting_for_its_lookup() {
         let scratch = Scratch::new("wtpr-number");
         let dir = scratch.0.join("pr-77-fix");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "someone-fix"]));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "someone-fix"]);
         let (mut names, now) = names(Switches::default());
         let (facts, asks) = names.facts(&dir, now);
         assert_eq!((facts.pr, facts.pr_repo), (Some(77), None));
@@ -1185,11 +1162,8 @@ mod tests {
     fn a_branch_with_a_pr_and_no_ticket_is_named_by_the_pr_s_title_once_known() {
         let scratch = Scratch::new("pr-title");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "retry-failed-fetches"]));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "retry-failed-fetches"]);
         let (mut names, now) = names(Switches::default());
         let repo_dir = dir.join(".git");
         assert_eq!(names.facts(&dir, now).0.label, "app:retry-failed-fetches");
@@ -1228,11 +1202,8 @@ mod tests {
     fn a_branch_that_only_looks_like_a_ticket_takes_the_pr_s_title() {
         let scratch = Scratch::new("pr-lookalike");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "patch-1"]));
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "patch-1"]);
         let (mut names, now) = names(Switches::default());
         names.answer(
             Answer::Pr {
@@ -1268,15 +1239,12 @@ mod tests {
     fn a_pr_on_an_issue_s_branch_is_named_by_the_issue() {
         let scratch = Scratch::new("pr-issue");
         let dir = scratch.0.join("app");
-        if !repo(&dir) {
-            eprintln!("skipped: no git");
-            return;
-        }
-        assert!(git(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]));
-        assert!(git(
+        repo(&dir);
+        git_scratch(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]);
+        git_scratch(
             &dir,
-            &["remote", "add", "origin", "https://github.com/acme/app.git"]
-        ));
+            &["remote", "add", "origin", "https://github.com/acme/app.git"],
+        );
         let (mut names, now) = names(Switches::default());
         names.answer(
             Answer::Pr {

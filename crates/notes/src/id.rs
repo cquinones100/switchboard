@@ -421,8 +421,7 @@ const MIGRATED: &str = "switchboard.wtnClaimsById";
 /// were, which the picker and the mode still read by path. Runs git, so it
 /// is never called on the server's task.
 pub fn migrate_claims(root: &Path, dir: &Path) -> Vec<String> {
-    let done =
-        || util::git_at(root, &["config", "--get", MIGRATED]).is_ok_and(|v| v.trim() == "true");
+    let done = || util::git(root, &["config", "--get", MIGRATED]).is_ok_and(|v| v.trim() == "true");
     if done() {
         return Vec::new();
     }
@@ -433,7 +432,7 @@ pub fn migrate_claims(root: &Path, dir: &Path) -> Vec<String> {
             return Vec::new();
         }
         let mut unplaced = Vec::new();
-        let claims = util::git_at(root, &["config", "--get-regexp", r"^branch\..*\.wtnitem$"])
+        let claims = util::git(root, &["config", "--get-regexp", r"^branch\..*\.wtnitem$"])
             .unwrap_or_default();
         struct Note {
             file: PathBuf,

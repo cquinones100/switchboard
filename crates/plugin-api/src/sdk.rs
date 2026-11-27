@@ -417,23 +417,133 @@ pub fn claude_command() -> Option<PathBuf> {
     })
 }
 
-/// Runs git in `dir`: what it printed, trimmed, or an error carrying the
-/// first line of what it said went wrong.
-pub fn git_at(dir: &Path, args: &[&str]) -> Result<String> {
+// ── git ─────────────────────────────────────────────────────────────────────
+
+/// The flags that keep a git command that only looks from running anything
+/// a repository supplies: no hook, no file-system monitor, and no optional
+/// lock, so a look never holds the index lock a commit in a pane wants.
+pub const GIT_SAFE: [&str; 5] = [
+    "--no-optional-locks",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+];
+
+/// `git -C <dir>`, its input closed, for a command the forms below don't
+/// cover (an environment or flags of its own, its output read as it is).
+pub fn git_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir).args(args);
-    Ok(run_command(&mut cmd)?.trim().to_string())
+    cmd.arg("-C").arg(dir).stdin(Stdio::null());
+    cmd
+}
+
+/// Runs git in `dir`: what it printed, trimmed, or an error carrying the
+/// first line of what it said went wrong; `.ok()` for none when it fails.
+pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    git_text(git_command(dir).args(args))
+}
+
+/// As `git`, with `GIT_SAFE`'s flags.
+pub fn git_safe(dir: &Path, args: &[&str]) -> Result<String> {
+    git_text(git_command(dir).args(GIT_SAFE).args(args))
+}
+
+/// What a git command built from `git_command` printed, trimmed.
+pub fn git_text(cmd: &mut Command) -> Result<String> {
+    Ok(run_command(cmd)?.trim().to_string())
+}
+
+/// As `git`, its output as git printed it, for output whose spaces count (a
+/// diff, `status --porcelain`).
+pub fn git_as_is(dir: &Path, args: &[&str]) -> Result<String> {
+    run_command(git_command(dir).args(args))
+}
+
+/// As `git`, its output's bytes as they are (a file's text may not be UTF-8).
+pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    Ok(output_of(git_command(dir).args(args))?.stdout)
+}
+
+/// git in `dir`, what it said (its output and its errors) whichever way it
+/// went, and whether it succeeded: for a push or a fetch, whose reasons
+/// span lines.
+pub fn git_said(dir: &Path, args: &[&str]) -> (bool, String) {
+    match git_command(dir).args(args).output() {
+        Ok(out) => {
+            let mut said = String::from_utf8_lossy(&out.stdout).into_owned();
+            said.push_str(&String::from_utf8_lossy(&out.stderr));
+            (out.status.success(), said.trim().to_string())
+        }
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+/// As `git_safe`, for an async task (the server's looks), given up after
+/// `timeout`.
+#[cfg(feature = "async")]
+pub async fn git_async(dir: &Path, args: &[&str], timeout: std::time::Duration) -> Result<String> {
+    let mut cmd = tokio::process::Command::from(git_command(dir));
+    cmd.args(GIT_SAFE).args(args).kill_on_drop(true);
+    let output = tokio::time::timeout(timeout, cmd.output())
+        .await
+        .map_err(|_| anyhow!("git timed out"))??;
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let first = said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Err(anyhow!("git failed: {}", first.trim()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Runs git in `dir`, its output thrown away; whether it succeeded.
 pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    git_command(dir)
         .args(args)
-        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// git with a config and an identity of its own, none of yours, nor any of
+/// a repository the caller runs in, for a scratch repository: a test's.
+pub fn git_isolated(dir: &Path) -> Command {
+    let mut cmd = git_command(dir);
+    cmd.args([
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgSign=false",
+        // Read from the home whatever GIT_CONFIG_GLOBAL says.
+        "-c",
+        "core.excludesFile=/dev/null",
+        "-c",
+        "core.attributesFile=/dev/null",
+    ]);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.envs([
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_AUTHOR_NAME", "t"),
+        ("GIT_AUTHOR_EMAIL", "t@example.com"),
+        ("GIT_COMMITTER_NAME", "t"),
+        ("GIT_COMMITTER_EMAIL", "t@example.com"),
+    ]);
+    cmd
+}
+
+/// For a test: `git_isolated` in `dir`, its output trimmed, panicking with
+/// what git said when it fails.
+pub fn git_scratch(dir: &Path, args: &[&str]) -> String {
+    git_text(git_isolated(dir).args(args)).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }

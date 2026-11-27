@@ -11,6 +11,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use switchboard_plugin_api::sdk::git_scratch;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_switchboard-diff");
 
@@ -68,39 +69,19 @@ fn env(home: &Path) -> Vec<(&'static str, String)> {
     ]
 }
 
-fn git(dir: &Path, home: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env_clear()
-        .envs(env(home))
-        .output()
-        .expect("git runs");
-    assert!(
-        status.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&status.stderr)
-    );
-}
-
 /// A repository on a branch that changes one file of main's and adds one.
 fn repository(tmp: &Tmp) -> PathBuf {
-    let (repo, home) = (tmp.0.join("repo"), tmp.home());
+    let repo = tmp.0.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &home, &["init", "-q", "-b", "main"]);
+    git_scratch(&repo, &["init", "-q", "-b", "main"]);
     std::fs::write(repo.join("alpha.txt"), "one\ntwo\n").unwrap();
-    git(&repo, &home, &["add", "."]);
-    git(&repo, &home, &["commit", "-q", "-m", "Start"]);
-    git(&repo, &home, &["checkout", "-q", "-b", "feature"]);
+    git_scratch(&repo, &["add", "."]);
+    git_scratch(&repo, &["commit", "-q", "-m", "Start"]);
+    git_scratch(&repo, &["checkout", "-q", "-b", "feature"]);
     std::fs::write(repo.join("alpha.txt"), "one\nthree\n").unwrap();
     std::fs::write(repo.join("beta.txt"), "new\n").unwrap();
-    git(&repo, &home, &["add", "."]);
-    git(
-        &repo,
-        &home,
-        &["commit", "-q", "-m", "Change alpha, add beta"],
-    );
+    git_scratch(&repo, &["add", "."]);
+    git_scratch(&repo, &["commit", "-q", "-m", "Change alpha, add beta"]);
     repo
 }
 

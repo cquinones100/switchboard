@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use crate::util;
+use crate::worktree::git_safe;
 
 /// Where the worktree commands make worktrees, under the main clone.
 pub const UNDER: &str = crate::worktree::DEFAULT_WORKTREE_DIR;
@@ -91,38 +92,6 @@ pub fn parse(porcelain: &str) -> Vec<Listed> {
 pub fn main_clone_of(dir: &Path) -> Option<PathBuf> {
     let (_, common) = crate::sources::landing::git_of(dir)?;
     (common.file_name()? == ".git").then(|| common.parent().map(Path::to_path_buf))?
-}
-
-/// git in `dir`, never taking the index's lock to refresh it.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = util::output_of(
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_OPTIONAL_LOCKS", "0"),
-    )
-    .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// The repository's default branch: origin's `HEAD`, else `main` or
-/// `master`, whichever origin has been fetched for (as
-/// `worktree::default_start` picks); none when none is known.
-pub fn default_branch(main: &Path) -> Option<String> {
-    let named = git(
-        main,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .and_then(|r| r.trim().strip_prefix("origin/").map(str::to_string));
-    named.or_else(|| {
-        ["main", "master"]
-            .into_iter()
-            .find(|b| git(main, &["rev-parse", "--verify", "-q", &upstream_of(b)]).is_some())
-            .map(str::to_string)
-    })
 }
 
 /// The remote-tracking ref of origin's `branch`, written in full, so a
@@ -211,7 +180,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// (assume-unchanged, a lowercase tag in `git ls-files -v`, or
 /// skip-worktree, `S`): its changes would go unseen and be lost.
 fn hides_changes(tree: &Path) -> bool {
-    git(tree, &["ls-files", "-v"]).is_none_or(|out| {
+    git_safe(tree, &["ls-files", "-v"]).ok().is_none_or(|out| {
         out.lines()
             .any(|l| l.starts_with(|c: char| c.is_ascii_lowercase() || c == 'S'))
     })
@@ -223,7 +192,7 @@ fn hides_changes(tree: &Path) -> bool {
 /// `disposable`, and its commits there (`HEAD` an ancestor of it), or
 /// merging them into it changing nothing, byte for byte.
 pub fn landed(main: &Path, tree: &Path, upstream: &str) -> bool {
-    let Some(status) = git(
+    let Some(status) = git_safe(
         tree,
         &[
             "status",
@@ -231,7 +200,8 @@ pub fn landed(main: &Path, tree: &Path, upstream: &str) -> bool {
             "--untracked-files=normal",
             "--ignored",
         ],
-    ) else {
+    )
+    .ok() else {
         return false;
     };
     let only_disposable = status.lines().all(|l| match l.strip_prefix("!! ") {
@@ -248,14 +218,17 @@ pub fn landed(main: &Path, tree: &Path, upstream: &str) -> bool {
 /// here; `landed` checks that too. `switchboard landing --json`'s
 /// `alreadyLanded`.
 pub fn committed_on(tree: &Path, upstream: &str) -> bool {
-    if git(tree, &["merge-base", "--is-ancestor", "HEAD", upstream]).is_some() {
+    if git_safe(tree, &["merge-base", "--is-ancestor", "HEAD", upstream])
+        .ok()
+        .is_some()
+    {
         return true;
     }
     if names_a_merge_driver(tree, upstream) {
         return false;
     }
-    let tree_of = |rev: &str| git(tree, &["rev-parse", &format!("{rev}^{{tree}}")]);
-    let merged = git(tree, &["merge-tree", "--write-tree", upstream, "HEAD"]);
+    let tree_of = |rev: &str| git_safe(tree, &["rev-parse", &format!("{rev}^{{tree}}")]).ok();
+    let merged = git_safe(tree, &["merge-tree", "--write-tree", upstream, "HEAD"]).ok();
     match (merged, tree_of(upstream)) {
         (Some(merged), Some(theirs)) => merged.lines().next() == Some(theirs.trim()),
         _ => false,
@@ -271,18 +244,19 @@ pub fn committed_on(tree: &Path, upstream: &str) -> bool {
 fn names_a_merge_driver(tree: &Path, upstream: &str) -> bool {
     // Any driver git is told of: a custom one may even be named for a
     // built-in (`text`), which it then stands in for.
-    let configured = git(tree, &["config", "--get-regexp", r"^merge\..*\.driver$"]);
-    let default = git(tree, &["config", "--get", "merge.default"]);
+    let configured = git_safe(tree, &["config", "--get-regexp", r"^merge\..*\.driver$"]).ok();
+    let default = git_safe(tree, &["config", "--get", "merge.default"]).ok();
     if configured.is_some() || default.is_some() {
         return true;
     }
-    let Some(base) = git(tree, &["merge-base", upstream, "HEAD"]) else {
+    let Some(base) = git_safe(tree, &["merge-base", upstream, "HEAD"]).ok() else {
         return true;
     };
-    let Some(changed) = git(
+    let Some(changed) = git_safe(
         tree,
         &["diff", "--name-only", "--no-renames", base.trim(), "HEAD"],
-    ) else {
+    )
+    .ok() else {
         return true;
     };
     let files: Vec<&str> = changed.lines().filter(|l| !l.is_empty()).collect();
@@ -351,7 +325,7 @@ fn real(path: &Path) -> PathBuf {
 /// The worktrees of `ask.main` to remove, by the rules above, at `now`.
 pub fn landed_worktrees(ask: &Ask, listed: &[Listed], now: SystemTime) -> Vec<PathBuf> {
     let under = real(&ask.main.join(UNDER));
-    let Some(default) = default_branch(&ask.main) else {
+    let Some(default) = crate::tabs::git::default_branch(&ask.main.join(".git")) else {
         return Vec::new();
     };
     let upstream = upstream_of(&default);
@@ -376,7 +350,9 @@ pub fn landed_worktrees(ask: &Ask, listed: &[Listed], now: SystemTime) -> Vec<Pa
 /// The default branch fetched from origin into `origin/<default>`; with
 /// none known, `main`, else `master`.
 pub fn fetch(main: &Path) {
-    let known = default_branch(main);
+    let common = main.join(".git");
+    let known = crate::tabs::git::default_branch(&common)
+        .filter(|b| crate::tabs::git::on_origin(&common, b));
     let tries: Vec<&str> = match &known {
         Some(d) => vec![d.as_str()],
         None => vec!["main", "master"],
@@ -384,7 +360,10 @@ pub fn fetch(main: &Path) {
     for branch in tries {
         crate::requests::count("GitHub", "git", "sweep");
         let refspec = format!("+refs/heads/{branch}:{}", upstream_of(branch));
-        if git(main, &["fetch", "-q", "origin", &refspec]).is_some() {
+        if git_safe(main, &["fetch", "-q", "origin", &refspec])
+            .ok()
+            .is_some()
+        {
             return;
         }
     }
@@ -392,7 +371,7 @@ pub fn fetch(main: &Path) {
 
 /// The landed worktrees of one repository, found now.
 pub fn find(ask: &Ask) -> Vec<PathBuf> {
-    let Some(porcelain) = git(&ask.main, &["worktree", "list", "--porcelain"]) else {
+    let Some(porcelain) = git_safe(&ask.main, &["worktree", "list", "--porcelain"]).ok() else {
         return Vec::new();
     };
     landed_worktrees(ask, &parse(&porcelain), SystemTime::now())
@@ -402,7 +381,7 @@ pub fn find(ask: &Ask) -> Vec<PathBuf> {
 /// again now: what was true as a sweep found it may not be once the
 /// worktrees before it are removed.
 pub fn still_landed(ask: &Ask, tree: &Path) -> bool {
-    let Some(porcelain) = git(&ask.main, &["worktree", "list", "--porcelain"]) else {
+    let Some(porcelain) = git_safe(&ask.main, &["worktree", "list", "--porcelain"]).ok() else {
         return false;
     };
     let one: Vec<Listed> = parse(&porcelain)

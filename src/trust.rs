@@ -45,6 +45,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::worktree::git;
 use crate::{paths, util};
 
 /// The worktree config key `wtpr --untrusted` sets to `true`.
@@ -230,18 +231,10 @@ pub fn trusted(real: &Path, dir: &Path) -> bool {
 
 // ── Your own code ───────────────────────────────────────────────────────────
 
-/// A git command's output in `dir`, trimmed; `None` when it fails.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(dir).args(args);
-    util::run_command(&mut command)
-        .ok()
-        .map(|s| s.trim_end().to_string())
-}
-
 /// Lines of a git command's output, none when it fails.
 fn git_lines(dir: &Path, args: &[&str]) -> Vec<String> {
     git(dir, args)
+        .ok()
         .map(|s| {
             s.lines()
                 .filter(|l| !l.is_empty())
@@ -287,7 +280,7 @@ pub fn yours_or_listed(real: &Path, wt: &Path) -> Result<(), String> {
         // And written and committed under your git email, since a PR
         // fetched straight to a local branch, or a fork's ref pruned since,
         // leaves no ref.
-        let me = git(wt, &["config", "user.email"]).unwrap_or_default();
+        let me = git(wt, &["config", "user.email"]).ok().unwrap_or_default();
         let mut args = vec![
             "log",
             "--no-show-signature",
@@ -327,7 +320,9 @@ fn midway_in(wt: &Path) -> Option<&'static str> {
     MIDWAY.iter().copied().find(|op| {
         // Relative to the worktree, as git gives it: --path-format is
         // newer than the git some still have.
-        git(wt, &["rev-parse", "--git-path", op]).is_some_and(|path| wt.join(path).exists())
+        git(wt, &["rev-parse", "--git-path", op])
+            .ok()
+            .is_some_and(|path| wt.join(path).exists())
     })
 }
 
@@ -378,7 +373,7 @@ pub fn branch_yours_or_listed(real: &Path, wt: &Path) -> Result<(), String> {
 /// and `user.email`.
 pub fn others_on(dir: &Path, tip: &str, base: Option<&str>) -> Result<Vec<String>, String> {
     let email = |var: &str| {
-        git(dir, &["var", var]).and_then(|ident| {
+        git(dir, &["var", var]).ok().and_then(|ident| {
             let (_, rest) = ident.split_once('<')?;
             Some(rest.split_once('>')?.0.to_string())
         })
@@ -386,7 +381,7 @@ pub fn others_on(dir: &Path, tip: &str, base: Option<&str>) -> Result<Vec<String
     let me: Vec<String> = ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"]
         .iter()
         .filter_map(|v| email(v))
-        .chain(git(dir, &["config", "user.email"]))
+        .chain(git(dir, &["config", "user.email"]).ok())
         .filter(|e| !e.is_empty())
         .collect();
     // One branch, never a union: a local main can hold commits the
@@ -405,9 +400,11 @@ pub fn others_on(dir: &Path, tip: &str, base: Option<&str>) -> Result<Vec<String
     };
     let base = match base {
         Some(b) => Some(b.to_string()),
-        None => candidates
-            .into_iter()
-            .find(|r| git(dir, &["rev-parse", "--verify", "--quiet", r]).is_some()),
+        None => candidates.into_iter().find(|r| {
+            git(dir, &["rev-parse", "--verify", "--quiet", r])
+                .ok()
+                .is_some()
+        }),
     };
     if base.is_none()
         && let Some(r) = &remote
@@ -426,7 +423,7 @@ pub fn others_on(dir: &Path, tip: &str, base: Option<&str>) -> Result<Vec<String
     ];
     args.extend(base.as_deref());
     args.push("--");
-    let Some(emails) = git(dir, &args) else {
+    let Some(emails) = git(dir, &args).ok() else {
         return Err(format!(
             "could not read {tip}'s commits in {}",
             paths::tilde(dir)
@@ -457,7 +454,7 @@ pub fn leads_back(wt: &Path) -> bool {
     let Some(want) = real_dir(wt) else {
         return false;
     };
-    let dir = |args: &[&str]| git(wt, args).and_then(|p| real_dir(&wt.join(p)));
+    let dir = |args: &[&str]| git(wt, args).ok().and_then(|p| real_dir(&wt.join(p)));
     let (Some(common), Some(own)) = (
         dir(&["rev-parse", "--git-common-dir"]),
         dir(&["rev-parse", "--absolute-git-dir"]),

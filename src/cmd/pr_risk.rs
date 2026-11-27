@@ -52,13 +52,14 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::util;
+use crate::worktree::{GIT_SAFE, git_command};
 
 /// What kind of thing a file is that runs without being asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,43 +217,33 @@ pub struct Report {
     pub hosts: Vec<String>,
 }
 
-/// git in the worktree with nothing of the PR's or yours run: no hook, no
-/// file-system monitor, paths printed as they are, `a/` and `b/` prefixes.
-/// Its output's bytes; the error is git's own words.
-fn git(worktree: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.quotePath=false",
-            "-c",
-            "diff.noprefix=false",
-            "-c",
-            "diff.mnemonicPrefix=false",
-            "-c",
-            "diff.relative=false",
-        ])
-        .arg("-C")
-        .arg(worktree)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(output.stdout)
-}
+/// With `GIT_SAFE`'s flags, so nothing of the PR's or yours runs: paths
+/// printed as they are, with `a/` and `b/` prefixes.
+const AS_PRINTED: [&str; 8] = [
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "-c",
+    "diff.relative=false",
+];
 
 /// What `pr-risk` reports for the worktree against `base`.
 pub fn report(worktree: &Path, base: &str) -> Result<Report, String> {
     if base.starts_with('-') {
         return Err(format!("{base} isn't a ref"));
     }
-    let merge_base = git(worktree, &["merge-base", base, "HEAD"])
+    // Its output's bytes; the error is what git said.
+    let git = |args: &[&str]| {
+        let mut cmd = git_command(worktree);
+        cmd.args(GIT_SAFE).args(AS_PRINTED).args(args);
+        util::output_of(&mut cmd)
+            .map(|o| o.stdout)
+            .map_err(|e| e.to_string())
+    };
+    let merge_base = git(&["merge-base", base, "HEAD"])
         .map(|out| String::from_utf8_lossy(&out).trim().to_string())
         .map_err(|e| {
             format!(
@@ -270,7 +261,7 @@ pub fn report(worktree: &Path, base: &str) -> Result<Report, String> {
     // Each changed file with its status, NUL-separated so any name reads.
     let mut args = diff.to_vec();
     args.extend(["--name-status", "-z", &merge_base, "HEAD", "--"]);
-    let listed = git(worktree, &args)?;
+    let listed = git(&args)?;
     let mut changed: Vec<(String, String)> = Vec::new();
     let mut fields = listed.split(|&b| b == 0).filter(|f| !f.is_empty());
     while let (Some(code), Some(path)) = (fields.next(), fields.next()) {
@@ -281,7 +272,7 @@ pub fn report(worktree: &Path, base: &str) -> Result<Report, String> {
     }
     let mut args = diff.to_vec();
     args.extend(["--text", "-U0", &merge_base, "HEAD", "--"]);
-    let patch = git(worktree, &args)?;
+    let patch = git(&args)?;
     let added = added_lines(&String::from_utf8_lossy(&patch));
 
     let lines_of = |path: &str| -> Vec<Added> {
@@ -326,20 +317,17 @@ pub fn report(worktree: &Path, base: &str) -> Result<Report, String> {
     let hosts = hosts
         .into_iter()
         .filter(|host| {
-            git(
-                worktree,
-                &[
-                    "grep",
-                    "-q",
-                    "-F",
-                    "-i",
-                    "--no-textconv",
-                    "-e",
-                    host,
-                    &merge_base,
-                    "--",
-                ],
-            )
+            git(&[
+                "grep",
+                "-q",
+                "-F",
+                "-i",
+                "--no-textconv",
+                "-e",
+                host,
+                &merge_base,
+                "--",
+            ])
             .is_err()
         })
         .collect();

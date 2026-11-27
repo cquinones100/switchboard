@@ -291,7 +291,7 @@ pub fn post_main(args: Vec<String>) -> ExitCode {
     let posted = util::block_on(async {
         // Origin's repository itself, never an upstream or gh's default,
         // and only one you can push to, so nothing goes on someone else's.
-        let origin = crate::worktree::git_at(&clone, &["config", "--get", "remote.origin.url"])
+        let origin = crate::worktree::git(&clone, &["config", "--get", "remote.origin.url"])
             .map_err(|e| anyhow::anyhow!("{} has no origin: {e}", clone.display()))?;
         let repo: Repo = github::parse_remote(origin.trim())
             .ok_or_else(|| anyhow::anyhow!("{}'s origin isn't on GitHub", clone.display()))?;

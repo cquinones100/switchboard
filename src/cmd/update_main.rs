@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use crate::worktree::{self, git_at};
+use crate::worktree::{self, git};
 
 fn fail(message: &str) -> ExitCode {
     eprintln!("update-main: {message}");
@@ -44,10 +44,10 @@ pub fn update(dir: &Path) -> Result<String, String> {
     // gives `--git-common-dir` relative to the top whatever directory asks,
     // and knows no `--path-format`.
     let outside = || format!("not in a git repository: {}", dir.display());
-    let top = git_at(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| outside())?;
+    let top = git(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| outside())?;
     let root = worktree::repo_root_of(Path::new(&top)).ok_or_else(outside)?;
     let remote = worktree::default_remote(&root).ok_or("the repository has no remote")?;
-    let branch = git_at(
+    let branch = git(
         &root,
         &["rev-parse", "--abbrev-ref", &format!("{remote}/HEAD")],
     )
@@ -83,11 +83,11 @@ pub fn update(dir: &Path) -> Result<String, String> {
         }
         Err(e) => return Err(format!("could not fetch {branch} from {remote}: {e}")),
     }
-    let git = |args: &[&str]| git_at(&root, args).map_err(|e| e.to_string());
-    let theirs = git(&["rev-parse", &format!("{remote}/{branch}")])?;
-    let ours = git_at(&root, &["rev-parse", &format!("refs/heads/{branch}")]).ok();
+    let in_root = |args: &[&str]| git(&root, args).map_err(|e| e.to_string());
+    let theirs = in_root(&["rev-parse", &format!("{remote}/{branch}")])?;
+    let ours = git(&root, &["rev-parse", &format!("refs/heads/{branch}")]).ok();
     let short = |sha: &str| sha.chars().take(9).collect::<String>();
-    let count = |from: &str, to: &str| git(&["rev-list", "--count", &format!("{from}..{to}")]);
+    let count = |from: &str, to: &str| in_root(&["rev-list", "--count", &format!("{from}..{to}")]);
 
     if ours.as_deref() == Some(theirs.as_str()) {
         return Ok(format!(
@@ -112,7 +112,7 @@ pub fn update(dir: &Path) -> Result<String, String> {
     };
     match &checked_out {
         Some(at) => {
-            let status = git_at(at, &["status", "--porcelain", "--untracked-files=no"])
+            let status = git(at, &["status", "--porcelain", "--untracked-files=no"])
                 .map_err(|e| e.to_string())?;
             if !status.is_empty() {
                 return Err(format!(
@@ -121,7 +121,7 @@ pub fn update(dir: &Path) -> Result<String, String> {
                     short(ours.as_deref().unwrap_or(""))
                 ));
             }
-            git_at(
+            git(
                 at,
                 &[
                     "merge",
@@ -138,7 +138,7 @@ pub fn update(dir: &Path) -> Result<String, String> {
             if let Some(ours) = &ours {
                 args.push(ours);
             }
-            git(&args)?;
+            in_root(&args)?;
         }
     }
     Ok(format!(

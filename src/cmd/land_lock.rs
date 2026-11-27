@@ -207,7 +207,7 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let found = common_dir(&cwd).and_then(|common| {
-        let here = worktree::git_at(&cwd, &["rev-parse", "--show-toplevel"]).ok()?;
+        let here = worktree::git(&cwd, &["rev-parse", "--show-toplevel"]).ok()?;
         Some((common, here))
     });
     let Some((common, here)) = found else {
@@ -316,7 +316,7 @@ const RECORD_USAGE: &str = "usage: land-lock record clear | <tests|review|leak> 
 /// `land-lock record`, as the module's comment says.
 fn record(args: &[String]) -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let Some(dir) = worktree::git_at(&cwd, &["rev-parse", "--show-toplevel"])
+    let Some(dir) = worktree::git(&cwd, &["rev-parse", "--show-toplevel"])
         .ok()
         .and_then(|top| crate::sources::landing::own_git_dir(Path::new(&top)))
     else {
@@ -1077,8 +1077,8 @@ impl Lock {
 /// The branch the worktree at `here` lands on, as `wt --target` recorded
 /// it, `None` when it named none.
 fn recorded_target(here: &Path) -> Option<String> {
-    let branch = worktree::git_at(here, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
-    worktree::git_at(
+    let branch = worktree::git(here, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    worktree::git(
         here,
         &["config", "--get", &format!("branch.{branch}.wtnTarget")],
     )
@@ -1176,7 +1176,7 @@ fn without(queue: Vec<Value>, here: &Path) -> Vec<Value> {
 /// absolute path with its links resolved. `--path-format=absolute` would say
 /// it at once, but needs git 2.31, so the relative answer is resolved here.
 pub fn common_dir(cwd: &Path) -> Option<PathBuf> {
-    let common = worktree::git_at(cwd, &["rev-parse", "--git-common-dir"]).ok()?;
+    let common = worktree::git(cwd, &["rev-parse", "--git-common-dir"]).ok()?;
     cwd.join(common).canonicalize().ok()
 }
 

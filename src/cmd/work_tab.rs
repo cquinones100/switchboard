@@ -183,7 +183,7 @@ pub(crate) fn start_point(root: &Path, target: Option<&str>) -> Result<String, S
     if let Some(target) = target {
         return target_start(root, target);
     }
-    let default = crate::repos::default_branch(root);
+    let default = crate::repos::main_branch(root);
     let name = default.clone().unwrap_or_else(|| {
         worktree::origin_head(root)
             .filter(|n| !n.is_empty())
@@ -207,13 +207,13 @@ pub(crate) fn start_point(root: &Path, target: Option<&str>) -> Result<String, S
 }
 
 /// Points origin's `HEAD` in the clone at `default`, the default branch
-/// `switchboard landing --json` names (`repos::default_branch`), when it
+/// `switchboard landing --json` names (`repos::main_branch`), when it
 /// names another, fetching that branch first: the branch then starts where
 /// queue-and-clean lands it, and the push rule, read from the start, allows
 /// the push it makes. A fetch or update that fails stops it, since starting
 /// from the branch `HEAD` still names would bring the mismatch back.
 pub(crate) fn point_origin_head_at(root: &Path, default: &str) -> Result<(), String> {
-    let head = worktree::git_at(
+    let head = worktree::git(
         root,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
@@ -290,7 +290,7 @@ fn target_start(root: &Path, target: &str) -> Result<String, String> {
         return Ok(local);
     }
     let fetched = format!("refs/remotes/{remote}/{branch}");
-    let ahead = worktree::git_at(
+    let ahead = worktree::git(
         root,
         &["rev-list", "--count", &format!("{fetched}..{local}")],
     )
@@ -314,7 +314,7 @@ fn target_start(root: &Path, target: &str) -> Result<String, String> {
 /// there, from git's config; `None` for a branch that tracks none.
 pub fn tracked(root: &Path, branch: &str) -> Option<(String, String)> {
     let get = |key: &str| {
-        worktree::git_at(
+        worktree::git(
             root,
             &["config", "--get", &format!("branch.{branch}.{key}")],
         )
@@ -358,7 +358,7 @@ pub(crate) fn target_of<'a>(given: &'a Given, root: &Path) -> Result<Option<&'a 
             // branch, cut from origin's as it is now with no target
             // recorded, since that is where its PR goes; any other is
             // refused.
-            let default = crate::repos::default_branch(root);
+            let default = crate::repos::main_branch(root);
             if default.as_deref() != Some(target) {
                 return Err(format!(
                     "{} lands through PRs, so an item cut from {target} would land on the default branch through a PR, carrying {target}'s commits. \
@@ -399,7 +399,7 @@ pub(crate) fn make_worktree(
 /// `switchboard landing` for queue-and-clean (none, the default branch).
 pub(crate) fn after_claim(root: &Path, branch: &str, target: Option<&str>) -> Result<(), String> {
     let started_key = format!("branch.{branch}.wtnStarted");
-    if worktree::git_at(root, &["config", "--get", &started_key])
+    if worktree::git(root, &["config", "--get", &started_key])
         .unwrap_or_default()
         .is_empty()
     {

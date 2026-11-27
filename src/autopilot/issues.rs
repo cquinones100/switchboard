@@ -1206,7 +1206,7 @@ pub fn unclaimed(
         .into_iter()
         .filter_map(|w| w.branch)
         .collect();
-    let config = worktree::git_at(dir, &["config", "--get-regexp", r"^branch\..*\.wtnissue$"])
+    let config = worktree::git(dir, &["config", "--get-regexp", r"^branch\..*\.wtnissue$"])
         .unwrap_or_default();
     let worked: HashSet<String> = config
         .lines()

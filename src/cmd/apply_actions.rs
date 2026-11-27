@@ -404,7 +404,7 @@ fn names(repo: &Path, from: &str, to: &str, added: bool) -> Result<Vec<String>, 
         args.push("--diff-filter=A");
     }
     args.extend([from.as_str(), to.as_str(), "--"]);
-    worktree::git_at(repo, &args)
+    worktree::git(repo, &args)
         .map(|out| {
             out.lines()
                 .filter(|l| !l.is_empty())
@@ -422,7 +422,7 @@ fn commit_of(repo: &Path, rev: &str) -> Result<String, String> {
         return Err(format!("not a revision: {rev}"));
     }
     let named = format!("{rev}^{{commit}}");
-    worktree::git_at(
+    worktree::git(
         repo,
         &[
             "rev-parse",
@@ -558,7 +558,7 @@ fn install(repo: &Path) -> Result<String, String> {
         }
         // Files no commit holds have no author to check, and a landing
         // leaves the main clone with none: built, they would run unread.
-        let status = worktree::git_at(&repo, &["status", "--porcelain", "--untracked-files=all"])
+        let status = worktree::git(&repo, &["status", "--porcelain", "--untracked-files=all"])
             .map_err(|e| format!("git status in {}: {e}", paths::tilde(&repo)))?;
         // The output comes trimmed, so a line's status is read up to its
         // first space rather than by its width.

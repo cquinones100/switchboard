@@ -148,7 +148,7 @@ pub fn missing_commands(skill: &str) -> Vec<String> {
 /// The SKILL.md to follow, as the module's comment orders them.
 pub fn find(name: &str, dir: &Path) -> Option<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(top) = worktree::git_at(dir, &["rev-parse", "--show-toplevel"])
+    if let Ok(top) = worktree::git(dir, &["rev-parse", "--show-toplevel"])
         && !top.is_empty()
     {
         // Asked from the worktree's top, where `--git-common-dir` is

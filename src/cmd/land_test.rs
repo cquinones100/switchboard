@@ -160,7 +160,7 @@ pub fn main(args: &[String], target: Option<String>) -> ExitCode {
     }
     let has = |flag: &str| args.iter().any(|a| a == flag);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let Some((top, own)) = worktree::git_at(&cwd, &["rev-parse", "--show-toplevel"])
+    let Some((top, own)) = worktree::git(&cwd, &["rev-parse", "--show-toplevel"])
         .ok()
         .map(PathBuf::from)
         .and_then(|top| Some((top.clone(), own_git_dir(&top)?)))
@@ -230,7 +230,7 @@ impl Run {
     /// Records the run, with the commit it ran on (`head`), by which
     /// `land-lock settle` tells a commit already tested from one to test.
     fn record_tests(&self, ok: bool, counts: &Counts) {
-        let head = worktree::git_at(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let head = worktree::git(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
         let mut tests = json!({
             "ok": ok,
             "file": counts.first.clone().unwrap_or_default(),
@@ -309,7 +309,7 @@ impl Run {
     /// may not run (`land_push::may_run_its_code`): its tests, or the
     /// repository's pre-push hook, which a push to CI runs.
     fn untrusted(&self) -> Option<ExitCode> {
-        let common = worktree::git_at(
+        let common = worktree::git(
             &self.top,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )
@@ -347,9 +347,9 @@ impl Run {
         // unpublished commits through unscanned. A landing's own `ci/`
         // branch doesn't count: what it holds was pushed for a test.
         let pushed_to = format!("refs/remotes/{}/", ci.remote);
-        let published = worktree::git_at(&self.top, &["merge-base", "HEAD", base]).ok();
+        let published = worktree::git(&self.top, &["merge-base", "HEAD", base]).ok();
         let on_a_remote = published.as_deref().is_some_and(|commit| {
-            worktree::git_at(
+            worktree::git(
                 &self.top,
                 &[
                     "for-each-ref",
@@ -374,7 +374,7 @@ impl Run {
             );
             return ExitCode::from(2);
         }
-        let sha = worktree::git_at(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let sha = worktree::git(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
         crate::integrations::run_by_you();
         let earlier = match super::wait_ci::earlier(
             &ci.repo,
@@ -535,8 +535,8 @@ impl Ci {
     /// its `wtnTarget`, else the default branch on `origin`): `None` when
     /// that target tracks no remote, or the remote isn't on GitHub.
     fn of(top: &Path, given: Option<String>) -> Option<Ci> {
-        let name = worktree::git_at(top, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
-        let target = worktree::git_at(
+        let name = worktree::git(top, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+        let target = worktree::git(
             top,
             &["config", "--get", &format!("branch.{name}.wtnTarget")],
         )
@@ -546,8 +546,7 @@ impl Ci {
             Some(target) => super::work_tab::tracked(top, &target)?.0,
             None => "origin".to_string(),
         };
-        let url =
-            worktree::git_at(top, &["config", "--get", &format!("remote.{remote}.url")]).ok()?;
+        let url = worktree::git(top, &["config", "--get", &format!("remote.{remote}.url")]).ok()?;
         let repo = repos::repo_of_url(&url)?;
         Some(Ci {
             top: top.to_path_buf(),

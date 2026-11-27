@@ -82,7 +82,7 @@ pub fn repo_of_url(url: &str) -> Option<String> {
 /// one or with an origin not on GitHub. Runs git, so never on the drawing
 /// path.
 pub fn repo_at(dir: &Path) -> Option<String> {
-    let url = worktree::git_at(dir, &["remote", "get-url", "origin"]).ok()?;
+    let url = worktree::git(dir, &["remote", "get-url", "origin"]).ok()?;
     repo_of_url(&url)
 }
 
@@ -766,7 +766,7 @@ fn recorded_key(branch: &str) -> String {
 
 /// The branch checked out at `dir`.
 fn branch_at(dir: &Path) -> Option<String> {
-    worktree::git_at(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+    worktree::git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
         .ok()
         .filter(|b| !b.is_empty() && b != "HEAD")
 }
@@ -774,7 +774,7 @@ fn branch_at(dir: &Path) -> Option<String> {
 /// The way the branch at `dir` started landing with, as kept on it.
 pub fn recorded_at(dir: &Path) -> Option<Way> {
     let branch = branch_at(dir)?;
-    worktree::git_at(dir, &["config", "--get", &recorded_key(&branch)])
+    worktree::git(dir, &["config", "--get", &recorded_key(&branch)])
         .ok()
         .and_then(|w| Way::parse(w.trim()))
 }
@@ -786,7 +786,7 @@ pub fn record_at(dir: &Path, way: Way) -> Result<Way, String> {
         return Ok(kept);
     }
     let branch = branch_at(dir).ok_or("no branch is checked out")?;
-    worktree::git_at(dir, &["config", &recorded_key(&branch), way.key()])
+    worktree::git(dir, &["config", &recorded_key(&branch), way.key()])
         .map_err(|e| e.to_string())?;
     Ok(way)
 }
@@ -1572,7 +1572,7 @@ pub fn migrate_lands() -> Option<String> {
 /// The repository at `dir`: its `owner/name` on GitHub, its worktree's top,
 /// and what it is known by here.
 fn repository_at(dir: &Path) -> Option<(Option<String>, PathBuf, String)> {
-    let top = PathBuf::from(worktree::git_at(dir, &["rev-parse", "--show-toplevel"]).ok()?);
+    let top = PathBuf::from(worktree::git(dir, &["rev-parse", "--show-toplevel"]).ok()?);
     let repo = repo_at(dir);
     let common = crate::cmd::land_lock::common_dir(dir);
     let key = repo.clone().unwrap_or_else(|| {
@@ -1598,7 +1598,7 @@ pub fn steps_at(dir: &Path) -> Result<Steps, String> {
         .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(file())))?;
     let mut entry = landing_entry(&data, &key);
     if entry.is_empty()
-        && let Some(configured) = worktree::git_at(dir, &["config", "--get", "remote.origin.url"])
+        && let Some(configured) = worktree::git(dir, &["config", "--get", "remote.origin.url"])
             .ok()
             .and_then(|url| repo_of_url(&url))
     {
@@ -1715,7 +1715,7 @@ pub fn tests_in_ci_known(dir: &Path) -> bool {
 /// `owner/name` of origin's URL as the config of the repository at `dir`
 /// writes it, which an `insteadOf` may point elsewhere. Runs git.
 pub fn configured_at(dir: &Path) -> Option<String> {
-    worktree::git_at(dir, &["config", "--get", "remote.origin.url"])
+    worktree::git(dir, &["config", "--get", "remote.origin.url"])
         .ok()
         .and_then(|url| repo_of_url(&url))
 }
@@ -1753,27 +1753,26 @@ fn wait_for<T>(future: impl std::future::Future<Output = T>) -> T {
     }
 }
 
-/// The repository's default branch, the one answer `switchboard landing
+/// The repository's main branch, the one answer `switchboard landing
 /// --json`'s `defaultBranch` and `wt` (its branch's start and its push
-/// rule) both take: GitHub's for origin's repository with the github
-/// setting on, else origin's `HEAD` in the clone, else `main` or `master`,
-/// whichever origin has been fetched for; none when none is known. Runs git
-/// and may ask GitHub, so off the server's task.
-pub fn default_branch(dir: &Path) -> Option<String> {
+/// rule) both take: GitHub's default branch for origin's repository with
+/// the github setting on, else the clone's (`tabs::git::default_branch`)
+/// when origin has it; none when neither is known.
+/// May ask GitHub, so off the server's task.
+pub fn main_branch(dir: &Path) -> Option<String> {
+    let on_github = |repo: String| {
+        let repo = github::parse_name_with_owner(&repo)?;
+        let source = "landing: the repository's default branch";
+        wait_for(github::default_branch(&repo, source)).ok()
+    };
     repo_at(dir)
         .filter(|_| settings::is_on("github"))
-        .and_then(|r| default_branch_on_github(&r).ok())
-        .or_else(|| crate::worktree_sweep::default_branch(dir))
-}
-
-/// The repository's default branch as GitHub has it now.
-pub fn default_branch_on_github(repo: &str) -> Result<String, String> {
-    let repo = github::parse_name_with_owner(repo).ok_or("not owner/name")?;
-    wait_for(github::default_branch(
-        &repo,
-        "landing: the repository's default branch",
-    ))
-    .map_err(|e| e.to_string())
+        .and_then(on_github)
+        .or_else(|| {
+            let (_, common) = crate::sources::landing::git_of(&dir.canonicalize().ok()?)?;
+            crate::tabs::git::default_branch(&common)
+                .filter(|b| crate::tabs::git::on_origin(&common, b))
+        })
 }
 
 #[cfg(test)]
@@ -1844,7 +1843,8 @@ mod tests {
         );
     }
 
-    use crate::tabs::git::tests::{Scratch, git, repo};
+    use crate::tabs::git::tests::{Scratch, repo};
+    use crate::worktree::git_scratch;
 
     struct Rig {
         scratch: Scratch,
@@ -1871,11 +1871,8 @@ mod tests {
     fn rig(name: &str) -> Option<Rig> {
         let scratch = Scratch::new(name);
         let direct = scratch.0.join("direct");
-        if !repo(&direct) {
-            eprintln!("skipped: no git");
-            return None;
-        }
-        git(
+        repo(&direct);
+        git_scratch(
             &direct,
             &["remote", "add", "origin", "git@github.com:acme/direct.git"],
         );
@@ -2012,8 +2009,8 @@ mod tests {
         let Some(r) = rig("repos-recorded") else {
             return;
         };
-        git(&r.direct, &["commit", "--allow-empty", "-qm", "one"]);
-        git(&r.direct, &["checkout", "-qb", "work"]);
+        git_scratch(&r.direct, &["commit", "--allow-empty", "-qm", "one"]);
+        git_scratch(&r.direct, &["checkout", "-qb", "work"]);
         std::fs::write(&r.repos, r#"{"acme/direct": {"lands": "auto-merge"}}"#).unwrap();
         assert_eq!(record_at(&r.direct, Way::AutoMerge), Ok(Way::AutoMerge));
         std::fs::write(&r.repos, r#"{"acme/direct": {"lands": "github-queue"}}"#).unwrap();
@@ -2026,7 +2023,7 @@ mod tests {
             Ok(Way::AutoMerge),
             "a way kept is never written over"
         );
-        git(&r.direct, &["checkout", "-qb", "next"]);
+        git_scratch(&r.direct, &["checkout", "-qb", "next"]);
         assert_eq!(
             landing_with(&r.direct, &r.repos, Some(&no_old))
                 .unwrap()

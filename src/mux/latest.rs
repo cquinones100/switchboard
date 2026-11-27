@@ -234,20 +234,8 @@ fn may_build(checkout: &Path) -> Result<(), String> {
 /// and it is built as it is.
 fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
     let name = paths::tilde(dir);
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .stdin(Stdio::null())
-            .output()
-    };
-    let text = |args: &[&str]| {
-        git(args)
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
+    let run = |args: &[&str]| crate::worktree::git_command(dir).args(args).output();
+    let text = |args: &[&str]| crate::worktree::git(dir, args).ok();
     let first_line = |o: &std::process::Output| {
         let err = String::from_utf8_lossy(&o.stderr);
         err.lines()
@@ -285,7 +273,7 @@ fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
             crate::requests::count("GitHub", "git", "restart");
             // Into origin/<default> by name, whatever origin's refspec fetches.
             let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
-            let fetch = git(&["fetch", "-q", "origin", &refspec])
+            let fetch = run(&["fetch", "-q", "origin", &refspec])
                 .map_err(|e| format!("git couldn't be run ({e})"))?;
             (!fetch.status.success())
                 .then(|| format!("(couldn't fetch origin: {})", first_line(&fetch)))
@@ -303,7 +291,7 @@ fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
         ));
     }
     let behind =
-        git(&["merge-base", "--is-ancestor", "HEAD", &upstream]).is_ok_and(|o| o.status.success());
+        run(&["merge-base", "--is-ancestor", "HEAD", &upstream]).is_ok_and(|o| o.status.success());
     if !behind {
         return Err(format!(
             "{name} has commits {upstream} doesn't; push or reset them to restart on a new build"
@@ -313,7 +301,7 @@ fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
     if note.is_some() {
         return Ok(note);
     }
-    let merge = git(&["merge", "-q", "--ff-only", &upstream])
+    let merge = run(&["merge", "-q", "--ff-only", &upstream])
         .map_err(|e| format!("git couldn't be run ({e})"))?;
     if !merge.status.success() {
         return Err(format!(
@@ -653,20 +641,6 @@ pub struct Brought {
     pub behind: bool,
 }
 
-/// What git prints for `args` in `dir`, when it succeeds.
-fn git_says(dir: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-}
-
 /// Brings the main clone up to date when `checkout` is one, telling
 /// `report` what that brought, and gives the note of a fetch not made;
 /// a checkout built as it is has nothing to bring.
@@ -675,7 +649,7 @@ fn refresh(checkout: &Checkout, report: &dyn Fn(Report)) -> Result<String, Strin
         return Ok(String::new());
     }
     let dir = &checkout.dir;
-    let git = |args: &[&str]| git_says(dir, args);
+    let git = |args: &[&str]| crate::worktree::git(dir, args).ok();
     may_build(dir)?;
     let fetch = crate::integrations::ensure_on("github", "GitHub").is_ok();
     let started = Instant::now();
@@ -712,7 +686,9 @@ fn built_from_head(dir: &Path, binary: &Path) -> bool {
         return false;
     };
     let built_from = format!("{commit}^{{commit}}");
-    git_says(dir, &["merge-base", "--is-ancestor", "HEAD", &built_from]).is_some()
+    crate::worktree::git(dir, &["merge-base", "--is-ancestor", "HEAD", &built_from])
+        .ok()
+        .is_some()
 }
 
 /// Whether a build put at `installed` by hand is the latest: of a
@@ -738,18 +714,20 @@ fn is_latest(checkout: &Checkout, installed: &Path) -> bool {
 
 /// The full hash `rev` names in `dir`.
 fn full_hash(dir: &Path, rev: &str) -> Option<String> {
-    git_says(
+    crate::worktree::git(
         dir,
         &["rev-parse", "-q", "--verify", &format!("{rev}^{{commit}}")],
     )
+    .ok()
 }
 
 /// Where the clone's `origin/<default>` is, as a full hash.
 fn origin_tip(dir: &Path) -> Option<String> {
-    let default = git_says(
+    let default = crate::worktree::git(
         dir,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
+    .ok()
     .and_then(|r| r.strip_prefix("origin/").map(String::from))
     .unwrap_or_else(|| "main".to_string());
     full_hash(dir, &format!("origin/{default}"))
@@ -791,7 +769,7 @@ fn moved_on(checkout: &Checkout, made: &Made, on: &Path, fetched: bool) -> Strin
     let Some(built) = built.filter(|_| checkout.main_clone) else {
         return String::new();
     };
-    let gained = git_says(
+    let gained = crate::worktree::git(
         dir,
         &[
             "rev-list",
@@ -801,6 +779,7 @@ fn moved_on(checkout: &Checkout, made: &Made, on: &Path, fetched: bool) -> Strin
             &format!("^{built}"),
         ],
     )
+    .ok()
     .and_then(|n| n.parse::<usize>().ok());
     match gained {
         Some(n) if n > 0 => {
@@ -845,7 +824,7 @@ fn make(checkout: &Checkout, report: &dyn Fn(Report)) -> Result<Made, String> {
         paths::tilde(dir),
         at.as_deref().unwrap_or("an unknown commit")
     ));
-    let git = |args: &[&str]| git_says(dir, args);
+    let git = |args: &[&str]| crate::worktree::git(dir, args).ok();
     let head = match (
         git(&["symbolic-ref", "--short", "HEAD"]),
         git(&["rev-parse", "--short", "HEAD"]),
@@ -957,6 +936,7 @@ pub fn bring_up_to_date(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worktree::git_scratch;
 
     #[test]
     fn counts_cargos_artifacts_as_they_come_and_says_so_twice_a_second() {
@@ -1142,28 +1122,13 @@ mod tests {
         assert_eq!(choose(None, None, "", "", ""), None);
     }
 
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
     #[test]
     fn the_main_clone_is_brought_up_to_date_only_on_its_default_branch_and_clean() {
         let dir = fresh("update");
         let origin = dir.join("origin.git");
         let main = dir.join("main");
         let other = dir.join("other");
-        git(
+        git_scratch(
             &dir,
             &[
                 "init",
@@ -1174,7 +1139,7 @@ mod tests {
                 origin.to_str().unwrap(),
             ],
         );
-        git(
+        git_scratch(
             &dir,
             &[
                 "clone",
@@ -1183,9 +1148,9 @@ mod tests {
                 other.to_str().unwrap(),
             ],
         );
-        git(&other, &["commit", "-q", "--allow-empty", "-m", "one"]);
-        git(&other, &["push", "-q", "origin", "HEAD:main"]);
-        git(
+        git_scratch(&other, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_scratch(&other, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(
             &dir,
             &[
                 "clone",
@@ -1196,29 +1161,29 @@ mod tests {
         );
 
         // Behind origin: fast-forwarded to it.
-        git(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
-        git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        git_scratch(&other, &["push", "-q", "origin", "HEAD:main"]);
         assert_eq!(update(&main, true), Ok(None));
-        assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "two");
+        assert_eq!(git_scratch(&main, &["log", "-1", "--format=%s"]), "two");
 
         // Another branch, or anything uncommitted: nothing done.
-        git(&main, &["checkout", "-q", "-b", "item"]);
+        git_scratch(&main, &["checkout", "-q", "-b", "item"]);
         let on_item = update(&main, true).unwrap_err();
         assert!(
             on_item.ends_with("is on item, not main; switch it back to restart on a new build"),
             "{on_item}"
         );
-        git(&main, &["checkout", "-q", "main"]);
+        git_scratch(&main, &["checkout", "-q", "main"]);
         std::fs::write(main.join("file"), "").unwrap();
         let dirty = update(&main, true).unwrap_err();
         assert!(dirty.contains("has uncommitted changes"), "{dirty}");
         std::fs::remove_file(main.join("file")).unwrap();
 
         // A commit origin lacks: refused.
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        git_scratch(&main, &["commit", "-q", "--allow-empty", "-m", "mine"]);
         let ahead = update(&main, true).unwrap_err();
         assert!(ahead.contains("has commits origin/main doesn't"), "{ahead}");
-        git(&main, &["reset", "-q", "--hard", "origin/main"]);
+        git_scratch(&main, &["reset", "-q", "--hard", "origin/main"]);
 
         // An origin that can't be reached: built as it is, with a note,
         // unless the clone has commits it last saw origin lack.
@@ -1226,16 +1191,16 @@ mod tests {
         let note = update(&main, true).unwrap().unwrap();
         assert!(note.starts_with("(couldn't fetch origin: "), "{note}");
         // Nor fetched with GitHub off, and not moved to what origin was.
-        git(&main, &["reset", "-q", "--hard", "HEAD~1"]);
+        git_scratch(&main, &["reset", "-q", "--hard", "HEAD~1"]);
         let off = update(&main, false).unwrap().unwrap();
         assert!(off.contains("GitHub is turned off"), "{off}");
-        assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "one");
-        git(&main, &["reset", "-q", "--hard", "origin/main"]);
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        assert_eq!(git_scratch(&main, &["log", "-1", "--format=%s"]), "one");
+        git_scratch(&main, &["reset", "-q", "--hard", "origin/main"]);
+        git_scratch(&main, &["commit", "-q", "--allow-empty", "-m", "mine"]);
         let ahead = update(&main, true).unwrap_err();
         assert!(ahead.contains("has commits origin/main doesn't"), "{ahead}");
         // No origin branch to check against: refused.
-        git(&main, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        git_scratch(&main, &["update-ref", "-d", "refs/remotes/origin/main"]);
         let unknown = update(&main, true).unwrap_err();
         assert!(unknown.contains("has no origin/main"), "{unknown}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1255,15 +1220,15 @@ mod tests {
     fn a_build_is_from_head_when_its_commit_has_heads_history() {
         let dir = fresh("built-from");
         let clone = dir.join("clone");
-        git(&dir, &["init", "-q", "-b", "main", clone.to_str().unwrap()]);
-        git(&clone, &["commit", "-q", "--allow-empty", "-m", "one"]);
-        let one = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
-        git(&clone, &["commit", "-q", "--allow-empty", "-m", "two"]);
-        let two = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
-        git(&clone, &["checkout", "-q", "-b", "item"]);
-        git(&clone, &["commit", "-q", "--allow-empty", "-m", "three"]);
-        let ahead = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
-        git(&clone, &["checkout", "-q", "main"]);
+        git_scratch(&dir, &["init", "-q", "-b", "main", clone.to_str().unwrap()]);
+        git_scratch(&clone, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let one = git_scratch(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git_scratch(&clone, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let two = git_scratch(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git_scratch(&clone, &["checkout", "-q", "-b", "item"]);
+        git_scratch(&clone, &["commit", "-q", "--allow-empty", "-m", "three"]);
+        let ahead = git_scratch(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git_scratch(&clone, &["checkout", "-q", "main"]);
         let says = |name: &str, line: &str| {
             let path = dir.join(name);
             std::fs::write(&path, format!("#!/bin/sh\necho '{line}'\n")).unwrap();

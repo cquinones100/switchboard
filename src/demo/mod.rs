@@ -67,6 +67,7 @@ use serde_json::{Map, Value, json};
 
 use crate::mux::proto::ClientMsg;
 use crate::util;
+use crate::worktree::{git_command, git_text};
 
 /// The settings the demo starts with: every view on, and what would reach
 /// a service or a model it hasn't got off.
@@ -332,29 +333,6 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A git command in the demo's home, with its own config and none of yours.
-fn git(home: &Path, dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", base_path())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .stdin(Stdio::null())
-        .output()
-        .context("couldn't run git")?;
-    if !out.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 /// A made-up file's contents for a repository.
 fn file_of(repo: &str, name: &str, line: &str) -> String {
     format!("// {repo}: {name}\n\nexport const {line};\n")
@@ -366,14 +344,22 @@ fn file_of(repo: &str, name: &str, line: &str) -> String {
 /// of its PRs' branches and the other branches a tab works on
 /// (`fixtures::BRANCHES`).
 fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
+    // git in the demo's home, with its own config and none of yours.
+    let git = |dir: &Path, args: &[&str]| {
+        let mut cmd = git_command(dir);
+        cmd.env_clear()
+            .env("HOME", home)
+            .env("PATH", base_path())
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        git_text(cmd.args(args))
+    };
     let dir = home.join("code").join(repo.name);
     let origin = home.join("code/.origin").join(format!("{}.git", repo.name));
     fs::create_dir_all(&dir)?;
     fs::create_dir_all(&origin)?;
-    git(home, &origin, &["init", "-q", "--bare", "-b", "main"])?;
-    git(home, &dir, &["init", "-q", "-b", "main"])?;
+    git(&origin, &["init", "-q", "--bare", "-b", "main"])?;
+    git(&dir, &["init", "-q", "-b", "main"])?;
     git(
-        home,
         &dir,
         &[
             "remote",
@@ -385,7 +371,6 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
     // What gh's `repo set-default` writes, which the workspace's lookups
     // read before origin's address.
     git(
-        home,
         &dir,
         &[
             "config",
@@ -411,10 +396,10 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
         let path = dir.join(file);
         fs::create_dir_all(path.parent().unwrap())?;
         util::write_atomic(&path, file_of(repo.name, file, line))?;
-        git(home, &dir, &["add", "-A"])?;
-        git(home, &dir, &["commit", "-q", "-m", message])?;
+        git(&dir, &["add", "-A"])?;
+        git(&dir, &["commit", "-q", "-m", message])?;
     }
-    git(home, &dir, &["push", "-q", "-u", "origin", "main"])?;
+    git(&dir, &["push", "-q", "-u", "origin", "main"])?;
     let branches = fixtures::PRS
         .iter()
         .map(|p| (p.repo, p.branch, p.title))
@@ -423,7 +408,6 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
     for (_, branch, title) in branches {
         let wt = worktree(home, branch);
         git(
-            home,
             &dir,
             &[
                 "worktree",
@@ -437,8 +421,8 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
         )?;
         let file = wt.join("src/feature.ts");
         util::write_atomic(&file, file_of(repo.name, title, "enabled = true"))?;
-        git(home, &wt, &["add", "-A"])?;
-        git(home, &wt, &["commit", "-q", "-m", title])?;
+        git(&wt, &["add", "-A"])?;
+        git(&wt, &["commit", "-q", "-m", title])?;
         // A change not committed yet, for the diff to show.
         util::write_atomic(
             &file,
@@ -453,7 +437,7 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
             wt.join("src/log.ts"),
             file_of(repo.name, "src/log.ts", "level = \"debug\""),
         )?;
-        git(home, &wt, &["push", "-q", "-u", "origin", branch])?;
+        git(&wt, &["push", "-q", "-u", "origin", branch])?;
     }
     Ok(())
 }

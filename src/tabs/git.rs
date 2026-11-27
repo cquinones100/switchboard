@@ -279,8 +279,6 @@ pub fn is_default_branch(common_dir: &Path, branch: &str) -> bool {
     }
 }
 
-/// The repository's default branch: what `refs/remotes/origin/HEAD` names,
-/// else `main` or `master`, whichever is a local branch.
 /// Whether origin has `branch`, as the clone last fetched it, from its
 /// loose ref or `packed-refs`, with no git process.
 pub fn on_origin(common_dir: &Path, branch: &str) -> bool {
@@ -294,6 +292,10 @@ pub fn on_origin(common_dir: &Path, branch: &str) -> bool {
         })
 }
 
+/// The repository's default branch as the clone has it: what
+/// `refs/remotes/origin/HEAD` names, else `main` or `master`, whichever
+/// origin has, else whichever is a local branch; none when none is known.
+/// It reads git's files and runs no git, so the drawing path may ask it.
 pub fn default_branch(common_dir: &Path) -> Option<String> {
     if let Ok(head) = fs::read_to_string(common_dir.join("refs/remotes/origin/HEAD"))
         && let Some(name) = head.trim().strip_prefix("ref: refs/remotes/origin/")
@@ -301,16 +303,16 @@ pub fn default_branch(common_dir: &Path) -> Option<String> {
         return Some(name.to_string());
     }
     let local = local_branches(common_dir);
-    ["main", "master"]
-        .into_iter()
-        .find(|b| local.iter().any(|l| l == b))
+    let first = |has: &dyn Fn(&str) -> bool| ["main", "master"].into_iter().find(|b| has(b));
+    first(&|b| on_origin(common_dir, b))
+        .or_else(|| first(&|b| local.iter().any(|l| l == b)))
         .map(str::to_string)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::process::Command;
+    use crate::worktree::git_scratch;
 
     /// A scratch directory under the system's temporary one, removed when
     /// dropped, its path with links resolved (macOS's /tmp is one).
@@ -335,37 +337,19 @@ pub(crate) mod tests {
         }
     }
 
-    /// Runs git in `dir` with an identity of its own; false when git isn't
-    /// there or fails.
-    pub fn git(dir: &Path, args: &[&str]) -> bool {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(["-c", "commit.gpgsign=false"])
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
-
-    /// A repository at `dir` with one commit on `main`; false without git.
-    pub fn repo(dir: &Path) -> bool {
+    /// A repository at `dir` with one commit on `main`.
+    pub fn repo(dir: &Path) {
         fs::create_dir_all(dir).unwrap();
-        git(dir, &["init", "-q"])
-            && git(dir, &["symbolic-ref", "HEAD", "refs/heads/main"])
-            && git(dir, &["commit", "-q", "--allow-empty", "-m", "first"])
+        git_scratch(dir, &["init", "-q"]);
+        git_scratch(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        git_scratch(dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
     }
 
     #[test]
     fn a_clone_its_branch_and_a_worktree() {
         let scratch = Scratch::new("git");
         let main = scratch.0.join("app");
-        if !repo(&main) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&main);
         let place = locate(&main).unwrap();
         assert_eq!(place.branch, "main");
         assert_eq!(place.git_dir, main.join(".git"));
@@ -377,14 +361,14 @@ pub(crate) mod tests {
         fs::create_dir_all(main.join("src/deep")).unwrap();
         assert_eq!(locate(&main.join("src/deep")), Some(place));
 
-        assert!(git(&main, &["checkout", "-q", "-b", "eng-42-fix"]));
+        git_scratch(&main, &["checkout", "-q", "-b", "eng-42-fix"]);
         assert_eq!(locate(&main).unwrap().branch, "eng-42-fix");
 
         let wt = scratch.0.join("app-wt");
-        assert!(git(
+        git_scratch(
             &main,
-            &["worktree", "add", "-q", "-b", "other", wt.to_str().unwrap()]
-        ));
+            &["worktree", "add", "-q", "-b", "other", wt.to_str().unwrap()],
+        );
         let place = locate(&wt).unwrap();
         assert_eq!(place.branch, "other");
         assert_eq!(place.common_dir, main.join(".git"));
@@ -395,13 +379,13 @@ pub(crate) mod tests {
         assert_eq!(main_clone(&main.join("src/deep")), main);
 
         // Packed refs count as much as loose ones.
-        assert!(git(&main, &["pack-refs", "--all"]));
+        git_scratch(&main, &["pack-refs", "--all"]);
         assert_eq!(locate(&main).unwrap().branch, "eng-42-fix");
         assert_eq!(locate(&wt).unwrap().branch, "other");
 
         // Its branches, loose and packed, nested ones by their whole name,
         // and the default with no origin the local main.
-        assert!(git(&main, &["branch", "team/next"]));
+        git_scratch(&main, &["branch", "team/next"]);
         assert_eq!(
             local_branches(&main.join(".git")),
             ["eng-42-fix", "main", "other", "team/next"]
@@ -414,15 +398,12 @@ pub(crate) mod tests {
         let scratch = Scratch::new("head");
         let dir = scratch.0.join("r");
         fs::create_dir_all(&dir).unwrap();
-        if !git(&dir, &["init", "-q"]) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        git_scratch(&dir, &["init", "-q"]);
         // No commit yet: git prints HEAD.
         assert_eq!(locate(&dir).unwrap().branch, "HEAD");
         assert!(!locate(&dir).unwrap().on_branch());
-        assert!(git(&dir, &["commit", "-q", "--allow-empty", "-m", "x"]));
-        assert!(git(&dir, &["checkout", "-q", "--detach"]));
+        git_scratch(&dir, &["commit", "-q", "--allow-empty", "-m", "x"]);
+        git_scratch(&dir, &["checkout", "-q", "--detach"]);
         assert_eq!(locate(&dir).unwrap().branch, "HEAD");
 
         let outside = scratch.0.join("plain");

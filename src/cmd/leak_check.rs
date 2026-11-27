@@ -52,10 +52,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 use std::sync::LazyLock;
 
 use regex::Regex;
+
+use crate::worktree::git;
 
 /// The file of words to find, in your own files: always the one on this
 /// computer, never one read from a repository your files are kept in
@@ -401,6 +403,7 @@ pub fn leave_out(
 /// none for a single revision, whose log reads all that came before it, or
 /// when there is none.
 fn base_of(dir: Option<&Path>, range: &str) -> Option<String> {
+    let dir = dir.unwrap_or(Path::new("."));
     let end = |s: &str| {
         if s.is_empty() {
             "HEAD".to_string()
@@ -412,24 +415,7 @@ fn base_of(dir: Option<&Path>, range: &str) -> Option<String> {
     let b = b.strip_prefix('.').unwrap_or(b);
     git(dir, &["merge-base", &end(a), &end(b)])
         .ok()
-        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-fn git(dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = dir {
-        cmd.arg("-C").arg(dir);
-    }
-    let out = cmd
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// What a look at a range found: the hits to report, those its base
@@ -444,8 +430,9 @@ pub struct Looked {
 /// in when `None`), or says why it can't.
 pub fn look(dir: Option<&Path>, range: &str) -> Result<Looked, String> {
     let words = read_words(&words_file())?;
+    let at = dir.unwrap_or(Path::new("."));
     let diff = git(
-        dir,
+        at,
         &[
             "-c",
             "core.quotePath=false",
@@ -465,9 +452,10 @@ pub fn look(dir: Option<&Path>, range: &str) -> Result<Looked, String> {
             range,
             "--",
         ],
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     let log = git(
-        dir,
+        at,
         &[
             "log",
             "--no-color",
@@ -476,11 +464,12 @@ pub fn look(dir: Option<&Path>, range: &str) -> Result<Looked, String> {
             range,
             "--",
         ],
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     let base = base_of(dir, range);
     let (kept, left) = leave_out(hits(&diff, &log, &words), &words, |file| {
         let base = base.as_deref()?;
-        git(dir, &["show", "--no-textconv", &format!("{base}:{file}")]).ok()
+        git(at, &["show", "--no-textconv", &format!("{base}:{file}")]).ok()
     });
     Ok(Looked { kept, left, base })
 }

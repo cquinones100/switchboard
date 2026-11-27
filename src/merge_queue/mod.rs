@@ -376,7 +376,7 @@ pub fn command(command: &str, args: &[String], common: &Path, here: &Path) -> Op
             };
             let entry = crate::cmd::land_lock::new_entry(&here.to_string_lossy(), None);
             let text = |key: &str| entry.get(key).and_then(|v| v.as_str()).map(str::to_string);
-            let Ok(head) = crate::worktree::git_at(here, &["rev-parse", "HEAD"]) else {
+            let Ok(head) = crate::worktree::git(here, &["rev-parse", "HEAD"]) else {
                 eprintln!("land-lock: no HEAD to queue in {}", here.display());
                 return Some(1);
             };

@@ -10,7 +10,8 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::merge_queue::{self, Queued};
-use crate::tabs::git::tests::{Scratch, git};
+use crate::tabs::git::tests::Scratch;
+use crate::worktree::git_scratch;
 
 struct Fake {
     origin: PathBuf,
@@ -88,7 +89,7 @@ impl Forge for Fake {
             return Ok(Seen::Running);
         }
         let a_head = self.prs.lock().unwrap().values().any(|p| p.head == sha);
-        let fails = git(
+        let fails = crate::worktree::git_ok(
             &self.origin,
             &["cat-file", "-e", &format!("{sha}:fail.txt")],
         );
@@ -173,11 +174,11 @@ impl Fake {
         if pr.head != head {
             return Err(anyhow!("Head branch was modified"));
         }
-        let main = crate::worktree::git_at(&self.origin, &["rev-parse", "main"])?;
+        let main = crate::worktree::git(&self.origin, &["rev-parse", "main"])?;
         let tree =
-            crate::worktree::git_at(&self.origin, &["merge-tree", "--write-tree", &main, head])?;
+            crate::worktree::git(&self.origin, &["merge-tree", "--write-tree", &main, head])?;
         let tree = tree.lines().next().unwrap_or("").to_string();
-        let squashed = crate::worktree::git_at(
+        let squashed = crate::worktree::git(
             &self.origin,
             &[
                 "-c",
@@ -192,7 +193,7 @@ impl Fake {
                 &format!("#{number}"),
             ],
         )?;
-        crate::worktree::git_at(&self.origin, &["update-ref", "refs/heads/main", &squashed])?;
+        crate::worktree::git(&self.origin, &["update-ref", "refs/heads/main", &squashed])?;
         pr.state = PrState::Merged;
         self.merged.lock().unwrap().push(number);
         Ok(())
@@ -212,39 +213,20 @@ impl World {
         let origin = scratch.0.join("origin.git");
         let work = scratch.0.join("work");
         let clone = scratch.0.join("clone");
-        let made = git(
-            &scratch.0,
-            &["init", "-q", "--bare", origin.to_str().unwrap()],
-        ) && git(&origin, &["symbolic-ref", "HEAD", "refs/heads/main"])
-            && git(
-                &scratch.0,
-                &[
-                    "clone",
-                    "-q",
-                    origin.to_str().unwrap(),
-                    work.to_str().unwrap(),
-                ],
-            )
-            && git(&work, &["checkout", "-q", "-b", "main"])
-            && {
-                fs::write(work.join("shared.txt"), "base\n").unwrap();
-                git(&work, &["add", "."])
-            }
-            && git(&work, &["commit", "-q", "-m", "first"])
-            && git(&work, &["push", "-q", "origin", "main"])
-            && git(
-                &scratch.0,
-                &[
-                    "clone",
-                    "-q",
-                    origin.to_str().unwrap(),
-                    clone.to_str().unwrap(),
-                ],
-            );
-        if !made {
-            eprintln!("skipped: no git");
-            return None;
-        }
+        let (origin_s, work_s, clone_s) = (
+            origin.to_str().unwrap(),
+            work.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        );
+        git_scratch(&scratch.0, &["init", "-q", "--bare", origin_s]);
+        git_scratch(&origin, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        git_scratch(&scratch.0, &["clone", "-q", origin_s, work_s]);
+        git_scratch(&work, &["checkout", "-q", "-b", "main"]);
+        fs::write(work.join("shared.txt"), "base\n").unwrap();
+        git_scratch(&work, &["add", "."]);
+        git_scratch(&work, &["commit", "-q", "-m", "first"]);
+        git_scratch(&work, &["push", "-q", "origin", "main"]);
+        git_scratch(&scratch.0, &["clone", "-q", origin_s, clone_s]);
         Some(World {
             repo: Repo {
                 common: clone.join(".git"),
@@ -277,24 +259,24 @@ impl World {
     /// PR `number`, a commit on main writing `file` with `text`, queued.
     fn pr(&self, number: u64, file: &str, text: &str) {
         let branch = format!("pr{number}");
-        assert!(git(&self.work, &["fetch", "-q", "origin"]));
-        assert!(git(
+        git_scratch(&self.work, &["fetch", "-q", "origin"]);
+        git_scratch(
             &self.work,
-            &["checkout", "-q", "-B", &branch, "origin/main"]
-        ));
+            &["checkout", "-q", "-B", &branch, "origin/main"],
+        );
         self.commit(number, file, text);
         self.queue_pr(number);
     }
 
     /// Another commit on PR `number`'s branch, pushed.
     fn commit(&self, number: u64, file: &str, text: &str) {
-        assert!(git(&self.work, &["checkout", "-q", &format!("pr{number}")]));
+        git_scratch(&self.work, &["checkout", "-q", &format!("pr{number}")]);
         fs::write(self.work.join(file), text).unwrap();
-        assert!(git(&self.work, &["add", "."]));
-        assert!(git(&self.work, &["commit", "-q", "-m", file]));
+        git_scratch(&self.work, &["add", "."]);
+        git_scratch(&self.work, &["commit", "-q", "-m", file]);
         let spec = format!("HEAD:refs/pull/{number}/head");
-        assert!(git(&self.work, &["push", "-q", "-f", "origin", &spec]));
-        let head = crate::worktree::git_at(&self.work, &["rev-parse", "HEAD"]).unwrap();
+        git_scratch(&self.work, &["push", "-q", "-f", "origin", &spec]);
+        let head = crate::worktree::git(&self.work, &["rev-parse", "HEAD"]).unwrap();
         self.fake.prs.lock().unwrap().insert(
             number,
             PrNow {
@@ -355,7 +337,7 @@ impl World {
     }
 
     fn branches(&self) -> String {
-        crate::worktree::git_at(&self.fake.origin, &["branch", "--list", "ci/*"]).unwrap()
+        crate::worktree::git(&self.fake.origin, &["branch", "--list", "ci/*"]).unwrap()
     }
 }
 
@@ -393,9 +375,8 @@ fn a_train_of_two_green_prs_merges_both_in_order() {
     assert!(queue.train.is_none() && queue.prs.is_empty());
     assert_eq!(queue.status(2), "merged");
     assert_eq!(w.branches(), "", "the train's branch is deleted");
-    let tree = |at: &str| {
-        crate::worktree::git_at(&w.fake.origin, &["rev-parse", &format!("{at}^{{tree}}")])
-    };
+    let tree =
+        |at: &str| crate::worktree::git(&w.fake.origin, &["rev-parse", &format!("{at}^{{tree}}")]);
     assert_eq!(
         tree("main").unwrap(),
         tree(&train.commit).unwrap(),
@@ -656,13 +637,13 @@ fn a_red_train_of_one_queued_again_at_a_new_head_keeps_it_queued() {
     w.step();
     assert_eq!(w.in_train(), [1]);
     w.commit(1, "fail.txt", "fixed\n");
-    assert!(git(&w.work, &["rm", "-q", "fail.txt"]));
-    assert!(git(&w.work, &["commit", "-q", "-m", "fixed"]));
-    assert!(git(
+    git_scratch(&w.work, &["rm", "-q", "fail.txt"]);
+    git_scratch(&w.work, &["commit", "-q", "-m", "fixed"]);
+    git_scratch(
         &w.work,
-        &["push", "-q", "-f", "origin", "HEAD:refs/pull/1/head"]
-    ));
-    let head = crate::worktree::git_at(&w.work, &["rev-parse", "HEAD"]).unwrap();
+        &["push", "-q", "-f", "origin", "HEAD:refs/pull/1/head"],
+    );
+    let head = crate::worktree::git(&w.work, &["rev-parse", "HEAD"]).unwrap();
     w.fake.prs.lock().unwrap().get_mut(&1).unwrap().head = head;
     w.queue_pr(1);
     w.step();
@@ -879,9 +860,8 @@ fn eight_prs_run_as_two_trains_at_once_and_merge_in_order_with_no_third_run() {
     assert_eq!(w.merged(), [1, 2, 3, 4, 5, 6, 7, 8]);
     assert!(!w.queue().busy());
     assert_eq!(w.branches(), "");
-    let tree = |at: &str| {
-        crate::worktree::git_at(&w.fake.origin, &["rev-parse", &format!("{at}^{{tree}}")])
-    };
+    let tree =
+        |at: &str| crate::worktree::git(&w.fake.origin, &["rev-parse", &format!("{at}^{{tree}}")]);
     assert_eq!(tree("main").unwrap(), tree(&ahead.commit).unwrap());
 }
 
@@ -991,14 +971,11 @@ fn main_moving_under_both_trains_builds_both_again() {
     let ahead = w.queue().ahead.unwrap();
     w.step();
     // A merge from outside the queue.
-    assert!(git(
-        &w.work,
-        &["checkout", "-q", "-B", "outside", "origin/main"]
-    ));
+    git_scratch(&w.work, &["checkout", "-q", "-B", "outside", "origin/main"]);
     fs::write(w.work.join("outside.txt"), "x\n").unwrap();
-    assert!(git(&w.work, &["add", "."]));
-    assert!(git(&w.work, &["commit", "-q", "-m", "outside"]));
-    assert!(git(&w.work, &["push", "-q", "origin", "HEAD:main"]));
+    git_scratch(&w.work, &["add", "."]);
+    git_scratch(&w.work, &["commit", "-q", "-m", "outside"]);
+    git_scratch(&w.work, &["push", "-q", "origin", "HEAD:main"]);
     w.step();
     let queue = w.queue();
     assert!(queue.train.is_none() && queue.ahead.is_none());

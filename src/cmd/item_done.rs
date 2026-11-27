@@ -180,7 +180,7 @@ fn merged_on_github(main: &Path, branch: &str, commit: &str) -> Result<bool, Str
     // Pushed to origin, the PR opened where gh opens it (the project, in a
     // fork's clone).
     let pushed_to = worktree::default_remote(main)
-        .and_then(|r| worktree::git_at(main, &["remote", "get-url", &r]).ok())
+        .and_then(|r| worktree::git(main, &["remote", "get-url", &r]).ok())
         .and_then(|url| github::parse_remote(url.trim()))
         .ok_or("the clone's remote isn't a GitHub repository")?;
     let repo = issues::wait_for(github::repo_of(main)).map_err(|e| format!("{e:#}"))?;
@@ -218,7 +218,7 @@ fn encode(text: &str) -> String {
 /// The steps, as the module's opening says; the lines to print.
 fn run(given: &Given, notes: &Path, close: Close, merged: Merged) -> Result<Vec<String>, String> {
     let git = |dir: &Path, args: &[&str]| {
-        worktree::git_at(dir, args).map_err(|e| format!("git {}: {}", args[0], first_line(&e)))
+        worktree::git(dir, args).map_err(|e| format!("git {}: {}", args[0], first_line(&e)))
     };
     let top = PathBuf::from(git(&given.dir, &["rev-parse", "--show-toplevel"])?);
     let main = crate::mux::main_clone::of(&top)
@@ -321,7 +321,7 @@ fn run(given: &Given, notes: &Path, close: Close, merged: Merged) -> Result<Vec<
     // alone showed the work safe), else the commit given holding it.
     let landed = in_target || pr_merged_from_here || (claims_merged && ask_github());
     let mut out = Vec::new();
-    let claim = worktree::git_at(
+    let claim = worktree::git(
         &main,
         &["config", "--get", &format!("branch.{branch}.wtnItem")],
     )
@@ -410,7 +410,7 @@ fn close_issue(
         );
     }
     // Whole, for GitHub's check.
-    let whole = worktree::git_at(
+    let whole = worktree::git(
         top,
         &["rev-parse", "--verify", &format!("{hash}^{{commit}}")],
     )
@@ -477,7 +477,7 @@ fn lands_on(
     fetched: Option<&str>,
 ) -> Option<String> {
     let name = already_on.map(str::to_string).or_else(|| {
-        worktree::git_at(
+        worktree::git(
             main,
             &["config", "--get", &format!("branch.{branch}.wtnTarget")],
         )
@@ -488,7 +488,7 @@ fn lands_on(
     let name = match name {
         Some(n) => n,
         None => {
-            let common = worktree::git_at(
+            let common = worktree::git(
                 main,
                 &["rev-parse", "--path-format=absolute", "--git-common-dir"],
             )
@@ -520,7 +520,7 @@ fn lands_on(
 /// worktree's HEAD; another remote's branches, never fetched here, may be
 /// stale and don't count.
 fn on_remote(top: &Path, remote: &str) -> bool {
-    worktree::git_at(
+    worktree::git(
         top,
         &[
             "branch",
@@ -543,7 +543,7 @@ fn holds(top: &Path, target: &str) -> bool {
     if worktree::git_ok(top, &["merge-base", "--is-ancestor", "HEAD", target]) {
         return true;
     }
-    let Ok(base) = worktree::git_at(top, &["merge-base", target, "HEAD"]) else {
+    let Ok(base) = worktree::git(top, &["merge-base", target, "HEAD"]) else {
         return false;
     };
     let plain = [
@@ -695,7 +695,7 @@ fn tick_file(file: &Path, first: &str, done: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
+    use crate::worktree::git_scratch;
 
     const NOTE: &str = "# Work\n\n- [ ] FEAT: Other\n- [ ] FEAT: Copy the reply\n  - Seen on Monday\n  Plan: [[Plan - Copy]]\n- [ ] BUG: Last\n\n- [x] FEAT: Old\n  Done: abc, 5m. Old.\n\n<!-- note-id: n-0123456789ab -->\n";
 
@@ -736,21 +736,6 @@ mod tests {
         );
     }
 
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
     /// A main clone with an origin, and a worktree on `note/copy` started
     /// for the note's item, its work committed.
     fn landed_setup(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
@@ -761,7 +746,7 @@ mod tests {
         let notes = dir.join("notes");
         std::fs::create_dir_all(&notes).unwrap();
         std::fs::create_dir_all(&main).unwrap();
-        git(
+        git_scratch(
             &dir,
             &[
                 "init",
@@ -772,16 +757,16 @@ mod tests {
                 origin.to_str().unwrap(),
             ],
         );
-        git(&main, &["init", "-q", "-b", "main"]);
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "one"]);
-        git(
+        git_scratch(&main, &["init", "-q", "-b", "main"]);
+        git_scratch(&main, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_scratch(
             &main,
             &["remote", "add", "origin", origin.to_str().unwrap()],
         );
-        git(&main, &["push", "-q", "-u", "origin", "main"]);
-        git(&main, &["remote", "set-head", "origin", "main"]);
+        git_scratch(&main, &["push", "-q", "-u", "origin", "main"]);
+        git_scratch(&main, &["remote", "set-head", "origin", "main"]);
         let wt = main.join(".claude/worktrees/note-copy");
-        git(
+        git_scratch(
             &main,
             &[
                 "worktree",
@@ -793,11 +778,11 @@ mod tests {
             ],
         );
         std::fs::write(wt.join("copy.txt"), "copied\n").unwrap();
-        git(&wt, &["add", "copy.txt"]);
-        git(&wt, &["commit", "-q", "-m", "Copy the reply"]);
+        git_scratch(&wt, &["add", "copy.txt"]);
+        git_scratch(&wt, &["commit", "-q", "-m", "Copy the reply"]);
         // Renamed since wt claimed it: found by its ID.
         std::fs::write(notes.join("Work renamed.md"), NOTE).unwrap();
-        git(
+        git_scratch(
             &main,
             &[
                 "config",
@@ -841,7 +826,7 @@ mod tests {
     #[test]
     fn a_landed_worktree_is_ticked_removed_and_its_branch_deleted() {
         let (dir, main, wt, notes) = landed_setup("landed");
-        git(&wt, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(&wt, &["push", "-q", "origin", "HEAD:main"]);
         let out = run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(out.iter().any(|l| l.starts_with("ticked:")), "{out:?}");
         assert!(!wt.exists(), "the worktree is removed");
@@ -877,10 +862,10 @@ mod tests {
     #[test]
     fn a_branch_deleted_on_the_remote_without_landing_doesnt_count() {
         let (dir, main, wt, notes) = landed_setup("deleted");
-        git(&wt, &["push", "-q", "origin", "HEAD:refs/heads/note/copy"]);
-        git(&main, &["fetch", "-q", "origin"]);
+        git_scratch(&wt, &["push", "-q", "origin", "HEAD:refs/heads/note/copy"]);
+        git_scratch(&main, &["fetch", "-q", "origin"]);
         let origin = dir.join("origin.git");
-        git(&origin, &["branch", "-D", "note/copy"]);
+        git_scratch(&origin, &["branch", "-D", "note/copy"]);
         let err = run(&given_for(&wt), &notes, &never, &merged).unwrap_err();
         assert!(err.contains("would lose them"), "{err}");
         assert!(wt.exists());
@@ -891,18 +876,18 @@ mod tests {
     fn a_merged_prs_head_counts_however_the_default_branch_changed_since() {
         let (dir, main, wt, notes) = landed_setup("merged-pr");
         std::fs::write(main.join("copy.txt"), "copied\nand more since\n").unwrap();
-        git(&main, &["add", "copy.txt"]);
-        git(
+        git_scratch(&main, &["add", "copy.txt"]);
+        git_scratch(
             &main,
             &["commit", "-q", "-m", "Squash-merged, then changed"],
         );
-        git(&main, &["push", "-q", "origin", "main"]);
+        git_scratch(&main, &["push", "-q", "origin", "main"]);
         assert!(
             run(&given_for(&wt), &notes, &never, &merged).is_err(),
             "no proof without the PR"
         );
         let mut given = given_for(&wt);
-        given.merged_pr_head = Some(git(&wt, &["rev-parse", "HEAD"]));
+        given.merged_pr_head = Some(git_scratch(&wt, &["rev-parse", "HEAD"]));
         assert!(
             run(&given, &notes, &never, &unmerged).is_err(),
             "no proof while GitHub names no merged PR with that head"
@@ -917,21 +902,21 @@ mod tests {
     #[test]
     fn an_issue_closes_on_a_squash_merge_main_changed_since_once_github_names_the_pr() {
         let (dir, main, wt, notes) = landed_setup("squash-issue");
-        git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
-        git(
+        git_scratch(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
+        git_scratch(
             &main,
             &["config", "branch.note/copy.wtnIssue", "acme/widgets#12"],
         );
         // Pushed, then squash-merged onto a main that changed its file since.
-        git(&wt, &["push", "-q", "origin", "HEAD:note/copy"]);
+        git_scratch(&wt, &["push", "-q", "origin", "HEAD:note/copy"]);
         std::fs::write(main.join("copy.txt"), "copied\nand more since\n").unwrap();
-        git(&main, &["add", "copy.txt"]);
-        git(
+        git_scratch(&main, &["add", "copy.txt"]);
+        git_scratch(
             &main,
             &["commit", "-q", "-m", "Squash-merged, then changed"],
         );
-        git(&main, &["push", "-q", "origin", "main"]);
-        let squash = git(&main, &["rev-parse", "--short", "HEAD"]);
+        git_scratch(&main, &["push", "-q", "origin", "main"]);
+        let squash = git_scratch(&main, &["rev-parse", "--short", "HEAD"]);
         let closed = std::cell::RefCell::new(0);
         let close = |_: &Repo, _: u64, _: &str, _: &str| {
             *closed.borrow_mut() += 1;
@@ -940,7 +925,7 @@ mod tests {
         let mut given = given_for(&wt);
         given.hash = Some(squash);
         given.close_issue = true;
-        given.merged_pr_head = Some(git(&wt, &["rev-parse", "HEAD"]));
+        given.merged_pr_head = Some(git_scratch(&wt, &["rev-parse", "HEAD"]));
         let out = run(&given, &notes, &close, &merged).unwrap();
         assert!(
             out.contains(&"closed: acme/widgets#12".to_string()),
@@ -953,20 +938,20 @@ mod tests {
     #[test]
     fn an_issue_isn_t_closed_on_a_commit_that_landed_something_else() {
         let (dir, main, wt, notes) = landed_setup("unlanded-issue");
-        git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
-        git(
+        git_scratch(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
+        git_scratch(
             &main,
             &["config", "branch.note/copy.wtnIssue", "acme/widgets#12"],
         );
         // Pushed, its PR still open; main moved on without it.
-        git(&wt, &["push", "-q", "origin", "HEAD:note/copy"]);
-        git(
+        git_scratch(&wt, &["push", "-q", "origin", "HEAD:note/copy"]);
+        git_scratch(
             &main,
             &["commit", "-q", "--allow-empty", "-m", "Other work"],
         );
-        git(&main, &["push", "-q", "origin", "main"]);
+        git_scratch(&main, &["push", "-q", "origin", "main"]);
         let mut given = given_for(&wt);
-        given.hash = Some(git(&main, &["rev-parse", "--short", "HEAD"]));
+        given.hash = Some(git_scratch(&main, &["rev-parse", "--short", "HEAD"]));
         given.close_issue = true;
         let out = run(&given, &notes, &never, &unmerged).unwrap();
         assert!(
@@ -981,9 +966,9 @@ mod tests {
     fn work_checked_in_the_default_branch_by_reading_it_counts() {
         let (dir, main, wt, notes) = landed_setup("checked-in");
         std::fs::write(main.join("copy.txt"), "copied\nand more since\n").unwrap();
-        git(&main, &["add", "copy.txt"]);
-        git(&main, &["commit", "-q", "-m", "Squashed, then changed"]);
-        git(&main, &["push", "-q", "origin", "main"]);
+        git_scratch(&main, &["add", "copy.txt"]);
+        git_scratch(&main, &["commit", "-q", "-m", "Squashed, then changed"]);
+        git_scratch(&main, &["push", "-q", "origin", "main"]);
         let mut given = given_for(&wt);
         given.checked_in = Some("main".into());
         run(&given, &notes, &never, &merged).unwrap();
@@ -994,13 +979,13 @@ mod tests {
     #[test]
     fn work_landed_on_a_local_target_counts_however_far_behind_origin_is() {
         let (dir, main, wt, notes) = landed_setup("local-target");
-        git(&main, &["branch", "integration", "main"]);
-        git(&main, &["push", "-q", "origin", "integration"]);
-        git(
+        git_scratch(&main, &["branch", "integration", "main"]);
+        git_scratch(&main, &["push", "-q", "origin", "integration"]);
+        git_scratch(
             &main,
             &["config", "branch.note/copy.wtnTarget", "integration"],
         );
-        git(&wt, &["push", "-q", ".", "HEAD:integration"]);
+        git_scratch(&wt, &["push", "-q", ".", "HEAD:integration"]);
         run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1009,13 +994,13 @@ mod tests {
     #[test]
     fn a_local_landing_needs_no_reachable_remote() {
         let (dir, main, wt, notes) = landed_setup("offline");
-        git(
+        git_scratch(
             &main,
             &["config", "branch.note/copy.wtnTarget", "integration"],
         );
-        git(&main, &["branch", "integration", "main"]);
-        git(&wt, &["push", "-q", ".", "HEAD:integration"]);
-        git(
+        git_scratch(&main, &["branch", "integration", "main"]);
+        git_scratch(&wt, &["push", "-q", ".", "HEAD:integration"]);
+        git_scratch(
             &main,
             &["remote", "set-url", "origin", "/nowhere/at/all.git"],
         );
@@ -1040,9 +1025,9 @@ mod tests {
     fn work_squashed_onto_the_default_branch_counts_as_landed() {
         let (dir, main, wt, notes) = landed_setup("squashed");
         std::fs::write(main.join("copy.txt"), "copied\n").unwrap();
-        git(&main, &["add", "copy.txt"]);
-        git(&main, &["commit", "-q", "-m", "Copy the reply, squashed"]);
-        git(&main, &["push", "-q", "origin", "main"]);
+        git_scratch(&main, &["add", "copy.txt"]);
+        git_scratch(&main, &["commit", "-q", "-m", "Copy the reply, squashed"]);
+        git_scratch(&main, &["push", "-q", "origin", "main"]);
         run(&given_for(&wt), &notes, &never, &merged).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1051,7 +1036,7 @@ mod tests {
     #[test]
     fn an_item_not_in_its_note_stops_before_anything_is_removed() {
         let (dir, _main, wt, notes) = landed_setup("missing");
-        git(&wt, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(&wt, &["push", "-q", "origin", "HEAD:main"]);
         std::fs::write(
             notes.join("Work renamed.md"),
             NOTE.replace("FEAT: Copy the reply", "FEAT: Reworded"),
@@ -1069,39 +1054,39 @@ mod tests {
     /// `dev::is_switchboard_clone` reads one: its sources committed and on
     /// origin, and origin named as GitHub's, git reaching it where it is.
     fn as_switchboard(main: &Path, wt: &Path) {
-        let origin = git(main, &["config", "remote.origin.url"]);
+        let origin = git_scratch(main, &["config", "remote.origin.url"]);
         let github = "https://github.com/acme/switchboard.git";
-        git(
+        git_scratch(
             main,
             &["config", &format!("url.{origin}.insteadOf"), github],
         );
-        git(main, &["config", "remote.origin.url", github]);
+        git_scratch(main, &["config", "remote.origin.url", github]);
         std::fs::write(wt.join("Cargo.toml"), "[package]\nname = \"switchboard\"\n").unwrap();
         for dir in ["assets/skills", "src/mux"] {
             std::fs::create_dir_all(wt.join(dir)).unwrap();
             std::fs::write(wt.join(dir).join(".keep"), "").unwrap();
         }
-        git(wt, &["add", "."]);
-        git(wt, &["commit", "-q", "-m", "sources"]);
-        git(wt, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(wt, &["add", "."]);
+        git_scratch(wt, &["commit", "-q", "-m", "sources"]);
+        git_scratch(wt, &["push", "-q", "origin", "HEAD:main"]);
         assert!(crate::dev::is_switchboard_clone(wt));
     }
 
     fn issue_setup(name: &str, branch: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let (dir, main, wt, notes) = landed_setup(name);
-        git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
-        git(&wt, &["checkout", "-q", "-b", branch]);
-        git(&main, &["branch", "-q", "-D", "note/copy"]);
-        git(&wt, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
+        git_scratch(&wt, &["checkout", "-q", "-b", branch]);
+        git_scratch(&main, &["branch", "-q", "-D", "note/copy"]);
+        git_scratch(&wt, &["push", "-q", "origin", "HEAD:main"]);
         // given_for's --hash, the commit the work landed as.
-        git(&wt, &["tag", "1234abcd"]);
+        git_scratch(&wt, &["tag", "1234abcd"]);
         (dir, main, wt, notes)
     }
 
     #[test]
     fn an_issue_branch_closes_its_issue_with_the_done_line_and_ticks_nothing() {
         let (dir, main, wt, notes) = issue_setup("issue", "issue/12-copy-the-reply");
-        git(
+        git_scratch(
             &main,
             &[
                 "config",
@@ -1131,7 +1116,7 @@ mod tests {
             [(
                 "acme/widgets".to_string(),
                 12,
-                git(&main, &["rev-parse", "1234abcd^{commit}"]),
+                git_scratch(&main, &["rev-parse", "1234abcd^{commit}"]),
                 "Done: 1234abcd. It copies.".to_string()
             )]
         );
@@ -1147,7 +1132,7 @@ mod tests {
     #[test]
     fn an_issue_wt_recorded_is_closed_and_one_that_fails_leaves_the_rest_to_go_on() {
         let (dir, main, wt, notes) = issue_setup("wt-issue", "issue/7-x");
-        git(
+        git_scratch(
             &main,
             &["config", "branch.issue/7-x.wtnIssue", "other/thing#9"],
         );
@@ -1183,7 +1168,7 @@ mod tests {
         // Made here, so the repository's own leak-check finds no path.
         let leaky = format!("It reads /{}/marta/secret.txt now.", "Users");
         let (dir, main, wt, notes) = issue_setup("leak", "issue/12-x");
-        git(
+        git_scratch(
             &main,
             &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
         );
@@ -1203,7 +1188,7 @@ mod tests {
 
         // Anywhere else, no leak-check runs.
         let (dir, main, wt, notes) = issue_setup("elsewhere", "issue/12-x");
-        git(
+        git_scratch(
             &main,
             &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
         );
@@ -1221,7 +1206,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let (dir, main, wt, notes) = issue_setup("unasked", "issue/12-x");
-        git(
+        git_scratch(
             &main,
             &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
         );

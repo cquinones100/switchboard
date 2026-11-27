@@ -64,6 +64,7 @@ use anyhow::{Result, anyhow};
 use super::{Queue, Rerun, TRAIN_MAX, Tested, Train};
 use crate::cmd::wait_ci::Seen;
 use crate::util;
+use crate::worktree::git;
 
 /// How long a train may have no CI at all, and how long its CI may run.
 pub const GRACE: i64 = 15 * 60 * 1000;
@@ -900,10 +901,6 @@ async fn promote(at: &Repo, train: &Train) -> Result<Option<String>> {
     let base = git(&at.common, &["rev-parse", &format!("{REFS}/base")])?;
     let tree = |commit: &str| git(&at.common, &["rev-parse", &format!("{commit}^{{tree}}")]);
     Ok((tree(&base)? == tree(&train.commit)?).then_some(base))
-}
-
-fn git(common: &Path, args: &[&str]) -> Result<String> {
-    crate::worktree::git_at(common, args)
 }
 
 /// Fetches from origin, counted in the request audit.

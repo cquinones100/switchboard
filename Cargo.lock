@@ -3099,6 +3099,7 @@ dependencies = [
  "sha2 0.11.1",
  "ssh-key",
  "tar",
+ "tokio",
  "url",
 ]
 
