@@ -835,7 +835,7 @@ const out = [];
         lines,
         [
             "drawer=api,web",
-            "chosen=api~/code/api",
+            "chosen=api\u{200e}~/code/api\u{200e}",
             "channel=web,api",
             "asks=Start Claude in ~/code/web? [Y/n]",
             "no=0",

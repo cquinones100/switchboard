@@ -309,8 +309,13 @@ pub struct Choice {
 }
 
 /// The list's groups: each repository by its main checkout's name, then
-/// "Other directories".
+/// "Other directories", the most recent `MAX_PLACES` places.
 pub fn place_choices(known: &Known) -> Vec<(String, Vec<Choice>)> {
+    choices_up_to(known, MAX_PLACES)
+}
+
+/// `place_choices` up to `most` places.
+fn choices_up_to(known: &Known, most: usize) -> Vec<(String, Vec<Choice>)> {
     let home = &known.home;
     let now = util::now_ms();
     let mut latest: HashMap<PathBuf, i64> = HashMap::new();
@@ -362,7 +367,7 @@ pub fn place_choices(known: &Known) -> Vec<(String, Vec<Choice>)> {
     };
     let choices: Vec<(Option<String>, Choice)> = sorted
         .into_iter()
-        .take(MAX_PLACES)
+        .take(most)
         .map(|(dir, repo, _)| {
             let label = match &repo {
                 None => short(home, &dir),
@@ -404,7 +409,9 @@ pub fn place_choices(known: &Known) -> Vec<(String, Vec<Choice>)> {
 /// to say it, or why it can't be used: the phone's, which starts a Claude
 /// only where the list offers one.
 pub fn listed(known: &Known, value: &str) -> Result<(PathBuf, String), String> {
-    let offered = place_choices(known)
+    // Every place the list could hold, not only the most recent, which
+    // another session may have pushed past since the sheet was read.
+    let offered = choices_up_to(known, usize::MAX)
         .into_iter()
         .flat_map(|(_, choices)| choices)
         .any(|c| c.value == value);

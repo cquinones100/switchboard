@@ -1287,7 +1287,7 @@ async function newTabSheet(lead) {
       { class: "place-group" },
       el("div", { class: "group-name" }, g.name),
       g.places.map((p) => {
-        const o = el("button", { class: "menu-option place", role: "radio", "aria-checked": "false", onclick: () => light(p) }, el("span", {}, p.label), el("span", { class: "where" }, p.value));
+        const o = el("button", { class: "menu-option place", role: "radio", "aria-checked": "false", onclick: () => light(p) }, el("span", {}, p.label), el("span", { class: "where" }, LRM + p.value + LRM));
         options.push([o, p]);
         return o;
       }),
@@ -1296,6 +1296,10 @@ async function newTabSheet(lead) {
   list.replaceChildren(...(sections.length ? sections : [el("div", { class: "dim" }, "No places yet: run Claude in a repository on the computer first.")]));
   if (options.length) light(options[0][1]);
 }
+
+// Left-to-right marks around a path drawn right to left, so its `~/` or `/`
+// stays at its start while a long one is cut from the left.
+const LRM = "\u200e";
 
 // The question Start asks first (board 186): No at the left, Start lit at
 // the right; only Start opens the tab.
