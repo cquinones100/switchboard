@@ -1001,15 +1001,17 @@ function dragDown(top) {
 async function loadSheet() {
   const m = state.menu;
   if (!m || !m.sheet) return;
-  // Only the newest read asked for is shown, whichever answers last.
+  // An answer older than the one shown is dropped, whichever answers last;
+  // a newer read still under way leaves this one shown meanwhile.
   const read = (m.sheet.reads = (m.sheet.reads || 0) + 1);
   try {
     const r = await api("/api/tabs/" + m.pane + "/turns");
-    if (state.menu !== m || read !== m.sheet.reads) return;
+    if (state.menu !== m || read < (m.sheet.shown || 0)) return;
+    m.sheet.shown = read;
     m.sheet.messages = r.messages || [];
     m.sheet.failed = false;
   } catch (_) {
-    if (state.menu !== m || read !== m.sheet.reads) return;
+    if (state.menu !== m || read < (m.sheet.shown || 0)) return;
     // Read again as the stream next changes the tab, or the app reconnects.
     m.sheet.failed = m.sheet.messages === null;
   }
