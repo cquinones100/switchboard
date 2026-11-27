@@ -25,7 +25,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use serde_json::Value;
-use switchboard_plugin_api::sdk::home_join;
+use switchboard_plugin_api::sdk::{self, AloneHost, home_join};
 use switchboard_plugin_api::{Action, Answer, Folders, Host};
 
 static HOST: RwLock<Option<Arc<dyn Host>>> = RwLock::new(None);
@@ -109,69 +109,38 @@ fn saved() -> serde_json::Map<String, Value> {
         .unwrap_or_default()
 }
 
-/// One setting alone: what you saved, when it is of the default's kind
-/// (on/off for an on/off option, a word for a choice), else the default;
-/// `None` for one neither saved nor listed here.
-fn setting_alone(key: &str, saved: Option<&serde_json::Map<String, Value>>) -> Option<Value> {
-    let default = crate::manifest().default_of(key).or_else(|| {
-        switchboard_ui::settings::DEFAULTS
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, d)| d.value())
-    });
-    match (saved.and_then(|s| s.get(key)), default) {
-        (Some(v), Some(d)) if v.is_boolean() == d.is_boolean() => Some(v.clone()),
-        (Some(v), None) => Some(v.clone()),
-        (_, default) => default,
+impl AloneHost for Alone {
+    fn default_of(&self, key: &str) -> Option<Value> {
+        crate::manifest()
+            .default_of(key)
+            .or_else(|| switchboard_ui::settings::default_of(key))
     }
-}
 
-impl Host for Alone {
-    fn ask(&self, action: Action) -> Answer {
-        match action {
-            Action::Setting { key } => {
-                static SAVED: OnceLock<serde_json::Map<String, Value>> = OnceLock::new();
-                let saved = self.yours.then(|| SAVED.get_or_init(saved));
-                match setting_alone(&key, saved) {
-                    Some(value) => Answer::Value { value },
-                    None => Answer::None,
-                }
-            }
-            Action::Settings { keys } => {
-                let saved = self.yours.then(saved);
-                Answer::Values {
-                    values: keys
-                        .iter()
-                        .map(|key| setting_alone(key, saved.as_ref()))
-                        .collect(),
-                }
-            }
-            Action::Folders => Answer::Folders {
-                folders: folders_alone(self.yours),
-            },
-            Action::InPane => Answer::Flag { on: false },
-            // The terminal's own clipboard (OSC 52) is the app's to write.
-            Action::Copy { .. } | Action::Request { .. } | Action::Fetch { .. } => Answer::Done,
-            Action::Command { .. }
-            | Action::Pr { .. }
-            | Action::ReviewedPr { .. }
-            | Action::Untrusted { .. }
-            | Action::HeadlessClaude
-            | Action::Plan { .. }
-            | Action::Paste
-            | Action::PasteImage { .. }
-            | Action::Preview { .. }
-            | Action::LinkWords { .. }
-            | Action::OpenLink { .. }
-            | Action::Draws
-            | Action::Picture { .. }
-            | Action::PictureGone { .. }
-            | Action::ItemClaim { .. }
-            | Action::Queued
-            | Action::Item { .. }
-            | Action::Pointer { .. }
-            | Action::Ready { .. } => Answer::None,
-        }
+    /// Read once, as the app starts; `Settings` reads the file again.
+    fn saved(&self, key: &str) -> Option<Value> {
+        static SAVED: OnceLock<serde_json::Map<String, Value>> = OnceLock::new();
+        self.yours
+            .then(|| SAVED.get_or_init(saved).get(key).cloned())
+            .flatten()
+    }
+
+    fn own_folders(&self) -> Folders {
+        folders_alone(self.yours)
+    }
+
+    // Several settings at once are read as they are now, since the app runs
+    // on while they change.
+    fn exception(&self, action: &Action) -> Option<Answer> {
+        let Action::Settings { keys } = action else {
+            return None;
+        };
+        let saved = self.yours.then(saved).unwrap_or_default();
+        Some(Answer::Values {
+            values: keys
+                .iter()
+                .map(|key| sdk::saved_over_default(saved.get(key).cloned(), self.default_of(key)))
+                .collect(),
+        })
     }
 }
 

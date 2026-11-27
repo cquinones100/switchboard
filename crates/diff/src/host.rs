@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{Map, Value};
-use switchboard_plugin_api::sdk::{self, home_join};
+use switchboard_plugin_api::sdk::{self, AloneHost, home_join};
 use switchboard_plugin_api::{Action, Answer, Folders, Host};
 
 static HOST: OnceLock<Arc<dyn Host>> = OnceLock::new();
@@ -196,67 +196,25 @@ pub fn write_setting_at(file: &std::path::Path, key: &str, value: Value) -> Resu
     Ok(())
 }
 
-/// One setting alone: what you saved (read only with `yours`), when it is
-/// of the default's kind (on/off for an on/off option, a word for a
-/// choice), else the default; `None` for one neither saved nor listed here.
-fn setting_alone(key: &str, yours: bool) -> Option<Value> {
-    let default = default_of(key).or_else(|| {
-        switchboard_ui::settings::DEFAULTS
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, d)| d.value())
-    });
-    let saved = yours.then(|| saved_value(key)).flatten();
-    match (saved, default) {
-        (Some(v), Some(d)) if v.is_boolean() == d.is_boolean() => Some(v),
-        (Some(v), None) => Some(v),
-        (_, default) => default,
+impl AloneHost for Alone {
+    fn default_of(&self, key: &str) -> Option<Value> {
+        default_of(key).or_else(|| switchboard_ui::settings::default_of(key))
     }
-}
 
-impl Host for Alone {
-    fn ask(&self, action: Action) -> Answer {
-        match action {
-            // Alone, GitHub is never asked, so a base kept as a branch's
-            // with no PR is not asked for again in case one has come.
-            Action::Setting { key } if key == "github" => Answer::Value {
-                value: Value::Bool(false),
-            },
-            Action::Setting { key } => match setting_alone(&key, self.yours) {
-                Some(value) => Answer::Value { value },
-                None => Answer::None,
-            },
-            Action::Folders => Answer::Folders {
-                folders: folders_alone(),
-            },
-            Action::InPane => Answer::Flag { on: false },
-            // No list of whose code a directory holds: yours.
-            Action::Untrusted { .. } => Answer::Flag { on: false },
-            // The terminal's own clipboard (OSC 52) is the diff's to write.
-            Action::Copy { .. } | Action::Request { .. } | Action::Fetch { .. } => Answer::Done,
-            Action::Command { .. }
-            | Action::Pr { .. }
-            | Action::ReviewedPr { .. }
-            | Action::HeadlessClaude
-            | Action::Plan { .. } => Answer::None,
-            // What only Notes asks.
-            Action::Settings { .. }
-            | Action::Paste
-            | Action::PasteImage { .. }
-            | Action::Preview { .. }
-            | Action::LinkWords { .. }
-            | Action::OpenLink { .. }
-            | Action::Draws
-            | Action::Picture { .. }
-            | Action::PictureGone { .. }
-            | Action::ItemClaim { .. }
-            | Action::Queued
-            | Action::Item { .. } => Answer::None,
-            // The terminal's pointer is the diff's own to set (`App::point`).
-            Action::Pointer { .. } => Answer::None,
-            // No tab to mark.
-            Action::Ready { .. } => Answer::None,
-        }
+    fn saved(&self, key: &str) -> Option<Value> {
+        self.yours.then(|| saved_value(key)).flatten()
+    }
+
+    fn own_folders(&self) -> Folders {
+        folders_alone()
+    }
+
+    // Alone, GitHub is never asked, so a base kept as a branch's with no PR
+    // is not asked for again in case one has come.
+    fn exception(&self, action: &Action) -> Option<Answer> {
+        matches!(action, Action::Setting { key } if key == "github").then_some(Answer::Value {
+            value: Value::Bool(false),
+        })
     }
 }
 
