@@ -756,7 +756,7 @@ function drawerList() {
         held(
           el(
             "button",
-            { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
+            { class: "row" + (state.menu && state.menu.pane === number(t) ? (state.menu.sheet ? " held" : " held lifted") : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
             follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
             el("span", { class: "sub" }, lit(sayingOf(t), words)),
@@ -1001,13 +1001,15 @@ function dragDown(top) {
 async function loadSheet() {
   const m = state.menu;
   if (!m || !m.sheet) return;
+  // Only the newest read asked for is shown, whichever answers last.
+  const read = (m.sheet.reads = (m.sheet.reads || 0) + 1);
   try {
     const r = await api("/api/tabs/" + m.pane + "/turns");
-    if (state.menu !== m) return;
+    if (state.menu !== m || read !== m.sheet.reads) return;
     m.sheet.messages = r.messages || [];
     m.sheet.failed = false;
   } catch (_) {
-    if (state.menu !== m) return;
+    if (state.menu !== m || read !== m.sheet.reads) return;
     // Read again as the stream next changes the tab, or the app reconnects.
     m.sheet.failed = m.sheet.messages === null;
   }

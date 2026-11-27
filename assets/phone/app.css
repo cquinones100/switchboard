@@ -611,7 +611,10 @@ body.refused p { color: var(--dim); }
 
 /* ── A tab's menu and Close tab's question (board 175) ── */
 .row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-.row.held { background: var(--chosen); box-shadow: inset 3px 0 0 var(--accent); position: relative; z-index: 11; }
+/* Lifted over the veil only for a box drawn beside it; a tab's sheet covers the
+   rows, so its row stays lit under the veil. */
+.row.held { background: var(--chosen); box-shadow: inset 3px 0 0 var(--accent); }
+.row.held.lifted { position: relative; z-index: 11; }
 .veil {
   position: fixed;
   inset: 0;
