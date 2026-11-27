@@ -28,6 +28,7 @@ use serde_json::json;
 use crate::items::{Column, Item, State, Target, ViewData};
 use crate::mux::TabId;
 use crate::mux::procinfo::ProcUsage;
+use crate::ui::when::{self, Said};
 
 /// How often the processes are read again while the view is in front.
 pub const RESOURCES_MS: u64 = 3_000;
@@ -539,7 +540,7 @@ pub fn with_slots(
                 });
             }
             let title = format!("{index} {name}");
-            let how_long = crate::sidebar::text::ago(Some(u.since), now_secs);
+            let how_long = when::ago(Some(u.since), now_secs, Said::Short);
             let role = if waits {
                 crate::slots::ordinal(place)
             } else {

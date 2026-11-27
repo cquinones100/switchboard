@@ -27,6 +27,7 @@ use crate::status::theme::RED;
 use crate::ui::Theme;
 use crate::ui::images::{Bar, Marks};
 use crate::ui::kit::{self, Col, Tone};
+use crate::ui::when::{self, Said};
 use crate::usage::charts::{Limit, Model, ModelSpend, SpanSpend, TabSpend};
 
 /// How wide the screen must be for the board; narrower, the plain list.
@@ -149,16 +150,6 @@ fn dollars(v: f64) -> String {
 /// `1,234`.
 fn count(n: usize) -> String {
     crate::usage::sessions::thousands(n)
-}
-
-/// A while ago, in a few characters.
-fn ago(ms: i64) -> String {
-    let s = (ms / 1000).max(0);
-    match s {
-        0..60 => format!("{s}s ago"),
-        60..3600 => format!("{}m ago", s / 60),
-        _ => format!("{}h ago", s / 3600),
-    }
 }
 
 fn clock(ms: i64, tz: &jiff::tz::TimeZone, format: &str) -> String {
@@ -736,7 +727,10 @@ fn limits(
     p.put(" LIMITS", Tone::Dim.bold(theme));
     if let Some(at) = model.limits_at {
         p.right(
-            format!("as the last statusline saw them, {}", ago(now_ms - at)),
+            format!(
+                "as the last statusline saw them, {}",
+                when::ago(Some(at / 1000), now_ms / 1000, Said::Ago)
+            ),
             cols.saturating_sub(1),
             Tone::Faint.style(theme),
         );

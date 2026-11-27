@@ -478,10 +478,6 @@ impl Overlay for RemindBox {
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn now() -> Zoned {
         "2026-11-04T14:30:00[America/New_York]".parse().unwrap()
     }
@@ -510,17 +506,20 @@ mod tests {
         assert!(!text.contains("Set now"), "{text}");
         assert!(!text.contains("Clear it"), "{text}");
         for c in "tue 9am".chars() {
-            b.key(key(KeyCode::Char(c)), &Look::default());
+            b.key(Key::plain(KeyCode::Char(c)), &Look::default());
         }
         let text = text_of(&b);
         assert!(
             text.contains("✓ Tuesday, November 10 at 9:00 AM · in 5 days 18 hours"),
             "{text}"
         );
-        b.key(key(KeyCode::Char('x')), &Look::default());
+        b.key(Key::plain(KeyCode::Char('x')), &Look::default());
         let text = text_of(&b);
         assert!(text.contains("isn't a time I know"), "{text}");
-        assert_eq!(b.key(key(KeyCode::Enter), &Look::default()), Step::Redraw);
+        assert_eq!(
+            b.key(Key::plain(KeyCode::Enter), &Look::default()),
+            Step::Redraw
+        );
     }
 
     #[test]
@@ -539,16 +538,16 @@ mod tests {
         assert!(text.contains("Set now:"), "{text}");
         assert!(text.contains("Clear it"), "{text}");
         let look = Look::default();
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
         for _ in 0..3 {
-            b.key(key(KeyCode::Backspace), &look);
+            b.key(Key::plain(KeyCode::Backspace), &look);
         }
         for c in "the handoff".chars() {
-            b.key(key(KeyCode::Char(c)), &look);
+            b.key(Key::plain(KeyCode::Char(c)), &look);
         }
-        match b.key(key(KeyCode::Enter), &look) {
+        match b.key(Key::plain(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => {
                 assert_eq!(p.index, 0);
                 assert_eq!(p.value, (n.timestamp().as_second() + 3 * 3600).to_string());

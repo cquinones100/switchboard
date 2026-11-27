@@ -40,8 +40,6 @@
 //! - `keylist`: the list of keys.
 //! - `pointer`: the mouse pointer's shape, a hand over what a click
 //!   presses (`OSC 22`).
-//! - `when`: when something came, as a date and a clock time for a row's
-//!   end (the Notifications view and window).
 //! - `alone`: a picker or a menu run in a terminal of its own, with no
 //!   server, for a command typed in a shell (`wt` with no argument).
 //! - `headless`: a client with no terminal, for `switchboard headless`,
@@ -79,11 +77,11 @@ pub mod picture;
 pub mod pictures;
 mod serve;
 pub mod tip;
-pub mod when;
 
 pub use switchboard_ui::{
     AsAny, Canvas, Confirm, Kept, Look, Menu, MenuOption, Message, Outcome, PickItem, Picked,
     Picker, Step, Theme, confirm, dim_behind, draw, field, kit, menu, message, picker, pointer,
+    when,
 };
 
 pub use serve::Handed;

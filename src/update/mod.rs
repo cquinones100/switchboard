@@ -40,6 +40,7 @@ use anyhow::{Result, anyhow};
 pub use release::{REPO, Release, Version};
 pub use serve::{Command, UpdateEvent, Updates};
 
+use crate::ui::when::{self, Said};
 use crate::{paths, util};
 
 /// This binary's version and the commit it was built from, as `switchboard
@@ -176,7 +177,7 @@ pub fn offer_text(newer: &[Release], current: &Version, now_secs: i64) -> String
         text.push_str(&format!(" {} new releases, newest first:", newer.len()));
     }
     for r in newer {
-        let ago = crate::sidebar::text::ago(r.published, now_secs);
+        let ago = when::ago(r.published, now_secs, Said::Short);
         text.push_str("\n\n");
         text.push_str(&r.version.to_string());
         if !ago.is_empty() {

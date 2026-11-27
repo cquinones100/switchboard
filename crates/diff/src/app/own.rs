@@ -26,6 +26,7 @@ use switchboard_plugin_api::{Scope, Setting};
 use switchboard_ui::draw::{cut, put_line, width, wrap};
 use switchboard_ui::input::{self, Key, Mods, Mouse, MouseKind};
 use switchboard_ui::kit::{self, Surface, Tone};
+use switchboard_ui::when::{self, Said};
 use switchboard_ui::{Menu, MenuOption, Outcome, Overlay, Step};
 
 use super::{Act, App, BUTTONS, Button, Focus, Msg, Options, Telling};
@@ -703,7 +704,7 @@ impl App {
                         false,
                         &theme,
                     ));
-                    let ago = switchboard_ui::text::ago(newer.published, util::now_secs());
+                    let ago = when::ago(newer.published, util::now_secs(), Said::Short);
                     let right = if ago.is_empty() {
                         Vec::new()
                     } else {

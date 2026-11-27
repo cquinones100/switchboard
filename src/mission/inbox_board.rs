@@ -33,6 +33,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, width};
 use crate::sources::inbox::Commit;
 use crate::ui::kit::{self, Col, Mark, Tone};
+use crate::ui::when::{self, Said};
 
 /// Under this many columns the ticket isn't beside the list: `i` shows it
 /// in the list's place.
@@ -141,11 +142,7 @@ fn when(ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
     let now = jiff::Timestamp::from_millisecond(now_ms).unwrap_or(at);
     let (at, now) = (at.to_zoned(tz.clone()), now.to_zoned(tz.clone()));
     if at.date() == now.date() {
-        match (now_ms - ms).max(0) / 60_000 {
-            0 => "now".into(),
-            m @ 1..60 => format!("{m}m ago"),
-            m => format!("{}h ago", m / 60),
-        }
+        when::ago(Some(ms / 1000), now_ms / 1000, Said::Ago)
     } else {
         at.strftime(crate::ui::when::CLOCK).to_string()
     }
@@ -494,12 +491,13 @@ fn ticket_lines(item: &Item, w: usize, m: &Mission, roomy: bool) -> Vec<Drawn> {
                     .filter(|id| !id.is_empty())
                     .map(|id| Who::new(Service::Linear, id));
                 let is_new = c.get("id").and_then(Value::as_str) == Some(own);
-                let ago = text::ago(
+                let ago = when::ago(
                     c.get("createdAt")
                         .and_then(Value::as_str)
                         .and_then(ms_of)
                         .map(|ms| ms / 1000),
                     now_ms / 1000,
+                    Said::Short,
                 );
                 let mut head = initial(&name);
                 head.extend([
@@ -619,7 +617,7 @@ fn from_your_work(
 /// file it touches only on a roomy screen.
 fn commit_line(c: &Commit, w: usize, m: &Mission, roomy: bool) -> Vec<Span<'static>> {
     let theme = &m.snap.theme;
-    let ago = text::ago(Some(c.at), m.snap.now_secs);
+    let ago = when::ago(Some(c.at), m.snap.now_secs, Said::Short);
     let landed = if ago.is_empty() {
         " landed".to_string()
     } else {

@@ -39,6 +39,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 
 use super::pager::Content;
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 /// How old a copy is before the view says so, and how long a view is
@@ -246,16 +247,17 @@ fn serve(stream: UnixStream, asks: &Sender<Ask>) {
 /// How old a copy read at `read_at` is, in the view's words, once it is
 /// `STALE` old: "read 12m ago".
 pub fn age(read_at: SystemTime, now: SystemTime) -> Option<String> {
-    let old = now.duration_since(read_at).ok()?;
-    if old < STALE {
+    if now.duration_since(read_at).ok()? < STALE {
         return None;
     }
-    let minutes = old.as_secs() / 60;
-    Some(match minutes {
-        0..60 => format!("read {minutes}m ago"),
-        60..2880 => format!("read {}h ago", minutes / 60),
-        _ => format!("read {}d ago", minutes / 1440),
-    })
+    let secs = |t: SystemTime| {
+        t.duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64)
+    };
+    Some(format!(
+        "read {}",
+        ago(Some(secs(read_at)), secs(now), Said::Ago)
+    ))
 }
 
 #[cfg(test)]
@@ -270,7 +272,7 @@ mod tests {
 
     #[test]
     fn a_copy_says_its_age_once_it_is_five_minutes_old() {
-        let at = SystemTime::UNIX_EPOCH;
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         let after = |secs: u64| at + Duration::from_secs(secs);
         assert_eq!(age(at, after(299)), None);
         assert_eq!(age(at, after(300)).as_deref(), Some("read 5m ago"));

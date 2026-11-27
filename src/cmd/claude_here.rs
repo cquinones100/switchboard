@@ -37,6 +37,7 @@ use serde_json::Value;
 
 use crate::agent::transcript::{self, Entry, Kind};
 use crate::sidebar::text;
+use crate::ui::when::{self, Said};
 use crate::{paths, util};
 
 /// How much of a transcript's end is read first; four times more each time
@@ -170,31 +171,8 @@ pub fn read_first_cwd(path: &Path) -> Option<String> {
     None
 }
 
-/// How long ago a session was active, as the picker says it.
-pub fn format_relative_time(time_ms: i64, now_ms: i64) -> String {
-    let minutes = (now_ms - time_ms).div_euclid(60_000);
-    if minutes < 1 {
-        return "just now".into();
-    }
-    if minutes < 60 {
-        return format!("{minutes}m ago");
-    }
-    let hours = minutes / 60;
-    if hours < 24 {
-        return format!("{hours}h ago");
-    }
-    let days = hours / 24;
-    if days < 2 {
-        return "yesterday".into();
-    }
-    if days < 7 {
-        return format!("{days}d ago");
-    }
-    local_date(time_ms)
-}
-
 /// A local date as `toLocaleDateString` writes one in English: 6/12/2026.
-pub fn local_date(ms: i64) -> String {
+fn local_date(ms: i64) -> String {
     let at = util::local_at_ms(ms);
     format!("{}/{}/{}", at.month(), at.day(), at.year())
 }
@@ -371,7 +349,7 @@ fn session_lines(sessions: &[Session]) -> Vec<String> {
     let now = util::now_ms();
     let times: Vec<String> = sessions
         .iter()
-        .map(|s| format_relative_time(s.last_active_ms, now))
+        .map(|s| when::ago(Some(s.last_active_ms / 1000), now / 1000, Said::Ago))
         .collect();
     let width = times.iter().map(|t| t.chars().count()).max().unwrap_or(0);
     sessions

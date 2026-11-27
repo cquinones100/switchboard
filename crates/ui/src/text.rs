@@ -402,24 +402,6 @@ pub fn plain(text: &str) -> String {
     text.trim().to_string()
 }
 
-/// How long ago a time in seconds was, shortly: `<1m`, `4m`, `2h`, `3d`;
-/// empty for none.
-pub fn ago(seconds: Option<i64>, now_secs: i64) -> String {
-    let Some(at) = seconds.filter(|s| *s != 0) else {
-        return String::new();
-    };
-    let s = (now_secs - at).max(0);
-    if s < 60 {
-        "<1m".into()
-    } else if s < 3600 {
-        format!("{}m", s / 60)
-    } else if s < 86_400 {
-        format!("{}h", s / 3600)
-    } else {
-        format!("{}d", s / 86_400)
-    }
-}
-
 /// How long a stretch of seconds is, in its two largest units with no
 /// space between them, a zero second unit left out: `<1m`, `12m`, `1h12m`,
 /// `2h`, `2d3h`.
@@ -709,11 +691,6 @@ mod tests {
     #[test]
     fn times_read_shortly() {
         let now = 1_000_000;
-        assert_eq!(ago(None, now), "");
-        assert_eq!(ago(Some(now - 10), now), "<1m");
-        assert_eq!(ago(Some(now - 300), now), "5m");
-        assert_eq!(ago(Some(now - 7200), now), "2h");
-        assert_eq!(ago(Some(now - 3 * 86_400), now), "3d");
         assert_eq!(span(-5), "<1m");
         assert_eq!(span(59), "<1m");
         assert_eq!(span(12 * 60 + 30), "12m");

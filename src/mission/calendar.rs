@@ -47,6 +47,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, width};
 use crate::ui::Theme;
 use crate::ui::kit::{self, Tone};
+use crate::ui::when::{self, Said};
 
 /// The hours' column, the time right-aligned in all but its last two.
 const GUTTER: usize = 9;
@@ -331,7 +332,11 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
     if let Some(at) = view.data.at.filter(|at| *at > 1) {
         let said = format!(
             "  updated {} ago",
-            text::ago(Some(at.div_euclid(1000)), look.now_ms.div_euclid(1000))
+            when::ago(
+                Some(at.div_euclid(1000)),
+                look.now_ms.div_euclid(1000),
+                Said::Short
+            )
         );
         head.put(x, &said, Style::new().fg(theme.faint), cols);
         x += width(&said);

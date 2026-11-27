@@ -38,6 +38,7 @@ use super::{Cx, Relay};
 use crate::agent::screen::hash_of;
 use crate::agent::screen::{self, Prompt, PromptOption, draft_in, options_in};
 use crate::agent::transcript::{self, Entry, Kind};
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 pub use crate::remote::protocol::CLAUDE_PANE;
@@ -287,29 +288,6 @@ pub fn context_words(context: Option<&Context>) -> String {
     context
         .map(|c| format!("{}% context used", c.percent))
         .unwrap_or_default()
-}
-
-/// How long ago, in words.
-pub fn relative(ms: i64) -> String {
-    let minutes = (ms as f64 / 60_000.0).round() as i64;
-    if minutes < 1 {
-        "just now".into()
-    } else if minutes < 60 {
-        format!("{minutes}m ago")
-    } else if minutes < 48 * 60 {
-        format!("{}h ago", (minutes as f64 / 60.0).round() as i64)
-    } else {
-        format!("{} days ago", (minutes as f64 / 1440.0).round() as i64)
-    }
-}
-
-/// `relative` without its "ago", for how long a state has lasted.
-pub fn lasted(ms: i64) -> String {
-    let words = relative(ms);
-    words
-        .strip_suffix(" ago")
-        .map(str::to_string)
-        .unwrap_or(words)
 }
 
 /// When a `since` began, in ms, or `None` for none.
@@ -668,7 +646,7 @@ pub fn turn_from(file: &Path, expected: Option<&str>, last: Option<&str>) -> Opt
                 } else {
                     "prompt sent"
                 },
-                relative(util::now_ms() - sent)
+                ago(Some(sent / 1000), util::now_ms() / 1000, Said::Ago)
             )
         })
         .unwrap_or_default();

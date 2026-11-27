@@ -777,10 +777,6 @@ mod tests {
     use crate::input::{MouseButton, MouseKind};
     use ratatui::layout::Rect;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn menu() -> Menu {
         Menu::new(
             "What now?",
@@ -796,31 +792,31 @@ mod tests {
     fn keys_move_and_choose() {
         let look = Look::default();
         let mut m = menu();
-        assert_eq!(m.key(key(KeyCode::Char('j')), &look), Step::Redraw);
-        assert_eq!(m.key(key(KeyCode::Down), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Char('j')), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Down), &look), Step::Redraw);
         assert_eq!(
-            m.key(key(KeyCode::Enter), &look),
+            m.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Chose(2))
         );
         let mut m = menu();
         assert_eq!(
-            m.key(key(KeyCode::Char('2')), &look),
+            m.key(Key::plain(KeyCode::Char('2')), &look),
             Step::Close(Outcome::Chose(1))
         );
         let mut m = menu();
         assert_eq!(
-            m.key(key(KeyCode::Char('c')), &look),
+            m.key(Key::plain(KeyCode::Char('c')), &look),
             Step::Close(Outcome::Chose(1))
         );
         let mut m = menu();
         assert_eq!(
-            m.key(key(KeyCode::Esc), &look),
+            m.key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
         let mut m = menu();
-        m.key(key(KeyCode::BackTab), &look);
+        m.key(Key::plain(KeyCode::BackTab), &look);
         assert_eq!(m.cursor(), 2, "Shift-Tab goes round to the last");
-        m.key(key(KeyCode::Tab), &look);
+        m.key(Key::plain(KeyCode::Tab), &look);
         assert_eq!(m.cursor(), 0);
     }
 
@@ -880,7 +876,7 @@ mod tests {
             "{first:#?}"
         );
         let tall = |s: &[String]| s.iter().filter(|l| l.contains('│')).count();
-        m.key(key(KeyCode::Down), &look);
+        m.key(Key::plain(KeyCode::Down), &look);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         m.draw(&mut buf, &look);
         let second = screen(&buf);
@@ -894,7 +890,7 @@ mod tests {
 
     fn typed(m: &mut Menu, text: &str, look: &Look) {
         for c in text.chars() {
-            m.key(key(KeyCode::Char(c)), look);
+            m.key(Key::plain(KeyCode::Char(c)), look);
         }
     }
 
@@ -916,34 +912,34 @@ mod tests {
     fn up_on_the_first_option_chooses_the_last_and_down_on_the_last_the_first() {
         let look = Look::default();
         let mut m = menu();
-        assert_eq!(m.key(key(KeyCode::Up), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Up), &look), Step::Redraw);
         assert_eq!(m.cursor, 2);
-        assert_eq!(m.key(key(KeyCode::Down), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Down), &look), Step::Redraw);
         assert_eq!(m.cursor, 0);
-        m.key(key(KeyCode::Char('k')), &look);
+        m.key(Key::plain(KeyCode::Char('k')), &look);
         assert_eq!(m.cursor, 2);
-        m.key(key(KeyCode::Char('j')), &look);
+        m.key(Key::plain(KeyCode::Char('j')), &look);
         assert_eq!(m.cursor, 0);
         m.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
         assert_eq!(m.cursor, 2);
         m.key(Key::new(KeyCode::Char('n'), Mods::CTRL), &look);
         assert_eq!(m.cursor, 0);
         // End and Home still stop at the ends.
-        m.key(key(KeyCode::End), &look);
-        assert_eq!(m.key(key(KeyCode::End), &look), Step::Same);
-        m.key(key(KeyCode::Home), &look);
-        assert_eq!(m.key(key(KeyCode::Home), &look), Step::Same);
+        m.key(Key::plain(KeyCode::End), &look);
+        assert_eq!(m.key(Key::plain(KeyCode::End), &look), Step::Same);
+        m.key(Key::plain(KeyCode::Home), &look);
+        assert_eq!(m.key(Key::plain(KeyCode::Home), &look), Step::Same);
     }
 
     #[test]
     fn moving_the_search_cursor_keeps_the_chosen_match() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "lan", &look);
-        m.key(key(KeyCode::Down), &look);
+        m.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(m.cursor(), 5);
-        assert_eq!(m.key(key(KeyCode::Left), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Left), &look), Step::Redraw);
         assert_eq!(m.cursor(), 5);
         m.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look);
         assert_eq!(m.cursor(), 5);
@@ -954,12 +950,12 @@ mod tests {
     fn a_searched_menu_wraps_over_its_matches() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "lan", &look);
         assert_eq!(m.shown, vec![2, 5]);
-        m.key(key(KeyCode::Up), &look);
+        m.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(m.cursor(), 5, "the last match");
-        m.key(key(KeyCode::Down), &look);
+        m.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(m.cursor(), 2, "the first match");
     }
 
@@ -977,7 +973,7 @@ mod tests {
     fn slash_searches_the_options_and_enter_takes_the_chosen_match() {
         let look = Look::default();
         let mut m = long();
-        assert_eq!(m.key(key(KeyCode::Char('/')), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Char('/')), &look), Step::Redraw);
         typed(&mut m, "lan", &look);
         assert_eq!(m.shown, vec![2, 5], "only those matching, best first");
         assert_eq!(m.cursor(), 2, "the cursor on the first match");
@@ -988,9 +984,9 @@ mod tests {
         assert!(s.iter().any(|l| l.contains("2/6")));
         assert!(!s.iter().any(|l| l.contains("Rename it")));
         assert!(s.iter().any(|l| l.contains("esc all")));
-        m.key(key(KeyCode::Down), &look);
+        m.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(
-            m.key(key(KeyCode::Enter), &look),
+            m.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Chose(5))
         );
     }
@@ -1017,7 +1013,7 @@ mod tests {
             "{row}"
         );
         assert_eq!(
-            m.key(key(KeyCode::Char('y')), &look),
+            m.key(Key::plain(KeyCode::Char('y')), &look),
             Step::Close(Outcome::Chose(1))
         );
     }
@@ -1026,12 +1022,12 @@ mod tests {
     fn while_searching_numbers_and_an_options_key_type() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
-        assert_eq!(m.key(key(KeyCode::Char('2')), &look), Step::Redraw);
-        assert_eq!(m.key(key(KeyCode::Char('c')), &look), Step::Redraw);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
+        assert_eq!(m.key(Key::plain(KeyCode::Char('2')), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Char('c')), &look), Step::Redraw);
         assert_eq!(m.filter.typed(), "2c");
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "co", &look);
         assert_eq!(m.shown, vec![1], "c typed rather than taking Copy");
     }
@@ -1040,17 +1036,17 @@ mod tests {
     fn backspace_to_empty_and_esc_show_every_option_and_a_second_esc_goes_back() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "x", &look);
-        m.key(key(KeyCode::Backspace), &look);
+        m.key(Key::plain(KeyCode::Backspace), &look);
         assert!(!m.filter.is_open());
         assert_eq!(m.shown.len(), 6);
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "land", &look);
-        assert_eq!(m.key(key(KeyCode::Esc), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Esc), &look), Step::Redraw);
         assert_eq!(m.shown.len(), 6, "every option again");
         assert_eq!(
-            m.key(key(KeyCode::Esc), &look),
+            m.key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
     }
@@ -1059,12 +1055,12 @@ mod tests {
     fn with_nothing_matching_it_says_so_and_enter_does_nothing() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "zzz", &look);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         m.draw(&mut buf, &look);
         assert!(screen(&buf).iter().any(|l| l.contains("No option matches")));
-        assert_eq!(m.key(key(KeyCode::Enter), &look), Step::Same);
+        assert_eq!(m.key(Key::plain(KeyCode::Enter), &look), Step::Same);
     }
 
     #[test]
@@ -1074,7 +1070,7 @@ mod tests {
             .map(|i| MenuOption::new(format!("Option {i}")))
             .collect();
         let mut m = Menu::new("Tab", options).body("Bash\ngit push");
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         m.draw(&mut buf, &look);
         let s = screen(&buf);
@@ -1091,7 +1087,7 @@ mod tests {
             (0..15).map(|i| MenuOption::new(format!("{i}"))).collect(),
         )
         .body("Bash");
-        open.key(key(KeyCode::Char('/')), &look);
+        open.key(Key::plain(KeyCode::Char('/')), &look);
         let mut closed = closed;
         closed.draw(&mut buf, &look);
         open.draw(&mut buf, &look);
@@ -1104,7 +1100,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 120, 24));
         plain.draw(&mut buf, &look);
         let closed = plain.drawn.clone().unwrap().inner.width;
-        plain.key(key(KeyCode::Char('/')), &look);
+        plain.key(Key::plain(KeyCode::Char('/')), &look);
         plain.draw(&mut buf, &look);
         assert_eq!(plain.drawn.unwrap().inner.width, closed, "with no text too");
     }
@@ -1117,7 +1113,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let mut m = Menu::of("Title", &["Copy it", "Close"]).body(body);
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         m.draw(&mut buf, &look);
         let s = screen(&buf);
@@ -1128,7 +1124,7 @@ mod tests {
     fn a_paste_on_two_lines_searches_two_words() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         m.paste("plan\nlanding", &look);
         assert_eq!(m.shown, vec![5]);
     }
@@ -1148,7 +1144,7 @@ mod tests {
     fn a_click_while_searching_takes_the_match_under_it() {
         let look = Look::default();
         let mut m = long();
-        m.key(key(KeyCode::Char('/')), &look);
+        m.key(Key::plain(KeyCode::Char('/')), &look);
         typed(&mut m, "plan", &look);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         m.draw(&mut buf, &look);
@@ -1179,10 +1175,10 @@ mod tests {
                 MenuOption::new("Read AB-1 here").key('1'),
             ],
         );
-        assert_eq!(m.key(key(KeyCode::Char('j')), &look), Step::Redraw);
+        assert_eq!(m.key(Key::plain(KeyCode::Char('j')), &look), Step::Redraw);
         assert_eq!(m.cursor(), 1, "j moves rather than joining");
         assert_eq!(
-            m.key(key(KeyCode::Char('1')), &look),
+            m.key(Key::plain(KeyCode::Char('1')), &look),
             Step::Close(Outcome::Chose(0)),
             "a number is the option's place"
         );
@@ -1237,10 +1233,10 @@ mod tests {
             ..Look::default()
         };
         let mut m = menu().at(2);
-        m.key(key(KeyCode::Tab), &look);
+        m.key(Key::plain(KeyCode::Tab), &look);
         assert_eq!(m.cursor(), 3);
         assert_eq!(
-            m.key(key(KeyCode::Enter), &look),
+            m.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Dismissed)
         );
     }

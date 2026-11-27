@@ -1457,10 +1457,6 @@ impl Overlay for SearchBox {
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn found(source: Source, link: &str) -> Found {
         Found {
             context: search::Context::default(),
@@ -1505,7 +1501,7 @@ mod tests {
 
     fn type_text(b: &mut SearchBox, text: &str) {
         for c in text.chars() {
-            b.key(key(KeyCode::Char(c)), &Look::default());
+            b.key(Key::plain(KeyCode::Char(c)), &Look::default());
         }
     }
 
@@ -1531,7 +1527,7 @@ mod tests {
         let (mut b, _) = open(&[], "");
         let look = Look::default();
         type_text(&mut b, "beta ");
-        b.key(key(KeyCode::Home), &look);
+        b.key(Key::plain(KeyCode::Home), &look);
         b.paste("note: alpha", &look);
         type_text(&mut b, "X");
         assert_eq!(b.typed(), "alphaXbeta ");
@@ -1554,7 +1550,7 @@ mod tests {
         let (mut b, mut rx) = open(&[Source::Slack], "");
         let look = Look::default();
         type_text(&mut b, "zebra");
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         assert_eq!(
             sent(&mut rx),
             ["ask zebra [Tabs, Notes, Linear, GitHub]"],
@@ -1570,10 +1566,10 @@ mod tests {
         // Tab to Slack's chip (field, All, Tabs, Notes, Linear, GitHub,
         // Slack) and Space turns it on.
         for _ in 0..6 {
-            b.key(key(KeyCode::Tab), &look);
+            b.key(Key::plain(KeyCode::Tab), &look);
         }
         assert_eq!(b.focus, Part::Chip(Source::Slack));
-        b.key(key(KeyCode::Char(' ')), &look);
+        b.key(Key::plain(KeyCode::Char(' ')), &look);
         assert_eq!(sent(&mut rx), ["off []", "ask zebra [Slack]"]);
         // Linear's chip, clicked off, drops its rows and is kept.
         b.press(Part::Chip(Source::Linear));
@@ -1591,7 +1587,7 @@ mod tests {
         let (mut b, _rx) = open(&[], "");
         let look = Look::default();
         type_text(&mut b, "zebra");
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
@@ -1600,9 +1596,9 @@ mod tests {
         );
         // Down to the chips, the first result, the second.
         for _ in 0..3 {
-            b.key(key(KeyCode::Down), &look);
+            b.key(Key::plain(KeyCode::Down), &look);
         }
-        match b.key(key(KeyCode::Enter), &look) {
+        match b.key(Key::plain(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => {
                 assert_eq!((p.value.as_str(), p.query.as_str()), ("n2", "zebra"))
             }
@@ -1611,14 +1607,14 @@ mod tests {
         // A prefix lighting other sources, the same words: Enter asks them.
         b.key(Key::new(KeyCode::Char('u'), Mods::CTRL), &look);
         type_text(&mut b, "tab: zebra");
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         assert!(
             b.rows.is_empty(),
             "the Notes rows aren't taken for the Tabs search"
         );
         // Typed again, Enter asks again.
         type_text(&mut b, "s");
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         assert!(b.rows.is_empty());
     }
 
@@ -1644,12 +1640,12 @@ mod tests {
         // empty field takes nothing.
         let (mut b, _rx) = open(&[], "");
         type_text(&mut b, "zebra");
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(id, Source::Tabs, vec![found(Source::Tabs, "t1")]);
         b.key(Key::new(KeyCode::Char('u'), Mods::CTRL), &look);
         type_text(&mut b, "note:");
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Same);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Same);
     }
 
     #[test]
@@ -1657,18 +1653,18 @@ mod tests {
         let (mut b, _rx) = open(&[], "");
         let look = Look::default();
         type_text(&mut b, "zebra");
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
             Source::Tabs,
             vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
         );
-        b.key(key(KeyCode::Tab), &look);
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(b.focus, Part::Results);
-        match b.key(key(KeyCode::Enter), &look) {
+        match b.key(Key::plain(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => assert_eq!(p.value, "t2"),
             other => panic!("{other:?}"),
         }
@@ -1679,9 +1675,9 @@ mod tests {
         let (mut b, _rx) = open(&[], "");
         let look = Look::default();
         type_text(&mut b, "zeb");
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(b.focus, Part::Chip(Source::Tabs));
-        b.key(key(KeyCode::Up), &look);
+        b.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(b.focus, Part::Field);
         type_text(&mut b, "ra");
         assert_eq!(b.typed(), "zebra");
@@ -1691,16 +1687,16 @@ mod tests {
     fn left_and_right_wrap_along_the_chips() {
         let (mut b, _rx) = open(&[], "");
         let look = Look::default();
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Left), &look);
-        b.key(key(KeyCode::Left), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Left), &look);
+        b.key(Key::plain(KeyCode::Left), &look);
         assert_eq!(b.focus, Part::Chip(Source::Slack));
-        b.key(key(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!(b.focus, Part::All);
         // Down from the field again comes back to the chip left last.
-        b.key(key(KeyCode::Right), &look);
-        b.key(key(KeyCode::Up), &look);
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Up), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(b.focus, Part::Chip(Source::Tabs));
     }
 
@@ -1708,12 +1704,12 @@ mod tests {
     fn enter_on_a_chip_reached_by_the_arrows_turns_its_source_off() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(id, Source::Tabs, vec![found(Source::Tabs, "t1")]);
         b.answered(id, Source::Notes, vec![found(Source::Notes, "n1")]);
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         assert!(!b.lit().contains(&Source::Tabs));
         assert!(b.rows.iter().all(|r| r.source != Source::Tabs));
     }
@@ -1722,18 +1718,18 @@ mod tests {
     fn down_from_the_chips_reaches_the_first_result_and_up_returns() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
             Source::Tabs,
             vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
         );
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Right), &look);
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!((b.focus, b.cursor), (Part::Results, 0));
-        b.key(key(KeyCode::Up), &look);
+        b.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(b.focus, Part::Chip(Source::Notes));
     }
 
@@ -1741,22 +1737,22 @@ mod tests {
     fn down_on_the_last_result_chooses_the_first_and_ctrl_p_on_the_first_the_last() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
             Source::Tabs,
             vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
         );
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!((b.focus, b.cursor), (Part::Results, 1));
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(b.cursor, 0, "wrapped to the first result");
         b.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
         assert_eq!(b.cursor, 1, "wrapped to the last result");
-        assert_eq!(b.key(key(KeyCode::PageDown), &look), Step::Same);
+        assert_eq!(b.key(Key::plain(KeyCode::PageDown), &look), Step::Same);
     }
 
     #[test]
@@ -1764,17 +1760,17 @@ mod tests {
         let (b, _rx) = open(&[], "zebra");
         let mut b = b.with_arrows(false);
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
             Source::Tabs,
             vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
         );
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!((b.focus, b.cursor), (Part::Results, 1));
-        b.key(key(KeyCode::Tab), &look);
-        b.key(key(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!(b.focus, Part::All);
     }
 
@@ -1782,15 +1778,15 @@ mod tests {
     fn a_letter_typed_on_a_chip_goes_into_the_field() {
         let (mut b, _rx) = open(&[], "zeb");
         let look = Look::default();
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Char('r')), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Char('r')), &look);
         assert_eq!((b.focus, b.typed()), (Part::Field, "zebr"));
     }
 
     #[test]
     fn a_chip_pressed_after_a_prefix_asks_every_source_the_search_did_not() {
         let (mut b, mut rx) = open(&[], "tab: deploy");
-        b.key(key(KeyCode::Enter), &Look::default());
+        b.key(Key::plain(KeyCode::Enter), &Look::default());
         b.key(Key::new(KeyCode::Char('u'), Mods::CTRL), &Look::default());
         type_text(&mut b, "note: deploy");
         sent(&mut rx);
@@ -1805,7 +1801,7 @@ mod tests {
     fn ctrl_o_takes_nothing_once_a_prefix_changed_the_sources() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(id, Source::Tabs, vec![found(Source::Tabs, "t1")]);
         b.key(Key::new(KeyCode::Char('u'), Mods::CTRL), &look);
@@ -1820,7 +1816,7 @@ mod tests {
     fn the_results_scroll_bar_scrolls_and_a_row_clicked_takes_the_focus() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         let many = (0..40)
             .map(|i| found(Source::Notes, &format!("n{i}")))
@@ -1852,7 +1848,7 @@ mod tests {
         );
         // Tab onto a chip, then a click on another row: Enter takes it.
         b.draw(&mut buf, &look);
-        b.key(key(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
         let drawn = b.drawn.clone().unwrap();
         let (row_y, _) = drawn.rows[HEAD + 2];
         assert_eq!(
@@ -1867,7 +1863,7 @@ mod tests {
         ));
         b.mouse(press(drawn.inner.x + 4, row_y), &look);
         assert!(matches!(
-            b.key(key(KeyCode::Enter), &look),
+            b.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(_))
         ));
     }
@@ -1876,7 +1872,7 @@ mod tests {
     fn every_chip_shows_on_an_80_column_terminal() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         b.draw(&mut buf, &look);
         let drawn = b.drawn.clone().unwrap();
@@ -1941,7 +1937,7 @@ mod tests {
                 -5,
             )],
         );
-        b.key(key(KeyCode::Enter), &Look::default());
+        b.key(Key::plain(KeyCode::Enter), &Look::default());
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
@@ -1997,7 +1993,7 @@ mod tests {
         // Down to the chips, the first result, the second: the preview
         // follows.
         for _ in 0..3 {
-            b.key(key(KeyCode::Down), &look);
+            b.key(Key::plain(KeyCode::Down), &look);
         }
         b.draw(&mut buf, &look);
         let text = screen(&buf).join("\n");
@@ -2025,7 +2021,7 @@ mod tests {
     fn with_the_setting_off_no_preview_draws() {
         let (mut b, _rx) = open(&[], "zebra");
         let look = Look::default();
-        b.key(key(KeyCode::Enter), &look);
+        b.key(Key::plain(KeyCode::Enter), &look);
         let id = b.asked.as_ref().unwrap().id;
         b.answered(
             id,
@@ -2082,7 +2078,7 @@ mod tests {
     fn previewing_lines(lines: &[&str], at: usize) -> SearchBox {
         let (b, _rx) = open(&[], "zebra");
         let mut b = b.with_preview(true, Vec::new());
-        b.key(key(KeyCode::Enter), &Look::default());
+        b.key(Key::plain(KeyCode::Enter), &Look::default());
         let id = b.asked.as_ref().unwrap().id;
         // Unnumbered, as a message's lines are, so the text has every
         // column but the chosen bar's.
@@ -2184,11 +2180,11 @@ mod tests {
         let look = Look::default();
         let mut buf = Buffer::empty(Rect::new(0, 0, 140, 16));
         b.draw(&mut buf, &look);
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(b.focus, Part::Results);
         assert_eq!(top(&b), 0);
-        assert_eq!(b.key(key(KeyCode::Char('J')), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Char('J')), &look), Step::Redraw);
         assert_eq!(top(&b), 1);
         b.draw(&mut buf, &look);
         let (cols, room) = b.peek_size().unwrap();
@@ -2206,17 +2202,17 @@ mod tests {
         // A small screen, so the context runs past the preview.
         let mut buf = Buffer::empty(Rect::new(0, 0, 140, 16));
         b.draw(&mut buf, &look);
-        b.key(key(KeyCode::Down), &look);
-        b.key(key(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
+        b.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(b.focus, Part::Results);
         let before = top(&b);
-        assert_eq!(b.key(key(KeyCode::Char('J')), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Char('J')), &look), Step::Redraw);
         assert_eq!(top(&b), before + 1);
-        b.key(key(KeyCode::Char('K')), &look);
+        b.key(Key::plain(KeyCode::Char('K')), &look);
         assert_eq!(top(&b), before);
         assert_eq!(b.typed(), "zebra", "nothing typed");
         // Scrolled, then a new search: its first result starts at its match.
-        b.key(key(KeyCode::Char('J')), &look);
+        b.key(Key::plain(KeyCode::Char('J')), &look);
         assert_eq!(top(&b), before + 1);
         b.ask("zebra".to_string());
         let id = b.asked.as_ref().unwrap().id;

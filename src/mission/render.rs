@@ -42,6 +42,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, Badge, width};
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Mark, Tone};
+use crate::ui::when::{self, Said};
 use crate::views::markdown::{Images, PictureRow};
 
 /// The edge of mission control's boxes and its name.
@@ -76,13 +77,13 @@ impl Row {
     }
 
     fn width(&self) -> usize {
-        spans_width(&self.spans)
+        kit::spans_width(&self.spans)
     }
 
     /// The spans cut to `cols` (an ellipsis in place of what didn't fit) and
     /// padded with spaces in `pad` to fill them.
     fn fitted(self, cols: usize, pad: Style) -> Vec<Span<'static>> {
-        fit(self.spans, cols, pad)
+        kit::fit(self.spans, cols, pad)
     }
 
     fn line(self, cols: usize, fill: Option<Color>) -> Line {
@@ -91,49 +92,6 @@ impl Row {
             fill,
         }
     }
-}
-
-fn spans_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(|s| width(&s.content)).sum()
-}
-
-/// Spans cut to `cols` columns and padded to fill them.
-fn fit(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'static>> {
-    let total = spans_width(&spans);
-    let mut out = Vec::new();
-    let mut used = 0;
-    if total <= cols {
-        out = spans;
-        used = total;
-    } else if cols > 0 {
-        for span in spans {
-            let w = width(&span.content);
-            if used + w < cols {
-                used += w;
-                out.push(span);
-                continue;
-            }
-            let mut kept = String::new();
-            let mut before = 0;
-            for c in span.content.chars() {
-                let cw = text::width_after(c, before);
-                if used + cw > cols - 1 {
-                    break;
-                }
-                kept.push(c);
-                used += cw;
-                before = cw;
-            }
-            kept.push('…');
-            used += 1;
-            out.push(Span::styled(kept, span.style));
-            break;
-        }
-    }
-    if used < cols {
-        out.push(Span::styled(" ".repeat(cols - used), pad));
-    }
-    out
 }
 
 /// An item's mark: needing you yellow, under way blue, the rest faint.
@@ -441,7 +399,7 @@ fn state_for(tab: &TabModel, r: &Rules) -> String {
         TabState::Done => "done",
         TabState::Idle => "idle",
     };
-    let ago = text::ago(tab.since, r.now_secs());
+    let ago = when::ago(tab.since, r.now_secs(), Said::Short);
     if ago.is_empty() {
         words.to_string()
     } else {
@@ -494,7 +452,7 @@ fn card_foot(
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     let checks = checks_words(tab, theme);
-    let checks_w = spans_width(&checks);
+    let checks_w = kit::spans_width(&checks);
     let branch = branch.unwrap_or_default();
     let lead = if branch.is_empty() { 0 } else { 2 };
     let room = inner.saturating_sub(checks_w + lead).max(1);
@@ -511,7 +469,7 @@ fn card_foot(
         .opened
         .map(|at| format!("opened {}", text::span(now_secs - at)))
         .unwrap_or_default();
-    let used = spans_width(&line);
+    let used = kit::spans_width(&line);
     if !opened.is_empty() && used + 2 + width(&opened) <= inner {
         line.push(Span::raw(" ".repeat(inner - used - width(&opened))));
         line.push(Span::styled(opened, Tone::Dim.style(theme)));
@@ -539,7 +497,7 @@ fn pr_lines(tab: &TabModel, inner: usize, theme: &Theme) -> Vec<Vec<Span<'static
     let mut lines = vec![Vec::new()];
     let count = tab.prs.len().to_string();
     let mut label = card_label("PRs", Tone::Dim, theme);
-    let used = spans_width(&label);
+    let used = kit::spans_width(&label);
     label.push(Span::raw(
         " ".repeat(inner.saturating_sub(used + width(&count))),
     ));
@@ -568,7 +526,7 @@ fn pr_lines(tab: &TabModel, inner: usize, theme: &Theme) -> Vec<Vec<Span<'static
             row.push(Span::styled(format!(" {name}"), Tone::Dim.style(theme)));
         }
         let room = inner.saturating_sub(width(&right) + 1);
-        let mut row = fit(row, room, Style::new());
+        let mut row = kit::fit(row, room, Style::new());
         row.push(Span::raw(" "));
         row.push(Span::styled(right, tone.style(theme)));
         lines.push(row);
@@ -989,7 +947,9 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
     // slot's and its time how long it has waited (board 79).
     let waiting = tab.slot.as_ref().filter(|s| s.waiting());
     let since = waiting.map(|s| s.since).or(since);
-    let how_long = since.map_or_else(String::new, |s| text::ago(Some(s), r.now_secs()));
+    let how_long = since.map_or_else(String::new, |s| {
+        when::ago(Some(s), r.now_secs(), Said::Short)
+    });
     let at = kit::columns(
         &[
             Col::Fixed {
@@ -1266,7 +1226,7 @@ fn shelf_line(
     let when = if tab.landing.is_some() {
         model::landing_words(tab)
     } else {
-        text::ago(tab.since, r.now_secs())
+        when::ago(tab.since, r.now_secs(), Said::Short)
     };
     // A landing tab's state is its place in line, said already.
     // A tab with no Claude is where it is.
@@ -1365,7 +1325,7 @@ fn shelf_line(
         }
     }
     Line {
-        spans: fit(spans, cols, Style::new()),
+        spans: kit::fit(spans, cols, Style::new()),
         fill: chosen.then(|| kit::Surface::Chosen.color(theme)),
     }
 }
@@ -1420,7 +1380,7 @@ fn cards(
             width(&if t.landing.is_some() {
                 model::landing_words(t)
             } else {
-                text::ago(t.since, r.now_secs())
+                when::ago(t.since, r.now_secs(), Said::Short)
             })
         })
         .max()
@@ -1556,7 +1516,7 @@ fn cards(
                 }
                 for spans in row_lines {
                     drawn.push(Line {
-                        spans: fit(spans, cols, Style::new()),
+                        spans: kit::fit(spans, cols, Style::new()),
                         fill: None,
                     });
                 }
@@ -1606,38 +1566,10 @@ fn rows_bar(
     }
     let bar = kit::scrollbar(total, top, body, body, &m.snap.theme);
     for (line, mark) in lines.iter_mut().zip(bar) {
-        let mut spans = clip(std::mem::take(&mut line.spans), cols - 1);
+        let mut spans = kit::clip(std::mem::take(&mut line.spans), cols - 1);
         spans.push(mark);
         line.spans = spans;
     }
-}
-
-/// Spans cut to `cols` columns with no ellipsis, the cells past them
-/// dropped, and padded to fill them.
-fn clip(spans: Vec<Span<'static>>, cols: usize) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
-    let mut used = 0;
-    for span in spans {
-        let mut kept = String::new();
-        for g in unicode_segmentation::UnicodeSegmentation::graphemes(span.content.as_ref(), true) {
-            let w = width(g);
-            if used + w > cols {
-                break;
-            }
-            kept.push_str(g);
-            used += w;
-        }
-        if !kept.is_empty() {
-            out.push(Span::styled(kept, span.style));
-        }
-        if used >= cols {
-            break;
-        }
-    }
-    if used < cols {
-        out.push(Span::raw(" ".repeat(cols - used)));
-    }
-    out
 }
 
 // ── Boards, tables and lists ────────────────────────────────────────────────
@@ -1676,7 +1608,7 @@ fn board(
         }
         .unwrap_or(theme.text);
         let mut out = vec![
-            fit(
+            kit::fit(
                 vec![Span::styled(
                     format!(" {} {}", column.to_uppercase(), items.len()),
                     bold(color),
@@ -1684,7 +1616,7 @@ fn board(
                 col_w,
                 Style::new(),
             ),
-            fit(
+            kit::fit(
                 vec![Span::styled(
                     format!(" {}", "─".repeat(col_w.saturating_sub(2))),
                     fg(color),
@@ -1719,7 +1651,7 @@ fn board(
                 fg(theme.text)
             };
             let mark = item_mark(item, theme);
-            let first_line = fit(
+            let first_line = kit::fit(
                 vec![
                     Span::styled(" ", with_bg(Style::new())),
                     Span::styled(mark.content.clone(), with_bg(mark.style)),
@@ -1732,7 +1664,7 @@ fn board(
                 col_w.saturating_sub(1),
                 with_bg(Style::new()),
             );
-            let second = fit(
+            let second = kit::fit(
                 vec![Span::styled(
                     format!("   {}", text::cut(&item.detail, col_w.saturating_sub(5))),
                     with_bg(fg(theme.dim)),
@@ -1757,7 +1689,7 @@ fn board(
             out.push(b);
         }
         if items.is_empty() {
-            out.push(fit(
+            out.push(kit::fit(
                 vec![Span::styled("   none", fg(theme.faint))],
                 col_w,
                 Style::new(),
@@ -1775,7 +1707,7 @@ fn board(
             );
         }
         lines.push(Line {
-            spans: fit(spans, cols, Style::new()),
+            spans: kit::fit(spans, cols, Style::new()),
             fill: None,
         });
     }
@@ -1934,14 +1866,14 @@ fn board_cards(
         for line in 0..tall {
             let mut spans = Vec::new();
             for card in &cards {
-                spans.extend(fit(
+                spans.extend(kit::fit(
                     card.get(line).cloned().unwrap_or_default(),
                     w,
                     Style::new(),
                 ));
                 spans.push(Span::raw(" "));
             }
-            rows.push(fit(spans, board_w, Style::new()));
+            rows.push(kit::fit(spans, board_w, Style::new()));
         }
     }
     let images = ready_diagrams(m);
@@ -2015,9 +1947,9 @@ fn pane_beside(
     let bar = pane_bar((total, top, body), (bar_x, top_row), hits, m);
     let inner = side_w - 2 - usize::from(!bar.is_empty());
     for (i, row) in rows.iter_mut().enumerate() {
-        let mut spans = fit(std::mem::take(row), board_w, Style::new());
+        let mut spans = kit::fit(std::mem::take(row), board_w, Style::new());
         spans.push(Span::styled("│ ", edge));
-        spans.extend(fit(
+        spans.extend(kit::fit(
             about.lines.get(i).cloned().unwrap_or_default(),
             inner,
             Style::new(),
@@ -2066,7 +1998,7 @@ fn pane_under(
     let bar = pane_bar((total, top, room), (cols.saturating_sub(1), at), hits, m);
     let inner = cols - usize::from(!bar.is_empty());
     for i in 0..room {
-        let mut spans = fit(
+        let mut spans = kit::fit(
             about.lines.get(i).cloned().unwrap_or_default(),
             inner,
             Style::new(),
@@ -2201,7 +2133,7 @@ fn face_card(face: Face, chosen: bool, hovered: bool, past: bool, theme: &Theme)
         },
         facts: [face.meta]
             .into_iter()
-            .filter(|line| spans_width(line) > 0)
+            .filter(|line| kit::spans_width(line) > 0)
             .collect(),
         meter: None,
         chosen,
@@ -2358,7 +2290,12 @@ fn estimate(d: &serde_json::Value) -> Option<String> {
 fn week_words(item: &Item, tickets: bool, now_secs: i64) -> String {
     let when = item
         .time
-        .map(|ms| format!("{} ago", text::ago(Some(ms.div_euclid(1000)), now_secs)))
+        .map(|ms| {
+            format!(
+                "{} ago",
+                when::ago(Some(ms.div_euclid(1000)), now_secs, Said::Short)
+            )
+        })
         .unwrap_or_default();
     let who = if !tickets {
         item.data["mergedBy"].as_str().unwrap_or("").to_string()
@@ -2769,7 +2706,7 @@ fn ticket_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Image
 fn when(item: &Item, now_secs: i64) -> String {
     match item.time {
         Some(ms) if ms.div_euclid(1000) <= now_secs => {
-            text::ago(Some(ms.div_euclid(1000)), now_secs)
+            when::ago(Some(ms.div_euclid(1000)), now_secs, Said::Short)
         }
         _ => String::new(),
     }
@@ -3473,11 +3410,12 @@ fn review_cell(r: &serde_json::Value, now_ms: i64) -> StageCell {
             format!("✓ {} clean", number("clean_rounds").unwrap_or(2)),
         );
     }
-    let ago = text::ago(
+    let ago = when::ago(
         r.get("at")
             .and_then(serde_json::Value::as_i64)
             .map(|ms| ms / 1000),
         now_ms / 1000,
+        Said::Short,
     );
     let at_cap = r["at_cap"].as_bool() == Some(true);
     StageCell {
@@ -3512,7 +3450,11 @@ fn prqueue_stages(q: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     let next = q["next"].as_bool() == Some(true);
     let testing = !next && q["testing"].as_bool() == Some(true);
     let (queued, train_cell) = if testing {
-        let ago = text::ago(q["since"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
+        let ago = when::ago(
+            q["since"].as_i64().map(|ms| ms / 1000),
+            now_ms / 1000,
+            Said::Short,
+        );
         let label = if q["rerun"].as_bool() == Some(true) {
             "rerunning"
         } else {
@@ -3784,7 +3726,11 @@ fn waits_on(landing: &serde_json::Value, now_ms: i64) -> String {
         return "its turn for the lock".into();
     }
     let phase = holder["phase"].as_str().unwrap_or("landing");
-    let since = text::ago(holder["since"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
+    let since = when::ago(
+        holder["since"].as_i64().map(|ms| ms / 1000),
+        now_ms / 1000,
+        Said::Short,
+    );
     let mut out = format!("{name}, which holds the lock · {phase}");
     if !since.is_empty() {
         out.push_str(&format!(" · {since}"));
@@ -3843,7 +3789,11 @@ fn review_line(review: &serde_json::Value, now_ms: i64) -> String {
     if let Some(r) = review["reviewer"].as_str().filter(|r| !r.is_empty()) {
         parts.push(r.to_string());
     }
-    let ago = text::ago(review["at"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
+    let ago = when::ago(
+        review["at"].as_i64().map(|ms| ms / 1000),
+        now_ms / 1000,
+        Said::Short,
+    );
     if !ago.is_empty() {
         parts.push(format!("{ago} ago"));
     }
@@ -3913,7 +3863,7 @@ fn landing_detail(
         let y = (top_row + lines.len()) as u16;
         let mut spans = vec![Span::raw(" ".repeat(DETAIL_LABEL))];
         for (key, what) in keys {
-            let x0 = spans_width(&spans);
+            let x0 = kit::spans_width(&spans);
             let parsed = footer_key(key);
             let pointed = parsed
                 .is_some_and(|k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k)));
@@ -3923,13 +3873,13 @@ fn landing_detail(
                 hits.push(HitBox {
                     y,
                     x0: x0 as u16,
-                    x1: spans_width(&spans).saturating_sub(1) as u16,
+                    x1: kit::spans_width(&spans).saturating_sub(1) as u16,
                     spot: Spot::Key(k),
                 });
             }
         }
         lines.push(Line {
-            spans: fit(spans, cols, Style::new()),
+            spans: kit::fit(spans, cols, Style::new()),
             fill: None,
         });
     }
@@ -4213,7 +4163,7 @@ fn stage_rows(
                 kit::place(&mut heading, vec![Span::styled(right, fg(theme.dim))], col);
             }
             lines.push(Line {
-                spans: fit(heading, cols, Style::new()),
+                spans: kit::fit(heading, cols, Style::new()),
                 fill,
             });
             let names = heads_of(item);
@@ -4237,7 +4187,7 @@ fn stage_rows(
                     );
                 }
                 lines.push(Line {
-                    spans: fit(heads, cols, Style::new()),
+                    spans: kit::fit(heads, cols, Style::new()),
                     fill: None,
                 });
                 lines.push(Line {
@@ -4297,12 +4247,12 @@ fn stage_rows(
             }
         }
         lines.push(Line {
-            spans: fit(top, cols, Style::new()),
+            spans: kit::fit(top, cols, Style::new()),
             fill,
         });
         hit(lines);
         lines.push(Line {
-            spans: fit(under, cols, Style::new()),
+            spans: kit::fit(under, cols, Style::new()),
             fill,
         });
     }
@@ -4541,7 +4491,7 @@ fn pilot_board(
         let button_lit = m.hover == Some(Spot::Menu(at as isize))
             || (m.focus == Some(Focus::Item) && chosen(at));
         let button = kit::keycap("m", "☰ Menu", button_lit, m.snap.caps, theme);
-        let button_w = spans_width(&button);
+        let button_w = kit::spans_width(&button);
         let button_x = cols.saturating_sub(spend_w + button_w);
         hits.push(HitBox {
             y: lines.len() as u16,
@@ -4925,7 +4875,7 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
         for on in after {
             let mut lead = blocker_line(on, false, 0, theme);
             lead.pop();
-            let indent = spans_width(&lead);
+            let indent = kit::spans_width(&lead);
             let name = on["item"].as_str().unwrap_or_default();
             for (n, l) in text::wrap(name, inner.saturating_sub(indent).max(1))
                 .into_iter()
@@ -5170,8 +5120,8 @@ fn with_right(
     right: Vec<Span<'static>>,
     cols: usize,
 ) -> Vec<Span<'static>> {
-    let right_w = spans_width(&right);
-    let mut out = fit(left, cols.saturating_sub(right_w + 1), Style::new());
+    let right_w = kit::spans_width(&right);
+    let mut out = kit::fit(left, cols.saturating_sub(right_w + 1), Style::new());
     out.extend(right);
     out.push(Span::raw(" "));
     out
@@ -5412,7 +5362,7 @@ fn ci_rows(
         }
     }
     for i in 0..list_h {
-        let mut spans = fit(
+        let mut spans = kit::fit(
             shown.get(i).map(|(l, _)| l.clone()).unwrap_or_default(),
             list_w,
             Style::new(),
@@ -5420,7 +5370,7 @@ fn ci_rows(
         if wide {
             spans.push(kit::rule_v(theme));
             spans.push(Span::raw(" "));
-            spans.extend(fit(
+            spans.extend(kit::fit(
                 about.get(i).cloned().unwrap_or_default(),
                 pane_inner,
                 Style::new(),
@@ -5436,7 +5386,7 @@ fn ci_rows(
         });
         for i in 0..pane_h {
             let mut spans = vec![Span::raw("  ")];
-            spans.extend(fit(
+            spans.extend(kit::fit(
                 about.get(i).cloned().unwrap_or_default(),
                 pane_inner,
                 Style::new(),
@@ -5709,7 +5659,7 @@ fn notice_board(
                 })
                 .collect();
         }
-        let w = spans_width(&cap);
+        let w = kit::spans_width(&cap);
         hits.push(HitBox {
             y: (top_row + lines.len()) as u16,
             x0: x as u16,
@@ -6057,7 +6007,7 @@ fn key_footer(
             }
             spans.splice(0..1, parts);
         }
-        x += spans_width(&spans);
+        x += kit::spans_width(&spans);
         out.extend(spans);
     }
     out
@@ -6079,7 +6029,7 @@ fn with_close(
     } else {
         cols
     };
-    let right_w = spans_width(&right);
+    let right_w = kit::spans_width(&right);
     if right_w > 0 && head.width() + 2 + right_w < room {
         head.put(" ".repeat(room - 1 - right_w - head.width()), Style::new());
         head.spans.extend(right);
@@ -6172,7 +6122,7 @@ fn header(m: &Mission, mut bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &
         hits.push(HitBox {
             y: 0,
             x0: x as u16,
-            x1: (head.width() + spans_width(&bar.filter)).saturating_sub(1) as u16,
+            x1: (head.width() + kit::spans_width(&bar.filter)).saturating_sub(1) as u16,
             spot: Spot::Filter,
         });
     }
@@ -11300,7 +11250,7 @@ mod tests {
         assert!(text.contains("tab 7 since"), "{text}");
         assert!(text.contains("$1.21 an hour"), "{text}");
         assert!(text.contains("at this pace, 58% by then"), "{text}");
-        assert!(text.contains("12s ago"), "{text}");
+        assert!(text.contains("just now"), "{text}");
         assert!(text.contains("40 today to 2 services"), "{text}");
         assert!(text.contains("jk tab or service"), "{text}");
         // One chart, with the chosen tab outlined; a meter a limit, the

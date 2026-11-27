@@ -28,7 +28,9 @@ use serde_json::{Value, json};
 use super::Cx;
 use super::homes::{home_thread, thread_url};
 use super::post::{Button, button_element};
-use super::tabs::{self, Tab, lasted};
+use super::tabs::{self, Tab};
+use crate::sidebar::text;
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 /// The setting that turns the section off.
@@ -119,7 +121,7 @@ fn ordinal(n: u32) -> String {
 fn flight_words(column: &str, tab: Option<&Tab>, now: i64) -> (&'static str, String) {
     let lasted_for = || {
         tab.and_then(|t| tabs::since_ms(&t.since))
-            .map(|s| format!(" {}", lasted(now - s)))
+            .map(|s| format!(" {}", ago(Some(s / 1000), now / 1000, Said::Short)))
             .unwrap_or_default()
     };
     match column {
@@ -270,7 +272,7 @@ pub fn blocks(cx: &Cx, board: &Value, named: bool, tabs: &[Tab]) -> Vec<Value> {
         // The tab's name, which its thread already says, never the note's
         // text: the board names no item.
         let name = tab
-            .map(|t| super::screens::clip(&t.name, 80))
+            .map(|t| text::cut(t.name.trim(), 80))
             .unwrap_or_else(|| "a tab".into());
         let mut block = mrkdwn(&format!("{mark} {index} {name} · {words}"));
         if let Some(url) = home_thread(cx, id).and_then(|t| thread_url(cx, &t)) {

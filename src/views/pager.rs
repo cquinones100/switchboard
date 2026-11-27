@@ -2988,7 +2988,7 @@ mod tests {
 
     #[test]
     fn a_followed_view_says_how_old_its_copy_is_once_it_is_stale() {
-        let at = SystemTime::UNIX_EPOCH;
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         let later = |minutes: u64| at + Duration::from_secs(minutes * 60);
         let mut pager = Pager::new(markdown("# A PR"), 80, 10).following(Some(at));
         assert!(!pager.frame_at(later(4)).contains("read "));

@@ -33,7 +33,8 @@ use super::homes::{home_thread, thread_url};
 use super::post::{Button, button_element, remove};
 use super::state::Doing;
 use super::summaries::{activity_of, haiku_today, summarize};
-use super::tabs::{self, Tab, lasted, relative};
+use super::tabs::{self, Tab};
+use crate::ui::when::{Said, ago};
 use crate::usage::sessions;
 use crate::util;
 
@@ -531,9 +532,11 @@ pub async fn dashboard_rows(cx: &Cx, quick: bool) -> (Vec<Row>, usize) {
             .unwrap_or_default();
         rows.push(Row {
             lasted: tabs::since_ms(&tab.since)
-                .map(|s| lasted(now - s))
+                .map(|s| ago(Some(s / 1000), now / 1000, Said::Short))
                 .unwrap_or_default(),
-            last: last_at.map(|at| relative(now - at)).unwrap_or_default(),
+            last: last_at
+                .map(|at| ago(Some(at / 1000), now / 1000, Said::Ago))
+                .unwrap_or_default(),
             context: tabs::context_words(tabs::context_of(&cx.paths, file.as_deref()).as_ref()),
             doing,
             choices: home_choices(cx, &tab),

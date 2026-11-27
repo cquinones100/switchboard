@@ -38,6 +38,7 @@ use crate::integrations::github::{self, Repo};
 use crate::items::{Item, ViewData};
 use crate::mux::server::{Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
+use crate::ui::when::{self, Said};
 use crate::{paths, settings, util};
 
 /// How long a directory's repository is kept before its config is read again.
@@ -1065,7 +1066,7 @@ impl Server {
         })?;
         let q = &r.prs;
         if let Some(t) = q.train.as_ref().filter(|_| q.in_train(number)) {
-            let ago = crate::sidebar::text::ago(Some(t.since / 1000), util::now_ms() / 1000);
+            let ago = when::ago(Some(t.since / 1000), util::now_ms() / 1000, Said::Short);
             return Some(match ago.as_str() {
                 "" => landing::train_name(&t.branch),
                 ago => format!("{} · CI {ago}", landing::train_name(&t.branch)),

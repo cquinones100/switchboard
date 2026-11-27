@@ -234,10 +234,6 @@ mod tests {
     use crate::input::{Mods, MouseButton, MouseKind};
     use ratatui::layout::Rect;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn drawn(c: &mut Confirm, look: &Look) -> Vec<String> {
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
         c.draw(&mut buf, look);
@@ -248,21 +244,21 @@ mod tests {
     fn enter_is_yes_and_anything_else_no() {
         let look = Look::default();
         assert_eq!(
-            Confirm::new("Close pane?").key(key(KeyCode::Enter), &look),
+            Confirm::new("Close pane?").key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Yes)
         );
         assert_eq!(
-            Confirm::new("x").key(key(KeyCode::Char('y')), &look),
+            Confirm::new("x").key(Key::plain(KeyCode::Char('y')), &look),
             Step::Close(Outcome::Yes)
         );
         for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('q')] {
             assert_eq!(
-                Confirm::new("x").key(key(code), &look),
+                Confirm::new("x").key(Key::plain(code), &look),
                 Step::Close(Outcome::No)
             );
         }
         assert_eq!(
-            Confirm::new("x").key(key(KeyCode::Char(' ')), &look),
+            Confirm::new("x").key(Key::plain(KeyCode::Char(' ')), &look),
             Step::Close(Outcome::No),
             "a stray Space is no"
         );
@@ -272,15 +268,18 @@ mod tests {
     fn tab_moves_to_no_and_round() {
         let look = Look::default();
         let mut c = Confirm::new("Close pane?");
-        assert_eq!(c.key(key(KeyCode::Tab), &look), Step::Redraw);
+        assert_eq!(c.key(Key::plain(KeyCode::Tab), &look), Step::Redraw);
         let s = drawn(&mut c, &look);
         assert!(s.iter().any(|l| l.contains("  Yes  › No")), "{s:#?}");
-        assert_eq!(c.key(key(KeyCode::Enter), &look), Step::Close(Outcome::No));
-        let mut c = Confirm::new("x");
-        c.key(key(KeyCode::Tab), &look);
-        c.key(key(KeyCode::Tab), &look);
         assert_eq!(
-            c.key(key(KeyCode::Char(' ')), &look),
+            c.key(Key::plain(KeyCode::Enter), &look),
+            Step::Close(Outcome::No)
+        );
+        let mut c = Confirm::new("x");
+        c.key(Key::plain(KeyCode::Tab), &look);
+        c.key(Key::plain(KeyCode::Tab), &look);
+        assert_eq!(
+            c.key(Key::plain(KeyCode::Char(' ')), &look),
             Step::Close(Outcome::Yes),
             "back on Yes after Tab, Space presses it"
         );
@@ -289,9 +288,9 @@ mod tests {
             ..look
         };
         let mut c = Confirm::new("x");
-        c.key(key(KeyCode::BackTab), &easy);
+        c.key(Key::plain(KeyCode::BackTab), &easy);
         assert_eq!(
-            c.key(key(KeyCode::Enter), &easy),
+            c.key(Key::plain(KeyCode::Enter), &easy),
             Step::Close(Outcome::No),
             "the close button is pressed as no"
         );

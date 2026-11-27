@@ -50,6 +50,7 @@ use serde_json::{Map, Value, json};
 
 use crate::agent::transcript::{self, Entry, Kind};
 use crate::worktree::git_safe;
+use crate::ui::when::{self, Said};
 use crate::{paths, util};
 
 const RECENT_MS: i64 = 14 * 24 * 60 * 60 * 1000;
@@ -451,18 +452,6 @@ fn session_rows() -> Vec<SessionRow> {
     rows
 }
 
-/// How long ago, as the rows say it.
-fn age(when: i64, now_secs: i64) -> String {
-    let s = now_secs - when;
-    if s < 3600 {
-        format!("{}m ago", s.div_euclid(60))
-    } else if s < 172_800 {
-        format!("{}h ago", s.div_euclid(3600))
-    } else {
-        format!("{}d ago", s.div_euclid(86_400))
-    }
-}
-
 fn inside(dir: &str, tree: &str) -> bool {
     dir == tree || dir.starts_with(&format!("{tree}/"))
 }
@@ -529,7 +518,7 @@ fn survey(dir: &Path, pane_dirs: &[PathBuf]) -> (Vec<Row>, bool) {
             rows.push(Row {
                 when,
                 label: format!("{name} {branch}"),
-                age: age(when, now_secs),
+                age: when::ago(Some(when), now_secs, Said::Ago),
                 tree,
                 repo: repo.clone(),
                 branch,
@@ -656,13 +645,6 @@ pub fn main(args: Vec<String>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ages_as_the_rows_say_them() {
-        assert_eq!(age(1000 - 300, 1000), "5m ago");
-        assert_eq!(age(0, 7200), "2h ago");
-        assert_eq!(age(0, 3 * 86_400), "3d ago");
-    }
 
     #[test]
     fn prompts_are_what_you_typed() {

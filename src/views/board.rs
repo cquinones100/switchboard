@@ -35,6 +35,7 @@ use super::markdown::{
 use crate::photos::Who;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Mark, Tone};
+use crate::ui::when::{Said, ago};
 
 /// The narrowest pane the panel is drawn beside the column in.
 pub const PANEL_MIN: usize = 100;
@@ -993,20 +994,12 @@ fn avatar(
         .collect()
 }
 
-/// How long ago an ISO time was, as the boards say it: "just now", "4m
-/// ago", "2h ago", "yesterday", "3 days ago", else its day.
+/// How long ago an ISO time was, as `when::ago` says it; its first ten
+/// characters (its day) for a time that can't be read.
 pub fn when(iso: &str, now: jiff::Timestamp) -> String {
-    let Ok(at) = iso.parse::<jiff::Timestamp>() else {
-        return iso.chars().take(10).collect();
-    };
-    let s = now.as_second() - at.as_second();
-    match s {
-        ..60 => "just now".into(),
-        60..3600 => format!("{}m ago", s / 60),
-        3600..86_400 => format!("{}h ago", s / 3600),
-        86_400..172_800 => "yesterday".into(),
-        172_800..2_592_000 => format!("{} days ago", s / 86_400),
-        _ => iso.chars().take(10).collect(),
+    match iso.parse::<jiff::Timestamp>() {
+        Ok(at) => ago(Some(at.as_second()), now.as_second(), Said::Ago),
+        Err(_) => iso.chars().take(10).collect(),
     }
 }
 
@@ -1209,10 +1202,7 @@ mod tests {
     #[test]
     fn when_says_how_long_ago() {
         let now: jiff::Timestamp = "2026-11-08T12:00:00Z".parse().unwrap();
-        assert_eq!(when("2026-11-08T11:59:30Z", now), "just now");
         assert_eq!(when("2026-11-08T10:00:00Z", now), "2h ago");
-        assert_eq!(when("2026-11-07T10:00:00Z", now), "yesterday");
-        assert_eq!(when("2026-11-05T12:00:00Z", now), "3 days ago");
-        assert_eq!(when("2026-01-05T12:00:00Z", now), "2026-01-05");
+        assert_eq!(when("2026-01-05 soon", now), "2026-01-05");
     }
 }

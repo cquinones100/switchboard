@@ -29,6 +29,7 @@ use super::slack::Form;
 use crate::autopilot::Mode;
 use crate::autopilot::mode::{self, NoteChoices, note_title};
 use crate::autopilot::settings_box::Fields;
+use crate::sidebar::text;
 use crate::util;
 
 /// The setting that lets the form name notes.
@@ -129,7 +130,7 @@ fn plain(text: &str) -> Value {
 }
 
 fn option(text: &str, value: &str) -> Value {
-    json!({ "text": plain(&super::screens::clip(text, 75)), "value": value })
+    json!({ "text": plain(&text::cut(text.trim(), 75)), "value": value })
 }
 
 fn context(text: &str) -> Value {

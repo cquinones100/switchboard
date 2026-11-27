@@ -32,6 +32,7 @@ use super::tabs::{self, Tab, label, state_words, table};
 use super::{Cx, Relay};
 use crate::remote::places::Known;
 use crate::remote::protocol::Refused;
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 /// Who the relay's asks name, for the server's log.
@@ -310,7 +311,7 @@ pub async fn handle(cx: &Cx, message: Message) -> Result<Option<String>> {
             .iter()
             .map(|t| {
                 let since = tabs::since_ms(&t.since)
-                    .map(|s| tabs::lasted(now - s))
+                    .map(|s| ago(Some(s / 1000), now / 1000, Said::Short))
                     .unwrap_or_default();
                 let context = tabs::context_of(&cx.paths, t.transcript.as_deref())
                     .map(|c| format!("{}%", c.percent))

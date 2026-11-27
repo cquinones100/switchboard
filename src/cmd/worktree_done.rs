@@ -35,6 +35,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::integrations::linear;
+use crate::sidebar::text;
 use crate::util;
 use crate::worktree::{self, Worktree};
 
@@ -145,17 +146,6 @@ fn fetch_issues(identifiers: &[(String, u64)]) -> Result<HashMap<String, Issue>,
     })
 }
 
-/// A text cut to `width` characters, an ellipsis at its end when cut.
-fn truncate(text: &str, width: usize) -> String {
-    let count = text.chars().count();
-    if count <= width {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
-    cut.push('…');
-    cut
-}
-
 struct Entry {
     worktree: Worktree,
     issue: Option<Issue>,
@@ -210,15 +200,15 @@ fn print_group(title: &str, entries: &[&Entry], root: &Path) {
         let rel = relative(root, &e.worktree.path);
         // Nothing to say about a worktree with no ticket but where it is.
         let Some(issue) = &e.issue else {
-            println!("  {}", truncate(&rel, width - 2));
+            println!("  {}", text::cut(&rel, width - 2));
             continue;
         };
         let columns = format!(
             "{:id_w$}  {:state_w$}  {}",
             issue.identifier, issue.state_name, issue.title
         );
-        println!("  {}", truncate(&columns, width - 2));
-        println!("{}", dim(format!("    {}", truncate(&rel, width - 4))));
+        println!("  {}", text::cut(&columns, width - 2));
+        println!("{}", dim(format!("    {}", text::cut(&rel, width - 4))));
     }
 }
 
@@ -514,11 +504,5 @@ mod tests {
         assert_eq!(parse_choice("", 3), Some(vec![]));
         assert_eq!(parse_choice("4", 3), None);
         assert_eq!(parse_choice("x", 3), None);
-    }
-
-    #[test]
-    fn long_text_is_cut_with_an_ellipsis() {
-        assert_eq!(truncate("abcdef", 4), "abc…");
-        assert_eq!(truncate("abc", 4), "abc");
     }
 }

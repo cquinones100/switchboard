@@ -29,6 +29,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::width;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Surface, Tone};
+use crate::ui::when::{self, Said};
 use crate::usage::resources::{CPU_HEAVY, MEMORY_HEAVY, bytes, is_slot};
 
 /// The board needs this many columns; under it `list` draws the table.
@@ -345,7 +346,7 @@ fn slot_columns(
                     Tone::Dim.style(theme),
                 )
             };
-            let how_long = crate::sidebar::text::ago(d["since"].as_i64(), now);
+            let how_long = when::ago(d["since"].as_i64(), now, Said::Short);
             let at_cols = kit::columns(
                 &[
                     Col::Fixed {

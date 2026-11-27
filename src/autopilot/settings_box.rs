@@ -1683,10 +1683,6 @@ mod tests {
     use super::super::mode::Skipped;
     use super::*;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn mode() -> Mode {
         Mode {
             on: true,
@@ -1842,7 +1838,7 @@ mod tests {
     fn an_item_skipped_while_the_box_is_open_stays_skipped() {
         let mut m = mode();
         let mut b = opened(Part::Skipped(0));
-        b.key(key(KeyCode::Char('u')), &Look::default());
+        b.key(Key::plain(KeyCode::Char('u')), &Look::default());
         // wt refused another item meanwhile.
         m.skipped.push(Skipped {
             note: "id1".into(),
@@ -1894,8 +1890,8 @@ mod tests {
         let look = Look::default();
         assert!(text_of(&b, WIDTH, true).contains("Weekly limit"));
         assert!(text_of(&b, WIDTH, true).contains("no reading yet"));
-        b.key(key(KeyCode::Right), &look);
-        b.key(key(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!(b.fields().weekly, 55);
         b.ctx.weekly = Some(62.4);
         assert!(text_of(&b, WIDTH, true).contains("62% this week"));
@@ -1911,8 +1907,8 @@ mod tests {
             b.fields().changes(&Fields::from_mode(&mode())),
             ["weekly limit 55%"]
         );
-        b.key(key(KeyCode::Left), &look);
-        b.key(key(KeyCode::Left), &look);
+        b.key(Key::plain(KeyCode::Left), &look);
+        b.key(Key::plain(KeyCode::Left), &look);
         assert_eq!(b.fields().weekly, 0);
         assert!(text_of(&b, WIDTH, true).contains("off"));
     }
@@ -2031,11 +2027,14 @@ mod tests {
         );
         // Tab reaches the items needing a choice at the end of the list.
         b.focus = Part::Skipped(39);
-        b.key(key(KeyCode::Tab), &Look::default());
-        b.key(key(KeyCode::Tab), &Look::default());
+        b.key(Key::plain(KeyCode::Tab), &Look::default());
+        b.key(Key::plain(KeyCode::Tab), &Look::default());
         assert_eq!(b.focus, Part::Skipped(41));
         assert!(text(&b).contains("Choice 1"));
-        assert_eq!(b.key(key(KeyCode::Char('u')), &Look::default()), Step::Same);
+        assert_eq!(
+            b.key(Key::plain(KeyCode::Char('u')), &Look::default()),
+            Step::Same
+        );
         // Drawn on a screen 40 rows tall, the keycaps stay in it.
         let mut buf = Buffer::empty(Rect::new(0, 0, 170, 40));
         b.draw(&mut buf, &Look::default());
@@ -2078,8 +2077,8 @@ mod tests {
         );
         assert!(b.parts.iter().any(|p| p.3 == Part::HandsFree));
         b.focus = Part::Limit;
-        b.key(key(KeyCode::Char('5')), &look);
-        b.key(key(KeyCode::Esc), &look);
+        b.key(Key::plain(KeyCode::Char('5')), &look);
+        b.key(Key::plain(KeyCode::Esc), &look);
         let shown = screen(&mut b);
         assert!(shown.contains("Leave without saving"), "{shown}");
         assert!(
@@ -2100,18 +2099,18 @@ mod tests {
     fn keys_step_flip_take_back_and_save_or_ask_before_leaving() {
         let look = Look::default();
         let mut b = opened(Part::Slots);
-        b.key(key(KeyCode::Char('+')), &look);
-        b.key(key(KeyCode::Right), &look);
-        b.key(key(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Char('+')), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!((b.fields.slots, b.fields.cap), (5, 5), "the cap follows");
-        b.key(key(KeyCode::Tab), &look);
-        b.key(key(KeyCode::Left), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Left), &look);
         assert_eq!((b.fields.slots, b.fields.cap), (4, 4), "the slots follow");
         b.focus = Part::Planned;
-        b.key(key(KeyCode::Char(' ')), &look);
+        b.key(Key::plain(KeyCode::Char(' ')), &look);
         assert!(b.fields.ready_only);
         b.focus = Part::Skipped(0);
-        b.key(key(KeyCode::Char('u')), &look);
+        b.key(Key::plain(KeyCode::Char('u')), &look);
         assert_eq!(b.fields.skipped, ["Rename the flag"]);
         // Its keycap takes a click too.
         let (_, parts, _) = b.lines(WIDTH, true, None, &look);
@@ -2121,30 +2120,30 @@ mod tests {
         assert_eq!(b.fields.taken_back, ["Tidy the logs", "Rename the flag"]);
         // Typing in the repository, its suggestion taken with →.
         b.focus = Part::Repo;
-        b.key(key(KeyCode::Char('u')), &look);
+        b.key(Key::plain(KeyCode::Char('u')), &look);
         assert_eq!(b.fields.repo, "/src/appu", "u types in a field");
         for _ in 0..5 {
-            b.key(key(KeyCode::Backspace), &look);
+            b.key(Key::plain(KeyCode::Backspace), &look);
         }
-        b.key(key(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!(b.fields.repo, "/src/app");
         // Esc with changes asks; n stays, Enter leaves.
-        assert_eq!(b.key(key(KeyCode::Esc), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Esc), &look), Step::Redraw);
         assert!(text_of(&b, WIDTH, true).contains("Leave without saving your changes? [Y/n]"));
-        assert_eq!(b.key(key(KeyCode::Char('n')), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Char('n')), &look), Step::Redraw);
         assert_eq!(b.focus, Part::Repo, "the focus back where it was");
-        b.key(key(KeyCode::Esc), &look);
-        b.key(key(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Esc), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
         assert_eq!(b.focus, Part::Stay);
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
-        b.key(key(KeyCode::Esc), &look);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
+        b.key(Key::plain(KeyCode::Esc), &look);
         assert_eq!(
-            b.key(key(KeyCode::Enter), &look),
+            b.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Dismissed)
         );
         // M-↵ saves from any field, with the fields as typed.
         let mut b = opened(Part::Limit);
-        b.key(key(KeyCode::Char('5')), &look);
+        b.key(Key::plain(KeyCode::Char('5')), &look);
         match b.key(Key::new(KeyCode::Enter, Mods::ALT), &look) {
             Step::Close(Outcome::Picked(p)) => {
                 assert_eq!(p.index, SAVE);
@@ -2155,25 +2154,25 @@ mod tests {
         }
         // More… with a change asks first, then opens the menu.
         let mut b = opened(Part::Slots);
-        b.key(key(KeyCode::Char('+')), &look);
-        assert_eq!(b.key(key(KeyCode::Char('m')), &look), Step::Redraw);
+        b.key(Key::plain(KeyCode::Char('+')), &look);
+        assert_eq!(b.key(Key::plain(KeyCode::Char('m')), &look), Step::Redraw);
         assert!(matches!(
-            b.key(key(KeyCode::Enter), &look),
+            b.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.index == MENU
         ));
         // p and s outside a field pause and stop.
         let mut b = opened(Part::Slots);
         assert!(matches!(
-            b.key(key(KeyCode::Char('p')), &look),
+            b.key(Key::plain(KeyCode::Char('p')), &look),
             Step::Close(Outcome::Picked(p)) if p.index == PAUSE
         ));
         assert!(matches!(
-            b.key(key(KeyCode::Char('s')), &look),
+            b.key(Key::plain(KeyCode::Char('s')), &look),
             Step::Close(Outcome::Picked(p)) if p.index == STOP
         ));
         // Esc with nothing changed closes.
         assert_eq!(
-            b.key(key(KeyCode::Esc), &look),
+            b.key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
     }

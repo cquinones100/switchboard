@@ -24,4 +24,5 @@ pulldown-cmark = { version = "0.13", default-features = false }
 nucleo-matcher = "0.3"
 # A terminal's colour as the emulator names it (`Rgb`): alacritty_terminal's
 # own vte, so the multiplexer's panes and the apps share the type.
+jiff = "0.2"
 vte = { version = "0.15", default-features = false, features = ["ansi"] }

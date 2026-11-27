@@ -19,6 +19,7 @@ use crate::facts::{Checks, Landing, Method, PrState};
 use crate::mux::{PaneId, TabId};
 use crate::tabs::Rgb;
 use crate::ui::kit::Mark;
+use crate::ui::when::{self, Said};
 
 /// What a tab's Claude is doing, as the sidebar tells it: the agent state's
 /// waiting, done and working, and two of its own. A Claude tab whose turn
@@ -1114,7 +1115,7 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
         return format!("✎ {title}");
     }
     let now = r.now_secs();
-    let since = text::ago(tab.since, now);
+    let since = when::ago(tab.since, now, Said::Short);
     // A PR landing through the merge queue says its place once, as landing
     // words.
     let through_queue = tab.landing.is_some_and(|l| l.method == Method::Pr)
@@ -1197,7 +1198,7 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
                 let when = if left > 60_000 {
                     format!(
                         "next in {}",
-                        text::ago(Some((r.now_ms - left).div_euclid(1000)), now)
+                        when::ago(Some((r.now_ms - left).div_euclid(1000)), now, Said::Short)
                     )
                 } else {
                     "next tick due".into()

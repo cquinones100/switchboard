@@ -29,6 +29,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::width;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Tone};
+use crate::ui::when::{self, Said};
 
 /// The most views shown at once.
 pub const MOST: usize = 4;
@@ -868,7 +869,7 @@ fn calendar(
             .map(|at| {
                 format!(
                     " (updated {} ago)",
-                    crate::sidebar::text::ago(Some(at.div_euclid(1000)), m.snap.now_secs)
+                    when::ago(Some(at.div_euclid(1000)), m.snap.now_secs, Said::Short)
                 )
             })
             .unwrap_or_default();

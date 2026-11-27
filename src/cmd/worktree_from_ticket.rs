@@ -252,7 +252,7 @@ pub fn prompt_for(issue: &Issue, extra: &str) -> String {
 
 /// Where a new ticket branch starts, whether it tracks origin's, and, when
 /// origin couldn't be reached, which copy of its default branch it is
-/// ("origin/main, last updated 2 hours ago").
+/// ("origin/main, last updated 2h ago").
 struct Start {
     commit: String,
     tracks: bool,

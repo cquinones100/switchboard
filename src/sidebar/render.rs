@@ -25,6 +25,7 @@ use crate::items::{Item, State};
 use crate::mux::TabId;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Mark, Tone};
+use crate::ui::when::{self, Said};
 
 /// The most lines a tab's name wraps to.
 pub const NAME_LINES: usize = 3;
@@ -1025,7 +1026,7 @@ pub fn sidebar_lines(
             // right edge, dim (board 1), laid out as columns so the title
             // is cut before the time column, a column short of it, whether
             // or not this one keeps a time: the titles end in one place.
-            let when = text::ago(n.time, r.now_secs());
+            let when = when::ago(n.time, r.now_secs(), Said::Short);
             let when_cols = width(&when).max(3);
             let chosen = view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner));
             let mark = match &n.owner {

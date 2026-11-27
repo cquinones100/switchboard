@@ -30,6 +30,8 @@
 //! - `markdown`, `mermaid`: Markdown laid out in columns, its diagrams as text.
 //! - `placeholder`: the cells a kitty image is placed by, the ids of the
 //!   workspace's own, and a box's shadow as text.
+//! - `when`: how long ago something was, the one way every row says it,
+//!   and when it came, as a date and a clock time for a row's end.
 //! - `who`: who someone is to a service, which an avatar's photo is known by.
 //! - `settings`: the settings the drawing follows, asked of the program.
 
@@ -53,6 +55,7 @@ pub mod settings;
 pub mod terminal;
 pub mod text;
 pub mod theme;
+pub mod when;
 pub mod who;
 
 pub use confirm::Confirm;

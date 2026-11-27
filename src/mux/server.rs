@@ -32,6 +32,7 @@ use super::pane::{Pane, PaneSpawn, PaneView};
 use super::proto::{self, ClientMsg, ServerMsg};
 use super::trail::{Place, Trail};
 use super::{Direction, PaneEvent, PaneId, TabId, TermNotice, socket};
+use crate::ui::when::{self, Said};
 use crate::{paths, util};
 
 /// The session `switchboard` attaches to when none is named.
@@ -5038,7 +5039,7 @@ impl Server {
                 .unwrap_or_default()
                 .to_string(),
             state,
-            age: crate::sidebar::text::ago(since, crate::util::now_secs()),
+            age: when::ago(since, crate::util::now_secs(), Said::Short),
             opened: self
                 .tabs
                 .get(&tab)

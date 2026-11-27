@@ -42,6 +42,7 @@ use serde_json::{Value, json};
 use crate::facts::{Merge, PrFacts, PrState};
 use crate::items::{Item, State, Target, ViewData};
 use crate::sidebar::model::{MergeState, TabModel, TabState};
+use crate::ui::when::{self, Said};
 use crate::{paths, settings};
 
 /// Which view.
@@ -1206,9 +1207,9 @@ fn last_used(tab: Option<&TabModel>, last: Option<&Revived>, now_secs: i64) -> S
             return "now".into();
         }
         let at = t.turn.as_ref().and_then(|turn| turn.at).map(|ms| ms / 1000);
-        return crate::sidebar::text::ago(at, now_secs);
+        return when::ago(at, now_secs, Said::Short);
     }
-    last.map(|l| crate::sidebar::text::ago(Some(l.when), now_secs))
+    last.map(|l| when::ago(Some(l.when), now_secs, Said::Short))
         .unwrap_or_default()
 }
 

@@ -325,33 +325,29 @@ impl Overlay for Ask {
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     #[test]
     fn it_takes_what_is_typed_and_an_empty_line_only_when_that_means_something() {
         let look = Look::default();
         let mut a = Ask::new("Rename", "A name.").text("old");
         for _ in 0..3 {
-            a.key(key(KeyCode::Backspace), &look);
+            a.key(Key::plain(KeyCode::Backspace), &look);
         }
-        assert_eq!(a.key(key(KeyCode::Enter), &look), Step::Same);
+        assert_eq!(a.key(Key::plain(KeyCode::Enter), &look), Step::Same);
         for c in "new one ".chars() {
-            a.key(key(KeyCode::Char(c)), &look);
+            a.key(Key::plain(KeyCode::Char(c)), &look);
         }
         assert!(matches!(
-            a.key(key(KeyCode::Enter), &look),
+            a.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "new one"
         ));
         let mut a = Ask::new("What for?", "Optional.").empty_ok();
         assert!(matches!(
-            a.key(key(KeyCode::Enter), &look),
+            a.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value.is_empty()
         ));
         let mut a = Ask::new("x", "y");
         assert_eq!(
-            a.key(key(KeyCode::Esc), &look),
+            a.key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
     }
@@ -376,7 +372,7 @@ mod tests {
         assert!(s.iter().any(|l| l.contains("› first")), "{s:#?}");
         assert!(s.iter().any(|l| l.contains("   second▏")), "{s:#?}");
         assert!(matches!(
-            a.key(key(KeyCode::Enter), &look),
+            a.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "first\nsecond"
         ));
         let mut one = Ask::new("Rename", "A name.").text("a");
@@ -391,7 +387,7 @@ mod tests {
         let look = Look::default();
         let mut a = Ask::new("Test command", "A command.").text("cat <<-EOF\n\tx\n\tEOF");
         assert!(matches!(
-            a.key(key(KeyCode::Enter), &look),
+            a.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "cat <<-EOF\n\tx\n\tEOF"
         ));
     }
@@ -448,29 +444,29 @@ mod tests {
         let look = Look::default();
         let mut a = shape_box();
         // Shape it with nothing typed stays.
-        a.key(key(KeyCode::Tab), &look);
-        assert_eq!(a.key(key(KeyCode::Enter), &look), Step::Redraw);
+        a.key(Key::plain(KeyCode::Tab), &look);
+        assert_eq!(a.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         a.paste("first", &look);
         a.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look);
         a.paste("second  ", &look);
         assert_eq!(a.typed(), "first\nsecond  ");
-        a.key(key(KeyCode::Tab), &look);
+        a.key(Key::plain(KeyCode::Tab), &look);
         assert!(matches!(
-            a.key(key(KeyCode::Enter), &look),
+            a.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "first\nsecond"
         ));
         let mut a = shape_box();
         a.paste("kept", &look);
-        a.key(key(KeyCode::Tab), &look);
-        a.key(key(KeyCode::Tab), &look);
+        a.key(Key::plain(KeyCode::Tab), &look);
+        a.key(Key::plain(KeyCode::Tab), &look);
         assert_eq!(
-            a.key(key(KeyCode::Char(' ')), &look),
+            a.key(Key::plain(KeyCode::Char(' ')), &look),
             Step::Close(Outcome::Dismissed)
         );
         let mut a = shape_box();
         a.paste("one", &look);
         assert!(matches!(
-            a.key(key(KeyCode::Enter), &look),
+            a.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "one"
         ));
     }

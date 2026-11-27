@@ -51,6 +51,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Theme;
 use crate::draw::{cut, width};
@@ -323,6 +324,34 @@ pub fn fit(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'stat
     }
     if used < cols {
         out.push(Span::styled(" ".repeat(cols - used), pad));
+    }
+    out
+}
+
+/// Spans cut to `cols` columns with no ellipsis, the cells past them
+/// dropped, and padded to fill them: a row a scroll bar is put beside.
+pub fn clip(spans: Vec<Span<'static>>, cols: usize) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut used = 0;
+    for span in spans {
+        let mut kept = String::new();
+        for g in span.content.graphemes(true) {
+            let w = width(g);
+            if used + w > cols {
+                break;
+            }
+            kept.push_str(g);
+            used += w;
+        }
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, span.style));
+        }
+        if used >= cols {
+            break;
+        }
+    }
+    if used < cols {
+        out.push(Span::raw(" ".repeat(cols - used)));
     }
     out
 }
