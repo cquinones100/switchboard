@@ -22,14 +22,15 @@
 //! background is followed to its job; the transcript is
 //! `~/.claude/projects/*/<session>.jsonl`.
 
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::Value;
 
 use crate::agent::sessions;
+use crate::agent::transcript::{self, Entry, Kind};
 use crate::mux::{procinfo, socket};
 use crate::paths;
 
@@ -146,67 +147,18 @@ pub fn transcript_of(session: &str) -> Option<PathBuf> {
         .find(|f| f.is_file())
 }
 
-/// A prompt's text, when the entry is one you typed: a string, or text
-/// parts with no tool result among them.
-fn prompt_text(entry: &Value) -> Option<String> {
-    match entry.pointer("/message/content")? {
-        Value::String(s) => (!s.is_empty()).then(|| s.clone()),
-        Value::Array(parts) => {
-            if parts
-                .iter()
-                .any(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
-            {
-                return None;
-            }
-            let text = parts
-                .iter()
-                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.is_empty()).then_some(text)
-        }
-        _ => None,
-    }
-}
-
 /// The entries after the transcript's last prompt, read from a tail of it
 /// that grows until it holds one; `None` when it has no prompt yet.
-fn after_last_prompt(path: &Path) -> Option<Vec<Value>> {
-    let mut file = File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
-    let mut tail = PROMPT_TAIL;
-    loop {
-        let length = size.min(tail);
-        let whole = length == size;
-        file.seek(SeekFrom::Start(size - length)).ok()?;
-        let mut buf = Vec::new();
-        (&mut file).take(length).read_to_end(&mut buf).ok()?;
-        let mut text = String::from_utf8_lossy(&buf).into_owned();
-        // A tail starts partway through a line.
-        if !whole {
-            text = text
-                .find('\n')
-                .map_or(String::new(), |at| text[at + 1..].to_string());
-        }
-        let entries: Vec<Value> = text
-            .split('\n')
-            .filter(|l| !l.is_empty())
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|e| {
-                !e.get("isSidechain").is_some_and(crate::util::truthy)
-                    && !e.get("isMeta").is_some_and(crate::util::truthy)
-            })
+fn after_last_prompt(path: &Path) -> Option<Vec<Entry>> {
+    transcript::from_end(path, PROMPT_TAIL, u64::MAX, |text, _| {
+        let entries: Vec<Entry> = transcript::entries(text)
+            .filter(|e| !e.sidechain() && !e.meta())
             .collect();
-        let start = entries.iter().rposition(|e| {
-            e.get("type").and_then(Value::as_str) == Some("user") && prompt_text(e).is_some()
-        });
-        match start {
-            Some(at) => return Some(entries[at + 1..].to_vec()),
-            None if whole => return None,
-            None => tail = tail.saturating_mul(4),
-        }
-    }
+        let start = entries
+            .iter()
+            .rposition(|e| e.is(Kind::User) && e.typed("\n").is_some())?;
+        Some(entries[start + 1..].to_vec())
+    })
 }
 
 /// The last thing Claude said in its last turn: the last text part of an
@@ -214,12 +166,10 @@ fn after_last_prompt(path: &Path) -> Option<Vec<Value>> {
 pub fn last_said(path: &Path) -> Option<String> {
     after_last_prompt(path)?
         .iter()
-        .filter(|e| e.get("type").and_then(Value::as_str) == Some("assistant"))
-        .filter_map(|e| e.pointer("/message/content").and_then(Value::as_array))
-        .flatten()
-        .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|p| p.get("text").and_then(Value::as_str))
-        .rfind(|t| !t.trim().is_empty())
+        .filter(|e| e.is(Kind::Assistant))
+        .flat_map(Entry::texts)
+        .filter(|t| !t.trim().is_empty())
+        .last()
         .map(str::to_string)
 }
 

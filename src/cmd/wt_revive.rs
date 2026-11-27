@@ -42,13 +42,13 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::agent::transcript::{self, Entry, Kind};
 use crate::{paths, util};
 
 const RECENT_MS: i64 = 14 * 24 * 60 * 60 * 1000;
@@ -59,7 +59,7 @@ const CWD_TAIL: u64 = 64 * 1024;
 const FACTS: i64 = 6;
 /// A prompt can be followed by any amount of tool output, so the search for
 /// it widens until it finds one or has read the whole file.
-const PROMPT_TAILS: [u64; 3] = [256 * 1024, 2 * 1024 * 1024, u64::MAX];
+const PROMPT_TAIL: u64 = 256 * 1024;
 /// How long a directory found to be outside any repository is believed. A
 /// repository's directory stays one, but a plain directory can become one.
 const NOT_A_REPO_MS: i64 = 24 * 60 * 60 * 1000;
@@ -113,28 +113,6 @@ fn write_cache(transcripts: Map<String, Value>, repos: Map<String, Value>) {
     }
 }
 
-/// The last `length` bytes of a file, from the start of a whole line unless
-/// the read reaches the start of the file; and whether it did.
-fn tail_of(path: &Path, size: u64, length: u64) -> Option<(String, bool)> {
-    let mut file = File::open(path).ok()?;
-    let start = size.saturating_sub(length);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    file.take(size - start).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf).into_owned();
-    if start == 0 {
-        return Some((text, true));
-    }
-    let from = text.find('\n').map_or(text.len(), |at| at + 1);
-    Some((text[from..].to_string(), false))
-}
-
-fn parse_time(text: &str) -> Option<f64> {
-    text.parse::<jiff::Timestamp>()
-        .ok()
-        .map(|t| t.as_millisecond() as f64)
-}
-
 /// The last directory and the last time a transcript was used. The last
 /// directory counts, since a session that moved into a worktree belongs to
 /// the worktree; the last timestamp, not the file's modified time, since
@@ -142,21 +120,14 @@ fn parse_time(text: &str) -> Option<f64> {
 /// opened. Both are whole lines' own, read from the end, never a "cwd" or
 /// "timestamp" inside a tool call's input; the piece read grows until it
 /// holds them or is the whole file.
-fn tail_facts(path: &Path, size: u64, mtime_ms: f64) -> (Option<String>, f64) {
-    let mut length = CWD_TAIL;
-    loop {
-        let Some((text, whole)) = tail_of(path, size, length) else {
-            return (None, mtime_ms);
-        };
+fn tail_facts(path: &Path, mtime_ms: f64) -> (Option<String>, f64) {
+    transcript::from_end(path, CWD_TAIL, u64::MAX, |text, whole| {
         let mut cwd = None;
         let mut active = None;
-        for line in text.split('\n').rev() {
+        for entry in text.split('\n').rev().filter_map(Entry::parse) {
             if cwd.is_some() && active.is_some() {
                 break;
             }
-            let Ok(entry) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
             if cwd.is_none()
                 && let Some(c) = entry
                     .get("cwd")
@@ -166,17 +137,12 @@ fn tail_facts(path: &Path, size: u64, mtime_ms: f64) -> (Option<String>, f64) {
                 cwd = Some(c.to_string());
             }
             if active.is_none() {
-                active = entry
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .and_then(parse_time);
+                active = entry.time().map(|ms| ms as f64);
             }
         }
-        if (cwd.is_some() && active.is_some()) || whole {
-            return (cwd, active.unwrap_or(mtime_ms));
-        }
-        length = length.saturating_mul(4);
-    }
+        ((cwd.is_some() && active.is_some()) || whole).then(|| (cwd, active.unwrap_or(mtime_ms)))
+    })
+    .unwrap_or((None, mtime_ms))
 }
 
 /// What you typed, not what Claude Code added: string content or text
@@ -184,13 +150,10 @@ fn tail_facts(path: &Path, size: u64, mtime_ms: f64) -> (Option<String>, f64) {
 /// tag (slash commands, hook output).
 fn prompts_in(text: &str) -> Vec<String> {
     text.split('\n')
-        .filter(|line| line.contains(r#""type":"user""#))
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|e| {
-            e.get("type").and_then(Value::as_str) == Some("user")
-                && !e.get("isMeta").is_some_and(util::truthy)
-        })
-        .filter_map(|e| typed_text(e.pointer("/message/content")?))
+        .filter(|line| transcript::may_be(line, Kind::User))
+        .filter_map(Entry::parse)
+        .filter(|e| e.is(Kind::User) && !e.meta())
+        .filter_map(|e| typed_text(&e))
         .map(|c| c.replace(['\n', '\t'], " "))
         .filter(|p| !p.starts_with('<'))
         .collect()
@@ -198,46 +161,29 @@ fn prompts_in(text: &str) -> Vec<String> {
 
 /// What a prompt's content says: a string, or the text blocks of a list
 /// (a prompt with a picture), never a list holding a tool's result.
-fn typed_text(content: &Value) -> Option<String> {
-    if let Some(text) = content.as_str() {
-        return Some(text.to_string());
+fn typed_text(e: &Entry) -> Option<String> {
+    match e.content()? {
+        Value::String(s) => Some(s.clone()),
+        _ if e.parts_of("tool_result").next().is_some() || e.texts().next().is_none() => None,
+        _ => Some(e.texts().collect::<Vec<_>>().join(" ")),
     }
-    let parts = content.as_array()?;
-    if parts
-        .iter()
-        .any(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
-    {
-        return None;
-    }
-    let text: Vec<&str> = parts
-        .iter()
-        .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|p| p.get("text").and_then(Value::as_str))
-        .collect();
-    (!text.is_empty()).then(|| text.join(" "))
 }
 
 /// The last prompt that says something: "yes" and "go ahead" don't say what
 /// the worktree was for. The very last one if none does.
-fn prompt_in(path: &Path, size: u64) -> String {
-    let mut answer = None;
-    for length in PROMPT_TAILS {
-        let Some((text, whole)) = tail_of(path, size, length) else {
-            break;
-        };
-        let prompts = prompts_in(&text);
-        answer = prompts
+fn prompt_in(path: &Path) -> String {
+    let answer = transcript::from_end(path, PROMPT_TAIL, u64::MAX, |text, whole| {
+        let prompts = prompts_in(text);
+        let saying = prompts
             .iter()
             .rev()
-            .find(|p| p.encode_utf16().count() >= 20)
-            .cloned();
-        if answer.is_none() && whole {
-            answer = Some(prompts.last().cloned().unwrap_or_default());
+            .find(|p| p.encode_utf16().count() >= 20);
+        match saying {
+            Some(p) => Some(p.clone()),
+            None if whole => Some(prompts.last().cloned().unwrap_or_default()),
+            None => None,
         }
-        if answer.is_some() || whole {
-            break;
-        }
-    }
+    });
     answer.unwrap_or_default().chars().take(90).collect()
 }
 
@@ -256,9 +202,6 @@ impl Recent {
             .get("activeMs")
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
-    }
-    fn size(&self) -> u64 {
-        self.entry.get("size").and_then(Value::as_u64).unwrap_or(0)
     }
 }
 
@@ -309,7 +252,7 @@ fn recent_sessions(cache: &Map<String, Value>) -> Vec<Recent> {
             let entry = match fresh {
                 Some(k) => k.clone(),
                 None => {
-                    let (cwd, active) = tail_facts(&path, size, mtime);
+                    let (cwd, active) = tail_facts(&path, mtime);
                     let mut e = Map::new();
                     e.insert("mtimeMs".into(), util::js_number(mtime));
                     e.insert("size".into(), json!(size));
@@ -420,7 +363,7 @@ fn turns_in(path: &Path) -> usize {
     std::io::BufReader::new(file)
         .lines()
         .map_while(Result::ok)
-        .filter(|l| l.contains(r#""type":"user""#))
+        .filter(|l| transcript::may_be(l, Kind::User))
         .filter(|l| !prompts_in(l).is_empty() || typed_command(l))
         .count()
 }
@@ -428,14 +371,11 @@ fn turns_in(path: &Path) -> usize {
 /// Whether a transcript's line is a slash command you typed, its
 /// `<command-name>` first or after its `<command-message>`.
 fn typed_command(line: &str) -> bool {
-    let Ok(e) = serde_json::from_str::<Value>(line) else {
-        return false;
-    };
-    e.get("type").and_then(Value::as_str) == Some("user")
-        && !e.get("isMeta").is_some_and(util::truthy)
-        && e.pointer("/message/content")
-            .and_then(typed_text)
-            .is_some_and(|t| t.contains("<command-name>"))
+    Entry::parse(line).is_some_and(|e| {
+        e.is(Kind::User)
+            && !e.meta()
+            && typed_text(&e).is_some_and(|t| t.contains("<command-name>"))
+    })
 }
 
 /// Each conversation of the last two weeks, newest first: a transcript
@@ -469,7 +409,7 @@ fn session_rows() -> Vec<SessionRow> {
             continue;
         }
         if !s.entry.contains_key("prompt") {
-            let p = prompt_in(&path, s.size());
+            let p = prompt_in(&path);
             s.entry.insert("prompt".into(), json!(p));
         }
         if !s.entry.contains_key("turns") {
@@ -579,7 +519,7 @@ fn survey(dir: &Path, pane_dirs: &[PathBuf]) -> (Vec<Row>, bool) {
             let (when, prompt) = match session {
                 Some(s) => {
                     if !s.entry.contains_key("prompt") {
-                        let p = prompt_in(Path::new(&s.file), s.size());
+                        let p = prompt_in(Path::new(&s.file));
                         s.entry.insert("prompt".into(), json!(p));
                     }
                     let prompt = s

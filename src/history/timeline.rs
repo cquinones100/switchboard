@@ -17,7 +17,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::transcript::{Answer, Lanes};
+use super::lanes::{Answer, Lanes};
 use crate::agent::State;
 use crate::mux::compose::Frame;
 use crate::ui::Theme;
@@ -468,7 +468,7 @@ pub fn draw_timeline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::transcript::{Commit, Compaction, Round};
+    use crate::history::lanes::{Commit, Compaction, Round};
 
     fn model() -> Model {
         let mut lanes = Lanes::default();

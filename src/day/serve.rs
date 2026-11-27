@@ -631,7 +631,7 @@ impl Server {
             crate::mux::input::KeyCode::Enter,
             crate::mux::input::Mods::NONE,
         );
-        use crate::mission::answer::Press;
+        use crate::agent::screen::Press;
         self.type_into_claude(
             pane,
             vec![

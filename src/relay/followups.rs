@@ -432,7 +432,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
 /// shows as the turn and what the screen shows, to be answered here.
 fn waiting_body(cx: &Relay, id: &str, name: &str, turn: &str, open: bool) -> String {
     match open
-        .then(|| tabs::options_in(&tabs::screen(cx, id)))
+        .then(|| crate::agent::screen::options_in(&tabs::screen(cx, id)))
         .flatten()
     {
         Some(found) => format!(
@@ -489,7 +489,7 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
     // A wait gets its options as buttons; a finished turn, what you'd send
     // next. Nothing for a tab that has closed or is still going.
     let found = (waiting && now.is_some())
-        .then(|| tabs::options_in(&tabs::screen(cx, id)))
+        .then(|| crate::agent::screen::options_in(&tabs::screen(cx, id)))
         .flatten();
     let buttons = match (&now, &found) {
         (None, _) => Vec::new(),

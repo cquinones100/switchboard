@@ -722,8 +722,10 @@ pub async fn send_waiting(
 /// dialog before its session starts.
 fn showing_choice(cx: &Cx, tab: &Tab, screen: &str) -> bool {
     let waiting_on_you = tabs::tab(cx, &tab.id).is_some_and(|t| t.state == "waiting");
-    (waiting_on_you && (tabs::options_in(screen).is_some() || tabs::scrolled_back(screen)))
-        || crate::remote::screen::dialog_in(screen).is_some()
+    (waiting_on_you
+        && (crate::agent::screen::options_in(screen).is_some()
+            || crate::agent::screen::scrolled_back(screen)))
+        || crate::agent::screen::dialog_in(screen).is_some()
 }
 
 fn choice_now(tab: &Tab) -> String {
@@ -816,8 +818,10 @@ async fn send_to_tab(
     let prompt = current
         .as_ref()
         .filter(|t| t.state == "waiting")
-        .and_then(|_| tabs::options_in(&before));
-    let answer = prompt.as_ref().and_then(|p| tabs::answer_for(p, text));
+        .and_then(|_| crate::agent::screen::options_in(&before));
+    let answer = prompt
+        .as_ref()
+        .and_then(|p| crate::agent::screen::answer_for(p, text));
     if let (Some(prompt), Some(answer)) = (&prompt, &answer) {
         if let Err(e) = cx.mux.answer(&pane, &tabs::typeable(text), How::default()) {
             return say(
@@ -830,15 +834,12 @@ async fn send_to_tab(
         }
         // The server sends what follows a settle a moment later (a choice
         // beside a preview, then Enter), so the screen read next waits too.
-        if crate::mission::answer::presses(prompt, answer)
-            .contains(&crate::mission::answer::Press::Settle)
+        if crate::agent::screen::presses(prompt, answer)
+            .contains(&crate::agent::screen::Press::Settle)
         {
-            tokio::time::sleep(Duration::from_millis(
-                crate::mission::answer::PASTE_SETTLE_MS,
-            ))
-            .await;
+            tokio::time::sleep(Duration::from_millis(crate::agent::screen::PASTE_SETTLE_MS)).await;
         }
-        let did = tabs::answer_said(answer);
+        let did = crate::agent::screen::answer_said(answer);
         cx.log(&format!("→ {name}: {did}"));
         let noted = settle_choice(cx, &tab.id, &format!("{did}."), None).await;
         if let Some(t) = thread {
@@ -856,12 +857,14 @@ async fn send_to_tab(
         let same_wait = now.as_ref().is_some_and(|n| {
             n.state == "waiting" && Some(&n.since) == current.as_ref().map(|c| &c.since)
         });
-        let next = same_wait.then(|| tabs::options_in(&after)).flatten();
+        let next = same_wait
+            .then(|| crate::agent::screen::options_in(&after))
+            .flatten();
         // The same prompt still up after a pick that takes one answer only
         // means Claude Code hasn't drawn what comes next yet.
         if let (Some(next), Some(now)) = (&next, &now)
             && (prompt.multi
-                || crate::remote::screen::hash_of(next) != crate::remote::screen::hash_of(prompt))
+                || crate::agent::screen::hash_of(next) != crate::agent::screen::hash_of(prompt))
         {
             let moved = next.question != prompt.question;
             let body = format!(
@@ -917,7 +920,7 @@ async fn send_to_tab(
     }
     // A dialog before the session starts is answered with the arrow keys:
     // up or down to the chosen option, then Enter.
-    let dialog = crate::remote::screen::dialog_in(&before);
+    let dialog = crate::agent::screen::dialog_in(&before);
     let picked = dialog
         .as_ref()
         .and_then(|d| tabs::chosen_option(&d.options, text));
@@ -982,7 +985,7 @@ async fn send_to_tab(
     // Claude's fullscreen view scrolled back hides what it waits on, which
     // the message's keys and Enter would answer unseen.
     let waiting = current.as_ref().is_some_and(|t| t.state == "waiting");
-    if waiting && tabs::scrolled_back(&before) {
+    if waiting && crate::agent::screen::scrolled_back(&before) {
         let body = format!(
             "{name} is waiting on a choice its view is scrolled up past, so I didn't type anything. Scroll it down at the computer."
         );

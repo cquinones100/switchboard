@@ -15,7 +15,7 @@
 //! snapshot goes once a pane has `SHOTS` of them. The rest (your turns,
 //! commits, review rounds, your answers at questions, compactions, the
 //! context) is read from the session's transcript off the server's task
-//! (src/history/transcript.rs), so those lanes reach back to the session's
+//! (src/history/lanes.rs, through `agent::transcript`), so those lanes reach back to the session's
 //! start whenever the server started.
 //!
 //! The span is the Claude session's: a new session in the pane (a start,
@@ -23,9 +23,9 @@
 //!
 //! The `tab_history` setting turns it off: nothing is kept and M-h says so.
 
+pub mod lanes;
 pub mod serve;
 pub mod timeline;
-pub mod transcript;
 pub mod view;
 
 use std::collections::{HashMap, VecDeque};
@@ -35,7 +35,7 @@ use ratatui::text::Span;
 
 use crate::agent::State;
 use crate::mux::PaneId;
-use transcript::Lanes;
+use lanes::Lanes;
 
 /// The least time between two snapshots of a pane, in seconds.
 pub const SHOT_EVERY: i64 = 15;
@@ -84,7 +84,7 @@ impl Record {
         Record {
             session: session.to_string(),
             began: now,
-            window: transcript::WINDOW,
+            window: lanes::WINDOW,
             ..Record::default()
         }
     }

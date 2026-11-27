@@ -4,12 +4,10 @@
 //! used over time. New with UX 2.0's board 6, with no tmux-version file
 //! behind it.
 //!
-//! Claude Code keeps each conversation as JSON lines under
-//! `~/.claude/projects/`, which isn't documented; a line this doesn't
-//! recognise is passed over, so a change of shape loses a lane's marks and
-//! nothing else. A transcript can be tens of megabytes, so it is read off
-//! the server's task (`read_from`) and only as far as it has grown since
-//! the last read, a whole line at a time.
+//! The transcript is read through `agent::transcript`, off the server's
+//! task and only as far as it has grown since the last read; a line this
+//! doesn't recognise is passed over, so a change of shape loses a lane's
+//! marks and nothing else.
 //!
 //! The context a reply used is its prompt's tokens (`input_tokens` and the
 //! cache's two) over the model's window, which the transcript doesn't say:
@@ -17,14 +15,12 @@
 //! session (its used share against the last reply's tokens), else taken as
 //! 200k tokens, or a million once a reply used more than that.
 
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::Value;
 
-use crate::sidebar::claude::prompt_text;
+use crate::agent::transcript::{Entry, Kind, by_you, result_text, str_of};
 
 /// A commit made in the session, by the `git commit` that made it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,29 +111,26 @@ impl Lanes {
     }
 
     /// Takes in the lines of what the transcript has grown by.
-    pub fn take(&mut self, text: &str) {
-        for line in text.split('\n').filter(|l| l.starts_with('{')) {
-            if let Ok(entry) = serde_json::from_str::<Value>(line) {
-                self.entry(&entry);
-            }
+    pub fn take(&mut self, line: &str) {
+        if let Some(entry) = Entry::parse(line) {
+            self.entry(&entry);
         }
     }
 
-    fn entry(&mut self, entry: &Value) {
-        let flag = |k: &str| entry.get(k) == Some(&Value::Bool(true));
-        if flag("isSidechain") {
+    fn entry(&mut self, entry: &Entry) {
+        if entry.sidechain() {
             return;
         }
-        let at = seconds(entry);
+        let at = entry.seconds();
         if at == 0 {
             return;
         }
         self.first.get_or_insert(at);
-        if flag("isMeta") {
+        if entry.meta() {
             return;
         }
-        match str_of(entry.get("type")) {
-            "system" if str_of(entry.get("subtype")) == "compact_boundary" => {
+        match entry.kind() {
+            Kind::System if str_of(entry.get("subtype")) == "compact_boundary" => {
                 let before = entry
                     .pointer("/compactMetadata/preTokens")
                     .and_then(Value::as_u64)
@@ -147,7 +140,7 @@ impl Lanes {
             // A message typed while Claude works is queued as an attachment
             // rather than a user entry: a turn of yours as well, unlike a
             // background task's notification queued the same way.
-            "attachment"
+            Kind::Attachment
                 if entry.pointer("/attachment/type").and_then(Value::as_str)
                     == Some("queued_command")
                     && by_you(entry.pointer("/attachment/origin/kind"))
@@ -158,13 +151,13 @@ impl Lanes {
             {
                 self.turns.push(at);
             }
-            "assistant" => self.reply(entry, at),
-            "user" => self.user(entry, at),
+            Kind::Assistant => self.reply(entry, at),
+            Kind::User => self.user(entry, at),
             _ => {}
         }
     }
 
-    fn reply(&mut self, entry: &Value, at: i64) {
+    fn reply(&mut self, entry: &Entry, at: i64) {
         if let Some(usage) = entry.pointer("/message/usage") {
             let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
             let tokens =
@@ -175,12 +168,7 @@ impl Lanes {
                 self.context.push((at, tokens));
             }
         }
-        let parts = entry
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        for part in parts.iter().filter(|p| str_of(p.get("type")) == "tool_use") {
+        for part in entry.parts_of("tool_use") {
             let id = str_of(part.get("id")).to_string();
             let name = str_of(part.get("name"));
             let command = part
@@ -206,19 +194,10 @@ impl Lanes {
         }
     }
 
-    fn user(&mut self, entry: &Value, at: i64) {
-        let content = entry.pointer("/message/content");
-        let results: Vec<&Value> = content
-            .and_then(Value::as_array)
-            .map(|parts| {
-                parts
-                    .iter()
-                    .filter(|p| str_of(p.get("type")) == "tool_result")
-                    .collect()
-            })
-            .unwrap_or_default();
+    fn user(&mut self, entry: &Entry, at: i64) {
+        let results: Vec<&Value> = entry.parts_of("tool_result").collect();
         if results.is_empty() {
-            if by_you(entry.pointer("/origin/kind")) && prompt_text(entry).is_some() {
+            if by_you(entry.pointer("/origin/kind")) && entry.prompt_text().is_some() {
                 self.turns.push(at);
             }
             return;
@@ -230,7 +209,7 @@ impl Lanes {
             };
             let (_, pending) = self.pending.remove(i);
             let failed = result.get("is_error") == Some(&Value::Bool(true));
-            let text = result_text(result);
+            let text = result_text(result, "\n");
             match pending {
                 // git's summary line says the commit was made, whatever came
                 // after it in the same call (a push refused).
@@ -253,57 +232,6 @@ impl Lanes {
                 _ => {}
             }
         }
-    }
-}
-
-/// What a transcript has grown by since `offset`, a whole line at a time:
-/// the text and the offset to read from next. Off the server's task.
-pub fn read_from(file: &Path, offset: u64) -> Option<(String, u64)> {
-    let mut f = std::fs::File::open(file).ok()?;
-    let size = f.metadata().ok()?.len();
-    // A transcript rewritten shorter is read again from its start.
-    let offset = if size < offset { 0 } else { offset };
-    f.seek(SeekFrom::Start(offset)).ok()?;
-    let mut bytes = Vec::new();
-    f.take(size - offset).read_to_end(&mut bytes).ok()?;
-    let whole = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
-    bytes.truncate(whole);
-    Some((
-        String::from_utf8_lossy(&bytes).into_owned(),
-        offset + whole as u64,
-    ))
-}
-
-/// An entry you typed, by its origin: none, or `human`, never a background
-/// task's notification or a subagent's report (`peer`), which Claude Code
-/// writes as user entries and queues the same way.
-pub(crate) fn by_you(kind: Option<&Value>) -> bool {
-    kind.and_then(Value::as_str).is_none_or(|k| k == "human")
-}
-
-pub(crate) fn seconds(entry: &Value) -> i64 {
-    entry
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
-        .map(|t| t.as_second())
-        .unwrap_or(0)
-}
-
-pub(crate) fn str_of(v: Option<&Value>) -> &str {
-    v.and_then(Value::as_str).unwrap_or("")
-}
-
-/// A tool result's text, whether it is a string or a list of parts.
-fn result_text(result: &Value) -> String {
-    match result.get("content") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
     }
 }
 
@@ -368,6 +296,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn take(lanes: &mut Lanes, text: &str) {
+        text.lines().for_each(|l| lanes.take(l));
+    }
+
     fn line(v: Value) -> String {
         format!("{v}\n")
     }
@@ -427,7 +359,7 @@ mod tests {
             json!({"type": "user", "timestamp": at(23), "isMeta": true, "message": {"content": "caveat"}}),
         );
         let mut lanes = Lanes::default();
-        lanes.take(&text);
+        take(&mut lanes, &text);
         assert_eq!(lanes.first, Some(secs(0)));
         assert_eq!(lanes.turns, vec![secs(0)]);
         assert_eq!(
@@ -490,40 +422,60 @@ mod tests {
     #[test]
     fn a_commit_counts_when_a_later_command_in_its_call_fails() {
         let mut lanes = Lanes::default();
-        lanes.take(&bash(2, "c1", "git commit -m x && git push", 1000));
-        lanes.take(&line(json!({
-            "type": "user", "timestamp": at(3),
-            "message": {"content": [{"type": "tool_result", "tool_use_id": "c1", "is_error": true,
-                "content": "[main a1c3e52] x\nerror: failed to push"}]}
-        })));
+        take(
+            &mut lanes,
+            &bash(2, "c1", "git commit -m x && git push", 1000),
+        );
+        take(
+            &mut lanes,
+            &line(json!({
+                "type": "user", "timestamp": at(3),
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "c1", "is_error": true,
+                    "content": "[main a1c3e52] x\nerror: failed to push"}]}
+            })),
+        );
         assert_eq!(lanes.commits.len(), 1);
     }
 
     #[test]
     fn a_message_typed_while_claude_works_is_a_turn() {
         let mut lanes = Lanes::default();
-        lanes.take(&line(
-            json!({"type": "attachment", "timestamp": at(5), "attachment": {
+        take(
+            &mut lanes,
+            &line(
+                json!({"type": "attachment", "timestamp": at(5), "attachment": {
             "type": "queued_command", "commandMode": "prompt", "prompt": "also do x"}}),
-        ));
-        lanes.take(&line(json!({"type": "attachment", "timestamp": at(6), "attachment": {
-            "type": "queued_command", "commandMode": "task-notification", "prompt": "<task-notification/>"}})));
-        lanes.take(&line(
-            json!({"type": "attachment", "timestamp": at(7), "attachment": {
+            ),
+        );
+        take(
+            &mut lanes,
+            &line(
+                json!({"type": "attachment", "timestamp": at(6), "attachment": {
+            "type": "queued_command", "commandMode": "task-notification", "prompt": "<task-notification/>"}}),
+            ),
+        );
+        take(
+            &mut lanes,
+            &line(
+                json!({"type": "attachment", "timestamp": at(7), "attachment": {
             "type": "queued_command", "prompt": "and y"}}),
-        ));
-        lanes.take(&line(
-            json!({"type": "user", "timestamp": at(8), "origin": {"kind": "peer"},
+            ),
+        );
+        take(
+            &mut lanes,
+            &line(
+                json!({"type": "user", "timestamp": at(8), "origin": {"kind": "peer"},
             "message": {"content": "An agent reported back"}}),
-        ));
+            ),
+        );
         assert_eq!(lanes.turns, vec![secs(5), secs(7)]);
     }
 
     #[test]
     fn a_result_in_a_later_read_finds_its_call() {
         let mut lanes = Lanes::default();
-        lanes.take(&bash(2, "c1", "git -C /w commit -m x", 1000));
-        lanes.take(&result(3, "c1", "[b a1c3e52] x"));
+        take(&mut lanes, &bash(2, "c1", "git -C /w commit -m x", 1000));
+        take(&mut lanes, &result(3, "c1", "[b a1c3e52] x"));
         assert_eq!(lanes.commits.len(), 1);
         assert_eq!(lanes.commits[0].hash, "a1c3e52");
     }
@@ -531,10 +483,13 @@ mod tests {
     #[test]
     fn a_compaction_is_marked_with_the_context_before_it() {
         let mut lanes = Lanes::default();
-        lanes.take(&line(json!({
-            "type": "system", "subtype": "compact_boundary", "timestamp": at(30),
-            "compactMetadata": {"trigger": "auto", "preTokens": 132_000}
-        })));
+        take(
+            &mut lanes,
+            &line(json!({
+                "type": "system", "subtype": "compact_boundary", "timestamp": at(30),
+                "compactMetadata": {"trigger": "auto", "preTokens": 132_000}
+            })),
+        );
         assert_eq!(
             lanes.compactions,
             vec![Compaction {
@@ -555,21 +510,5 @@ mod tests {
         assert_eq!(lanes.window(Some(10.0)), LARGE_WINDOW);
         lanes.context.push((2, 300_000));
         assert_eq!(lanes.window(None), LARGE_WINDOW);
-    }
-
-    #[test]
-    fn reads_whole_lines_only_and_goes_on_from_there() {
-        let dir = std::env::temp_dir().join(format!("sb-history-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("t.jsonl");
-        std::fs::write(&file, "{\"a\":1}\n{\"b\":").unwrap();
-        let (text, next) = read_from(&file, 0).unwrap();
-        assert_eq!(text, "{\"a\":1}\n");
-        assert_eq!(next, 8);
-        std::fs::write(&file, "{\"a\":1}\n{\"b\":2}\n").unwrap();
-        let (text, next) = read_from(&file, next).unwrap();
-        assert_eq!(text, "{\"b\":2}\n");
-        assert_eq!(next, 16);
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

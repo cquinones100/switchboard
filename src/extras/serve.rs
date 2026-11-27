@@ -650,14 +650,14 @@ impl Server {
         let dialog = self
             .panes
             .get(&pane)
-            .is_some_and(|slot| crate::remote::screen::dialog_in(&slot.pane.text(0)).is_some());
+            .is_some_and(|slot| crate::agent::screen::dialog_in(&slot.pane.text(0)).is_some());
         let asking = submit
             && model.claude_pane.is_some()
             && (dialog
                 || (model.state == crate::sidebar::model::TabState::Waiting || auto_mode_asked)
                     && (self.prompt_of(tab).is_some()
                         || self.panes.get(&pane).is_some_and(|slot| {
-                            crate::mission::answer::scrolled_back(&slot.pane.text(0))
+                            crate::agent::screen::scrolled_back(&slot.pane.text(0))
                         })));
         // A draft already in its prompt box would go with the words, so
         // they are pasted in unsent, at its cursor as a paste always was, to
@@ -665,10 +665,10 @@ impl Server {
         let has_draft = submit
             && model.claude_pane.is_some()
             && self.panes.get(&pane).is_some_and(|slot| {
-                crate::remote::screen::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
+                crate::agent::screen::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
                     .is_some()
             });
-        let paste = vec![crate::mission::answer::Press::Paste(reply.to_string())];
+        let paste = vec![crate::agent::screen::Press::Paste(reply.to_string())];
         if asking {
             self.say(
                 Some(client),
@@ -676,7 +676,7 @@ impl Server {
             );
         } else if model.claude_pane.is_some() {
             let presses = if submit && !has_draft {
-                crate::mission::answer::message_presses(reply)
+                crate::agent::screen::message_presses(reply)
             } else {
                 paste
             };

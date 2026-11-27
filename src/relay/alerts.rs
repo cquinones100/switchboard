@@ -411,7 +411,7 @@ async fn alert(cx: &Cx, due: Due) {
     // A wait gets its options as buttons; a finished turn, what you'd send
     // next.
     let found = waiting
-        .then(|| tabs::options_in(&tabs::screen(cx, &tab.id)))
+        .then(|| crate::agent::screen::options_in(&tabs::screen(cx, &tab.id)))
         .flatten();
     // queue-and-clean's push question, asked as board 51 draws it.
     let push = found.as_ref().and_then(super::landing::push_question);
@@ -564,7 +564,7 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             .alerts
             .dialog_checked
             .insert(tab.id.clone(), now);
-        let Some(dialog) = crate::remote::screen::dialog_in(&tabs::screen(cx, &tab.id)) else {
+        let Some(dialog) = crate::agent::screen::dialog_in(&tabs::screen(cx, &tab.id)) else {
             let was_dialog = cx
                 .state
                 .borrow()

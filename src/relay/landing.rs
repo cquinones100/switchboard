@@ -16,9 +16,9 @@ use serde_json::Value;
 
 use super::post::Button;
 use super::tabs::Tab;
+use crate::agent::screen::Prompt;
+use crate::agent::screen::hash_of;
 use crate::facts::PrFacts;
-use crate::mission::answer::Prompt;
-use crate::remote::screen::hash_of;
 use crate::sidebar::text::ordinal;
 
 pub use crate::remote::protocol::{LandingAt, landing_of};
@@ -235,8 +235,8 @@ pub fn push_buttons(tab: &Tab, found: &Prompt, q: &PushQuestion) -> Vec<Button> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::screen::PromptOption;
     use crate::facts::{Checks, PrState};
-    use crate::mission::answer::PromptOption;
     use serde_json::json;
 
     fn holding(phase: &str, record: Value) -> LandingAt {

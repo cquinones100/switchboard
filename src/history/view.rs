@@ -267,7 +267,7 @@ impl Overlay for HistoryView {
 mod tests {
     use super::*;
     use crate::agent::State;
-    use crate::history::transcript::{Answer, Lanes};
+    use crate::history::lanes::{Answer, Lanes};
     use crate::mux::input::Mods;
 
     fn view() -> HistoryView {

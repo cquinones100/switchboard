@@ -312,8 +312,8 @@ impl Server {
                 self.type_into_claude(
                     pane,
                     vec![
-                        crate::mission::answer::Press::Text(text.clone()),
-                        crate::mission::answer::Press::Key(Key::new(KeyCode::Enter, Mods::NONE)),
+                        crate::agent::screen::Press::Text(text.clone()),
+                        crate::agent::screen::Press::Key(Key::new(KeyCode::Enter, Mods::NONE)),
                     ],
                 );
                 Ok(Ran::Said(format!(

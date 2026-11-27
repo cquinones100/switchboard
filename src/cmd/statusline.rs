@@ -354,11 +354,7 @@ fn transcript_began(path: &Path) -> Option<i64> {
         .lines()
         .take(64)
         .map_while(Result::ok)
-        .find_map(|line| {
-            let v: Value = serde_json::from_str(&line).ok()?;
-            let stamp: jiff::Timestamp = v.get("timestamp")?.as_str()?.parse().ok()?;
-            Some(stamp.as_millisecond())
-        })
+        .find_map(|line| crate::agent::transcript::Entry::parse(line)?.time())
 }
 
 /// The spend file's next text, from its text now: the script's awk. A

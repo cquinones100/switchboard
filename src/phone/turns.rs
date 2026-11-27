@@ -25,7 +25,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::images;
-use crate::sidebar::claude::{prompt_text, timestamp_ms, tool_text};
+use crate::agent::transcript::{Entry, Kind};
+use crate::sidebar::claude::tool_text;
 
 /// How many turns a channel opens on, and each scroll up loads.
 pub const TURNS: usize = 20;
@@ -87,7 +88,6 @@ pub struct Window {
 /// The messages in a stretch of a transcript that starts at a line, `base`
 /// bytes into the file, the phone's images found in `images_dir`.
 pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
-    let flag = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
     let mut out: Vec<Message> = Vec::new();
     // Whether the last reply so far waits on a tool, so its turn runs on
     // until something other than the tool's result is said, as the relay
@@ -97,33 +97,21 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
     for line in bytes.split(|b| *b == b'\n') {
         let at_line = offset;
         offset += line.len() as u64 + 1;
-        if !line.starts_with(b"{") {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_slice::<Value>(line) else {
+        let Some(entry) = Entry::parse(line) else {
             continue;
         };
-        if flag(&entry, "isSidechain") {
+        if entry.sidechain() {
             continue;
         }
-        let at = timestamp_ms(&entry);
-        match entry.get("type").and_then(Value::as_str) {
-            Some("assistant") => {
+        let at = entry.ms();
+        match entry.kind() {
+            Kind::Assistant => {
                 running = entry
                     .pointer("/message/stop_reason")
                     .and_then(Value::as_str)
                     == Some("tool_use");
             }
-            Some("user") if !flag(&entry, "isMeta") => {
-                running &= entry
-                    .pointer("/message/content")
-                    .and_then(Value::as_array)
-                    .is_some_and(|parts| {
-                        parts
-                            .iter()
-                            .all(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
-                    });
-            }
+            Kind::User if !entry.meta() => running &= entry.results_only(),
             _ => {}
         }
         // Another session's message (`SendMessage`) is a meta entry with
@@ -132,7 +120,7 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
         // origin alone as the relay knows it, kept only as where a turn
         // starts, so what Claude does after it isn't folded into the turn
         // before.
-        if entry.pointer("/origin/kind").and_then(Value::as_str) == Some("peer") {
+        if entry.origin() == "peer" {
             if let Some(body) = entry.pointer("/origin/body").and_then(Value::as_str) {
                 out.push(Message {
                     who: "tab",
@@ -162,16 +150,13 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
             }
             continue;
         }
-        if flag(&entry, "isMeta") {
+        if entry.meta() {
             continue;
         }
-        match entry.get("type").and_then(Value::as_str) {
+        match entry.kind() {
             // Claude Code's own wake-up for a finished background task
             // starts a turn, but nobody said it.
-            Some("user")
-                if entry.pointer("/origin/kind").and_then(Value::as_str)
-                    == Some("task-notification") =>
-            {
+            Kind::User if entry.origin() == "task-notification" => {
                 out.push(Message {
                     who: "task",
                     text: "a background task finished".to_string(),
@@ -183,8 +168,8 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
                     offset: at_line,
                 });
             }
-            Some("user") => {
-                if let Some(text) = prompt_text(&entry) {
+            Kind::User => {
+                if let Some(text) = entry.prompt_text() {
                     let (text, images) = images::split(&text, images_dir);
                     out.push(Message {
                         who: "you",
@@ -198,16 +183,11 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
                     });
                 }
             }
-            Some("assistant")
+            Kind::Assistant
                 if entry.pointer("/message/model").and_then(Value::as_str)
                     != Some("<synthetic>") =>
             {
-                let parts = entry
-                    .pointer("/message/content")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                for part in parts {
+                for part in entry.parts() {
                     match part.get("type").and_then(Value::as_str) {
                         Some("text") => {
                             let t = part["text"].as_str().unwrap_or("").trim();
@@ -226,7 +206,7 @@ pub fn parse(bytes: &[u8], base: u64, images_dir: &Path) -> Vec<Message> {
                         }
                         Some("tool_use") => out.push(Message {
                             who: "tool",
-                            text: tool_text(&part),
+                            text: tool_text(part),
                             images: Vec::new(),
                             titles: Vec::new(),
                             at,

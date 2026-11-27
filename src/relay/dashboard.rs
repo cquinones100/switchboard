@@ -414,13 +414,13 @@ fn reminded_words(reminded: usize) -> String {
 fn home_choices(cx: &Cx, tab: &Tab) -> Vec<Button> {
     let shown = tabs::screen(cx, &tab.id);
     let buttons = if tab.state == "waiting" {
-        tabs::options_in(&shown).map(|f| option_buttons(tab, &f))
+        crate::agent::screen::options_in(&shown).map(|f| option_buttons(tab, &f))
     } else {
         None
     }
     .or_else(|| {
         (tab.state == "idle")
-            .then(|| crate::remote::screen::dialog_in(&shown).map(|d| dialog_buttons(tab, &d)))
+            .then(|| crate::agent::screen::dialog_in(&shown).map(|d| dialog_buttons(tab, &d)))
             .flatten()
     })
     .unwrap_or_default();

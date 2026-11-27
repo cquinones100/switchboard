@@ -13,15 +13,14 @@
 //! phone's tabs, stays.
 //!
 //! A prompt is read and answered with mission control's own reader and
-//! keys (`mission::answer`), so a front-end presses exactly what the
+//! keys (`agent::screen`), so a front-end presses exactly what the
 //! answer box would. Nothing here reaches a pane that isn't running
 //! Claude: each command refuses one.
 
 use serde_json::{Value, json};
 
 use super::protocol::How;
-use super::screen::{self, Dialog};
-use crate::mission::answer::{self, Prompt};
+use crate::agent::screen::{self, Dialog, Prompt};
 use crate::mission::remind;
 use crate::mux::input::{Key, KeyCode, Mods};
 use crate::mux::server::{Reply, Server};
@@ -44,8 +43,8 @@ pub fn prompt_json(found: &Prompt) -> Value {
         "multi": found.multi,
         "free": found.free,
         "cursor": match found.cursor {
-            Some(answer::Cursor::Option(n)) => json!(n),
-            Some(answer::Cursor::Submit) => json!("submit"),
+            Some(screen::Cursor::Option(n)) => json!(n),
+            Some(screen::Cursor::Submit) => json!("submit"),
             None => Value::Null,
         },
         "steps": found
@@ -89,9 +88,9 @@ impl Server {
     /// The prompt a Claude pane shows, read off its screen.
     pub(crate) fn remote_prompt_of(&self, pane: PaneId) -> Option<Prompt> {
         let slot = self.panes.get(&pane)?;
-        let mut found = answer::options_in(&slot.pane.text(60))?;
+        let mut found = screen::options_in(&slot.pane.text(60))?;
         if !found.steps.is_empty() {
-            answer::read_shown(&mut found, &slot.pane.styled_lines());
+            screen::read_shown(&mut found, &slot.pane.styled_lines());
         }
         Some(found)
     }
@@ -114,7 +113,7 @@ impl Server {
     fn remote_scrolled_back(&self, pane: PaneId) -> bool {
         self.panes
             .get(&pane)
-            .is_some_and(|slot| answer::scrolled_back(&slot.pane.text(0)))
+            .is_some_and(|slot| screen::scrolled_back(&slot.pane.text(0)))
     }
 
     /// What is typed and unsent in a Claude pane's prompt box.
@@ -191,7 +190,7 @@ impl Server {
                 );
             }
             (true, _) => {
-                self.type_into_claude(pane, answer::message_presses(reply));
+                self.type_into_claude(pane, screen::message_presses(reply));
                 format!("Sent \"{}\"", short(reply))
             }
             // A dialog asked for is answered over a numbered list still on
@@ -200,7 +199,7 @@ impl Server {
                 if how.expect.is_some_and(|id| id != dialog.hash()) {
                     return Err("its dialog changed since: look at it again".into());
                 }
-                let picked = answer::chosen_option(&dialog.options, reply)
+                let picked = screen::chosen_option(&dialog.options, reply)
                     .ok_or_else(|| format!("\"{reply}\" isn't one of its options"))?;
                 self.press(pane, dialog.presses(&picked));
                 format!("Chose {}. {}", picked.n, picked.label)
@@ -210,15 +209,15 @@ impl Server {
                 return Err("its prompt changed since: look at it again".into());
             }
             (false, Some(found)) if let Some(step) = how.step => {
-                let (presses, said) = answer::step_presses(&found, &answer::StepTo::parse(step))?;
+                let (presses, said) = screen::step_presses(&found, &screen::StepTo::parse(step))?;
                 self.press(pane, presses);
                 said
             }
             (false, Some(found)) => {
-                let a = answer::answer_for(&found, reply)
+                let a = screen::answer_for(&found, reply)
                     .ok_or_else(|| format!("\"{reply}\" isn't one of its options"))?;
-                self.press(pane, answer::presses(&found, &a));
-                answer::answer_said(&a)
+                self.press(pane, screen::presses(&found, &a));
+                screen::answer_said(&a)
             }
         };
         if let Some(from) = how.from
@@ -300,7 +299,7 @@ impl Server {
         let tab = self.panes[&pane].tab;
         self.press(
             pane,
-            vec![answer::Press::Key(Key::new(KeyCode::Esc, Mods::NONE))],
+            vec![screen::Press::Key(Key::new(KeyCode::Esc, Mods::NONE))],
         );
         if let Some(from) = from {
             self.remote_did(from, tab, "Stopped");
@@ -435,13 +434,13 @@ mod tests {
 
     #[test]
     fn a_prompt_reads_as_its_options() {
-        let found = answer::options_in("Do you want to proceed?\n❯ 1. Yes\n  2. No\n").unwrap();
+        let found = screen::options_in("Do you want to proceed?\n❯ 1. Yes\n  2. No\n").unwrap();
         let v = prompt_json(&found);
         assert_eq!(v["question"], "Do you want to proceed?");
         assert_eq!(v["options"][1]["label"], "No");
         assert_eq!(v["multi"], false);
         assert_eq!(v["options"][1]["detail"], "", "no explainer under it");
-        let explained = answer::options_in(
+        let explained = screen::options_in(
             "Which way?\n❯ 1. Fast\n     Skips the checks\n  2. Slow\n     Runs every check\n",
         )
         .unwrap();
@@ -462,7 +461,7 @@ Which size should it open at?
   3. Type something
 ──────────────────
   4. Chat about this";
-        let mut found = answer::options_in(screen).unwrap();
+        let mut found = screen::options_in(screen).unwrap();
         let plain = prompt_json(&found);
         assert_eq!(
             plain["steps"][0],
@@ -478,7 +477,7 @@ Which size should it open at?
             ratatui::text::Span::styled(" ☐ Size ", lit),
             ratatui::text::Span::raw(" ✔ Submit  →"),
         ];
-        answer::read_shown(&mut found, &[row]);
+        screen::read_shown(&mut found, &[row]);
         let v = prompt_json(&found);
         assert_eq!(v["shown"], 1);
         assert_ne!(v["id"], plain["id"], "the step shown is part of its id");

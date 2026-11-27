@@ -2283,7 +2283,7 @@ fn a_button_made_for_one_tab_answers_that_tab_even_in_a_thread_linked_to_another
         .threads
         .insert(thread.clone(), thread.clone());
     let tab = tabs::tab(&rig.cx, &mine).unwrap();
-    let found = tabs::options_in(&tabs::screen(&rig.cx, &mine)).unwrap();
+    let found = crate::agent::screen::options_in(&tabs::screen(&rig.cx, &mine)).unwrap();
     let yes = super::buttons::option_buttons(&tab, &found)[0]
         .value
         .clone()

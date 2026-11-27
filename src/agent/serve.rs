@@ -552,11 +552,11 @@ impl Server {
     /// Whether a pane's screen shows a prompt Claude draws: a permission or
     /// a question, its cursor on a choice, or a dialog.
     pub(crate) fn prompt_shown(&self, pane: PaneId) -> bool {
-        use crate::mission::answer;
+        use crate::agent::screen;
         self.panes.get(&pane).is_some_and(|slot| {
             let screen = slot.pane.text(0);
-            (answer::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
-                || crate::remote::screen::dialog_in(&screen).is_some()
+            (screen::options_in(&screen).is_some() && cursor_on_a_choice(&screen))
+                || crate::agent::screen::dialog_in(&screen).is_some()
         })
     }
 
@@ -565,7 +565,7 @@ impl Server {
     fn scrolled_back(&self, pane: PaneId) -> bool {
         self.panes
             .get(&pane)
-            .is_some_and(|slot| crate::mission::answer::scrolled_back(&slot.pane.text(0)))
+            .is_some_and(|slot| crate::agent::screen::scrolled_back(&slot.pane.text(0)))
     }
 
     /// A pane's record for `switchboard list`, or null.
