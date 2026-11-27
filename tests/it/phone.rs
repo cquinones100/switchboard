@@ -2434,12 +2434,13 @@ fn the_phone_stops_a_working_claude_with_esc() {
         &pane,
         json!({"hook_event_name": "PermissionRequest", "permission_mode": "auto", "session_id": "s-phone", "tool_name": "Bash", "tool_input": {"command": "ls"}}),
     );
+    // Waited for by its own refusal: a scan of the sidebar between the
+    // Ctrl-C and the hook can read the pane as not Claude's for a moment,
+    // which refuses it too.
     wait_until(&server, "the pane marked asked", || {
-        let (code, _, _) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
-        code == 1
+        let (code, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
+        code == 1 && err.contains("asking something")
     });
-    let (_, _, err) = server.run(&["stop", "-t", &pane, "-s", "phone"]);
-    assert!(err.contains("asking something"), "{err}");
 }
 
 /// Claude Code's hook for `pane`'s Claude, its event named in `input`,
