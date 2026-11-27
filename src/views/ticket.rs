@@ -171,7 +171,15 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
                 name: name_of(c),
                 verb: "commented".into(),
                 when: when_of(c),
-                chip: bot.then(|| ("bot".into(), Tone::Dim)),
+                chip: if bot {
+                    Some(("bot".into(), Tone::Dim))
+                } else if name_at(c, "/user/id").is_some()
+                    && name_at(c, "/user/id") == name_at(issue, "/creator/id")
+                {
+                    Some(("Author".into(), Tone::Dim))
+                } else {
+                    None
+                },
                 place: None,
                 body: body_of(c),
                 replies,

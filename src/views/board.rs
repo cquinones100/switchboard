@@ -1,10 +1,10 @@
 //! The PR (M-v) and the ticket (M-i) as UX 2.0's boards 13 and 14 draw
-//! them, in Claude's place: a column read top to bottom (the head, the
-//! description through Markdown, what follows it: the ticket's sub-issues,
-//! the comments with people's photos) and beside it a panel of what GitHub
-//! and Linear keep at the right of the page (the PR's checks, reviewers,
-//! open review threads and files; the ticket's facts, pull requests and
-//! related tickets). New, with no tmux-version file behind it:
+//! them, in Claude's place: a column read top to bottom (the head, then
+//! the description and each comment in a box as boards 131 to 133 draw
+//! them, the PR's open review threads among them, then the ticket's
+//! sub-issues) and beside it a panel of what GitHub and Linear keep at the
+//! right of the page (the PR's checks, reviewers and files; the ticket's
+//! facts, pull requests and related tickets). New, with no tmux-version file behind it:
 //! pr-view.js laid both out as one Markdown text.
 //!
 //! A board is plain data (`Board`, its `Part`s and `Piece`s), which
@@ -427,7 +427,7 @@ pub fn is_fold(line: &Line) -> bool {
 const FOLD: usize = usize::MAX;
 
 /// How far apart, in blocks, a box's body and each reply under it are.
-const REPLY: usize = 1 << 18;
+const REPLY: usize = 1 << 16;
 
 /// Whether a comment's box has the avatar beside it (board 131), in a
 /// column `inner` wide: not without a panel (board 132), nor where the

@@ -368,7 +368,6 @@ impl Pager {
         follow::age(self.read_at.filter(|_| self.follows)?, now)
     }
 
-    /// Gives Markdown a cursor, on the first line with something on it.
     /// Tab, Enter and clicks acting on the comments' boxes, and long
     /// comments folded, or neither (`view_box_keys`).
     pub fn with_box_keys(mut self, on: bool) -> Pager {
@@ -377,6 +376,7 @@ impl Pager {
         self
     }
 
+    /// Gives Markdown a cursor, on the first line with something on it.
     pub fn with_cursor(mut self, on: bool) -> Pager {
         self.cursor_on = on;
         self.cursor = self.snap(self.top);
@@ -990,25 +990,18 @@ impl Pager {
     /// before a search looks, so what a fold hides is found as the rest is;
     /// the screen and the cursor kept on what they showed.
     fn unfold_for_search(&mut self) {
-        // With the cursor, Vim searches, by its pattern: a regular
-        // expression, smart case, the text itself where it isn't one.
+        // With the cursor, Vim searches, by its own pattern, a line at a
+        // time.
         let pattern = self
             .has_cursor()
             .then_some(self.query.as_deref())
             .flatten()
-            .and_then(|text| {
-                let smart = if text.chars().any(char::is_uppercase) {
-                    ""
-                } else {
-                    "(?i)"
-                };
-                regex::Regex::new(&format!("{smart}{text}"))
-                    .or_else(|_| regex::Regex::new(&format!("{smart}{}", regex::escape(text))))
-                    .ok()
-            });
-        let hit = |text: &str| match &pattern {
-            Some(re) => re.is_match(text),
-            None => !self.matches(text).is_empty(),
+            .and_then(Editor::pattern);
+        let hit = |text: &str| {
+            text.lines().any(|line| match &pattern {
+                Some(re) => re.is_match(line),
+                None => !self.matches(line).is_empty(),
+            })
         };
         let unfold: Vec<String> = self
             .boxes
@@ -1387,6 +1380,7 @@ impl Pager {
         };
         let mut keys = self.footer_keys(&b.keys);
         if self.has_cursor() && self.full_at(self.cursor).is_some() {
+            keys.retain(|(k, _)| k != "Enter");
             keys.insert(0, ("Enter".to_string(), "full size".to_string()));
         }
         let text = board::hints(&keys, &self.look).plain();
@@ -1936,6 +1930,7 @@ impl Pager {
         if let Content::Board(b) = &self.content {
             let mut keys = self.footer_keys(&b.keys);
             if full {
+                keys.retain(|(k, _)| k != "Enter");
                 keys.insert(0, ("Enter".to_string(), "full size".to_string()));
             }
             let line = board::hints(&keys, &self.look);
