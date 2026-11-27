@@ -1897,11 +1897,8 @@ impl Server {
                     look.matches(
                         entries
                             .iter()
-                            // The kind its menu shows alone, by source too.
-                            .filter(|e| {
-                                kind.is_none()
-                                    || crate::sidebar::history::kind_of(&e.source) == kind
-                            })
+                            // Every kind: by source, the headings take the
+                            // kinds' place.
                             .take(look.most)
                             .map(|e| {
                                 // A folded source's rows only counted, so
@@ -4326,8 +4323,9 @@ impl Server {
             Some(ViewId::Notifications) => {
                 use crate::sidebar::history::Kind;
                 add("Dismiss every notification shown", ViewAct::DismissShown);
-                if m.snap.notice_counts.is_none() {
-                    // The view lists only what the sidebar shows: no kinds.
+                // The view lists only what the sidebar shows, or by source,
+                // whose headings take the kinds' place: no kinds.
+                if m.snap.notice_counts.is_none() || m.snap.notices_grouped {
                 } else {
                     for key in 1..=7 {
                         let name = Kind::of_key(key).map_or("All", Kind::name);
