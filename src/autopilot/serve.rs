@@ -534,7 +534,7 @@ impl FieldsCheck {
         // the box: a repository landing through PRs sends them to the
         // default branch, so it takes no other.
         if starting || picked || repo != mode_repo || target != mode_target {
-            match crate::repos::landing_for(&repo) {
+            match crate::repos::landing_carrying(&repo) {
                 Ok(l) if l.lands == crate::repos::Way::Direct => {}
                 Ok(l) => {
                     let default = common.as_deref().and_then(crate::tabs::git::default_branch);
@@ -713,7 +713,7 @@ impl Server {
                     }
                     server.off_task(
                         client,
-                        move || crate::repos::landing_for(&at).map(|l| (l, at)),
+                        move || crate::repos::landing_carrying(&at).map(|l| (l, at)),
                         move |server, client, landing| match landing {
                             Ok((l, _)) if l.lands == crate::repos::Way::Direct => {
                                 keep(&branch);

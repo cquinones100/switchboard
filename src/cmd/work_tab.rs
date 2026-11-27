@@ -351,7 +351,9 @@ pub fn refused_by_source(source: Sources) -> Result<(), String> {
 /// default branch.
 pub(crate) fn target_of<'a>(given: &'a Given, root: &Path) -> Result<Option<&'a str>, String> {
     Ok(match given.last("--target").filter(|t| !t.is_empty()) {
-        Some(target) if crate::repos::landing_for(root)?.lands != crate::repos::Way::Direct => {
+        Some(target)
+            if crate::repos::landing_carrying(root)?.lands != crate::repos::Way::Direct =>
+        {
             // Where PRs land, the default branch named is the default
             // branch, cut from origin's as it is now with no target
             // recorded, since that is where its PR goes; any other is
