@@ -274,7 +274,7 @@ const composer = (sx, y, text, placeholder, live) => {
 // THE PROMPT CARD: what Claude waits on, under its newest turn, in the needs-you tone; each option a button, its words dim under it.
 const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: 'needs', title, right, edge: 'y', rightTone: 'y' });
 
-// AUTOPILOT ON THE PHONE: in place of the generic list boards 185 to 187 give it, the views panel's Autopilot draws what
+// AUTOPILOT ON THE PHONE (Pause and Resume do what mission control's Autopilot menu's Pause: open no more tabs for now and Resume do): in place of the generic list boards 185 to 187 give it, the views panel's Autopilot draws what
 // switchboard autopilot-board already answers: whether it is on, paused, away or limited, its tabs at once, what it has spent
 // against its limit, the line saying when it will be done, and its columns with their counts (Waiting on you, Working, Next up,
 // Blocked, Landing, Landed, Skipped). A tap on an item opens the menu the phone allows today (Go to tab, Skip, Unskip, priority
