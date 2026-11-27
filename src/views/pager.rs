@@ -990,13 +990,33 @@ impl Pager {
     /// before a search looks, so what a fold hides is found as the rest is;
     /// the screen and the cursor kept on what they showed.
     fn unfold_for_search(&mut self) {
+        // With the cursor, Vim searches, by its pattern: a regular
+        // expression, smart case, the text itself where it isn't one.
+        let pattern = self
+            .has_cursor()
+            .then_some(self.query.as_deref())
+            .flatten()
+            .and_then(|text| {
+                let smart = if text.chars().any(char::is_uppercase) {
+                    ""
+                } else {
+                    "(?i)"
+                };
+                regex::Regex::new(&format!("{smart}{text}"))
+                    .or_else(|_| regex::Regex::new(&format!("{smart}{}", regex::escape(text))))
+                    .ok()
+            });
+        let hit = |text: &str| match &pattern {
+            Some(re) => re.is_match(text),
+            None => !self.matches(text).is_empty(),
+        };
         let unfold: Vec<String> = self
             .boxes
             .iter()
             .filter(|b| {
                 (b.from..=b.to).any(|i| {
                     let line = &self.doc.lines[i];
-                    board::is_fold(line) && !self.matches(&line.searched).is_empty()
+                    board::is_fold(line) && hit(&line.searched)
                 })
             })
             .map(|b| b.comment.key.clone())
