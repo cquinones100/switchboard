@@ -20,6 +20,11 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::{cut, width};
 use crate::ui::Theme;
 
+/// Its menu's Pause and Resume, which mission control's Autopilot view
+/// offers and the phone finds by these labels.
+pub const PAUSE: &str = "Pause: open no more tabs for now";
+pub const RESUME: &str = "Resume";
+
 /// What the line shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Summary {
@@ -273,13 +278,9 @@ pub fn choices(
     offer_hands_free: bool,
 ) -> Vec<(char, String, Act)> {
     let mut out = vec![if mode.paused {
-        ('r', "Resume".to_string(), Act::Resume)
+        ('r', RESUME.to_string(), Act::Resume)
     } else {
-        (
-            'p',
-            "Pause: open no more tabs for now".to_string(),
-            Act::Pause,
-        )
+        ('p', PAUSE.to_string(), Act::Pause)
     }];
     if !next.is_empty() {
         out.push((

@@ -124,6 +124,23 @@ impl Data {
         }
     }
 
+    /// The Autopilot view's run paused or resumed (board 200): its card
+    /// and its Pause or Resume as the server would then send them, at its
+    /// limit still when it was.
+    fn pilot(&mut self, paused: bool) {
+        use super::views::{PAUSE, RESUME, option_json, pause_kind};
+        let Some(v) = self.views.iter_mut().find(|v| v["key"] == "autopilot") else {
+            return;
+        };
+        let limited = v["run"]["limited"] == true;
+        v["run"] = made_up::autopilot_run(crate::util::now_ms(), paused);
+        if limited {
+            limit(&mut v["run"]);
+        }
+        let label = if paused { RESUME } else { PAUSE };
+        v["acts"] = json!([option_json(label, &pause_kind(!paused))]);
+    }
+
     /// The tab whose pane's number is `n`.
     fn tab(&mut self, n: &str) -> Option<&mut Value> {
         let pane = format!("%{n}");
@@ -559,8 +576,16 @@ fn no_tab() -> Response {
     refused(NO_TAB.0, NO_TAB.1)
 }
 
+/// A made-up run at its spend limit, as `Server::autopilot_board` says it.
+fn limit(run: &mut Value) {
+    run["limited"] = json!(true);
+    run["spent"] = run["limit"].clone();
+    run["eta"] = json!("");
+}
+
 /// The frame's buttons: a tab starts waiting, a reply arrives, the server
-/// goes offline and comes back, the data starts again.
+/// goes offline and comes back, autopilot reaches its spend limit, the data
+/// starts again.
 async fn control(State(preview): State<Arc<Preview>>, UrlPath(what): UrlPath<String>) -> Response {
     match what.as_str() {
         "wait" => preview.change(|d| {
@@ -606,6 +631,14 @@ async fn control(State(preview): State<Arc<Preview>>, UrlPath(what): UrlPath<Str
         "online" => preview.change(|d| {
             d.live = true;
             said("The server is back")
+        }),
+        "limit" => preview.change(|d| {
+            let Some(v) = d.views.iter_mut().find(|v| v["key"] == "autopilot") else {
+                return refused(StatusCode::CONFLICT, "no Autopilot view");
+            };
+            limit(&mut v["run"]);
+            v["acts"] = json!([]);
+            said("Autopilot reached its spend limit")
         }),
         "reset" => preview.change(|d| {
             let resets = d.resets + 1;
@@ -1135,6 +1168,11 @@ async fn view_act(
             None => refused(StatusCode::CONFLICT, CHANGED),
             Some(o) if o.get("open").is_some() => {
                 refused(StatusCode::CONFLICT, "The phone does that one itself.")
+            }
+            Some(o) if o.get("pilot").is_some() => {
+                let pause = o["pilot"] == "pause";
+                d.pilot(pause);
+                said(if pause { "Paused" } else { "Resumed" })
             }
             Some(_) => said(format!("{label}: done (made up)")),
         }

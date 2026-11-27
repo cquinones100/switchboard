@@ -20,6 +20,7 @@
 use serde_json::{Value, json};
 
 use crate::autopilot::Act;
+pub use crate::autopilot::line::{PAUSE, RESUME};
 use crate::items::{Item, State};
 use crate::mission::choices::{self, Do};
 use crate::mission::view_acts::{self, Whole};
@@ -29,7 +30,8 @@ use crate::usage::charts::{self, Limit};
 use crate::usage::sessions::{self, LIMIT_FULL};
 
 /// The views the phone lists, in its order, each while mission control
-/// would list it for a client with no view kept in front.
+/// would list it for a client with no view kept in front, but Autopilot,
+/// listed while autopilot is stopped too, as one kept in front is.
 pub const SHOWN: [ViewId; 6] = [
     ViewId::Landing,
     ViewId::Autopilot,
@@ -94,6 +96,42 @@ pub fn whole_kind(act: &Whole, label: &str) -> Option<Kind> {
     }
 }
 
+/// What the phone does with the Autopilot view's Pause (`pause`) or
+/// Resume: Pause runs at once, Resume is asked first, as starting work is,
+/// since it opens tabs again.
+pub fn pause_kind(pause: bool) -> Kind {
+    if pause {
+        Kind::Run(None)
+    } else {
+        Kind::Run(Some(
+            "Resume autopilot? It takes the next item up in a new tab.".into(),
+        ))
+    }
+}
+
+/// The Autopilot view's columns in the order the phone lists them (board
+/// 200): what needs you first, then what moves, then what is done with.
+pub const AUTOPILOT_ORDER: [&str; 7] = [
+    "Waiting on you",
+    "Working",
+    "Landing",
+    "Next up",
+    "Blocked",
+    "Landed",
+    "Skipped",
+];
+
+/// The Autopilot view as the phone's stream carries it (board 200): the
+/// view `view_json` made, its groups already its columns in
+/// `AUTOPILOT_ORDER` (`groups`), with `run`, the run itself as
+/// `Server::autopilot_board` answers it (on, paused, limited, its tabs at
+/// once, its spend and limit, when it should be done), for the card over
+/// them; its Pause or Resume is among the view's own options.
+pub fn autopilot_json(mut view: Value, run: Value) -> Value {
+    view["run"] = run;
+    view
+}
+
 /// The question an option that starts work in a tab asks on the phone:
 /// its label, asked.
 fn starts(label: &str) -> String {
@@ -111,6 +149,10 @@ pub fn option_json(label: &str, kind: &Kind) -> Value {
         label.to_string()
     };
     let mut v = json!({ "label": label, "shown": shown });
+    // The Autopilot card's button finds its option by this.
+    if label == PAUSE || label == RESUME {
+        v["pilot"] = json!(if label == PAUSE { "pause" } else { "resume" });
+    }
     match kind {
         Kind::Go(pane) => v["go"] = json!(pane),
         Kind::Open(url) => v["open"] = json!(url),
@@ -130,12 +172,18 @@ pub struct Group<'a> {
 }
 
 /// A view's items in mission control's groups and order: a board's
-/// columns in its order (the PR board), else each heading and the items
+/// columns in its order (the PR board; Autopilot's in the phone's,
+/// `AUTOPILOT_ORDER`, its headings left out), else each heading and the items
 /// after it, or each run of items naming the same group; a view's summary
 /// (Autopilot's heading) left out, as the phone's list says it.
 pub fn groups(view: &View) -> Vec<Group<'_>> {
     let items = view.data.items.iter().filter(|i| !views::is_summary(i));
-    if let Some(columns) = view.columns() {
+    let columns = if view.id == ViewId::Autopilot {
+        Some(&AUTOPILOT_ORDER[..])
+    } else {
+        view.columns()
+    };
+    if let Some(columns) = columns {
         let rows: Vec<&Item> = items.filter(|i| !views::is_header(i)).collect();
         let mut out: Vec<Group> = columns
             .iter()
@@ -494,6 +542,57 @@ mod tests {
             whole_kind(&Whole::Refresh("ci"), "Read CI again now"),
             Some(Kind::Run(None))
         );
+    }
+
+    #[test]
+    fn pause_runs_at_once_and_resume_asks_first() {
+        assert_eq!(pause_kind(true), Kind::Run(None));
+        let resume = pause_kind(false);
+        assert!(
+            matches!(&resume, Kind::Run(Some(q)) if q.starts_with("Resume autopilot?")),
+            "{resume:?}"
+        );
+        let v = option_json(PAUSE, &pause_kind(true));
+        assert_eq!(v["pilot"], "pause");
+        assert_eq!(v["ask"], Value::Null);
+        let v = option_json(RESUME, &resume);
+        assert_eq!(v["pilot"], "resume");
+        assert_eq!(v["shown"], "Resume…");
+        assert!(v["ask"].is_string());
+        assert_eq!(
+            option_json("Go to tab 4", &Kind::Go("%9".into()))["pilot"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn the_autopilot_view_lists_what_needs_you_first_under_its_run() {
+        // As autopilot::view::items lists them: headings, the queue, then
+        // its tabs from the least far along, every column once.
+        let heading = |id: &str| Item::new(id, id).data(json!({ "header": true }));
+        let mut items = vec![heading("header:autopilot:next")];
+        let mut tabs = vec![heading("header:autopilot:tabs")];
+        for c in crate::autopilot::view::COLUMNS {
+            let item = Item::new(c, c).group(c);
+            if c == "Next up" || c == "Blocked" {
+                items.push(item);
+            } else {
+                tabs.push(item);
+            }
+        }
+        items.extend(tabs);
+        let v = view(ViewId::Autopilot, items);
+        let made = view_json(&v, &|_| Vec::new(), Vec::new());
+        let run = json!({ "on": true, "paused": false, "slots": 3 });
+        let out = autopilot_json(made, run.clone());
+        let titles: Vec<&str> = out["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, AUTOPILOT_ORDER);
+        assert_eq!(out["run"], run);
     }
 
     #[test]
