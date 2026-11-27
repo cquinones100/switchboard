@@ -2402,9 +2402,9 @@ const ctx = vm.createContext({
 });
 "#;
 
-/// The drawer's menu (assets/phone/app.js), run in Node over a page made
-/// of plain objects: a long press on a row opens its tab's menu rather
-/// than the tab, Close tab asks first, only Close closes it, and a tap
+/// The drawer's tab sheet (assets/phone/app.js, board 197), run in Node
+/// over a page made of plain objects: a long press on a row opens its
+/// tab's sheet rather than the tab, Close tab asks first, only Close closes it, and a tap
 /// still opens the tab; skipped without Node.
 #[test]
 fn a_long_press_opens_a_tabs_menu_and_close_tab_asks_first() {
@@ -2430,6 +2430,7 @@ const out = [];
   row("4").fire("pointerup");
   row("4").fire("click");
   out.push("menu=" + options().join(",") + " open=" + vm.runInContext("state.open", ctx) + " buzzes=" + buzzes);
+  out.push("sheet=" + body.all((x) => x.className === "box tab-sheet").map((x) => x.attrs["aria-label"]).join());
   // Close tab asks first; No leaves the tab.
   button("Close tab").fire("click");
   out.push("asks=" + body.text.includes("Close tab 4 full titles? [Y/n]") + " posted=" + posted.length);
@@ -2499,6 +2500,7 @@ const out = [];
         lines,
         [
             "menu=Mark seen,Pin it,Remind me,Close tab open=null buzzes=1",
+            "sheet=Tab 4 full titles",
             "asks=true posted=0",
             "answers=No,Close*",
             "no=0 menu=null",
@@ -2699,6 +2701,154 @@ const out = [];
             r#"unpin=/api/tabs/3/pin {"pin":false} menu=null"#,
             "not=Pin it,Remind me,Close tab",
             r#"pin=/api/tabs/5/pin {"pin":true} menu=null"#,
+        ],
+        "{stdout}"
+    );
+}
+
+/// A tab's sheet (assets/phone/app.js, board 197), run in Node over a page
+/// made of plain objects: a long press on a finished tab's row shows its
+/// last turn, read from the channel's route, above its options; on a
+/// working tab a new step reaches the open sheet, read again as the
+/// stream's `turn` changes, the working mark on it; on a tab that asks the
+/// turn ends with its question, read only; a tap on the turn, and Enter on
+/// it, open the tab's channel; skipped without Node.
+#[test]
+fn a_tabs_sheet_shows_its_last_turn_follows_it_and_opens_the_channel() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let script = r#"
+${PRELUDE}
+const now = Date.now();
+const turnsOf = {
+  "4": [
+    { who: "you", text: "An older ask", at: now },
+    { who: "claude", text: "An older reply", at: now },
+    { who: "you", text: "Show the full title", at: now },
+    { who: "tool", text: "Read header.rs", at: now },
+    { who: "claude", text: "The header draws the whole title now.", at: now },
+  ],
+  "1": [
+    { who: "you", text: "Plan the parity check", at: now },
+    { who: "tool", text: "Read fork.rs", at: now },
+  ],
+  "6": [
+    { who: "you", text: "Review PR 41", at: now },
+    { who: "claude", text: "The redraw test can time either.", at: now },
+  ],
+};
+const asked = [];
+ctx.fetch = (path) => {
+  asked.push(path);
+  const m = path.match(/^\/api\/tabs\/(\d+)\/turns$/);
+  // The channel a tap opens reads its turns too, which this page leaves unanswered.
+  const forChannel = vm.runInContext("state.open", ctx);
+  if (m && !forChannel) return Promise.resolve({ ok: true, status: 200, json: async () => ({ messages: turnsOf[m[1]], from: 0, earlier: false, conversation: "" }) });
+  return new Promise(() => {});
+};
+let source = null;
+ctx.EventSource = class { constructor() { source = this; } close() {} };
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const tabs = (step) => [
+  { index: 4, pane: "%4", name: "full titles", state: "done", needs: true, stage: "needs", group: "Needs you", mark: "✓", tone: "passed", words: "finished", turn: { prompt: "Show the full title", at: now } },
+  { index: 6, pane: "%6", name: "review PR 41", state: "waiting", needs: true, stage: "needs", group: "Needs you", mark: "●", tone: "needs", words: "asks", turn: { prompt: "Review PR 41", at: now },
+    prompt: { id: "p", question: "Which fixture should it time?", options: [{ n: 1, label: "notes-400" }, { n: 2, label: "notes-big" }, { n: 3, label: "Type something" }], free: 3 } },
+  { index: 1, pane: "%1", name: "planning", state: "working", stage: "working", group: "Working", spins: true, tone: "working", words: "working", turn: { prompt: "Plan the parity check", at: 1, step } },
+];
+ctx.tabsNow = tabs(1);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = tabsNow;
+  listen();
+  render();
+`, ctx);
+const send = (step) => source.onmessage({ data: JSON.stringify({ tabs: tabs(step), live: true }) });
+const row = (n) => app.all((x) => x.attrs["data-pane"] === n)[0];
+const sheet = () => body.all((x) => x.className === "box tab-sheet")[0];
+const turn = () => body.all((x) => x.className === "turn")[0];
+const lines = () => turn().kids.map((k) => k.text).join(" | ");
+const options = () => body.all((x) => x.attrs.role === "menuitem").map((x) => x.text);
+const tick = () => new Promise((r) => setImmediate(r));
+const out = [];
+(async () => {
+  row("4").fire("contextmenu");
+  await tick();
+  out.push("sheet=" + sheet().attrs["aria-label"] + " asked=" + asked.filter((p) => p.endsWith("/turns")).join(","));
+  out.push("finished=" + lines());
+  out.push("options=" + options().join(","));
+  out.push("button=" + turn().attrs.role + " " + turn().attrs.tabindex + " " + turn().attrs["aria-label"]);
+  turn().fire("click");
+  await tick();
+  out.push("tap=" + vm.runInContext("state.open + ' ' + state.menu", ctx));
+  vm.runInContext("toDrawer()", ctx);
+  row("1").fire("contextmenu");
+  await tick();
+  out.push("working=" + lines() + " running=" + body.all((x) => x.className === "tool running").length);
+  turnsOf["1"] = turnsOf["1"].concat([{ who: "tool", text: "Bash: switchboard watch-note", at: now }]);
+  send(2);
+  await tick();
+  out.push("followed=" + lines() + " open=" + !!sheet() + " running=" + body.all((x) => x.className === "tool running").map((x) => x.text).join());
+  row("1").fire("click");
+  row("6").fire("contextmenu");
+  await tick();
+  out.push("asks=" + lines());
+  turn().fire("keydown", { key: "Enter" });
+  await tick();
+  out.push("enter=" + vm.runInContext("state.open + ' ' + state.menu", ctx));
+  // A drag down on its top past the line, a tap above it, and Escape each close it; a short drag leaves it.
+  vm.runInContext("toDrawer()", ctx);
+  const top = () => body.all((x) => x.className === "sheet-top")[0];
+  const closed = () => vm.runInContext("state.menu === null", ctx);
+  row("4").fire("contextmenu");
+  top().fire("pointerdown", { clientY: 100 });
+  top().fire("pointermove", { clientY: 130 });
+  top().fire("pointerup", { clientY: 130 });
+  const short = closed();
+  top().fire("pointerdown", { clientY: 100 });
+  top().fire("pointermove", { clientY: 300 });
+  top().fire("pointerup", { clientY: 300 });
+  const dragged = closed();
+  row("4").fire("contextmenu");
+  const veil = body.all((x) => x.className === "veil")[0];
+  veil.fire("click", { target: veil });
+  const tapped = closed();
+  row("4").fire("contextmenu");
+  row("4").fire("keydown", { key: "Escape" });
+  out.push("closes=" + [short, dragged, tapped, closed()].join(","));
+  console.log(out.join("\n"));
+})();
+"#
+    .replace("${PRELUDE}", PRELUDE);
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "sheet=Tab 4 full titles asked=/api/tabs/4/turns",
+            "finished=YYounowShow the full title | Read header.rs | CClaudenowThe header draws the whole title now.",
+            "options=Mark seen,Pin it,Remind me,Close tab",
+            "button=button 0 Open tab 4's channel",
+            "tap=4 null",
+            "working=YYounowPlan the parity check | ⠹ Read fork.rs running=1",
+            "followed=YYounowPlan the parity check | Read fork.rs | ⠹ Bash: switchboard watch-note open=true running=⠹ Bash: switchboard watch-note",
+            "asks=YYounowReview PR 41 | CClaudenowThe redraw test can time either. | ● Waiting on youWhich fixture should it time?notes-400 · notes-bigAnswer in the channel ›",
+            "enter=6 null",
+            "closes=false,true,true,true",
         ],
         "{stdout}"
     );

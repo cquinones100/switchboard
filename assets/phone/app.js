@@ -38,7 +38,7 @@ const state = {
   turnKeys: [], // the keys of the open tab's turns last drawn, oldest first (`turns`)
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
-  menu: null, // { pane, asking }: the tab whose menu shows, and whether Close tab's question or the reminder's sheet does
+  menu: null, // { pane, asking, sheet }: the tab whose menu or sheet shows, whether Close tab's question or the reminder's sheet does, and the sheet's { messages } (null until read)
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
   haptics: true, // whether the app buzzes (Settings' phone_haptics), from the stream
@@ -756,7 +756,7 @@ function drawerList() {
         held(
           el(
             "button",
-            { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "menu", "data-pane": number(t) },
+            { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
             follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
             el("span", { class: "sub" }, lit(sayingOf(t), words)),
@@ -806,9 +806,9 @@ document.addEventListener(
   true,
 );
 
-// A row's tap opens its tab, or, while a menu shows, closes it; holding
+// A row's tap opens its tab, or, while its sheet shows, closes it; holding
 // it, or the context menu event a screen reader's More or a keyboard's
-// menu key sends, opens its menu.
+// menu key sends, opens its sheet (board 197).
 function held(row, tab) {
   row.addEventListener("pointerdown", (e) => {
     letGo();
@@ -818,7 +818,7 @@ function held(row, tab) {
       if (state.open || state.menu) return;
       buzz();
       hold.swallow = true;
-      openMenu(number(tab));
+      openSheet(number(tab));
     }, HOLD_MS);
   });
   row.addEventListener("contextmenu", (e) => {
@@ -828,7 +828,7 @@ function held(row, tab) {
     if (isLongPress && !state.menu) buzz();
     if (isLongPress) hold.swallow = true;
     letGo();
-    if (!state.menu) openMenu(number(tab));
+    if (!state.menu) openSheet(number(tab));
   });
   row.addEventListener("click", () => (state.menu ? closeMenu() : openTab(number(tab))));
   return row;
@@ -841,6 +841,7 @@ let menuLayer = null;
 
 function closeMenu() {
   state.menu = null;
+  sheetShown = null;
   if (menuLayer) leave(menuLayer);
   menuLayer = null;
   document.removeEventListener("keydown", menuKeys);
@@ -908,6 +909,192 @@ function showMenu(tab) {
     box.style.top = below + tall > window.innerHeight ? Math.max(8, r.top - tall) + "px" : below + "px";
   }
   if (options[0].focus) options[0].focus();
+}
+
+// ── A tab's sheet, from a long press on its row in the drawer (board 197) ──
+// It rises from the screen's foot to three quarters of its height over the
+// dimmed drawer: a grabber and a head (the tab's mark, number and name, what
+// it is doing as a chip, ×), the tab's last turn as the channel draws it,
+// read from the channel's own route and read again as the tab's turn
+// changes, a question it asks ending it, and menuChoices' options fixed at
+// its foot. A tap on the turn, or Enter or Space on it, opens the channel; a
+// drag down on its grabber or head, a tap above it, × or Escape closes it.
+// The channel's ⋯ keeps the menu under its header (`showMenu`).
+
+const SHEET_DRAG_CLOSES = 80; // px a drag down on the sheet's top closes it past
+let sheetShown = null; // { box, head, turn, options, words, drawn }: the sheet while it shows
+
+const sheetTab = () => (state.menu && state.menu.sheet ? state.tabs.find((t) => number(t) === state.menu.pane) || null : null);
+
+function openSheet(pane) {
+  const tab = state.tabs.find((t) => number(t) === pane);
+  if (!tab) return;
+  state.menu = { pane, asking: false, sheet: { messages: null } };
+  if (!state.open) drawer();
+  document.addEventListener("keydown", menuKeys);
+  const head = el("div", { class: "sheet-head" });
+  const top = el("div", { class: "sheet-top" }, el("div", { class: "grabber", "aria-hidden": "true" }), head);
+  dragDown(top);
+  const n = number(tab);
+  const open = () => openTab(n);
+  const turn = el("div", {
+    class: "turn",
+    role: "button",
+    tabindex: "0",
+    "aria-label": "Open tab " + tab.index + "'s channel",
+    onclick: open,
+    onkeydown: (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      open();
+    },
+  });
+  const options = el("div", { class: "sheet-options", role: "menu", "aria-label": "Tab " + tab.index + "'s options" });
+  const box = el("div", { class: "box tab-sheet", role: "dialog", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, top, turn, options);
+  sheetShown = { box, head, turn, options, words: null, drawn: false };
+  layer(box);
+  drawSheet();
+  const first = options.children[0];
+  if (first && first.focus) first.focus();
+  loadSheet();
+}
+
+// A drag down on the sheet's top follows the finger, and past
+// SHEET_DRAG_CLOSES closes it; short of that it springs back.
+function dragDown(top) {
+  let from = null;
+  const moved = (e) => Math.max(0, e.clientY - from);
+  // Captured only once it moves, so a tap on × stays the button's.
+  top.addEventListener("pointerdown", (e) => {
+    from = e.clientY;
+  });
+  top.addEventListener("pointermove", (e) => {
+    if (from === null || !sheetShown) return;
+    if (top.setPointerCapture && e.pointerId !== undefined && moved(e) > 0) top.setPointerCapture(e.pointerId);
+    sheetShown.box.style.transition = "none";
+    sheetShown.box.style.transform = "translateY(" + moved(e) + "px)";
+  });
+  const end = (e) => {
+    if (from === null) return;
+    const far = moved(e) > SHEET_DRAG_CLOSES;
+    from = null;
+    if (!sheetShown) return;
+    sheetShown.box.style.transition = "";
+    sheetShown.box.style.transform = "";
+    if (far) closeMenu();
+  };
+  top.addEventListener("pointerup", end);
+  top.addEventListener("pointercancel", (e) => end(Object.assign({}, e, { clientY: from })));
+}
+
+// The sheet's tab's turns, from the route the channel opens with; the sheet
+// shows the last of them.
+async function loadSheet() {
+  const m = state.menu;
+  if (!m || !m.sheet) return;
+  try {
+    const r = await api("/api/tabs/" + m.pane + "/turns");
+    if (state.menu !== m) return;
+    m.sheet.messages = r.messages || [];
+  } catch (_) {
+    return;
+  }
+  drawSheet();
+}
+
+function drawSheet() {
+  const m = state.menu;
+  if (!m || !m.sheet || m.asking || !sheetShown) return;
+  const tab = sheetTab();
+  if (!tab) return closeMenu();
+  const s = sheetShown;
+  const list = s.turn;
+  const atEnd = !s.drawn || list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+  const head = sheetHead(tab);
+  s.head.replaceWith(head);
+  s.head = head;
+  const card = tab.prompt ? askedCard(tab.prompt) : null;
+  const turn = m.sheet.messages === null
+    ? [el("div", { class: "empty" }, "Reading its last turn…")]
+    : m.sheet.messages.length ? lastTurn(tab, m.sheet.messages) : [el("div", { class: "empty" }, "No turn yet.")];
+  list.replaceChildren(...turn, ...(card ? [card] : []));
+  // The options drawn again only when they change, so the one focused keeps it.
+  const choices = menuChoices(tab);
+  const words = choices.map(([w]) => w).join("\n");
+  if (words !== s.words) {
+    s.options.replaceChildren(...choices.map(([w, tone, act]) => el("button", { class: "menu-option" + tone, role: "menuitem", onclick: act }, w)));
+    s.words = words;
+  }
+  if (m.sheet.messages !== null) s.drawn = true;
+  if (atEnd) list.scrollTop = list.scrollHeight;
+}
+
+function sheetHead(tab) {
+  const [mark, kind] = markOf(tab);
+  const worked = stepOf(tab)[1];
+  const chip = tab.state === "waiting" ? ["needs you", "y"] : tab.state === "done" ? ["done", "g"] : tab.state === "working" ? ["working" + (worked ? " " + worked : ""), "b"] : tab.state === "background" ? ["working", "b"] : ["idle", ""];
+  return el(
+    "div",
+    { class: "sheet-head" },
+    el("span", { class: "mark " + kind }, mark),
+    el("span", { class: "name" }, el("span", { class: "num " + hue(tab) }, tab.index), " " + (tab.name || "")),
+    el("span", { class: "chip " + chip[1] }, chip[0]),
+    el("button", { class: "icon", "aria-label": "Close", onclick: () => closeMenu() }, "×"),
+  );
+}
+
+// The last turn of a tab's messages, grouped as the channel groups them:
+// what started it, Claude's steps one dim line each, the working mark on the
+// last while the tab still works with no reply after it, and its words.
+// Nothing in it is a control of its own, the whole turn being the button
+// that opens the channel.
+function lastTurn(tab, messages) {
+  let at = 0;
+  messages.forEach((m, i) => {
+    if (starts(m) && !m.queued) at = i;
+  });
+  // A turn started with nothing said (`turn`) shows none of it.
+  const turn = messages.slice(at).filter((m) => m.who !== "turn");
+  const lastTool = turn.map((m) => m.who).lastIndexOf("tool");
+  const replied = turn.slice(lastTool + 1).some((m) => m.who === "claude");
+  const running = tab.state === "working" && lastTool >= 0 && !replied;
+  return turn.map((m, i) => {
+    if (m.who === "tool" || m.who === "task") {
+      const now = running && i === lastTool;
+      return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" + (now ? " running" : "") }, now ? spinner() : null, now ? " " + m.text : m.text));
+    }
+    if (m.who === "look") {
+      const n = (m.images || []).length;
+      return el("div", { class: "msg" }, el("span"), el("div", { class: "tool" }, "Showed " + (n === 1 ? "a picture" : n + " pictures")));
+    }
+    const prev = turn[i - 1];
+    const same = prev && prev.who === m.who && (m.who !== "tab" || prev.from === m.from);
+    const who = m.who === "you" ? "You" : m.who === "tab" ? m.from || "Another tab" : "Claude";
+    const speaker = m.who === "tab" ? "tab" : m.who === "you" ? "you" : "claude";
+    const when = el("span", { class: "when" }, ago(m.at));
+    const body = !m.text ? null : m.who === "claude" && md ? markdown(m.text) : el("div", { class: "body" }, m.text);
+    return el(
+      "div",
+      { class: "msg" },
+      same ? el("span") : el("span", { class: "avatar " + speaker }, m.who === "tab" ? (m.tab ? String(m.tab) : "↪") : who[0]),
+      same ? null : el("div", {}, el("span", { class: "who" }, who), when),
+      body,
+    );
+  });
+}
+
+// A question the tab asks, as the channel's card draws it, read only: its
+// choices in a dim line, and where to answer it.
+function askedCard(p) {
+  const options = p.options.filter((o) => o.n !== p.free).map((o) => o.label);
+  return el(
+    "div",
+    { class: "card asked" },
+    el("div", { class: "top" }, el("span", {}, "● Waiting on you")),
+    el("div", { class: "question" }, p.question || "Claude asks"),
+    options.length ? el("div", { class: "choices" }, options.join(" · ")) : null,
+    el("div", { class: "go" }, "Answer in the channel ›"),
+  );
 }
 
 // The question Close tab asks first, as every yes/no question asks (board
@@ -2989,6 +3176,7 @@ function listen() {
       return;
     }
     const before = current();
+    const sheetBefore = sheetTab();
     state.tabs = data.tabs || [];
     state.live = !!data.live;
     if (state.live) state.lastHeard = Date.now();
@@ -3014,6 +3202,11 @@ function listen() {
     render();
     drawPanel();
     if (turned) loadTurns();
+    // The sheet follows its tab: its head, card and options drawn again, its
+    // turn read again as the channel's is.
+    const sheetAfter = sheetTab();
+    drawSheet();
+    if (sheetBefore && sheetAfter && said(sheetBefore) !== said(sheetAfter)) loadSheet();
     tabsRead();
   };
   source.onerror = () => {
