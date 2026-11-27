@@ -1004,7 +1004,8 @@ async fn tab_view(
 /// them (`remote::places`): `{"groups": [{"name", "places": [{"label",
 /// "value"}]}]}`, refused while Settings' `phone_new_tab` is off.
 async fn places_list() -> Response {
-    if !settings::is_on("phone_new_tab") {
+    // Read fresh, as this process keeps no settings it would be told of.
+    if settings::setting("phone_new_tab") == Some(Value::Bool(false)) {
         return (
             StatusCode::CONFLICT,
             axum::Json(json!({"error": "opening tabs from the phone is off in Settings"})),
