@@ -53,15 +53,6 @@ impl App {
         act
     }
 
-    /// Vim's command half typed, if any, let go, as Esc does.
-    pub(super) fn vim_reset(&mut self) {
-        self.vim.begin();
-        self.vim
-            .key(Key::plain(switchboard_ui::input::KeyCode::Esc));
-        self.vim.end();
-        self.vim.effects();
-    }
-
     /// `keys` on the side with the focus, with the count typed before them: the cursor goes
     /// where Vim takes it and the view follows.
     pub(super) fn vim_keys(&mut self, keys: &[Key], count: Option<usize>) -> Act {
@@ -85,10 +76,7 @@ impl App {
         self.vim.height = self.body_height().max(1);
         self.vim.begin();
         if let Some(count) = count {
-            for digit in count.to_string().chars() {
-                self.vim
-                    .key(Key::plain(switchboard_ui::input::KeyCode::Char(digit)));
-            }
+            count.to_string().chars().for_each(|d| self.vim.key(ch(d)));
         }
         for key in keys {
             self.vim.key(*key);
@@ -133,12 +121,7 @@ fn byte_at(line: &str, col: usize) -> usize {
         .map_or(line.len(), |(i, _)| i)
 }
 
-/// `g`, for `gg`.
-pub(super) fn g_key() -> Key {
-    Key::plain(input_code('g'))
-}
-
-/// A character as the shared Vim's keys name it.
-pub(super) fn input_code(c: char) -> switchboard_ui::input::KeyCode {
-    switchboard_ui::input::KeyCode::Char(c)
+/// A character typed alone, as the shared Vim's keys name it.
+pub(super) fn ch(c: char) -> Key {
+    Key::plain(KC::Char(c))
 }

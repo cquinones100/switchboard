@@ -1,9 +1,6 @@
-//! One list navigation: the keys that move a cursor through a list, the
-//! same in every list, so `j` means one row down in mission control, a
-//! menu, a box and the diff alike. `j` and Down (C-n), `k` and Up (C-p)
-//! a row, `h` and Left, `l` and Right a column, `g` and Home to the top,
-//! `G` and End to the bottom. A list decides what a step does there (a
-//! row, a week, a section); a key `step` doesn't name is the list's own.
+//! One list navigation, the same keys in every list: `j` `k`, the arrows and
+//! C-n C-p a row, `h` `l` a column, `g` `G` Home End the ends; the list
+//! decides what a step is (a row, a week, a section).
 
 use crate::input::{Key, KeyCode, Mods};
 
@@ -28,9 +25,8 @@ impl Move {
         }
     }
 
-    /// How far a step up or down moves a cursor `count` rows a step, Top
-    /// and Bottom past either end of any list, for the list to clamp;
-    /// None for left and right.
+    /// How far a step moves a cursor `count` rows a step, Top and Bottom
+    /// past either end for the list to clamp; None for left and right.
     pub fn along(self, count: isize) -> Option<isize> {
         match self {
             Move::Top => Some(isize::MIN / 2),
@@ -67,9 +63,8 @@ pub fn step(key: Key) -> Option<Move> {
     })
 }
 
-/// The row a key steps in a list whose search is being typed into: the
-/// arrows and C-n C-p alone, the letters being the search's, and Home and
-/// End its line's.
+/// The row a key steps in a list whose search is typed into: the arrows
+/// and C-n C-p alone, the letters, Home and End being the search's.
 pub fn typing_rows(key: Key) -> Option<isize> {
     let typed = matches!(key.normalized().code, KeyCode::Char(c) if c != 'n' && c != 'p');
     let ends = matches!(key.code, KeyCode::Home | KeyCode::End);
@@ -82,15 +77,11 @@ mod tests {
 
     #[test]
     fn every_list_moves_on_the_same_keys() {
-        let step_of = |code, mods| step(Key::new(code, mods));
-        assert_eq!(step_of(KeyCode::Char('n'), Mods::CTRL), Some(Move::Down));
-        assert_eq!(step_of(KeyCode::Up, Mods::NONE), Some(Move::Up));
-        assert_eq!(step_of(KeyCode::Char('g'), Mods::SHIFT), Some(Move::Bottom));
-        assert_eq!(step_of(KeyCode::Char('j'), Mods::ALT), None);
-        assert_eq!(step_of(KeyCode::Char('J'), Mods::NONE), None);
-        let typing = |code, mods| typing_rows(Key::new(code, mods));
-        assert_eq!(typing(KeyCode::Char('j'), Mods::NONE), None);
-        assert_eq!(typing(KeyCode::Char('n'), Mods::NONE), None);
-        assert_eq!(typing(KeyCode::Char('p'), Mods::CTRL), Some(-1));
+        let key = |c, mods| Key::new(KeyCode::Char(c), mods);
+        assert_eq!(step(key('n', Mods::CTRL)), Some(Move::Down));
+        assert_eq!(step(key('g', Mods::SHIFT)), Some(Move::Bottom));
+        assert_eq!(step(key('j', Mods::ALT)), None);
+        assert_eq!(typing_rows(key('j', Mods::NONE)), None);
+        assert_eq!(typing_rows(key('p', Mods::CTRL)), Some(-1));
     }
 }

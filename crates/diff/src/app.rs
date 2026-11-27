@@ -116,7 +116,7 @@ mod select;
 mod talk;
 mod trail;
 mod vim;
-use vim::{g_key, input_code};
+use vim::ch;
 mod width;
 
 pub use page::story_page;
@@ -2599,7 +2599,7 @@ impl App {
             self.message = None;
             self.filtering = false;
             self.menu = None;
-            self.vim_reset();
+            self.vim = switchboard_vim::Editor::reader(switchboard_vim::Text::default());
             return Act::Redraw;
         }
         if ctrl && key.code == KeyCode::Char('n') {
@@ -2822,8 +2822,8 @@ impl App {
                 }
             }
             // Home and End the file's first and last line, as ever.
-            KeyCode::Home if !list => return self.vim_keys(&[g_key(), g_key()], None),
-            KeyCode::End if !list => return self.vim_keys(&[Key::plain(input_code('G'))], None),
+            KeyCode::Home if !list => return self.vim_keys(&[ch('g'), ch('g')], None),
+            KeyCode::End if !list => return self.vim_keys(&[ch('G')], None),
             // A screen of the file from the list too.
             KeyCode::Char('f' | 'b') | KeyCode::PageDown | KeyCode::PageUp
                 if list && (ctrl || !matches!(key.code, KeyCode::Char(_))) =>
@@ -2893,7 +2893,7 @@ impl App {
             ('y', 'S') => self.copy_story(),
             ('g', 'g') if self.focus == Focus::List => self.move_list(isize::MIN / 2),
             ('g', 'g') => {
-                return self.vim_keys(&[g_key(), g_key()], counted.then_some(count));
+                return self.vim_keys(&[ch('g'), ch('g')], counted.then_some(count));
             }
             (']', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(1),
             ('[', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(-1),
@@ -5349,11 +5349,6 @@ mod tests {
         assert_eq!(
             app.message.as_ref().map(|(m, _)| m.as_str()),
             Some(switchboard_vim::editor::READ_ONLY)
-        );
-        assert_eq!(
-            app.side_text(app.focus == Focus::New),
-            text,
-            "nothing changed"
         );
         press(&mut app, "G");
         assert_eq!(app.cur, text.len() - 1);

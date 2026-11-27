@@ -117,6 +117,16 @@ pub struct Mods {
 }
 
 impl Mods {
+    fn of_crossterm(m: crossterm::event::KeyModifiers) -> Mods {
+        use crossterm::event::KeyModifiers as M;
+        let (shift, alt, ctrl) = (
+            m.contains(M::SHIFT),
+            m.contains(M::ALT),
+            m.contains(M::CONTROL),
+        );
+        Mods { shift, alt, ctrl }
+    }
+
     pub const NONE: Mods = Mods {
         shift: false,
         alt: false,
@@ -254,7 +264,7 @@ impl Key {
     /// A key a program in a pane read with crossterm, as the workspace
     /// names it; None for one it has no use for.
     pub fn of_crossterm(key: &crossterm::event::KeyEvent) -> Option<Key> {
-        use crossterm::event::{KeyCode as C, KeyModifiers as M};
+        use crossterm::event::KeyCode as C;
         let code = match key.code {
             C::Char(c) => KeyCode::Char(c),
             C::Enter => KeyCode::Enter,
@@ -275,12 +285,7 @@ impl Key {
             C::F(n) => KeyCode::F(n),
             _ => return None,
         };
-        let mods = Mods {
-            shift: key.modifiers.contains(M::SHIFT),
-            alt: key.modifiers.contains(M::ALT),
-            ctrl: key.modifiers.contains(M::CONTROL),
-        };
-        Some(Key::new(code, mods))
+        Some(Key::new(code, Mods::of_crossterm(key.modifiers)))
     }
 
     /// `code` with no modifier held, as the tests press a key.
@@ -517,7 +522,7 @@ impl Mouse {
     /// The mouse as a program in a pane read it with crossterm, as the
     /// workspace names it.
     pub fn of_crossterm(mouse: &crossterm::event::MouseEvent) -> Mouse {
-        use crossterm::event::{KeyModifiers as M, MouseButton as B, MouseEventKind as E};
+        use crossterm::event::{MouseButton as B, MouseEventKind as E};
         let button = |b: B| match b {
             B::Left => MouseButton::Left,
             B::Middle => MouseButton::Middle,
@@ -533,17 +538,12 @@ impl Mouse {
             E::ScrollLeft => (MouseKind::Press, MouseButton::WheelLeft),
             E::ScrollRight => (MouseKind::Press, MouseButton::WheelRight),
         };
-        let m = mouse.modifiers;
-        let mods = Mods {
-            shift: m.contains(M::SHIFT),
-            alt: m.contains(M::ALT),
-            ctrl: m.contains(M::CONTROL),
-        };
+        let (col, row, mods) = (mouse.column, mouse.row, Mods::of_crossterm(mouse.modifiers));
         Mouse {
             kind,
             button,
-            col: mouse.column,
-            row: mouse.row,
+            col,
+            row,
             mods,
         }
     }
