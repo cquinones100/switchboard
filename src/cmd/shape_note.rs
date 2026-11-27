@@ -445,7 +445,12 @@ impl Server {
     /// repository's `tickets` says, Linear ticket IDs alone a tab each;
     /// where it can't be, the box comes back with `text` and why.
     fn shape_typed(&mut self, client: ClientId, text: String) {
-        self.pick_dir_for(
+        let kept_here = self
+            .current_pane(client)
+            .and_then(|p| self.pane_own_dir(p))
+            .and_then(|dir| crate::tickets::kept_known(&dir));
+        let back_text = text.clone();
+        self.pick_dir_or_back(
             client,
             "The repo this ticket is for",
             move |server, client, dir| {
@@ -470,7 +475,8 @@ impl Server {
                 let only_ids = text
                     .split(|c: char| c.is_whitespace() || c == ',')
                     .filter(|w| !w.is_empty())
-                    .all(worktree::looks_like_ticket);
+                    .all(worktree::looks_like_ticket)
+                    && !items.is_empty();
                 let source = if only_ids {
                     if !settings::is_on("linear") {
                         let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
@@ -504,7 +510,29 @@ impl Server {
                         None => break,
                     }
                 }
+                if opened.is_empty() {
+                    return again(server, kept, "Couldn't open a tab for it.".to_string());
+                }
                 server.front(client, &opened);
+                let n = opened.len();
+                server.say(
+                    Some(client),
+                    &format!(
+                        "Shaping {n} {} in {}, a tab each at the end, the first in front",
+                        if n == 1 { "item" } else { "items" },
+                        paths::tilde(&repo)
+                    ),
+                );
+            },
+            // Esc, or a directory that isn't there: back to the box, with
+            // what was typed.
+            move |server, client, why| {
+                let ask = shape_box(kept_here, &back_text);
+                let ask = match why {
+                    Some(why) => ask.failed(why),
+                    None => ask,
+                };
+                server.ask_new_ticket(client, ask);
             },
         );
     }

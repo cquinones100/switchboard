@@ -494,6 +494,18 @@ impl Server {
         title: &str,
         then: impl FnOnce(&mut Server, ClientId, PathBuf) + Send + 'static,
     ) {
+        self.pick_dir_or_back(client, title, then, said);
+    }
+
+    /// `pick_dir_for`, with `back` given what happened when no directory
+    /// came of it: `None` for Esc, else why (no such directory).
+    pub(crate) fn pick_dir_or_back(
+        &mut self,
+        client: ClientId,
+        title: &str,
+        then: impl FnOnce(&mut Server, ClientId, PathBuf) + Send + 'static,
+        back: impl FnOnce(&mut Server, ClientId, Option<String>) + Send + 'static,
+    ) {
         let here = self
             .current_pane(client)
             .and_then(|p| self.pane_own_dir(p))
@@ -508,9 +520,14 @@ impl Server {
                 clipboard: String::new(),
             },
             move |server, client, found| {
-                server.ask_dir(client, &title, found, Wanted::Any, |s, c, dir, _| {
-                    then(s, c, dir)
-                })
+                server.ask_dir_or_back(
+                    client,
+                    &title,
+                    found,
+                    Wanted::Any,
+                    |s, c, dir, _| then(s, c, dir),
+                    back,
+                )
             },
         );
     }
@@ -525,6 +542,20 @@ impl Server {
         found: Found,
         wanted: Wanted,
         then: impl FnOnce(&mut Server, ClientId, PathBuf, String) + Send + 'static,
+    ) {
+        self.ask_dir_or_back(client, title, found, wanted, then, said);
+    }
+
+    /// `ask_dir`, with `back` given what happened when no directory came
+    /// of it, as `pick_dir_or_back` says.
+    fn ask_dir_or_back(
+        &mut self,
+        client: ClientId,
+        title: &str,
+        found: Found,
+        wanted: Wanted,
+        then: impl FnOnce(&mut Server, ClientId, PathBuf, String) + Send + 'static,
+        back: impl FnOnce(&mut Server, ClientId, Option<String>) + Send + 'static,
     ) {
         let items: Vec<PickItem> = found
             .dirs
@@ -544,7 +575,7 @@ impl Server {
         let here = found.here;
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
-                return;
+                return back(server, client, None);
             };
             let dir = if picked.index == TYPED {
                 let typed = expand(&picked.value);
@@ -557,21 +588,15 @@ impl Server {
                 PathBuf::from(&picked.value)
             };
             if !dir.is_dir() {
-                server.say(
-                    Some(client),
-                    &format!("No such directory: {}", picked.value),
-                );
-                return;
+                let why = format!("No such directory: {}", picked.value);
+                return back(server, client, Some(why));
             }
             let dir = match wanted {
                 Wanted::Repo => match main_clone(&dir) {
                     Some(root) => root,
                     None => {
-                        server.say(
-                            Some(client),
-                            &format!("Not in a repository: {}", picked.value),
-                        );
-                        return;
+                        let why = format!("Not in a repository: {}", picked.value);
+                        return back(server, client, Some(why));
                     }
                 },
                 Wanted::Any => dir,
@@ -1962,6 +1987,14 @@ impl Server {
                 s.front(c, &tabs);
             });
         });
+    }
+}
+
+/// What a directory question does when no directory came of it: says why,
+/// if anything, and nothing on Esc.
+fn said(server: &mut Server, client: ClientId, why: Option<String>) {
+    if let Some(why) = why {
+        server.say(Some(client), &why);
     }
 }
 
