@@ -201,7 +201,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         .find(|a| !a.starts_with('-'))
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let mut answer = match repos::landing_for(&dir) {
+    let mut answer = match repos::landing_carrying(&dir) {
         Ok(answer) => answer,
         Err(e) => {
             eprintln!("landing: {e}");
