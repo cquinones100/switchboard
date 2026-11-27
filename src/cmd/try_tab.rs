@@ -6,7 +6,8 @@
 //! (`eval "$(switchboard try --print)"`, then `switchboard`), since plain
 //! `try` refuses to attach inside a pane. `try` itself keeps refusing
 //! someone else's code, and a worktree `wtpr --untrusted` made is refused
-//! here first, by its path alone, since it runs only sealed (src/trust.rs).
+//! here first, by its path or its mark, read with no git, since it runs
+//! only sealed (src/trust.rs).
 //! New with the Rust port; no tmux-version file.
 
 use std::path::{Path, PathBuf};
@@ -61,7 +62,7 @@ impl Server {
             );
             return;
         };
-        if crate::trust::in_review_dir(&wt) {
+        if crate::trust::is_untrusted_without_git(&wt) {
             self.say(
                 Some(client),
                 "This tab's worktree holds someone else's PR, which runs only in switchboard try --sealed",
