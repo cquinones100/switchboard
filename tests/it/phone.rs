@@ -425,7 +425,7 @@ fn the_test_notification_reaches_each_phone_and_says_what_came_back() {
 }
 
 #[test]
-fn the_tabs_the_phone_reads_carry_their_repository_and_branch() {
+fn the_tabs_the_phone_reads_carry_their_repository_branch_and_waiting_state() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
     client.wait_text("$");
@@ -459,6 +459,15 @@ fn the_tabs_the_phone_reads_carry_their_repository_and_branch() {
     let home_name = server.home.canonicalize().unwrap();
     let home_name = home_name.file_name().unwrap().to_string_lossy();
     assert_eq!(tab["repo"], *home_name, "{seen}");
+    assert_eq!(tab["needs"], false, "{seen}");
+
+    // Waiting, it still names its repository, which the drawer's filter
+    // reads to keep it above the Other repos fold.
+    show_prompt(&server, &pane);
+    server.ok(&["set", "-t", &pane, "@agent_state", "waiting"]);
+    let waiting = next_line(&mut stream, |v| v["tabs"][0]["state"] == "waiting");
+    assert_eq!(waiting["tabs"][0]["needs"], true, "{waiting}");
+    assert_eq!(waiting["tabs"][0]["repo"], *home_name, "{waiting}");
 }
 
 /// Each tab the phone reads carries its Claude's address, which names a
@@ -4669,6 +4678,87 @@ const out = [];
             "resumed=2",
             "limited=pilot limited limited3 at once$20 of $20At its limit: takes nothing new today buttons=0",
             "off=Autopilot is offStart it from mission control on the computer. buttons=0",
+        ],
+        "{stdout}"
+    );
+}
+
+/// The drawer's repository filter (assets/phone/app.js's `repoSheet` and
+/// `elsewhere`), run in Node over the preview's made-up tabs, which span
+/// three repositories: the chip's sheet lists them with their counts and
+/// Every repository last; filtered to one, its tabs keep their groups, a
+/// waiting tab of another shows under Elsewhere naming its repository, and
+/// the rest fold under a closed Other repos line with their count; the
+/// filter outlives a reload, the search covers every tab, and Every
+/// repository brings the drawer back as it was; skipped without Node.
+#[test]
+fn the_drawers_repository_filter_folds_the_others_and_keeps_what_needs_you() {
+    let tabs = serde_json::to_string(&switchboard::demo::phone::tabs(1_800_000_000_000)).unwrap();
+    let script = PRELUDE.to_string()
+        + "const TABS = "
+        + &tabs
+        + ";\n"
+        + r#"
+const store = { data: {}, getItem(k) { return k in this.data ? this.data[k] : null; }, setItem(k, v) { this.data[k] = String(v); }, removeItem(k) { delete this.data[k]; } };
+ctx.localStorage = store;
+const base = Object.assign({}, ctx);
+const load = (c) => {
+  app.replaceChildren();
+  body.replaceChildren();
+  vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), c);
+  vm.runInContext("state.me = { paired: true, computer: 'studio' }; state.live = true; state.tabs = " + JSON.stringify(TABS) + "; render();", c);
+};
+let c = ctx;
+load(c);
+const heads = () => app.all((x) => x.attrs["data-stage"]).map((x) => x.text + (x.attrs["aria-expanded"] === "false" ? "*" : "")).join(",");
+const repoOf = (n) => TABS.find((t) => t.pane === "%" + n).repo;
+const rows = () => app.all((x) => x.attrs["data-pane"]).map((x) => repoOf(x.attrs["data-pane"])).join(",");
+const chip = () => app.all((x) => x.className === "repo-chip")[0];
+const pick = (repo) => body.all((x) => x.attrs["data-repo"] === repo)[0].fire("click");
+const out = [];
+const before = heads();
+out.push("chip=" + chip().text);
+chip().fire("click");
+out.push("sheet=" + body.all((x) => x.attrs["data-repo"] !== undefined).map((x) => x.kids.map((k) => k.text).join(":")).join(","));
+pick("api");
+out.push("chip=" + chip().text + " kept=" + store.data["drawer-repo"]);
+out.push("heads=" + heads());
+out.push("rows=" + rows());
+out.push("named=" + app.all((x) => x.className === "sub where-line").map((x) => x.text).join(","));
+app.all((x) => x.attrs["data-stage"] === "other-repos")[0].fire("click");
+out.push("opened=" + rows());
+// Reloaded: the page's script run again over the same storage.
+c = vm.createContext(Object.assign({}, base));
+load(c);
+out.push("reloaded=" + chip().text + " " + heads());
+vm.runInContext("state.search = 'web'; drawer();", c);
+out.push("search=" + rows());
+vm.runInContext("state.search = ''; drawer();", c);
+chip().fire("click");
+pick("");
+out.push("cleared=" + chip().text + " same=" + (heads() === before) + " kept=" + store.data["drawer-repo"]);
+console.log(out.join("\n"));
+"#;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "chip=All repos",
+            // Most tabs first, each with its count, and every tab last.
+            "sheet=api:9,web:9,docs:4,Every repository:22",
+            "chip=api kept=api",
+            "heads=▾ Needs you2,▾ Working1,▾ Monitoring1,▾ CI loop1,▾ In merge queue1,▾ Landing1,▾ Idle1,▾ Reminders1,Elsewhere3,▸ Other repos10*",
+            // The waiting web tabs above the fold; a finished one folds away.
+            "rows=api,api,api,api,api,api,api,api,api,web,web,web",
+            "named=repository web,repository web,repository web",
+            "opened=api,api,api,api,api,api,api,api,api,web,web,web,web,docs,web,web,docs,web,docs,web,web,docs",
+            "reloaded=api ▾ Needs you2,▾ Working1,▾ Monitoring1,▾ CI loop1,▾ In merge queue1,▾ Landing1,▾ Idle1,▾ Reminders1,Elsewhere3,▸ Other repos10*",
+            // A search past the filter: every web tab, and an api one naming it.
+            "search=web,web,web,web,web,web,web,api,web,web",
+            "cleared=All repos same=true kept=undefined",
         ],
         "{stdout}"
     );
