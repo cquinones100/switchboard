@@ -2250,10 +2250,15 @@ fn the_slack_board_lists_a_threads_replies_as_one_row() {
         s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
     });
     client.type_text("vslack\r");
-    let screen = client.wait_text("reply three");
-    let all = screen.join("\n");
     // Past the column of groups and views, then the sections.
     let list = |l: &String| l.split('│').nth(2).unwrap_or("").to_string();
+    // The thread's copy read, so its row leads with the question: until
+    // then the row is the first reply the look saw.
+    let screen = client.wait_for("the thread's row and its replies beside", |s| {
+        s.iter().map(list).any(|l| l.contains("the question"))
+            && s.iter().any(|l| l.contains("reply three"))
+    });
+    let all = screen.join("\n");
     let listed: Vec<String> = screen.iter().map(list).collect();
     assert!(listed.iter().any(|l| l.contains("the question")), "{all}");
     assert!(
