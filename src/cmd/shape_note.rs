@@ -471,9 +471,16 @@ impl Server {
                     );
                     return again(server, Some(kept), why);
                 }
-                // Ticket IDs typed are a tab each, as shape-batch takes them.
+                // Ticket IDs typed are a tab each, as shape-batch takes them,
+                // and Linear's whatever the repository keeps, so they need it.
+                let items = shape_batch::items_of(std::slice::from_ref(&text));
+                let typed_ids = items.iter().any(|i| worktree::looks_like_ticket(i));
+                if typed_ids && !settings::is_on("linear") {
+                    let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
+                    return again(server, Some(kept), why);
+                }
                 let mut opened: Vec<TabId> = Vec::new();
-                for item in shape_batch::items_of(std::slice::from_ref(&text)) {
+                for item in items {
                     match server.tab_at_end(
                         client,
                         &repo,
