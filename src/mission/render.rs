@@ -2821,7 +2821,7 @@ fn list(
     }
     // `i`'s output over the list, whether the board or the list is drawn.
     if view.id == ViewId::Landing
-        && m.landing_output
+        && m.alone.contains(&ViewId::Landing)
         && cols < LANDING_OUTPUT_AT
         && let Some(landing) = m
             .chosen_item()
@@ -3865,7 +3865,7 @@ fn landing_detail(
             let parsed = footer_key(key);
             let pointed = parsed
                 .is_some_and(|k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k)));
-            let lit = pointed || (key == "i" && m.landing_output);
+            let lit = pointed || (key == "i" && m.alone.contains(&ViewId::Landing));
             spans.extend(kit::keycap(key, what, lit, m.snap.caps, theme));
             if let Some(k) = parsed {
                 hits.push(HitBox {
@@ -5562,7 +5562,8 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             let output = m
                 .chosen_item()
                 .is_some_and(|i| i.data["landing"]["record"]["output"].is_object());
-            let rest: &[(&str, &str)] = match (narrow && output, m.landing_output) {
+            let rest: &[(&str, &str)] = match (narrow && output, m.alone.contains(&ViewId::Landing))
+            {
                 (true, true) => &[("i", "back to the list")],
                 (true, false) => &[("i", "its last output")],
                 _ => &[],
@@ -10677,7 +10678,7 @@ mod tests {
             !text.contains("test line 30") && text.contains("i  its last output here"),
             "{text}"
         );
-        m.landing_output = true;
+        m.alone.insert(ViewId::Landing);
         let text = texts(&screen(&m, 130, 50).0).join("\n");
         assert!(
             text.contains("test line 30 ... ok") && !text.contains("leak check"),

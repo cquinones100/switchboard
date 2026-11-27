@@ -48,14 +48,23 @@ impl App {
             return Act::Same;
         };
         self.focus = self.main_side();
-        let act = self.vim_keys(&[key], 1);
+        let act = self.vim_keys(&[key], None);
         self.focus = Focus::List;
         act
     }
 
-    /// `keys` on the side with the focus, `count` times: the cursor goes
+    /// Vim's command half typed, if any, let go, as Esc does.
+    pub(super) fn vim_reset(&mut self) {
+        self.vim.begin();
+        self.vim
+            .key(Key::plain(switchboard_ui::input::KeyCode::Esc));
+        self.vim.end();
+        self.vim.effects();
+    }
+
+    /// `keys` on the side with the focus, with the count typed before them: the cursor goes
     /// where Vim takes it and the view follows.
-    pub(super) fn vim_keys(&mut self, keys: &[Key], count: usize) -> Act {
+    pub(super) fn vim_keys(&mut self, keys: &[Key], count: Option<usize>) -> Act {
         let text = self.side_text(self.focus == Focus::New);
         let Some(last) = text.len().checked_sub(1) else {
             return Act::Same;
@@ -71,7 +80,7 @@ impl App {
         self.vim.top = if self.view == self.at { self.top } else { 0 };
         self.vim.height = self.body_height().max(1);
         self.vim.begin();
-        if count > 1 {
+        if let Some(count) = count {
             for digit in count.to_string().chars() {
                 self.vim
                     .key(Key::plain(switchboard_ui::input::KeyCode::Char(digit)));

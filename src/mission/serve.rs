@@ -3096,9 +3096,6 @@ impl Server {
             self.calendar_day_step(client, m, by);
             return;
         }
-        if landing_key(m, k) {
-            return;
-        }
         let count = match m.current() {
             Some(v) => v.data.items.len(),
             None => m.order().len(),
@@ -8464,29 +8461,6 @@ pub(crate) fn with_check(mut item: Item, n: usize) -> Item {
     item
 }
 
-/// UX 2.0's Landing view's own key: `i` shows the chosen worktree's last
-/// output over the list on a screen too narrow to show it under the rows,
-/// until `i` or Esc. What acts on the worktree is in its menu, which Enter
-/// opens. True when it took the key.
-fn landing_key(m: &mut Mission, k: Key) -> bool {
-    if !m.current().is_some_and(|v| v.id == ViewId::Landing) {
-        return false;
-    }
-    if m.landing_output && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
-        m.landing_output = false;
-        return true;
-    }
-    let narrow = (m.laid().0 as usize) < super::render::LANDING_OUTPUT_AT;
-    let has_output = m
-        .chosen_item()
-        .is_some_and(|i| i.data["landing"]["record"]["output"].is_object());
-    if k.code == KeyCode::Char('i') && plain(&k) && narrow && has_output {
-        m.landing_output = true;
-        return true;
-    }
-    false
-}
-
 /// A worktree removed with `git worktree remove` from its main clone,
 /// which keeps one with changes not committed or files git doesn't track;
 /// what became of it, in words.
@@ -8578,6 +8552,12 @@ fn alone_label(m: &Mission) -> Option<&'static str> {
             if on_routines(m) && cols < crate::routines::view::BESIDE_AT && chosen.is_some() =>
         {
             Some("Show the chosen routine")
+        }
+        ViewId::Landing
+            if cols < super::render::LANDING_OUTPUT_AT
+                && chosen.is_some_and(|i| i.data["landing"]["record"]["output"].is_object()) =>
+        {
+            Some("Show its last output")
         }
         ViewId::Reopen
             if cols < super::reopen_board::PANE_AT

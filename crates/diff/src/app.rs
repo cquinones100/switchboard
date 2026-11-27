@@ -2599,6 +2599,7 @@ impl App {
             self.message = None;
             self.filtering = false;
             self.menu = None;
+            self.vim_reset();
             return Act::Redraw;
         }
         if ctrl && key.code == KeyCode::Char('n') {
@@ -2710,7 +2711,7 @@ impl App {
             && !self.on_story()
             && let Some(key) = Key::of_crossterm(&key)
         {
-            return self.vim_keys(&[key], 1);
+            return self.vim_keys(&[key], None);
         }
         if let KeyCode::Char(c @ '0'..='9') = key.code
             && !ctrl
@@ -2720,6 +2721,7 @@ impl App {
             self.count = Some(self.count.unwrap_or(0) * 10 + n);
             return Act::Same;
         }
+        let counted = self.count.is_some();
         let count = self.count.take().unwrap_or(1).max(1);
         // The talk has the keys while it is on the screen.
         if self.on_talk()
@@ -2820,8 +2822,8 @@ impl App {
                 }
             }
             // Home and End the file's first and last line, as ever.
-            KeyCode::Home if !list => return self.vim_keys(&[g_key(), g_key()], 1),
-            KeyCode::End if !list => return self.vim_keys(&[Key::plain(input_code('G'))], 1),
+            KeyCode::Home if !list => return self.vim_keys(&[g_key(), g_key()], None),
+            KeyCode::End if !list => return self.vim_keys(&[Key::plain(input_code('G'))], None),
             // A screen of the file from the list too.
             KeyCode::Char('f' | 'b') | KeyCode::PageDown | KeyCode::PageUp
                 if list && (ctrl || !matches!(key.code, KeyCode::Char(_))) =>
@@ -2830,7 +2832,7 @@ impl App {
             }
             // The rest is the shared Vim's, on a side of the file.
             _ if !list && let Some(key) = Key::of_crossterm(&key) => {
-                return self.vim_keys(&[key], count);
+                return self.vim_keys(&[key], counted.then_some(count));
             }
             _ => return Act::Same,
         }
@@ -2858,6 +2860,7 @@ impl App {
         let KeyCode::Char(c) = key.code else {
             return Act::Redraw;
         };
+        let counted = self.count.is_some();
         let count = self.count.take().unwrap_or(1);
         // The map has no file or line under a cursor: its pairs are the
         // views' and the story's copy.
@@ -2890,7 +2893,7 @@ impl App {
             ('y', 'S') => self.copy_story(),
             ('g', 'g') if self.focus == Focus::List => self.move_list(isize::MIN / 2),
             ('g', 'g') => {
-                return self.vim_keys(&[g_key(), g_key()], count);
+                return self.vim_keys(&[g_key(), g_key()], counted.then_some(count));
             }
             (']', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(1),
             ('[', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(-1),
@@ -3436,8 +3439,9 @@ impl App {
                 self.refilter();
             }
             KeyCode::Enter => self.filtering = false,
-            KeyCode::Down => self.move_list(1),
-            KeyCode::Up => self.move_list(-1),
+            _ if let Some(by) = Key::of_crossterm(&key).and_then(kit::nav::typing_rows) => {
+                self.move_list(by)
+            }
             KeyCode::Backspace => {
                 self.path_filter.pop();
                 self.refilter();

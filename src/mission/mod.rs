@@ -457,9 +457,6 @@ pub struct Mission {
     /// The Landing view kept while this client has it in front, or opens
     /// on it, with nothing landing.
     pub keep_landing: bool,
-    /// The Landing view's chosen worktree's last output shown over the
-    /// list (`i`), on a screen too narrow to show it under the rows.
-    pub landing_output: bool,
     /// Autopilot's view kept the same way, with the mode off.
     pub keep_autopilot: bool,
     /// Which rows the Reopen view shows (its menu's "Show only tabs" and
@@ -467,7 +464,7 @@ pub struct Mission {
     pub reopen_kind: crate::usage::reopen::Kind,
     /// The views whose pane beside the list shows in the list's place, on a
     /// screen too narrow for both: `i` shows it and `i` or Esc goes back
-    /// (the Inbox's ticket, the Slack thread, the Reminders' lists, the
+    /// (the Landing view's output, the Inbox's ticket, the Slack thread, the Reminders' lists, the
     /// chosen routine, what reopening a row brings back).
     pub alone: std::collections::HashSet<ViewId>,
     /// How far the pane beside a board is scrolled (`J`, `K`, the wheel
@@ -627,7 +624,6 @@ impl Mission {
             came: None,
             spun_at: 0,
             keep_landing: false,
-            landing_output: false,
             keep_autopilot: false,
             reopen_kind: Default::default(),
             alone: Default::default(),
