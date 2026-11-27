@@ -500,7 +500,12 @@ impl Server {
                     Some(kept.key())
                 };
                 let mut opened: Vec<TabId> = Vec::new();
+                let mut left: Vec<String> = Vec::new();
                 for item in items {
+                    if !left.is_empty() {
+                        left.push(item);
+                        continue;
+                    }
                     match server.tab_at_end(
                         client,
                         &repo,
@@ -508,13 +513,21 @@ impl Server {
                         crate::mux::server::Opened::Background,
                     ) {
                         Some(tab) => opened.push(tab),
-                        None => break,
+                        None => left.push(item),
                     }
                 }
-                if opened.is_empty() {
-                    return again(server, kept, "Couldn't open a tab for it.".to_string());
-                }
                 server.front(client, &opened);
+                // What didn't get a tab comes back in the box, the rest
+                // already opened.
+                if !left.is_empty() {
+                    let why = match opened.len() {
+                        0 => "Couldn't open a tab for it.".to_string(),
+                        n => format!("Opened {n}, then couldn't open a tab for the rest."),
+                    };
+                    let rest = if opened.is_empty() { text.clone() } else { left.join(" ") };
+                    server.ask_new_ticket(client, shape_box(kept, &rest).failed(why));
+                    return;
+                }
                 let n = opened.len();
                 server.say(
                     Some(client),
