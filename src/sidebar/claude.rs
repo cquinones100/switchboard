@@ -1697,12 +1697,16 @@ impl Reader {
             return Err(std::io::ErrorKind::IsADirectory.into());
         }
         let seen = self.seen.entry(file.to_path_buf()).or_default();
+        // The cursor kept as far as it read, a read failing partway included,
+        // so the lines it handed over aren't taken in again.
         let mut cursor = seen.cursor;
-        if cursor.read(file, u64::MAX, |line| seen.line(line))? {
+        let mut read = cursor.read(file, u64::MAX, |line| seen.line(line));
+        if let Ok(true) = read {
             *seen = Seen::default();
-            cursor.read(file, u64::MAX, |line| seen.line(line))?;
+            read = cursor.read(file, u64::MAX, |line| seen.line(line));
         }
         seen.cursor = cursor;
+        read?;
         Ok(seen.work(since, now, tests_in_ci))
     }
 

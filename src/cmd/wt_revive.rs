@@ -146,20 +146,27 @@ fn tail_facts(path: &Path, mtime_ms: f64) -> (Option<String>, f64) {
 }
 
 /// What you typed, not what Claude Code added: string content or text
-/// blocks (`Entry::typed`), nothing marked meta, and nothing that starts with a
+/// blocks (`typed_text`), nothing marked meta, and nothing that starts with a
 /// tag (slash commands, hook output).
 fn prompts_in(text: &str) -> Vec<String> {
     text.split('\n')
         .filter(|line| transcript::may_be(line, Kind::User))
         .filter_map(Entry::parse)
         .filter(|e| e.is(Kind::User) && !e.meta())
-        .filter_map(|e| match e.content() {
-            Some(Value::String(s)) => Some(s.clone()),
-            _ => e.typed(" "),
-        })
+        .filter_map(|e| typed_text(&e))
         .map(|c| c.replace(['\n', '\t'], " "))
         .filter(|p| !p.starts_with('<'))
         .collect()
+}
+
+/// What a prompt's content says: a string, or the text blocks of a list
+/// (a prompt with a picture), never a list holding a tool's result.
+fn typed_text(e: &Entry) -> Option<String> {
+    match e.content()? {
+        Value::String(s) => Some(s.clone()),
+        _ if e.parts_of("tool_result").next().is_some() || e.texts().next().is_none() => None,
+        _ => Some(e.texts().collect::<Vec<_>>().join(" ")),
+    }
 }
 
 /// The last prompt that says something: "yes" and "go ahead" don't say what
@@ -365,7 +372,9 @@ fn turns_in(path: &Path) -> usize {
 /// `<command-name>` first or after its `<command-message>`.
 fn typed_command(line: &str) -> bool {
     Entry::parse(line).is_some_and(|e| {
-        e.is(Kind::User) && !e.meta() && e.typed(" ").is_some_and(|t| t.contains("<command-name>"))
+        e.is(Kind::User)
+            && !e.meta()
+            && typed_text(&e).is_some_and(|t| t.contains("<command-name>"))
     })
 }
 
