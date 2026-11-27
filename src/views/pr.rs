@@ -1048,7 +1048,7 @@ mod tests {
         assert!(screen.contains("Line 1."), "{screen}");
         assert!(!screen.contains("Line 20."), "{screen}");
         assert!(
-            screen.contains("▾ 31 more lines · Enter: Show all of it"),
+            screen.contains("▾ 31 more lines · Show all of it in its menu"),
             "{screen}"
         );
         assert!(screen.contains("ci-bot commented · 1h ago") && screen.contains("bot "));

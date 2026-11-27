@@ -598,7 +598,7 @@ fn comment_lines(
         let mut row = vec![Span::new(" ".repeat(MARGIN + at), Style::default())];
         row.extend(side.clone());
         row.extend(from_kit(kit::comment_fold(
-            &format!("{hidden} more lines · Enter: Show all of it"),
+            &format!("{hidden} more lines · Show all of it in its menu"),
             frame.inner,
             theme,
         )));
