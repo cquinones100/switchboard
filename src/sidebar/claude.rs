@@ -13,13 +13,13 @@
 //! parked session's `parkedJobId` as its `jobId`, and the tab shows the job's
 //! conversation, as the agent state marks the tab with the job's state.
 //!
-//! Each transcript is read only as far as it has grown since the last look
-//! (`Reader::background_work`), and its last turn only when its size or time
-//! has changed (`Reader::last_turn`), so a refresh reads a few new lines.
+//! Each transcript is read through `agent::transcript`, only as far as it
+//! has grown since the last look (`Reader::background_work`), and its last
+//! turn only when its size or time has changed (`Reader::last_turn`), so a
+//! refresh reads a few new lines.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::SystemTime;
@@ -27,6 +27,8 @@ use std::time::SystemTime;
 use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::Value;
+
+use crate::agent::transcript::{self, Cursor, Entry, Kind, str_of};
 
 /// What a session file says, as far as the sidebar needs it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -250,8 +252,6 @@ fn loop_of(command: &str) -> Option<&'static str> {
 const WAKEUP_GRACE_MS: i64 = 5 * 60_000;
 /// A recurring cron job lasts this long at most, Claude Code's own limit.
 const CRON_LIFE_MS: i64 = 7 * 24 * 60 * 60_000;
-/// How much of a transcript is read at a time.
-const READ_CHUNK: u64 = 16 * 1024 * 1024;
 
 static STARTED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:Command running in background with ID|agentId): ([A-Za-z0-9_-]+)")
@@ -986,8 +986,7 @@ struct Wakeup {
 /// What has been read of one transcript.
 #[derive(Clone, Debug, Default)]
 struct Seen {
-    offset: u64,
-    rest: Vec<u8>,
+    cursor: Cursor,
     started: IndexMap<String, Task>,
     ended: HashSet<String>,
     commands: HashMap<String, String>,
@@ -1001,19 +1000,6 @@ struct Seen {
     api_error: Option<(String, i64)>,
     /// When a turn you interrupted was, while nothing has been said since.
     interrupted: Option<i64>,
-}
-
-pub fn timestamp_ms(entry: &Value) -> i64 {
-    entry
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
-        .map(|t| t.as_millisecond())
-        .unwrap_or(0)
-}
-
-fn str_of(v: Option<&Value>) -> &str {
-    v.and_then(Value::as_str).unwrap_or("")
 }
 
 /// A JSON value as JavaScript's `String()` writes it, for a field read as
@@ -1036,24 +1022,18 @@ impl Seen {
         // subagent's lines (isSidechain) are its own, not the conversation's.
         let sidechain = line.contains("\"isSidechain\":true");
         if !sidechain && line.contains("\"isApiErrorMessage\":true") {
-            if let Ok(entry) = serde_json::from_str::<Value>(line)
-                && str_of(entry.get("type")) == "assistant"
-                && entry.get("isApiErrorMessage") == Some(&Value::Bool(true))
-                && entry.get("isSidechain") != Some(&Value::Bool(true))
+            if let Some(entry) = Entry::parse(line)
+                && entry.is(Kind::Assistant)
+                && entry.flag("isApiErrorMessage")
+                && !entry.sidechain()
             {
                 let text = entry
-                    .pointer("/message/content")
-                    .and_then(Value::as_array)
-                    .and_then(|parts| {
-                        parts
-                            .iter()
-                            .find(|p| str_of(p.get("type")) == "text")
-                            .and_then(|p| p.get("text").and_then(Value::as_str))
-                    })
+                    .texts()
+                    .next()
                     .filter(|t| !t.is_empty())
                     .unwrap_or("API error");
                 let first = text.split('\n').next().unwrap_or("").to_string();
-                self.api_error = Some((first, timestamp_ms(&entry)));
+                self.api_error = Some((first, entry.ms()));
             }
             return;
         }
@@ -1061,26 +1041,19 @@ impl Seen {
         // something: a user or assistant entry of the conversation itself.
         if self.api_error.is_some()
             && !sidechain
-            && (line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\""))
-            && let Ok(entry) = serde_json::from_str::<Value>(line)
+            && (transcript::may_be(line, Kind::User) || transcript::may_be(line, Kind::Assistant))
+            && let Some(entry) = Entry::parse(line)
         {
             // A slash command as typed, its output, a shell command run with
             // ! and its output, a note Claude Code adds (isMeta) or a
             // background task's report doesn't carry the conversation on by
             // itself: a prompt does, and so does Claude's answer.
-            let kind = str_of(entry.get("type"));
             let local = entry
-                .pointer("/message/content")
+                .content()
                 .and_then(Value::as_str)
                 .is_some_and(|c| LOCAL_COMMAND.is_match(c));
-            let report = str_of(entry.pointer("/origin/kind")) == "task-notification";
-            let flag = |k: &str| entry.get(k) == Some(&Value::Bool(true));
-            if (kind == "user" || kind == "assistant")
-                && !flag("isSidechain")
-                && !flag("isMeta")
-                && !local
-                && !report
-            {
+            let report = entry.origin() == "task-notification";
+            if entry.is_said() && !entry.sidechain() && !entry.meta() && !local && !report {
                 self.api_error = None;
             }
         }
@@ -1093,38 +1066,30 @@ impl Seen {
         let interrupt = !sidechain && line.contains(INTERRUPTED);
         if (self.interrupted.is_some() || interrupt)
             && !sidechain
-            && (line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\""))
-            && let Ok(entry) = serde_json::from_str::<Value>(line)
+            && (transcript::may_be(line, Kind::User) || transcript::may_be(line, Kind::Assistant))
+            && let Some(entry) = Entry::parse(line)
         {
-            let kind = str_of(entry.get("type"));
-            let flag = |k: &str| entry.get(k) == Some(&Value::Bool(true));
-            let content = entry.pointer("/message/content");
-            let text = match content {
+            let text = match entry.content() {
                 Some(Value::String(s)) => Some(s.as_str()),
-                Some(Value::Array(parts)) => parts
-                    .iter()
-                    .find(|p| str_of(p.get("type")) == "text")
-                    .and_then(|p| p.get("text").and_then(Value::as_str)),
-                _ => None,
+                _ => entry.texts().next(),
             };
-            let conversation =
-                (kind == "user" || kind == "assistant") && !flag("isSidechain") && !flag("isMeta");
-            let results_only = content
-                .and_then(Value::as_array)
-                .is_some_and(|parts| parts.iter().all(|p| str_of(p.get("type")) == "tool_result"));
-            if conversation && kind == "user" && text.is_some_and(|t| t.starts_with(INTERRUPTED)) {
-                self.interrupted = Some(timestamp_ms(&entry));
-            } else if conversation && !results_only {
+            let conversation = entry.is_said() && !entry.sidechain() && !entry.meta();
+            if conversation
+                && entry.is(Kind::User)
+                && text.is_some_and(|t| t.starts_with(INTERRUPTED))
+            {
+                self.interrupted = Some(entry.ms());
+            } else if conversation && !entry.results_only() {
                 self.interrupted = None;
             }
         }
         if !MAY_MATTER.is_match(line) {
             return;
         }
-        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+        let Some(entry) = Entry::parse(line) else {
             return;
         };
-        let kind = str_of(entry.get("type"));
+        let kind = entry.kind();
         // A task's end, wherever Claude Code wrote it: in a user message, or,
         // in newer versions, as a queued command in an attachment entry. Only
         // a queued command marked as a task's notification: a message you
@@ -1138,19 +1103,19 @@ impl Seen {
             })
             .and_then(|a| a.get("prompt").and_then(Value::as_str))
             .unwrap_or("");
-        if kind != "user" && kind != "assistant" && !queued.is_empty() {
+        if !entry.is_said() && !queued.is_empty() {
             ended_in(queued, &mut self.ended);
             return;
         }
         // The conversation alone: Claude Code also writes copies of each
         // request (api-request-blob) with no time of their own, which would
         // start every task again at time 0, before the session.
-        if kind != "user" && kind != "assistant" {
+        if !entry.is_said() {
             return;
         }
-        let at = timestamp_ms(&entry);
+        let at = entry.ms();
         let content = entry
-            .pointer("/message/content")
+            .content()
             .cloned()
             .unwrap_or(Value::String(String::new()));
         let text = content.to_string();
@@ -1158,7 +1123,7 @@ impl Seen {
         // A loop's skill starting: typed as /<skill> (or with Switchboard's
         // plugin's name, /switchboard:<skill>), or run by the Skill tool.
         for l in &LOOPS {
-            if kind == "user"
+            if kind == Kind::User
                 && (text.contains(&format!("<command-name>/{}</command-name>", l.skill))
                     || text.contains(&format!(
                         "<command-name>/{}:{}</command-name>",
@@ -1225,7 +1190,7 @@ impl Seen {
                 {
                     self.crons.shift_remove(&string_of(Some(job)));
                 }
-                if name == "ScheduleWakeup" && kind == "assistant" {
+                if name == "ScheduleWakeup" && kind == Kind::Assistant {
                     self.wakeup = if field("stop").is_some_and(crate::util::truthy) {
                         None
                     } else {
@@ -1260,8 +1225,8 @@ impl Seen {
                 }
             }
         }
-        let notification = str_of(entry.pointer("/origin/kind")) == "task-notification"
-            || text.contains("<task-notification>");
+        let notification =
+            entry.origin() == "task-notification" || text.contains("<task-notification>");
         if notification {
             // A watch's events keep it going; anything else about a task
             // ends it. Each text part on its own, as written, since several
@@ -1452,50 +1417,6 @@ pub struct Turn {
     pub before: Option<String>,
 }
 
-/// The prompt as you typed it: a slash command as `/name args`, pasted text
-/// unwrapped, a background task's report named as one.
-pub fn prompt_text(entry: &Value) -> Option<String> {
-    static COMMAND: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?s)<command-name>(.*?)</command-name>").expect("a regex"));
-    static ARGS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?s)<command-args>(.*?)</command-args>").expect("a regex"));
-    static PASTED: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?s)<pasted_content\b[^>]*>\n?(.*?)\n?</pasted_content\b[^>]*>")
-            .expect("a regex")
-    });
-    let content = entry.pointer("/message/content")?;
-    let text = match content {
-        Value::String(s) => s.clone(),
-        Value::Array(parts) if !parts.iter().any(|p| str_of(p.get("type")) == "tool_result") => {
-            parts
-                .iter()
-                .filter(|p| str_of(p.get("type")) == "text")
-                .map(|p| str_of(p.get("text")))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        _ => return None,
-    };
-    if text.trim().is_empty() {
-        return None;
-    }
-    if str_of(entry.pointer("/origin/kind")) == "task-notification" {
-        return Some("(a background task finished)".into());
-    }
-    if let Some(command) = COMMAND.captures(&text) {
-        let args = ARGS
-            .captures(&text)
-            .map(|c| c[1].trim().to_string())
-            .unwrap_or_default();
-        return Some(format!("{} {args}", command[1].trim()).trim().to_string());
-    }
-    let trimmed = text.trim();
-    if trimmed.starts_with("<local-command-") || trimmed.starts_with("<bash-") {
-        return None;
-    }
-    Some(PASTED.replace_all(&text, "$1").trim().to_string())
-}
-
 /// A tool call in a few words, for a turn stopped on one.
 pub fn tool_text(part: &Value) -> String {
     let name = str_of(part.get("name"));
@@ -1528,29 +1449,18 @@ pub fn tool_text(part: &Value) -> String {
 
 /// The last turn in a transcript's text (or its end).
 pub fn parse_turn(text: &str) -> Option<Turn> {
-    let flag = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
-    let entries: Vec<Value> = text
-        .split('\n')
-        .filter(|l| l.starts_with('{'))
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|e| !flag(e, "isSidechain") && !flag(e, "isMeta"))
+    let entries: Vec<Entry> = transcript::entries(text)
+        .filter(|e| !e.sidechain() && !e.meta())
         .collect();
-    let start = entries
-        .iter()
-        .rposition(|e| str_of(e.get("type")) == "user" && prompt_text(e).is_some())?;
+    let start = entries.iter().rposition(Entry::is_prompt)?;
     let mut said: Vec<String> = Vec::new();
     // Each call: whether it was answered, when it was made, and how many
     // of the turn's texts had been said by then.
     let mut calls: IndexMap<String, (Value, bool, i64, usize)> = IndexMap::new();
     for entry in &entries[start + 1..] {
-        let parts = entry
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        match str_of(entry.get("type")) {
-            "assistant" => {
-                for part in parts {
+        match entry.kind() {
+            Kind::Assistant => {
+                for part in entry.parts().iter().cloned() {
                     match str_of(part.get("type")) {
                         "text" => {
                             let t = str_of(part.get("text")).trim();
@@ -1559,7 +1469,7 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
                             }
                         }
                         "tool_use" => {
-                            let at = timestamp_ms(entry);
+                            let at = entry.ms();
                             let id = str_of(part.get("id")).to_string();
                             calls.insert(id, (part, false, at, said.len()));
                         }
@@ -1567,11 +1477,8 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
                     }
                 }
             }
-            "user" => {
-                for part in parts
-                    .iter()
-                    .filter(|p| str_of(p.get("type")) == "tool_result")
-                {
+            Kind::User => {
+                for part in entry.parts_of("tool_result") {
                     if let Some(call) = calls.get_mut(str_of(part.get("tool_use_id"))) {
                         call.1 = true;
                     }
@@ -1589,9 +1496,9 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
         .filter(|(part, _, at, _)| str_of(part.get("name")) == "AskUserQuestion" && *at != 0)
         .map(|(part, _, at, _)| (tool_text(part), *at, str_of(part.get("id")).to_string()));
     let before = stopped_on.and_then(|(_, _, _, said_by)| said[..*said_by].last().cloned());
-    let at = timestamp_ms(&entries[start]);
+    let at = entries[start].ms();
     Some(Turn {
-        prompt: prompt_text(&entries[start]).unwrap_or_default(),
+        prompt: entries[start].prompt_text().unwrap_or_default(),
         at: (at != 0).then_some(at),
         reply: said.pop(),
         tools: calls.len(),
@@ -1619,26 +1526,15 @@ const MAX_TAIL: u64 = 16 * 1024 * 1024;
 /// in front and its spaces at the end taken off; a subagent's message, an
 /// API error and Claude Code's own stand-in messages are no reply.
 pub fn parse_reply(text: &str) -> Option<String> {
-    let said = |e: &Value| {
-        let yes = |key: &str| e.get(key).and_then(Value::as_bool) == Some(true);
-        e.get("type").and_then(Value::as_str) == Some("assistant")
-            && !yes("isSidechain")
-            && !yes("isApiErrorMessage")
+    let said = |e: &Entry| {
+        e.is(Kind::Assistant)
+            && !e.sidechain()
+            && !e.flag("isApiErrorMessage")
             && e.pointer("/message/model").and_then(Value::as_str) != Some("<synthetic>")
     };
-    let entries: Vec<Value> = text
-        .split('\n')
-        .filter(|line| line.starts_with('{'))
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(said)
-        .collect();
-    let texts = |e: &Value| -> Vec<String> {
-        e.pointer("/message/content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
+    let entries: Vec<Entry> = transcript::entries(text).filter(said).collect();
+    let texts = |e: &Entry| -> Vec<String> {
+        e.texts()
             .filter(|t| !t.trim().is_empty())
             .map(|t| {
                 let lead = t.len() - t.trim_start().len();
@@ -1663,31 +1559,11 @@ pub fn parse_reply(text: &str) -> Option<String> {
     Some(parts.join("\n\n"))
 }
 
-/// What `parse` finds at the end of `file`, `size` bytes long: in its last
-/// `TAIL` bytes, then four times as many while nothing turns up, up to
-/// `MAX_TAIL` or the whole file.
-fn from_end<T>(file: &Path, size: u64, parse: impl Fn(&str) -> Option<T>) -> Option<T> {
-    let mut f = fs::File::open(file).ok()?;
-    let mut length = TAIL;
-    loop {
-        let take = length.min(size);
-        let mut buf = Vec::with_capacity(take as usize);
-        f.seek(SeekFrom::Start(size - take)).ok()?;
-        (&mut f).take(take).read_to_end(&mut buf).ok()?;
-        let found = parse(&String::from_utf8_lossy(&buf));
-        if found.is_some() || take == size || length >= MAX_TAIL {
-            return found;
-        }
-        length *= 4;
-    }
-}
-
 /// The latest reply in a transcript (`parse_reply`), read from its end.
 /// Blocking: a transcript can be tens of megabytes, so the server reads it
 /// off its task.
 pub fn last_reply(file: &Path) -> Option<String> {
-    let size = fs::metadata(file).ok()?.len();
-    from_end(file, size, parse_reply)
+    transcript::from_end(file, TAIL, MAX_TAIL, |text, _| parse_reply(text))
 }
 
 /// Every string in a JSON value, depth first.
@@ -1706,35 +1582,22 @@ fn strings_in<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
 /// any screen's width, a string a line, for M-p's media list to look in.
 /// A subagent's messages are left out. Blocking, as `last_reply`.
 pub fn last_words(file: &Path) -> Option<String> {
-    let size = fs::metadata(file).ok()?.len();
-    let take = TAIL.min(size);
-    let mut f = fs::File::open(file).ok()?;
-    f.seek(SeekFrom::Start(size - take)).ok()?;
-    let mut buf = Vec::with_capacity(take as usize);
-    f.take(take).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut words = Vec::new();
-    for line in text.split('\n').filter(|line| line.starts_with('{')) {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-            continue;
+    transcript::from_end(file, TAIL, TAIL, |text, _| {
+        let mut words = Vec::new();
+        for entry in transcript::entries(text).filter(|e| !e.sidechain()) {
+            // What you typed is left out: a user entry gives its tools' results alone.
+            let mut found = Vec::new();
+            match entry.content() {
+                _ if entry.is(Kind::User) => entry
+                    .parts_of("tool_result")
+                    .for_each(|p| strings_in(p, &mut found)),
+                Some(content) => strings_in(content, &mut found),
+                None => {}
+            }
+            words.extend(found.into_iter().map(str::to_string));
         }
-        // What you typed is left out: a user entry gives its tools' results alone.
-        let user = entry.get("type").and_then(Value::as_str) == Some("user");
-        let mut found = Vec::new();
-        match entry.pointer("/message/content") {
-            Some(Value::Array(parts)) if user => parts
-                .iter()
-                .filter(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
-                .for_each(|p| strings_in(p, &mut found)),
-            Some(content) if !user => strings_in(content, &mut found),
-            _ => {}
-        }
-        words.extend(found.into_iter().map(str::to_string));
-    }
-    Some(words.join("\n"))
+        Some(words.join("\n"))
+    })
 }
 
 // ── Reading, with what was read kept ────────────────────────────────────────
@@ -1833,32 +1696,13 @@ impl Reader {
         if meta.is_dir() {
             return Err(std::io::ErrorKind::IsADirectory.into());
         }
-        let size = meta.len();
         let seen = self.seen.entry(file.to_path_buf()).or_default();
-        if size < seen.offset {
+        let mut cursor = seen.cursor;
+        if cursor.read(file, u64::MAX, |line| seen.line(line))? {
             *seen = Seen::default();
+            cursor.read(file, u64::MAX, |line| seen.line(line))?;
         }
-        if size > seen.offset {
-            let mut f = fs::File::open(file)?;
-            f.seek(SeekFrom::Start(seen.offset))?;
-            while seen.offset < size {
-                let take = (size - seen.offset).min(READ_CHUNK);
-                let mut chunk = Vec::with_capacity(take as usize);
-                (&mut f).take(take).read_to_end(&mut chunk)?;
-                if chunk.is_empty() {
-                    break;
-                }
-                seen.offset += chunk.len() as u64;
-                let mut bytes = std::mem::take(&mut seen.rest);
-                bytes.extend_from_slice(&chunk);
-                let mut lines: Vec<&[u8]> = bytes.split(|&b| b == b'\n').collect();
-                let rest = lines.pop().unwrap_or(&[]).to_vec();
-                for line in lines {
-                    seen.line(&String::from_utf8_lossy(line));
-                }
-                seen.rest = rest;
-            }
-        }
+        seen.cursor = cursor;
         Ok(seen.work(since, now, tests_in_ci))
     }
 
@@ -1874,7 +1718,7 @@ impl Reader {
         {
             return turn.clone();
         }
-        let turn = from_end(file, size, parse_turn);
+        let turn = transcript::from_end(file, TAIL, MAX_TAIL, |text, _| parse_turn(text));
         self.turns
             .insert(file.to_path_buf(), (size, mtime, turn.clone()));
         turn
@@ -2761,23 +2605,24 @@ mod tests {
         );
         // Pasted text unwrapped; a report named as one; a question by its words.
         assert_eq!(
-            prompt_text(
-                &json!({"message": {"content": "<pasted_content id=1>\nhello\n</pasted_content>"}})
+            Entry(
+                json!({"message": {"content": "<pasted_content id=1>\nhello\n</pasted_content>"}})
             )
+            .prompt_text()
             .as_deref(),
             Some("hello")
         );
         assert_eq!(
-            prompt_text(
-                &json!({"origin": {"kind": "task-notification"}, "message": {"content": "x"}})
-            )
-            .as_deref(),
+            Entry(json!({"origin": {"kind": "task-notification"}, "message": {"content": "x"}}))
+                .prompt_text()
+                .as_deref(),
             Some("(a background task finished)")
         );
         assert_eq!(
-            prompt_text(
-                &json!({"message": {"content": "<local-command-stdout>x</local-command-stdout>"}})
-            ),
+            Entry(
+                json!({"message": {"content": "<local-command-stdout>x</local-command-stdout>"}})
+            )
+            .prompt_text(),
             None
         );
         assert_eq!(

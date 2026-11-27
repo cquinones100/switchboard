@@ -32,6 +32,7 @@ use super::post::{Upload, upload_files};
 use super::slack::FileRef;
 use super::slices::sliced;
 use super::tabs;
+use crate::agent::transcript::Kind;
 use crate::util;
 
 pub const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -351,17 +352,10 @@ pub fn turn_media(cx: &Relay, transcript: &Path) -> Vec<PathBuf> {
         if let Some(dir) = entry.get("cwd").and_then(Value::as_str) {
             cwd = PathBuf::from(dir);
         }
-        if entry.get("type").and_then(Value::as_str) != Some("assistant") {
+        if !entry.is(Kind::Assistant) {
             continue;
         }
-        for part in entry
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-        {
-            let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+        for text in entry.texts() {
             for p in media_paths(text) {
                 let p = match p.strip_prefix("~/") {
                     Some(rest) => cx.paths.home.join(rest),

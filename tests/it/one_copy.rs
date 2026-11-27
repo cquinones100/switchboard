@@ -5,8 +5,8 @@
 //! empties its entries as it lands; nothing is added to one.
 //!
 //! - git's wrapper: `fn git(` only in plugin-api's `sdk` (issue 399).
-//! - Claude's transcripts: read only by `agent::transcript`, which issue 400
-//!   makes; until then `history::transcript` is the reader to use.
+//! - Claude's transcripts: read only by `agent::transcript` (issue 400
+//!   moved every reader onto it, so its list is empty).
 //! - Mission control: a view acts on an item through its menus, never a
 //!   key of its own (issue 396).
 
@@ -48,23 +48,8 @@ const GIT_COPIES: &[(&str, u32)] = &[
     ("src/worktree_sweep/reviews.rs", 399),
 ];
 
-/// Where Claude's transcripts will be read (issue 400).
+/// Where Claude's transcripts are read.
 const TRANSCRIPT_HOME: &str = "src/agent/transcript.rs";
-
-/// The files that read a transcript's entries themselves today.
-const TRANSCRIPT_COPIES: &[(&str, u32)] = &[
-    ("src/cmd/claude_here.rs", 400),
-    ("src/cmd/claude_reply.rs", 400),
-    ("src/cmd/wt_revive.rs", 400),
-    ("src/history/transcript.rs", 400),
-    ("src/phone/turns.rs", 400),
-    ("src/relay/files.rs", 400),
-    ("src/relay/milestones.rs", 400),
-    ("src/relay/summaries.rs", 400),
-    ("src/relay/tabs.rs", 400),
-    ("src/sidebar/claude.rs", 400),
-    ("src/views/conversation.rs", 400),
-];
 
 /// Mission control's boxes, which take answers rather than act on a view's
 /// item.
@@ -217,13 +202,11 @@ fn git_has_one_wrapper() {
 
 #[test]
 fn transcripts_have_one_reader() {
-    let found = transcript_copies(&sources());
-    let mut bad = new_copies(
-        "a new reader of Claude's transcripts; read them through agent::transcript (issue 400), or history::transcript until it is there",
-        found.clone(),
-        TRANSCRIPT_COPIES,
+    let bad = new_copies(
+        "a new reader of Claude's transcripts; read them through agent::transcript",
+        transcript_copies(&sources()),
+        &[],
     );
-    bad.extend(stale(&found, TRANSCRIPT_COPIES));
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 

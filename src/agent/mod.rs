@@ -11,6 +11,9 @@
 //!   Claude, which session is headless and where a background job came from.
 //! - `hook`: `switchboard hook`, the side Claude Code runs.
 //! - `prs`: the PRs a session opens or looks at, from its tool calls.
+//! - `transcript`: the one reader of Claude Code's transcripts.
+//! - `screen`: the one reading of Claude's screen: its prompt, a draft, a
+//!   dialog, and what answering presses.
 //! - `hands_free`: what the server answers a hook with in a tab of
 //!   autopilot's hands-free mode, which `hook` prints.
 //! - `serve`: the server's side: hooks, focus, the keys, one Claude per tab.
@@ -27,9 +30,11 @@
 pub mod hands_free;
 pub mod hook;
 pub mod prs;
+pub mod screen;
 mod serve;
 pub mod sessions;
 mod state;
+pub mod transcript;
 
 pub use serve::{READY_SETTING, READY_SOURCE, SEEN_DELAY, TAB_READY};
 pub use state::{Agents, Context, Doing, Hook, PaneAgent, QUESTION_KINDS, State, Wait, WaitKind};

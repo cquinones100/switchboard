@@ -13,14 +13,12 @@
 //! after it reads only what was added since.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value;
 
-use crate::history::transcript::{by_you, seconds, str_of};
-use crate::sidebar::claude::prompt_text;
+use crate::agent::transcript::{Cursor, Entry, Kind, by_you};
 
 /// The most of a transcript read: its last 50 MB.
 pub const MOST: u64 = 50 * 1024 * 1024;
@@ -50,33 +48,27 @@ pub struct Hit {
 #[derive(Clone, Debug, Default)]
 pub struct Conversation {
     pub said: Vec<Said>,
-    pub offset: u64,
+    pub cursor: Cursor,
 }
 
 impl Conversation {
-    /// Takes in the lines of what the transcript has grown by.
-    pub fn take(&mut self, text: &str) {
-        for line in text.split('\n').filter(|l| l.starts_with('{')) {
-            if let Ok(entry) = serde_json::from_str::<Value>(line) {
-                self.entry(&entry);
-            }
-        }
-    }
-
-    fn entry(&mut self, entry: &Value) {
-        let flag = |k: &str| entry.get(k) == Some(&Value::Bool(true));
-        if flag("isSidechain") || flag("isMeta") {
+    /// Takes in a line of the transcript.
+    fn take(said: &mut Vec<Said>, line: &str) {
+        let Some(entry) = Entry::parse(line) else {
+            return;
+        };
+        if entry.sidechain() || entry.meta() {
             return;
         }
-        let at = seconds(entry);
+        let at = entry.seconds();
         if at == 0 {
             return;
         }
-        let text = match str_of(entry.get("type")) {
-            "user" if by_you(entry.pointer("/origin/kind")) => prompt_text(entry),
+        let text = match entry.kind() {
+            Kind::User if by_you(entry.pointer("/origin/kind")) => entry.prompt_text(),
             // A message typed while Claude works, queued as an attachment,
             // as the history counts it a turn of yours.
-            "attachment"
+            Kind::Attachment
                 if entry.pointer("/attachment/type").and_then(Value::as_str)
                     == Some("queued_command")
                     && by_you(entry.pointer("/attachment/origin/kind"))
@@ -90,20 +82,7 @@ impl Conversation {
                     .and_then(Value::as_str)
                     .map(str::to_string)
             }
-            "assistant" => {
-                let parts: Vec<&str> = entry
-                    .pointer("/message/content")
-                    .and_then(Value::as_array)
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter(|p| str_of(p.get("type")) == "text")
-                            .map(|p| str_of(p.get("text")))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(parts.join("\n"))
-            }
+            Kind::Assistant => Some(entry.texts().collect::<Vec<_>>().join("\n")),
             _ => None,
         };
         let Some(text) = text else {
@@ -116,7 +95,7 @@ impl Conversation {
             .map(str::trim_end)
             .filter(|l| !l.trim().is_empty())
         {
-            self.said.push(Said {
+            said.push(Said {
                 at,
                 line: line.to_string(),
             });
@@ -152,37 +131,11 @@ impl Conversation {
     }
 
     fn read_within(&mut self, file: &Path, most: u64) {
-        let Ok(mut f) = std::fs::File::open(file) else {
-            return;
-        };
-        let Ok(size) = f.metadata().map(|m| m.len()) else {
-            return;
-        };
-        if size < self.offset {
-            *self = Conversation::default();
+        let said = &mut self.said;
+        if let Ok(true) = self.cursor.read(file, most, |l| Self::take(said, l)) {
+            said.clear();
+            let _ = self.cursor.read(file, most, |l| Self::take(said, l));
         }
-        let start = self.offset.max(size.saturating_sub(most));
-        let cut = start > self.offset;
-        if f.seek(SeekFrom::Start(start)).is_err() {
-            return;
-        }
-        let mut bytes = Vec::new();
-        if f.take(size - start).read_to_end(&mut bytes).is_err() {
-            return;
-        }
-        let whole = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
-        bytes.truncate(whole);
-        // Read from the middle of a line: from the next one.
-        let from = if cut {
-            bytes
-                .iter()
-                .position(|b| *b == b'\n')
-                .map_or(whole, |i| i + 1)
-        } else {
-            0
-        };
-        self.take(&String::from_utf8_lossy(&bytes[from..]));
-        self.offset = start + whole as u64;
     }
 }
 
@@ -217,6 +170,11 @@ mod tests {
         dir
     }
 
+    fn take(c: &mut Conversation, text: &str) {
+        text.lines()
+            .for_each(|l| Conversation::take(&mut c.said, l));
+    }
+
     fn line(entry: Value) -> String {
         format!("{entry}\n")
     }
@@ -237,22 +195,35 @@ mod tests {
     #[test]
     fn keeps_prompts_and_replies_but_not_tool_calls_or_their_output() {
         let mut c = Conversation::default();
-        c.take(&format!(
-            "{}{}{}{}{}{}{}",
-            prompt("2026-11-15T10:00:00Z", "Where is node installed?\n\nThanks"),
-            reply("2026-11-15T10:00:05Z", "Node is under ~/.local"),
-            line(json!({"type": "user", "timestamp": "2026-11-15T10:00:06Z", "message": {"content": [
-                {"type": "tool_result", "tool_use_id": "t1", "content": "zebra node output"}
-            ]}})),
-            line(json!({"type": "user", "timestamp": "2026-11-15T10:00:07Z", "origin": {"kind": "peer"},
-                "message": {"content": "a subagent's node report"}})),
-            line(json!({"type": "attachment", "timestamp": "2026-11-15T10:00:09Z", "attachment": {
-                "type": "queued_command", "prompt": "also check node's path", "commandMode": "prompt"}})),
-            line(json!({"type": "attachment", "timestamp": "2026-11-15T10:00:10Z", "attachment": {
-                "type": "queued_command", "prompt": "node task done", "commandMode": "task-notification"}})),
-            line(json!({"type": "assistant", "isSidechain": true, "timestamp": "2026-11-15T10:00:08Z",
-                "message": {"content": [{"type": "text", "text": "sidechain node"}]}})),
-        ));
+        take(
+            &mut c,
+            &format!(
+                "{}{}{}{}{}{}{}",
+                prompt("2026-11-15T10:00:00Z", "Where is node installed?\n\nThanks"),
+                reply("2026-11-15T10:00:05Z", "Node is under ~/.local"),
+                line(
+                    json!({"type": "user", "timestamp": "2026-11-15T10:00:06Z", "message": {"content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "zebra node output"}
+                    ]}})
+                ),
+                line(
+                    json!({"type": "user", "timestamp": "2026-11-15T10:00:07Z", "origin": {"kind": "peer"},
+                "message": {"content": "a subagent's node report"}})
+                ),
+                line(
+                    json!({"type": "attachment", "timestamp": "2026-11-15T10:00:09Z", "attachment": {
+                "type": "queued_command", "prompt": "also check node's path", "commandMode": "prompt"}})
+                ),
+                line(
+                    json!({"type": "attachment", "timestamp": "2026-11-15T10:00:10Z", "attachment": {
+                "type": "queued_command", "prompt": "node task done", "commandMode": "task-notification"}})
+                ),
+                line(
+                    json!({"type": "assistant", "isSidechain": true, "timestamp": "2026-11-15T10:00:08Z",
+                "message": {"content": [{"type": "text", "text": "sidechain node"}]}})
+                ),
+            ),
+        );
         let lines: Vec<&str> = c.said.iter().map(|s| s.line.as_str()).collect();
         assert_eq!(
             lines,
@@ -279,10 +250,10 @@ mod tests {
     #[test]
     fn a_match_s_lines_around_keep_their_indentation() {
         let mut c = Conversation::default();
-        c.take(&reply(
-            "2026-11-15T10:00:05Z",
-            "- parent\n    - zebra child  ",
-        ));
+        take(
+            &mut c,
+            &reply("2026-11-15T10:00:05Z", "- parent\n    - zebra child  "),
+        );
         let hit = c.search("zebra").unwrap();
         assert_eq!(hit.line, "- zebra child");
         assert_eq!(hit.around, ["- parent", "    - zebra child"]);
@@ -297,7 +268,7 @@ mod tests {
         let mut c = Conversation::default();
         c.read_on(&file);
         assert_eq!(c.said.len(), 1);
-        let first = c.offset;
+        let first = c.cursor.offset;
         // A line still being written is left for the next read.
         let mut more = reply("2026-11-15T10:01:00Z", "second otter");
         let partial = prompt("2026-11-15T10:02:00Z", "third otter");
@@ -309,7 +280,7 @@ mod tests {
             .unwrap();
         c.read_on(&file);
         assert_eq!(c.said.len(), 2, "each line read once");
-        assert!(c.offset > first);
+        assert!(c.cursor.offset > first);
         std::fs::OpenOptions::new()
             .append(true)
             .open(&file)

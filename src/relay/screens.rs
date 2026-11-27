@@ -105,11 +105,11 @@ fn renamed(buttons: Vec<Button>, prefix: &str, tab: &Tab) -> Vec<Button> {
 fn choice_blocks(cx: &Relay, tab: &Tab) -> Vec<Value> {
     let shown = tabs::screen(cx, &tab.id);
     let found = (tab.state == "waiting")
-        .then(|| tabs::options_in(&shown))
+        .then(|| crate::agent::screen::options_in(&shown))
         .flatten();
     let buttons = match &found {
         Some(f) => option_buttons(tab, f),
-        None => crate::remote::screen::dialog_in(&shown)
+        None => crate::agent::screen::dialog_in(&shown)
             .map(|d| dialog_buttons(tab, &d))
             .unwrap_or_default(),
     };

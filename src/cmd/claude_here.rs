@@ -27,7 +27,7 @@
 //! process alone isn't passed on to Claude.
 
 use std::fs::{self, File};
-use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::LazyLock;
@@ -35,6 +35,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::agent::transcript::{self, Entry, Kind};
 use crate::sidebar::text;
 use crate::{paths, util};
 
@@ -88,22 +89,13 @@ pub struct Tail {
 /// so the picker draws text, never commands. Meta entries, tool results and
 /// the `<command-*>` and `<system-reminder>` messages Claude Code records
 /// give nothing.
-fn prompt_text(entry: &Value) -> Option<String> {
-    if entry.get("type").and_then(Value::as_str) != Some("user")
-        || entry.get("isMeta").is_some_and(util::truthy)
-    {
+fn prompt_text(entry: &Entry) -> Option<String> {
+    if !entry.is(Kind::User) || entry.meta() {
         return None;
     }
-    let content = entry.pointer("/message/content");
-    let raw = match content {
+    let raw = match entry.content() {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
+        _ => entry.texts().collect::<Vec<_>>().join(" "),
     };
     let stripped = ESCAPES.replace_all(&raw, "");
     let spaced: String = stripped
@@ -117,28 +109,6 @@ fn prompt_text(entry: &Value) -> Option<String> {
     .then_some(cleaned)
 }
 
-/// Milliseconds since the epoch of an ISO time, as `Date.parse` reads one.
-fn parse_time(text: &str) -> Option<i64> {
-    text.parse::<jiff::Timestamp>()
-        .ok()
-        .map(|t| t.as_millisecond())
-}
-
-/// The last `length` bytes of a file of `size`, from the start of a whole
-/// line unless the read reaches the start of the file; and whether it did.
-fn tail_of(file: &mut File, size: u64, length: u64) -> std::io::Result<(String, bool)> {
-    let start = size.saturating_sub(length);
-    file.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::with_capacity((size - start) as usize);
-    file.take(size - start).read_to_end(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf).into_owned();
-    if start == 0 {
-        return Ok((text, true));
-    }
-    let from = text.find('\n').map_or(text.len(), |at| at + 1);
-    Ok((text[from..].to_string(), false))
-}
-
 /// A session's last activity, last directory and last prompt, read from
 /// the end of its transcript, a growing piece at a time. The last entry
 /// with a timestamp is the last activity, not the file's modified time:
@@ -147,26 +117,15 @@ fn tail_of(file: &mut File, size: u64, length: u64) -> std::io::Result<(String, 
 /// outlive the folder it started in. A transcript that can't be read reads
 /// as having nothing, so it is left out rather than stopping the search.
 pub fn read_session_tail(path: &Path) -> Tail {
-    let Ok(mut file) = File::open(path) else {
-        return Tail::default();
-    };
-    let Ok(size) = file.metadata().map(|m| m.len()) else {
-        return Tail::default();
-    };
-    let mut length = TAIL_START;
-    loop {
-        let Ok((text, whole)) = tail_of(&mut file, size, length) else {
-            return Tail::default();
-        };
+    transcript::from_end(path, TAIL_START, u64::MAX, |text, whole| {
         let mut found = Tail::default();
-        for line in text.split('\n').rev() {
-            if found.cwd.is_some() && found.last_active_ms.is_some() && found.last_message.is_some()
-            {
+        let all = |found: &Tail| {
+            found.cwd.is_some() && found.last_active_ms.is_some() && found.last_message.is_some()
+        };
+        for entry in text.split('\n').rev().filter_map(Entry::parse) {
+            if all(&found) {
                 break;
             }
-            let Ok(entry) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
             if found.cwd.is_none()
                 && let Some(cwd) = entry
                     .get("cwd")
@@ -176,22 +135,15 @@ pub fn read_session_tail(path: &Path) -> Tail {
                 found.cwd = Some(cwd.to_string());
             }
             if found.last_active_ms.is_none() {
-                found.last_active_ms = entry
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .and_then(parse_time);
+                found.last_active_ms = entry.time();
             }
             if found.last_message.is_none() {
                 found.last_message = prompt_text(&entry);
             }
         }
-        let all =
-            found.cwd.is_some() && found.last_active_ms.is_some() && found.last_message.is_some();
-        if all || whole {
-            return found;
-        }
-        length *= 4;
-    }
+        (all(&found) || whole).then_some(found)
+    })
+    .unwrap_or_default()
 }
 
 /// The first directory a transcript names, where its session started, read
@@ -206,7 +158,7 @@ pub fn read_first_cwd(path: &Path) -> Option<String> {
         if !line.contains("\"cwd\":") {
             continue;
         }
-        if let Ok(entry) = serde_json::from_str::<Value>(&line)
+        if let Some(entry) = Entry::parse(&line)
             && let Some(cwd) = entry
                 .get("cwd")
                 .and_then(Value::as_str)
@@ -684,13 +636,16 @@ mod tests {
         let entry = serde_json::json!({ "type": "user", "message": { "content": [
             { "type": "text", "text": "follow-up\n  \u{1b}[2J\u{1b}[Hquestion\u{7}" }
         ] } });
-        assert_eq!(prompt_text(&entry).as_deref(), Some("follow-up question"));
+        assert_eq!(
+            prompt_text(&Entry(entry)).as_deref(),
+            Some("follow-up question")
+        );
         let command =
             serde_json::json!({ "type": "user", "message": { "content": "<command-name>/clear" } });
-        assert_eq!(prompt_text(&command), None);
+        assert_eq!(prompt_text(&Entry(command)), None);
         let meta =
             serde_json::json!({ "type": "user", "isMeta": true, "message": { "content": "x" } });
-        assert_eq!(prompt_text(&meta), None);
+        assert_eq!(prompt_text(&Entry(meta)), None);
     }
 
     #[test]

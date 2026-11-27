@@ -7,7 +7,6 @@
 //! relay sent.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -21,6 +20,7 @@ use super::post::{PostOpts, post, tab_notice};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::tabs::{Tab, label};
+use crate::agent::transcript::{self, Cursor, Entry};
 
 /// gh and git count only where a command starts (a line's start, or after
 /// ; && || | ( or $( ), so text that only mentions them isn't taken for a
@@ -186,7 +186,7 @@ pub fn milestone_line(kind: &str, output: &str, failed: bool) -> Option<String> 
 /// the milestone commands waiting on their results.
 struct Seen {
     file: PathBuf,
-    offset: u64,
+    cursor: Cursor,
     pending: HashMap<String, Vec<&'static str>>,
 }
 
@@ -285,7 +285,9 @@ pub async fn milestones(cx: &Cx, tabs: &[Tab]) {
                     tab.id.clone(),
                     Seen {
                         file: file.clone(),
-                        offset: size.unwrap_or(0),
+                        cursor: Cursor {
+                            offset: size.unwrap_or(0),
+                        },
                         pending: HashMap::new(),
                     },
                 );
@@ -295,13 +297,13 @@ pub async fn milestones(cx: &Cx, tabs: &[Tab]) {
             let Some(size) = size else {
                 continue;
             };
-            if size < seen.offset {
-                seen.offset = size;
+            if size < seen.cursor.offset {
+                seen.cursor.offset = size;
             }
-            if size == seen.offset {
+            if size == seen.cursor.offset {
                 continue;
             }
-            read_new(seen, size)
+            read_new(seen)
         };
         // A failure is a kind of its own, which notifies by default;
         // progress stays in the tab's thread.
@@ -323,31 +325,19 @@ pub async fn milestones(cx: &Cx, tabs: &[Tab]) {
 }
 
 /// The milestones in what a transcript gained since it was last read.
-fn read_new(seen: &mut Seen, size: u64) -> Vec<String> {
-    let read = (|| -> std::io::Result<Vec<u8>> {
-        let mut f = std::fs::File::open(&seen.file)?;
-        f.seek(SeekFrom::Start(seen.offset))?;
-        let mut buf = Vec::new();
-        f.take(size - seen.offset).read_to_end(&mut buf)?;
-        Ok(buf)
-    })();
-    let Ok(buf) = read else {
-        return Vec::new();
-    };
-    let end = buf.iter().rposition(|b| *b == b'\n').map_or(0, |at| at + 1);
-    seen.offset += end as u64;
+fn read_new(seen: &mut Seen) -> Vec<String> {
     let mut lines = Vec::new();
-    for raw in String::from_utf8_lossy(&buf[..end]).split('\n') {
-        let Ok(entry) = serde_json::from_str::<Value>(raw) else {
-            continue;
+    let Seen {
+        file,
+        cursor,
+        pending,
+    } = seen;
+    let _ = cursor.read(file, u64::MAX, |raw| {
+        let Some(entry) = Entry::parse(raw) else {
+            return;
         };
-        let assistant = entry.get("type").and_then(Value::as_str) == Some("assistant");
-        for part in entry
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
+        let assistant = entry.is(transcript::Kind::Assistant);
+        for part in entry.parts() {
             let kind = part.get("type").and_then(Value::as_str);
             if assistant
                 && kind == Some("tool_use")
@@ -363,7 +353,7 @@ fn read_new(seen: &mut Seen, size: u64) -> Vec<String> {
                     .map(crate::util::js_string)
                     .unwrap_or_default();
                 if !kinds.is_empty() {
-                    seen.pending.insert(id, kinds);
+                    pending.insert(id, kinds);
                 }
             }
             if kind == Some("tool_result") {
@@ -371,18 +361,10 @@ fn read_new(seen: &mut Seen, size: u64) -> Vec<String> {
                     .get("tool_use_id")
                     .map(crate::util::js_string)
                     .unwrap_or_default();
-                let Some(kinds) = seen.pending.remove(&id) else {
+                let Some(kinds) = pending.remove(&id) else {
                     continue;
                 };
-                let output = match part.get("content") {
-                    Some(Value::Array(items)) => items
-                        .iter()
-                        .map(|c| c.get("text").and_then(Value::as_str).unwrap_or(""))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    Some(v) if !v.is_null() => crate::util::js_string(v),
-                    _ => String::new(),
-                };
+                let output = transcript::result_text(part, "\n");
                 let failed = part.get("is_error").is_some_and(crate::util::truthy);
                 lines.extend(
                     kinds
@@ -391,7 +373,7 @@ fn read_new(seen: &mut Seen, size: u64) -> Vec<String> {
                 );
             }
         }
-    }
+    });
     lines
 }
 

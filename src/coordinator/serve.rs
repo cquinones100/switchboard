@@ -9,9 +9,9 @@ use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::{Coordinator, LEAST_COLUMNS, Shown, TAB, Wake};
+use crate::agent::screen;
 use crate::agent::{Hook, State};
 use crate::facts::{Facts, PrState};
-use crate::mission::answer;
 use crate::mux::compose::{self, Frame};
 use crate::mux::input::{Key, KeyCode, Mouse, MouseButton, MouseKind};
 use crate::mux::pane::PaneView;
@@ -276,7 +276,7 @@ impl Server {
         // A message you left half written in its prompt waits too, rather
         // than going in with the events after it.
         let drafted = self.panes.get(&pane).is_some_and(|slot| {
-            crate::remote::screen::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
+            crate::agent::screen::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0))
                 .is_some_and(|d| !d.trim().is_empty())
         });
         let asleep = !drafted
@@ -285,7 +285,7 @@ impl Server {
                 Some(State::Working | State::Waiting)
             );
         if let Some(text) = self.coordinator.take_due(asleep, Instant::now()) {
-            self.type_into_claude(pane, answer::message_presses(&text));
+            self.type_into_claude(pane, screen::message_presses(&text));
             crate::requests::count("Anthropic", "claude", "coordinator: woken");
             self.coordinator_save();
         }

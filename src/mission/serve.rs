@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::answer::{self, AnswerBox, Press};
+use super::answer::AnswerBox;
 use super::ask::Ask;
 use super::busy::Busy;
 use super::choices::{self, Choice, Ctx, Do};
@@ -41,6 +41,7 @@ use super::inbox_board;
 use super::remind;
 use super::views::{self, Scope, View, ViewId};
 use super::{After, Focus, Jump, Mission, MissionEvent, Pane, Snapshot, Spot};
+use crate::agent::screen::{self, Press};
 use crate::items::{Item, Target, ViewData};
 use crate::mux::input::{self, Input, Key, KeyCode, Mods, Mouse, MouseButton, MouseKind, Parsed};
 use crate::mux::server::{ClientId, Event, Server};
@@ -776,7 +777,7 @@ impl Server {
                 .into_iter()
                 .find(|p| self.agents.state(*p) == Some(crate::agent::State::Waiting));
             let (options, question, more) = match asking.and_then(|p| self.panes.get(&p)) {
-                Some(slot) => answer::options_in(&slot.pane.text(60))
+                Some(slot) => screen::options_in(&slot.pane.text(60))
                     .map(|p| {
                         (
                             p.options.into_iter().map(|o| o.label).collect(),
@@ -6045,7 +6046,7 @@ impl Server {
     }
 
     /// Types into the prompt of the Claude in `pane`: `i` first while its
-    /// screen shows the prompt in vim's Normal mode (`answer::into_prompt`),
+    /// screen shows the prompt in vim's Normal mode (`screen::into_prompt`),
     /// so what is typed arrives whole. Everything that types a command or a
     /// message into a tab's Claude goes through here (the PR view's
     /// /resolve-conflicts, the Slack tab's /slack-updates, a CI loop
@@ -6058,7 +6059,7 @@ impl Server {
             .get(&pane)
             .map(|slot| slot.pane.text(0))
             .unwrap_or_default();
-        self.press(pane, answer::into_prompt(&screen, presses));
+        self.press(pane, screen::into_prompt(&screen, presses));
     }
 
     /// Presses keys and text in a pane, a paste given a moment to land
@@ -6078,7 +6079,7 @@ impl Server {
                     let left: Vec<Press> = rest.collect();
                     if !left.is_empty() {
                         self.send_later(
-                            Duration::from_millis(answer::PASTE_SETTLE_MS),
+                            Duration::from_millis(screen::PASTE_SETTLE_MS),
                             Event::Mission(MissionEvent::Press {
                                 pane,
                                 presses: left,
@@ -6095,10 +6096,10 @@ impl Server {
     // ── Answering a tab ─────────────────────────────────────────────────────
 
     /// The prompt a tab's Claude shows, read off its screen.
-    pub(crate) fn prompt_of(&self, tab: TabId) -> Option<answer::Prompt> {
+    pub(crate) fn prompt_of(&self, tab: TabId) -> Option<screen::Prompt> {
         let pane = self.claude_pane_of(tab)?;
         let slot = self.panes.get(&pane)?;
-        answer::options_in(&slot.pane.text(60))
+        screen::options_in(&slot.pane.text(60))
     }
 
     fn claude_pane_of(&self, tab: TabId) -> Option<PaneId> {
@@ -6141,20 +6142,20 @@ impl Server {
             return;
         };
         match self.prompt_of(tab) {
-            Some(found) => match answer::answer_for(&found, reply) {
+            Some(found) => match screen::answer_for(&found, reply) {
                 None => self.open_answer(
                     client,
                     tab,
                     Some(format!("\"{reply}\" isn't one of its options.")),
                 ),
                 Some(a) => {
-                    self.press(pane, answer::presses(&found, &a));
+                    self.press(pane, screen::presses(&found, &a));
                     self.send_later(
                         REANSWER_AFTER,
                         Event::Mission(MissionEvent::Reanswer {
                             client,
                             tab,
-                            note: answer::answer_said(&a),
+                            note: screen::answer_said(&a),
                         }),
                     );
                 }
@@ -6169,7 +6170,7 @@ impl Server {
                 && self
                     .panes
                     .get(&pane)
-                    .is_some_and(|slot| answer::scrolled_back(&slot.pane.text(0))) =>
+                    .is_some_and(|slot| screen::scrolled_back(&slot.pane.text(0))) =>
             {
                 self.mission_note(
                     client,
@@ -6177,7 +6178,7 @@ impl Server {
                 );
             }
             None => {
-                self.type_into_claude(pane, answer::message_presses(reply));
+                self.type_into_claude(pane, screen::message_presses(reply));
                 self.mission_note(client, "Sent.");
             }
         }

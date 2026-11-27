@@ -22,9 +22,8 @@ use super::slack::Transport;
 use super::state::Dm;
 use super::summaries::{Asked, Haiku};
 use super::{Cx, Relay, presence};
-use crate::mission::answer::{self, Press};
+use crate::agent::screen::{self, Press};
 use crate::presence::Presence as Reading;
-use crate::remote::screen;
 use crate::util;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -283,14 +282,14 @@ impl Mux for Rc<FakeMux> {
         let shown = self.shown(pane)?;
         let dialog = screen::dialog_in(&shown).filter(|_| how.dialog);
         if dialog.is_none()
-            && let Some(found) = answer::options_in(&shown)
+            && let Some(found) = screen::options_in(&shown)
         {
-            let a = answer::answer_for(&found, reply).ok_or_else(|| anyhow!("not an option"))?;
-            self.apply(pane, answer::presses(&found, &a))?;
-            return Ok(answer::answer_said(&a));
+            let a = screen::answer_for(&found, reply).ok_or_else(|| anyhow!("not an option"))?;
+            self.apply(pane, screen::presses(&found, &a))?;
+            return Ok(screen::answer_said(&a));
         }
         let dialog = dialog.ok_or_else(|| anyhow!("no prompt"))?;
-        let picked = answer::chosen_option(&dialog.options, reply)
+        let picked = screen::chosen_option(&dialog.options, reply)
             .ok_or_else(|| anyhow!("not an option"))?;
         self.apply(pane, dialog.presses(&picked))?;
         Ok(format!("Chose {}. {}", picked.n, picked.label))
@@ -302,7 +301,7 @@ impl Mux for Rc<FakeMux> {
             .ok_or_else(|| anyhow!("no pane {pane}"))?;
         self.apply(
             pane,
-            answer::into_prompt(&screen, answer::message_presses(text)),
+            screen::into_prompt(&screen, screen::message_presses(text)),
         )?;
         Ok(format!("Sent \"{text}\""))
     }

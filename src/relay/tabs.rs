@@ -22,8 +22,6 @@
 //! (src/mission/answer.rs, which was ported from here).
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime};
@@ -36,13 +34,11 @@ use super::config::{Paths, SCREEN_LINES};
 use super::mux::TabStage;
 use super::post::BUTTON_TEXT;
 use super::{Cx, Relay};
-use crate::mission::answer::{self, Prompt, PromptOption};
-use crate::remote::screen::draft_in;
 #[cfg(test)]
-use crate::remote::screen::hash_of;
+use crate::agent::screen::hash_of;
+use crate::agent::screen::{self, Prompt, PromptOption, draft_in, options_in};
+use crate::agent::transcript::{self, Entry, Kind};
 use crate::util;
-
-pub use answer::{answer_for, answer_said, options_in, scrolled_back};
 
 /// The option the relay records a tab's Claude pane in.
 pub const CLAUDE_PANE: &str = "@claude_pane";
@@ -348,14 +344,11 @@ pub fn last_turn(cx: &Relay, id: &str, expected: Option<&str>) -> String {
 }
 
 /// Claude's texts after the last prompt.
-fn texts_after(after: &[Value]) -> Vec<String> {
+fn texts_after(after: &[Entry]) -> Vec<String> {
     after
         .iter()
-        .filter(|e| e.get("type").and_then(Value::as_str) == Some("assistant"))
-        .filter_map(|e| e.pointer("/message/content").and_then(Value::as_array))
-        .flatten()
-        .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|p| p.get("text").and_then(Value::as_str))
+        .filter(|e| e.is(Kind::Assistant))
+        .flat_map(Entry::texts)
         .filter(|t| !t.trim().is_empty())
         .map(str::to_string)
         .collect()
@@ -374,28 +367,12 @@ pub fn caught_up(file: &Path, last: &str) -> bool {
 /// ended can still stop at a tool call, or at text that came before one.
 pub fn turn_written(file: &Path) -> bool {
     let after = last_prompt(file).map(|p| p.after).unwrap_or_default();
-    let Some(last) = after.iter().rev().find(|e| {
-        matches!(
-            e.get("type").and_then(Value::as_str),
-            Some("assistant" | "user")
-        )
-    }) else {
+    let Some(last) = after.iter().rev().find(|e| e.is_said()) else {
         return false;
     };
-    let parts = last
-        .pointer("/message/content")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let kind = |p: &Value| p.get("type").and_then(Value::as_str).map(str::to_string);
-    last.get("type").and_then(Value::as_str) == Some("assistant")
-        && parts.iter().any(|p| {
-            kind(p).as_deref() == Some("text")
-                && p.get("text")
-                    .and_then(Value::as_str)
-                    .is_some_and(|t| !t.trim().is_empty())
-        })
-        && !parts.iter().any(|p| kind(p).as_deref() == Some("tool_use"))
+    last.is(Kind::Assistant)
+        && last.texts().any(|t| !t.trim().is_empty())
+        && last.parts_of("tool_use").next().is_none()
 }
 
 /// Claude Code keeps a long message it was typed (the relay types the whole
@@ -427,62 +404,12 @@ pub struct LastPrompt {
     pub prompt: String,
     pub background: bool,
     pub sent_at: Option<i64>,
-    pub after: Vec<Value>,
+    pub after: Vec<Entry>,
 }
 
 /// How much of a transcript's end is read for its last prompt at first:
 /// a long session's transcript runs to hundreds of megabytes.
 const PROMPT_TAIL: u64 = 1024 * 1024;
-
-/// A prompt's text, when the entry is one you (or the harness) sent.
-fn prompt_of(entry: &Value) -> Option<String> {
-    match entry.pointer("/message/content")? {
-        Value::String(s) => (!s.is_empty()).then(|| s.clone()),
-        Value::Array(parts) => {
-            if parts
-                .iter()
-                .any(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
-            {
-                return None;
-            }
-            let text = parts
-                .iter()
-                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.is_empty()).then_some(text)
-        }
-        _ => None,
-    }
-}
-
-/// The end of a file: its last `tail` bytes, from the start of a line, and
-/// whether that is the whole file.
-fn tail_of(file: &Path, tail: u64) -> Option<(String, bool)> {
-    let mut f = File::open(file).ok()?;
-    let size = f.metadata().ok()?.len();
-    let length = size.min(tail);
-    let whole = length == size;
-    f.seek(SeekFrom::Start(size - length)).ok()?;
-    let mut buf = Vec::new();
-    f.take(length).read_to_end(&mut buf).ok()?;
-    let mut text = String::from_utf8_lossy(&buf).into_owned();
-    if !whole {
-        text = text
-            .find('\n')
-            .map_or(String::new(), |at| text[at + 1..].to_string());
-    }
-    Some((text, whole))
-}
-
-/// When an entry was written, in ms.
-pub fn time_of(entry: &Value) -> Option<i64> {
-    let ts = entry.get("timestamp")?.as_str()?;
-    ts.parse::<jiff::Timestamp>()
-        .ok()
-        .map(|t| t.as_millisecond())
-}
 
 /// A transcript's last prompt, or `None` when there is none yet.
 /// Subagents' entries are left out. Read from the end, a tail four times
@@ -496,61 +423,37 @@ pub fn last_prompt(file: &Path) -> Option<LastPrompt> {
         LazyLock::new(|| Regex::new(r"<[^>]+>[^<]*</[^>]+>").expect("a regex"));
     static AGENT: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"</?agent-message[^>]*>").expect("a regex"));
-    let mut tail = PROMPT_TAIL;
-    loop {
-        let (text, whole) = tail_of(file, tail)?;
+    transcript::from_end(file, PROMPT_TAIL, u64::MAX, |text, _| {
         // Whether the last reply so far waits on a tool, so its turn runs on,
         // until something other than the tool's result is said (Esc's
         // interruption, a prompt of yours).
         let mut running = false;
-        let entries: Vec<Value> = text
-            .split('\n')
-            .filter(|l| !l.is_empty())
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|e| !e.get("isSidechain").is_some_and(util::truthy))
+        let entries: Vec<Entry> = transcript::entries(text)
+            .filter(|e| !e.sidechain())
             .filter(|e| {
-                let meta = e.get("isMeta").is_some_and(util::truthy);
-                match e.get("type").and_then(Value::as_str) {
-                    Some("assistant") => {
+                match e.kind() {
+                    Kind::Assistant => {
                         running = e.pointer("/message/stop_reason").and_then(Value::as_str)
                             == Some("tool_use");
                     }
-                    Some("user") if !meta => {
-                        let results_only = e
-                            .pointer("/message/content")
-                            .and_then(Value::as_array)
-                            .is_some_and(|parts| {
-                                parts.iter().all(|p| {
-                                    p.get("type").and_then(Value::as_str) == Some("tool_result")
-                                })
-                            });
-                        running &= results_only;
-                    }
+                    Kind::User if !e.meta() => running &= e.results_only(),
                     _ => {}
                 }
                 // Another session's message arrives as a meta entry once a
                 // turn has ended, and starts one all the same (one that comes
                 // in while a turn runs is queued into it).
-                let starts_a_turn =
-                    !running && e.pointer("/origin/kind").and_then(Value::as_str) == Some("peer");
-                starts_a_turn || !meta
+                let starts_a_turn = !running && e.origin() == "peer";
+                starts_a_turn || !e.meta()
             })
             .collect();
-        let start = entries.iter().rposition(|e| {
-            e.get("type").and_then(Value::as_str) == Some("user") && prompt_of(e).is_some()
-        });
-        let Some(start) = start else {
-            if whole {
-                return None;
-            }
-            tail = tail.saturating_mul(4);
-            continue;
-        };
+        let start = entries
+            .iter()
+            .rposition(|e| e.is(Kind::User) && e.typed("\n").is_some())?;
         let entry = &entries[start];
-        let raw = prompt_of(entry).unwrap_or_default();
+        let raw = entry.typed("\n").unwrap_or_default();
         let after = entries[start + 1..].to_vec();
-        let sent_at = time_of(entry);
-        let origin = entry.pointer("/origin/kind").and_then(Value::as_str);
+        let sent_at = entry.time();
+        let origin = Some(entry.origin()).filter(|o| !o.is_empty());
         // A subagent's report back starts a turn (origin peer), in the
         // harness's framing: it reads as the report, cut short. Known by its
         // origin alone, never its text, which a prompt of yours may quote.
@@ -614,13 +517,13 @@ pub fn last_prompt(file: &Path) -> Option<LastPrompt> {
             let text = COMMAND.replace(&text, "$1 ");
             TAGGED.replace_all(&text, "").trim().to_string()
         };
-        return Some(LastPrompt {
+        Some(LastPrompt {
             prompt,
             background,
             sent_at,
             after,
-        });
-    }
+        })
+    })
 }
 
 /// When a session last did something: the time of its transcript's last
@@ -648,18 +551,14 @@ pub fn last_activity_at(cx: &Relay, file: &Path) -> Option<i64> {
 
 /// The last conversation entry's time in a transcript's end.
 pub fn activity_in(file: &Path) -> Option<i64> {
-    let (text, _) = tail_of(file, 256 * 1024)?;
-    text.split('\n').rev().find_map(|line| {
-        if !line.contains(r#""type":"user""#) && !line.contains(r#""type":"assistant""#) {
-            return None;
-        }
-        let entry: Value = serde_json::from_str(line).ok()?;
-        matches!(
-            entry.get("type").and_then(Value::as_str),
-            Some("user" | "assistant")
-        )
-        .then(|| time_of(&entry))
-        .flatten()
+    let tail = 256 * 1024;
+    transcript::from_end(file, tail, tail, |text, _| {
+        text.split('\n').rev().find_map(|line| {
+            if !transcript::may_be(line, Kind::User) && !transcript::may_be(line, Kind::Assistant) {
+                return None;
+            }
+            Entry::parse(line).filter(Entry::is_said)?.time()
+        })
     })
 }
 
@@ -689,7 +588,7 @@ pub fn last_said(file: &Path) -> Option<String> {
 /// The messages queued into a turn while it ran, in order: only what you
 /// typed, not a finished background task's notification or a subagent's
 /// report, which Claude Code queues the same way.
-pub fn queued_in(after: &[Value]) -> Vec<String> {
+pub fn queued_in(after: &[Entry]) -> Vec<String> {
     after
         .iter()
         .filter_map(|e| {
@@ -700,7 +599,7 @@ pub fn queued_in(after: &[Value]) -> Vec<String> {
                 .unwrap_or("human");
             let typed = kind == "human"
                 && a.get("commandMode").and_then(Value::as_str) != Some("task-notification");
-            (e.get("type").and_then(Value::as_str) == Some("attachment")
+            (e.is(Kind::Attachment)
                 && a.get("type").and_then(Value::as_str) == Some("queued_command")
                 && typed)
                 .then(|| a.get("prompt")?.as_str().map(str::to_string))
@@ -729,16 +628,8 @@ pub fn turn_from(file: &Path, expected: Option<&str>, last: Option<&str>) -> Opt
     }
     let mut tools = 0;
     let mut said: Vec<String> = Vec::new();
-    for entry in &after {
-        if entry.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-        for part in entry
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
+    for entry in after.iter().filter(|e| e.is(Kind::Assistant)) {
+        for part in entry.parts() {
             match part.get("type").and_then(Value::as_str) {
                 Some("tool_use") => tools += 1,
                 Some("text") => {
@@ -928,7 +819,7 @@ fn prompt_with(found: &Prompt, shown: impl Fn(&&PromptOption) -> bool, hint: &st
 
 /// Your answer as one of a dialog's options.
 pub fn chosen_option(options: &[PromptOption], text: &str) -> Option<PromptOption> {
-    answer::chosen_option(options, text)
+    screen::chosen_option(options, text)
 }
 
 /// The lines of a screen a post shows under "On screen now".

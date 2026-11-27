@@ -8,9 +8,11 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+use super::lanes::Lanes;
 use super::timeline::{self, Model};
 use super::view::HistoryView;
 use crate::agent::Hook;
+use crate::agent::transcript::Cursor;
 use crate::mux::keys::Action;
 use crate::mux::server::ClientId;
 use crate::mux::server::{Event, Server};
@@ -26,7 +28,7 @@ pub enum HistoryEvent {
         /// What the transcript says, taken in as far as it has grown, with
         /// where the next read starts and the context window; `None` when
         /// it couldn't be read.
-        read: Option<(super::transcript::Lanes, u64, u64)>,
+        read: Option<(super::lanes::Lanes, u64, u64)>,
     },
 }
 
@@ -62,7 +64,7 @@ impl Server {
             .and_then(Value::as_str)
             .unwrap_or("");
         if matches!(hook.event.as_str(), "PostToolUse" | "PostToolUseFailure")
-            && super::transcript::is_commit(command)
+            && super::lanes::is_commit(command)
         {
             self.history.marked(pane);
         }
@@ -144,14 +146,19 @@ impl Server {
         // Read and parsed here, off the server's task: a transcript read
         // from its start can be tens of megabytes.
         tokio::task::spawn_blocking(move || {
-            let read = super::transcript::read_from(&file, offset).map(|(text, next)| {
-                if next < offset {
-                    lanes = Default::default();
+            let mut cursor = Cursor { offset };
+            let mut read_on = |lanes: &mut Lanes| cursor.read(&file, u64::MAX, |l| lanes.take(l));
+            let read = match read_on(&mut lanes) {
+                Ok(true) => {
+                    lanes = Lanes::default();
+                    read_on(&mut lanes)
                 }
-                lanes.take(&text);
+                other => other,
+            };
+            let read = read.ok().map(|_| {
                 let (used, _) = crate::usage::sessions::context_of(&state, &session);
                 let window = lanes.window(used);
-                (lanes, next, window)
+                (lanes, cursor.offset, window)
             });
             let _ = tx.send(Event::History(HistoryEvent::Read {
                 pane,

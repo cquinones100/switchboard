@@ -1765,7 +1765,7 @@ pub enum MissionEvent {
     /// once what came before has landed.
     Press {
         pane: PaneId,
-        presses: Vec<answer::Press>,
+        presses: Vec<crate::agent::screen::Press>,
     },
     /// After an answer: the tab's prompt read again, the next question of
     /// several shown, or what was done said.

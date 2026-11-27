@@ -1234,7 +1234,7 @@ impl Server {
             Some(pane) => {
                 self.type_into_claude(
                     pane,
-                    vec![crate::mission::answer::Press::Text(
+                    vec![crate::agent::screen::Press::Text(
                         "/resolve-conflicts".into(),
                     )],
                 );
