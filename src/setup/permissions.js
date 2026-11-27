@@ -535,7 +535,7 @@ export function denied(tool, input) {
 // `Way`). A branch that lands on another branch (`landing`'s `target`) has
 // its PR onto that branch, stacked, which GitHub's auto-merge merges
 // whatever the way but a merge service, as queue-and-clean's "GitHub's
-// auto-merge" says; read from what `landing` knows of the branch, not
+// auto-merge" says, which it asks with `--auto`; read from what `landing` knows of the branch, not
 // asked of GitHub, which only `src/integrations` reaches, counted. A repository with no way set,
 // or a push whose branch can't be read from its words (`git push origin
 // "$b"`), is left to the rules above: this keeps a Claude from landing
@@ -622,7 +622,9 @@ export function landingCalls(command) {
         }
       }
       // `--disable-auto` stops a merge rather than making one.
-      if (!w.includes('--disable-auto')) found.push({ kind: 'merge', args: otherRepo ? null : args });
+      if (!w.includes('--disable-auto')) {
+        found.push({ kind: 'merge', args: otherRepo ? null : args, auto: w.includes('--auto') });
+      }
     }
   }
   return found;
@@ -658,7 +660,9 @@ export async function landingRefused(command, look) {
         return `Switchboard's permissions in its panes deny this: ${name}, not a push to its default branch, ${main}: ${change}`;
       }
     } else if (call.kind === 'merge' && !MERGES.has(way)) {
-      if (way === 'service' || !landing.target) {
+      // Only auto-merge, as queue-and-clean asks it for the stacked PR: a
+      // merge at once from the branch is never the stacked PR's way.
+      if (way === 'service' || !landing.target || !call.auto) {
         return `Switchboard's permissions in its panes deny this: ${name}, not \`gh pr merge\`: ${change}`;
       }
     }
