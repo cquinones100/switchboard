@@ -147,7 +147,7 @@ fn made_by_cargo(target: &Path) -> bool {
 /// isn't would never have cargo use, or tag, its `target/`.
 fn wanted_in(worktree: &Path) -> bool {
     let tracks_none = |main: PathBuf| {
-        worktree::git_at(&main, &["ls-files", "--", ":(icase)target/"]).is_ok_and(|f| f.is_empty())
+        worktree::git(&main, &["ls-files", "--", ":(icase)target/"]).is_ok_and(|f| f.is_empty())
     };
     worktree.join("Cargo.toml").is_file()
         && !trust::is_untrusted(worktree)
@@ -269,7 +269,7 @@ fn keep_compiler_cache(target: &Path) -> std::io::Result<()> {
 /// rather than new, whose files may be older than the dependencies' own
 /// records of a build, which setting them back would have cargo build again.
 fn made_at(worktree: &Path) -> Option<std::time::SystemTime> {
-    let tracked = worktree::git_at(worktree, &["ls-files", "-z"]).ok()?;
+    let tracked = worktree::git(worktree, &["ls-files", "-z"]).ok()?;
     let oldest = tracked
         .split('\0')
         .filter(|f| !f.is_empty())
@@ -394,32 +394,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "commit.gpgSign=false",
-            ])
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        assert!(ok, "git {args:?}");
-    }
+    use crate::worktree::git_scratch;
 
     /// Removes its folder when the test ends.
     struct Scratch(PathBuf);
@@ -439,8 +414,8 @@ mod tests {
         let main = dir.join("main");
         std::fs::create_dir_all(&main).unwrap();
         let tmp = Scratch(dir);
-        git(&main, &["init", "-q", "-b", "main"]);
-        git(
+        git_scratch(&main, &["init", "-q", "-b", "main"]);
+        git_scratch(
             &main,
             &[
                 "-c",
@@ -455,7 +430,7 @@ mod tests {
             ],
         );
         let wt = main.join(".claude/worktrees/wt");
-        git(
+        git_scratch(
             &main,
             &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()],
         );

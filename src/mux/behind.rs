@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 use crate::items::Item;
 use crate::mux::server::{Event, Server};
 use crate::settings;
+use crate::worktree::git;
 
 /// The setting that turns the notification off.
 pub const SETTING: &str = "build_behind_notice";
@@ -79,31 +80,6 @@ pub fn built_from() -> Option<String> {
     (!commit.is_empty() && commit != "unknown").then(|| commit.to_string())
 }
 
-/// Runs git in `clone`, giving what it printed when it succeeded.
-fn git(clone: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(clone)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-}
-
-/// The clone's default branch: `origin/HEAD`'s, else `main`.
-fn default_branch(clone: &Path) -> String {
-    git(
-        clone,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .and_then(|r| r.trim().strip_prefix("origin/").map(String::from))
-    .unwrap_or_else(|| "main".to_string())
-}
-
 /// How long a fetch may take before it is ended, so one stalled on a dead
 /// connection never holds the counts after it.
 const FETCH_FOR: Duration = Duration::from_secs(60);
@@ -112,7 +88,8 @@ const FETCH_FOR: Duration = Duration::from_secs(60);
 /// whatever origin's refspec fetches; a fetch that fails (offline) or runs
 /// past `FETCH_FOR` leaves it as it was, and the count is made from that.
 pub fn fetch(clone: &Path) {
-    let default = default_branch(clone);
+    let default =
+        crate::tabs::git::default_branch(&clone.join(".git")).unwrap_or_else(|| "main".into());
     let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
     let Ok(mut child) = Command::new("git")
         .arg("-C")
@@ -146,19 +123,21 @@ pub fn fetch(clone: &Path) {
 /// is at; `None` when git can't say (no such commit, no main).
 pub fn count(clone: &Path, commit: &str) -> Option<(usize, String)> {
     let git = |args: &[&str]| git(clone, args);
-    let default = default_branch(clone);
+    let default =
+        crate::tabs::git::default_branch(&clone.join(".git")).unwrap_or_else(|| "main".into());
     let upstream = [format!("origin/{default}"), default]
         .into_iter()
-        .find(|r| git(&["rev-parse", "--verify", "-q", &format!("{r}^{{commit}}")]).is_some())?;
+        .find(|r| git(&["rev-parse", "--verify", "-q", &format!("{r}^{{commit}}")]).is_ok())?;
     let listed = git(&[
         "rev-list",
         &format!("{commit}^{{commit}}..{upstream}"),
         "--",
-    ])?;
+    ])
+    .ok()?;
     let commits: Vec<&str> = listed.lines().filter(|l| !l.is_empty()).collect();
     let head = match commits.first() {
         Some(head) => head.to_string(),
-        None => git(&["rev-parse", &upstream])?.trim().to_string(),
+        None => git(&["rev-parse", &upstream]).ok()?,
     };
     Some((commits.len(), head))
 }
@@ -277,26 +256,7 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@example.com")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@example.com")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
+    use crate::worktree::git_scratch;
 
     #[test]
     fn counts_the_commits_on_main_the_build_lacks() {
@@ -305,7 +265,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let origin = dir.join("origin");
         let clone = dir.join("clone");
-        git(
+        git_scratch(
             &dir,
             &[
                 "init",
@@ -316,7 +276,7 @@ mod tests {
                 origin.to_str().unwrap(),
             ],
         );
-        git(
+        git_scratch(
             &dir,
             &[
                 "clone",
@@ -325,12 +285,12 @@ mod tests {
                 clone.to_str().unwrap(),
             ],
         );
-        git(&clone, &["commit", "-q", "--allow-empty", "-m", "built"]);
-        let built = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
-        git(&clone, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(&clone, &["commit", "-q", "--allow-empty", "-m", "built"]);
+        let built = git_scratch(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git_scratch(&clone, &["push", "-q", "origin", "HEAD:main"]);
         assert_eq!(count(&clone, &built).map(|(n, _)| n), Some(0));
         for n in 1..=3 {
-            git(
+            git_scratch(
                 &clone,
                 &[
                     "commit",
@@ -343,13 +303,13 @@ mod tests {
         }
         // Only what reached origin counts once it has an origin/main.
         assert_eq!(count(&clone, &built).map(|(n, _)| n), Some(0));
-        git(&clone, &["push", "-q", "origin", "HEAD:main"]);
-        let head = git(&clone, &["rev-parse", "HEAD"]);
+        git_scratch(&clone, &["push", "-q", "origin", "HEAD:main"]);
+        let head = git_scratch(&clone, &["rev-parse", "HEAD"]);
         assert_eq!(count(&clone, &built), Some((3, head)));
         // Merged on origin by something else (the merge queue on GitHub, a
         // push from another clone): counted once fetched.
         let other = dir.join("other");
-        git(
+        git_scratch(
             &dir,
             &[
                 "clone",
@@ -358,11 +318,11 @@ mod tests {
                 other.to_str().unwrap(),
             ],
         );
-        git(&other, &["commit", "-q", "--allow-empty", "-m", "merged"]);
-        git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        git_scratch(&other, &["commit", "-q", "--allow-empty", "-m", "merged"]);
+        git_scratch(&other, &["push", "-q", "origin", "HEAD:main"]);
         assert_eq!(count(&clone, &built).map(|(n, _)| n), Some(3));
         fetch(&clone);
-        let head = git(&other, &["rev-parse", "HEAD"]);
+        let head = git_scratch(&other, &["rev-parse", "HEAD"]);
         assert_eq!(count(&clone, &built), Some((4, head)));
         assert_eq!(
             words(3),

@@ -214,6 +214,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+use crate::worktree::git;
+
 use crate::cmd::land_lock;
 use crate::integrations::github::{self, Repo};
 use crate::integrations::linear;
@@ -327,6 +329,12 @@ fn fail<T>(message: impl Into<String>) -> Reviewed<T> {
     Err(ReviewError(message.into()))
 }
 
+impl From<anyhow::Error> for ReviewError {
+    fn from(e: anyhow::Error) -> ReviewError {
+        ReviewError(e.to_string())
+    }
+}
+
 #[derive(Default)]
 struct Opts {
     dir: Option<String>,
@@ -431,25 +439,6 @@ fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
 }
 
 // ── git ─────────────────────────────────────────────────────────────────────
-
-/// git's output, trimmed, in the current directory (the repository's top,
-/// once `run` has moved there); the review stops when it fails.
-fn git(args: &[&str]) -> Reviewed<String> {
-    let output = Command::new("git")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| ReviewError(format!("could not run git: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return fail(format!(
-            "git {} failed: {}",
-            args.first().unwrap_or(&""),
-            stderr.trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
 
 /// A command's output, trimmed, or `None` when it fails or prints nothing.
 fn try_run(program: &str, args: &[&str]) -> Option<String> {
@@ -679,7 +668,7 @@ fn repo_root() -> Reviewed<String> {
 }
 
 fn current_branch() -> Reviewed<String> {
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = git(Path::new("."), &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if branch == "HEAD" {
         return fail("HEAD is detached; check out the branch you want reviewed");
     }
@@ -687,7 +676,7 @@ fn current_branch() -> Reviewed<String> {
 }
 
 fn ensure_clean() -> Reviewed<()> {
-    let status = git(&["status", "--porcelain"])?;
+    let status = git(Path::new("."), &["status", "--porcelain"])?;
     if status.is_empty() {
         return Ok(());
     }
@@ -869,7 +858,7 @@ fn github_slug(url: &str) -> Option<String> {
 /// repository when a clone has several remotes.
 fn remote_for_pull_request(pr: &PrDetails) -> Reviewed<String> {
     let want = github_slug(&pr.url);
-    let all = git(&["remote"])?;
+    let all = git(Path::new("."), &["remote"])?;
     let remotes: Vec<&str> = all.lines().filter(|l| !l.is_empty()).collect();
     let found = remotes.iter().find(|name| {
         try_run("git", &["remote", "get-url", name])
@@ -930,7 +919,10 @@ fn resolve_base(
 ) -> Reviewed<(String, String)> {
     let exists = |r: &str| try_run("git", &["rev-parse", "--verify", "--quiet", r]).is_some();
     if explicit && exists(name) {
-        return Ok((name.to_string(), git(&["merge-base", name, head])?));
+        return Ok((
+            name.to_string(),
+            git(Path::new("."), &["merge-base", name, head])?,
+        ));
     }
     let remote_name = match pr {
         Some(pr) => remote_for_pull_request(pr)?,
@@ -957,7 +949,7 @@ fn resolve_base(
     }
     let mut best: Option<(String, String)> = None;
     for candidate in candidates {
-        let merge_base = git(&["merge-base", &candidate, head])?;
+        let merge_base = git(Path::new("."), &["merge-base", &candidate, head])?;
         best = match best {
             None => Some((candidate, merge_base)),
             Some((best_ref, best_base)) => {
@@ -1991,7 +1983,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     if !opts.dry_run {
         ensure_clean()?;
     }
-    let head = git(&["rev-parse", "HEAD"])?;
+    let head = git(Path::new("."), &["rev-parse", "HEAD"])?;
 
     // A PR from a fork (yours, in a fork's clone) is reviewed against the
     // copy of its base on the remote that points at the repository it
@@ -2030,7 +2022,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                 "there is no origin/{base_name} to compare {branch} with; pass --base <commit>"
             ));
         }
-        let merge_base = git(&["merge-base", &remote, &head])?;
+        let merge_base = git(Path::new("."), &["merge-base", &remote, &head])?;
         (remote, merge_base)
     } else {
         resolve_base(&base_name, &head, pr.as_ref(), opts.base.is_some())?
@@ -2045,12 +2037,15 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         });
     }
 
-    let commits = git(&[
-        "log",
-        "--reverse",
-        "--format=- %h %s%n%w(0,2,2)%b",
-        &format!("{merge_base}..{head}"),
-    ])?
+    let commits = git(
+        Path::new("."),
+        &[
+            "log",
+            "--reverse",
+            "--format=- %h %s%n%w(0,2,2)%b",
+            &format!("{merge_base}..{head}"),
+        ],
+    )?
     .lines()
     .filter(|l| !l.trim().is_empty())
     .collect::<Vec<_>>()
@@ -2160,13 +2155,16 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     if claude {
         write(
             &diff_path,
-            &git(&[
-                "diff",
-                "--text",
-                "--no-textconv",
-                "--no-ext-diff",
-                &format!("{merge_base}..{head}"),
-            ])?,
+            &git(
+                Path::new("."),
+                &[
+                    "diff",
+                    "--text",
+                    "--no-textconv",
+                    "--no-ext-diff",
+                    &format!("{merge_base}..{head}"),
+                ],
+            )?,
         )?;
     }
 
@@ -2263,7 +2261,9 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // The reviewer read the working tree for several minutes. If the
     // checkout moved underneath it, the findings describe a mix of states
     // and can't be put down to any one commit, so they are thrown away.
-    if git(&["rev-parse", "HEAD"])? != head || !git(&["status", "--porcelain"])?.is_empty() {
+    if git(Path::new("."), &["rev-parse", "HEAD"])? != head
+        || !git(Path::new("."), &["status", "--porcelain"])?.is_empty()
+    {
         return fail(format!(
             "the checkout changed while {reviewer} was reviewing {head}; discarding the result. Re-run once the tree is stable."
         ));
@@ -2776,7 +2776,10 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
 
 /// Where git keeps one of the record's files for the checkout this runs in.
 fn record_path(name: &str) -> Reviewed<PathBuf> {
-    Ok(PathBuf::from(git(&["rev-parse", "--git-path", name])?))
+    Ok(PathBuf::from(git(
+        Path::new("."),
+        &["rev-parse", "--git-path", name],
+    )?))
 }
 
 fn write_record(path: &Path, line: &str) -> Reviewed<()> {
@@ -3226,8 +3229,11 @@ pub(crate) fn record_squashed(commit: &str) -> Result<(), String> {
 /// reviewed patch.
 fn record_squash(commit: &str) -> Reviewed<()> {
     let (reviewed, base, patch) = recorded()?;
-    let squashed = git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
-    let tree = |c: &str| git(&["rev-parse", &format!("{c}^{{tree}}")]);
+    let squashed = git(
+        Path::new("."),
+        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
+    )?;
+    let tree = |c: &str| git(Path::new("."), &["rev-parse", &format!("{c}^{{tree}}")]);
     if tree(&squashed)? != tree(&reviewed)? {
         return fail(format!(
             "{squashed} has a different tree from the reviewed {reviewed}; nothing recorded"
@@ -3259,14 +3265,17 @@ fn record_squash(commit: &str) -> Reviewed<()> {
             "{squashed} adds commits on top of the reviewed {reviewed}; nothing recorded"
         ));
     }
-    let parents = git(&["rev-list", "--parents", "-n", "1", &squashed])?;
+    let parents = git(
+        Path::new("."),
+        &["rev-list", "--parents", "-n", "1", &squashed],
+    )?;
     if parents.split_whitespace().count() != 2 {
         return fail(format!(
             "{squashed} isn't a commit with one parent; nothing recorded"
         ));
     }
     let below = format!("{base}..{squashed}");
-    for hash in git(&["rev-list", &below])?.lines() {
+    for hash in git(Path::new("."), &["rev-list", &below])?.lines() {
         if hash != squashed && !is_ancestor(hash, &reviewed) {
             return fail(format!(
                 "{hash} is history the review didn't cover, between {base} and {squashed}; nothing recorded"

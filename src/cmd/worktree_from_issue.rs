@@ -178,7 +178,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     // The issue the branch is for, so a branch of the same name made for
     // another issue is refused rather than started inside its work.
     let key = format!("branch.{branch}.wtnIssue");
-    let recorded = worktree::git_at(&root, &["config", "--get", &key]).unwrap_or_default();
+    let recorded = worktree::git(&root, &["config", "--get", &key]).unwrap_or_default();
     if !recorded.is_empty() && !recorded.eq_ignore_ascii_case(&issue.reference()) {
         let why = format!("{branch} is for another issue: {recorded}");
         refused_in_autopilot(&why);
@@ -222,7 +222,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         // A folder already holding another branch fails the start before
         // anything is written on GitHub, so its retries post nothing.
         if path.exists() {
-            let on = worktree::git_at(&path, &["branch", "--show-current"]).unwrap_or_default();
+            let on = worktree::git(&path, &["branch", "--show-current"]).unwrap_or_default();
             if on != branch {
                 return Err(format!(
                     "{} is there already, on {}, not {branch}.",
@@ -392,7 +392,7 @@ fn check_issue(in_autopilot: bool) -> String {
 /// Whether a directory's branch was started from an issue, and which:
 /// `<owner>/<repo>#<number>`.
 pub fn issue_of_branch(root: &Path, branch: &str) -> Option<String> {
-    worktree::git_at(
+    worktree::git(
         root,
         &["config", "--get", &format!("branch.{branch}.wtnIssue")],
     )

@@ -158,7 +158,7 @@ fn open(
     body_file: &str,
     body: &str,
 ) -> Result<ExitCode, String> {
-    let branch = worktree::git_at(here, &["branch", "--show-current"])
+    let branch = worktree::git(here, &["branch", "--show-current"])
         .ok()
         .filter(|b| !b.is_empty())
         .ok_or("not on a branch")?;
@@ -168,11 +168,11 @@ fn open(
     }
     land_push::fetch(here, &onto)?;
     let base = onto.base();
-    let fork = worktree::git_at(here, &["merge-base", &base, "HEAD"])
+    let fork = worktree::git(here, &["merge-base", &base, "HEAD"])
         .map_err(|e| format!("no merge base with {base}: {e}"))?;
     let range = format!("{fork}..HEAD");
     // The branch's own issue named to close is this repository's, no leak.
-    let own_issue = worktree::git_at(
+    let own_issue = worktree::git(
         here,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )
@@ -186,7 +186,7 @@ fn open(
         crate::dev::is_switchboard_clone(here).then(|| leaks(here, &range, title, &checked_body));
     let leak_clean = leak.as_ref().is_none_or(|(clean, _)| *clean);
     let hits = leak.map(|(_, hits)| hits).unwrap_or_default();
-    let diff = worktree::git_at(
+    let diff = worktree::git(
         here,
         &[
             "diff",
@@ -230,7 +230,7 @@ fn open(
         return Ok(ExitCode::from(ASK));
     }
     worktree::count_fetch(here, "origin", "land-lock open-pr");
-    let (pushed, said) = land_push::git(
+    let (pushed, said) = worktree::git_said(
         here,
         &[
             "push",
@@ -246,7 +246,7 @@ fn open(
     eprintln!("{said}");
     // Named with its owner, so gh finds it when it opens the PR in the
     // project a fork's clone was forked from.
-    let head = worktree::git_at(here, &["config", "--get", "remote.origin.url"])
+    let head = worktree::git(here, &["config", "--get", "remote.origin.url"])
         .ok()
         .and_then(|url| crate::integrations::github::parse_remote(url.trim()))
         .map(|repo| format!("{}:{branch}", repo.owner))

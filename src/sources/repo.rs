@@ -276,7 +276,8 @@ pub fn branch_keys(remotes: &Remotes, branch: &str) -> Vec<PrKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::git::tests::{Scratch, git as run_git, repo as init_repo};
+    use crate::tabs::git::tests::{Scratch, repo as init_repo};
+    use crate::worktree::git_scratch;
 
     #[test]
     fn a_remote_s_url_from_the_config_file() {
@@ -345,23 +346,21 @@ mod tests {
         let scratch = Scratch::new("upstream");
         let dir = scratch.0.join("widgets");
         std::fs::create_dir_all(&dir).unwrap();
-        if !init_repo(&dir) {
-            return;
-        }
-        assert!(run_git(
+        init_repo(&dir);
+        git_scratch(
             &dir,
-            &["remote", "add", "origin", "git@github.com:me/widgets.git"]
-        ));
+            &["remote", "add", "origin", "git@github.com:me/widgets.git"],
+        );
         assert_eq!(remotes_of(&dir).upstream, None);
-        assert!(run_git(
+        git_scratch(
             &dir,
             &[
                 "remote",
                 "add",
                 "upstream",
-                "https://github.com/acme/widgets.git"
-            ]
-        ));
+                "https://github.com/acme/widgets.git",
+            ],
+        );
         let remotes = remotes_of(&dir);
         let all: Vec<String> = remotes.all().map(|r| r.to_string()).collect();
         assert_eq!(all, ["me/widgets", "acme/widgets"]);
@@ -396,10 +395,8 @@ mod tests {
         for (i, (url, want)) in remotes.iter().enumerate() {
             let dir = scratch.0.join(format!("r{i}"));
             std::fs::create_dir_all(&dir).unwrap();
-            if !init_repo(&dir) {
-                return;
-            }
-            assert!(run_git(&dir, &["remote", "add", "origin", url]));
+            init_repo(&dir);
+            git_scratch(&dir, &["remote", "add", "origin", url]);
             assert_eq!(
                 origin_of(&dir).map(|r| r.to_string()).as_deref(),
                 *want,

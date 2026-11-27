@@ -615,7 +615,8 @@ impl Sealed {
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from(try_::ROOT));
         let home_real = tmp_real.join(name_of(&home));
-        let common = try_::git(&wt, &["rev-parse", "--git-common-dir"])
+        let common = crate::worktree::git(&wt, &["rev-parse", "--git-common-dir"])
+            .ok()
             .ok_or_else(|| anyhow!("{} has no git directory", wt.display()))?;
         let git_common = wt
             .join(common)
@@ -1179,9 +1180,11 @@ pub(crate) fn start(
         Some(dir) => dir.to_path_buf(),
         None => std::env::current_dir().context("can't read the directory you are in")?,
     };
-    let top = try_::git(&from, &["rev-parse", "--show-toplevel"]).ok_or_else(|| {
-        anyhow!("not in a git repository: run it in a Switchboard worktree, or name one")
-    })?;
+    let top = crate::worktree::git(&from, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .ok_or_else(|| {
+            anyhow!("not in a git repository: run it in a Switchboard worktree, or name one")
+        })?;
     let wt = PathBuf::from(top)
         .canonicalize()
         .context("the worktree can't be read")?;

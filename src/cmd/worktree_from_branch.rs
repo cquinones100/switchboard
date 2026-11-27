@@ -80,25 +80,6 @@ pub fn shell_function() -> String {
     )
 }
 
-/// The remote's default branch, from `refs/remotes/<remote>/HEAD`, else
-/// main or master, whichever the remote has.
-fn default_branch(root: &Path, remote: &str) -> Option<String> {
-    if let Ok(head) = worktree::git_at(
-        root,
-        &[
-            "symbolic-ref",
-            "--short",
-            &format!("refs/remotes/{remote}/HEAD"),
-        ],
-    ) {
-        return Some(head[remote.len() + 1..].to_string());
-    }
-    ["main", "master"]
-        .into_iter()
-        .find(|b| worktree::fetch_branch(root, remote, b, SOURCE))
-        .map(str::to_string)
-}
-
 /// The branch's worktree, made by `worktree::add_worktree`: a local branch
 /// as it is, caught up with the remote's; else the remote's, tracking it;
 /// else a new branch off the remote's default branch as it is now, with no
@@ -121,15 +102,19 @@ fn create_worktree(path: &Path, branch: &str, root: &Path) -> Result<(), String>
         };
         return worktree::add_worktree(root, path, branch, &start);
     }
-    let base = remote
-        .as_deref()
-        .and_then(|r| default_branch(root, r).map(|b| (r.to_string(), b)));
+    let base = remote.as_deref().and_then(|r| {
+        crate::tabs::git::default_branch(&root.join(".git")).map(|b| (r.to_string(), b))
+    });
+    // Off the remote's branch when it has one, fetched now or before, else
+    // off HEAD: the clone's default may be a local branch the remote lacks.
+    let on_remote = |remote: &str, base: &str| {
+        let tracking = format!("refs/remotes/{remote}/{base}");
+        worktree::fetch_branch(root, remote, base, SOURCE)
+            || worktree::git_ok(root, &["rev-parse", "--verify", "-q", &tracking])
+    };
     let at = match &base {
-        Some((remote, base)) => {
-            worktree::fetch_branch(root, remote, base, SOURCE);
-            format!("{remote}/{base}")
-        }
-        None => "HEAD".to_string(),
+        Some((remote, base)) if on_remote(remote, base) => format!("{remote}/{base}"),
+        _ => "HEAD".to_string(),
     };
     eprintln!("New branch, off {at}.");
     let start = worktree::Start {
@@ -277,7 +262,7 @@ fn run(
         // since the last fetch isn't taken for this branch's; offline, as it
         // was last fetched.
         if let Some(remote) = worktree::default_remote(&root)
-            && let Some(base) = default_branch(&root, &remote)
+            && let Some(base) = crate::tabs::git::default_branch(&root.join(".git"))
         {
             worktree::fetch_branch(&root, &remote, &base, SOURCE);
         }

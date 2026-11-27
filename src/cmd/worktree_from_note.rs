@@ -605,7 +605,7 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
         .into_iter()
         .filter_map(|w| w.branch)
         .collect();
-    let config = worktree::git_at(repo, &["config", "--get-regexp", r"^branch\..*\.wtnitem$"])
+    let config = worktree::git(repo, &["config", "--get-regexp", r"^branch\..*\.wtnitem$"])
         .unwrap_or_default();
     let claimed: HashSet<&str> = config
         .lines()
@@ -1048,7 +1048,7 @@ pub(crate) fn run(
         .unwrap_or_default();
     let identity = format!("{note_id}: {first}");
     let key = format!("branch.{branch}.wtnItem");
-    let recorded = worktree::git_at(&root, &["config", "--get", &key]).unwrap_or_default();
+    let recorded = worktree::git(&root, &["config", "--get", &key]).unwrap_or_default();
     // A claim from before IDs that the migration couldn't place, its note
     // back at that path since, is this item's too, and is rewritten below.
     let by_path = recorded == format!("{relative}: {first}");
@@ -1199,6 +1199,7 @@ pub(crate) const THEN: &str = "Where the plan gets a detail wrong (a wrong type,
 mod tests {
     use super::*;
     use crate::cmd::work_tab::{point_origin_head_at, push_settings};
+    use crate::worktree::git_scratch;
 
     #[test]
     fn a_fetch_that_fails_twice_then_works_starts_from_the_fresh_branch() {
@@ -1861,37 +1862,21 @@ mod tests {
         assert_eq!(item_text(&note, 8), "- [ ] Second thing\n");
     }
 
-    fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@e")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@e")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {out:?}");
-    }
-
     #[test]
     fn a_stale_origin_head_follows_the_default_branch_landing_names() {
         let dir = crate::mux::socket::testing::TempDir::new();
         let origin = dir.path().join("origin.git");
         let clone = dir.path().join("repo");
         let (origin_s, clone_s) = (origin.to_str().unwrap(), clone.to_str().unwrap());
-        git(
+        git_scratch(
             dir.path(),
             &["init", "-q", "--bare", "-b", "main", origin_s],
         );
-        git(dir.path(), &["clone", "-q", origin_s, clone_s]);
-        git(&clone, &["checkout", "-q", "-b", "main"]);
-        git(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
-        git(&clone, &["push", "-q", "origin", "main", "main:master"]);
-        git(&clone, &["remote", "set-head", "origin", "master"]);
+        git_scratch(dir.path(), &["clone", "-q", origin_s, clone_s]);
+        git_scratch(&clone, &["checkout", "-q", "-b", "main"]);
+        git_scratch(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        git_scratch(&clone, &["push", "-q", "origin", "main", "main:master"]);
+        git_scratch(&clone, &["remote", "set-head", "origin", "master"]);
         assert_eq!(
             worktree::default_start(&clone, "test").as_deref(),
             Ok("refs/remotes/origin/master")
@@ -1905,13 +1890,13 @@ mod tests {
         // GitHub, now agree with it.
         assert_eq!(start.strip_prefix("refs/remotes/origin/"), Some("main"));
         assert_eq!(
-            crate::worktree_sweep::default_branch(&clone).as_deref(),
+            crate::tabs::git::default_branch(&clone.join(".git")).as_deref(),
             Some("main")
         );
 
         assert!(point_origin_head_at(&clone, "gone").is_err());
         assert_eq!(
-            crate::worktree_sweep::default_branch(&clone).as_deref(),
+            crate::tabs::git::default_branch(&clone.join(".git")).as_deref(),
             Some("main")
         );
     }

@@ -158,9 +158,9 @@ fn main_checkout(cwd: &Path) -> Option<PathBuf> {
 /// Read-only: no pull, no checkout. The point is only to say when the code
 /// Claude is about to read is older than what is on the remote.
 fn warn_if_behind(root: &Path) {
-    let branch = worktree::git_at(root, &["branch", "--show-current"]).unwrap_or_default();
+    let branch = worktree::git(root, &["branch", "--show-current"]).unwrap_or_default();
     let upstream =
-        worktree::git_at(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).unwrap_or_default();
+        worktree::git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).unwrap_or_default();
     if branch.is_empty() || upstream.is_empty() {
         return;
     }
@@ -168,7 +168,7 @@ fn warn_if_behind(root: &Path) {
         eprintln!("Could not fetch; shaping against the local checkout as it is.");
         return;
     }
-    let behind = worktree::git_at(
+    let behind = worktree::git(
         root,
         &["rev-list", "--count", &format!("{branch}..{upstream}")],
     )

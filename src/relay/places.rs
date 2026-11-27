@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -25,26 +24,13 @@ use regex::Regex;
 use super::Relay;
 use super::config::Paths;
 use crate::util;
+use crate::worktree::git;
 
 pub const RECENT_DAYS: i64 = 14;
 /// The most a Slack menu holds.
 pub const MAX_PLACES: usize = 100;
 /// Slack refuses an option whose value is longer.
 const MAX_VALUE: usize = 150;
-
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
 
 /// Directories Claude sessions have run in since `since` (ms), each with
 /// the time of its session's last activity: the last cwd in each
@@ -124,7 +110,8 @@ fn main_checkout(dir: &Path) -> Option<PathBuf> {
     let common = git(
         dir,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
+    )
+    .ok()?;
     let common = PathBuf::from(common);
     (common.file_name().and_then(|n| n.to_str()) == Some(".git"))
         .then(|| common.parent().map(Path::to_path_buf))
@@ -149,7 +136,9 @@ pub fn places(cx: &Relay) -> Vec<Place> {
     }
     let mut out = Vec::new();
     for repo in roots {
-        let listed = git(&repo, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+        let listed = git(&repo, &["worktree", "list", "--porcelain"])
+            .ok()
+            .unwrap_or_default();
         let name = repo
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -301,6 +290,7 @@ pub fn place_choices(cx: &Relay) -> Vec<(String, Vec<Choice>)> {
                 "--git-common-dir",
             ],
         )
+        .ok()
         .unwrap_or_default();
         let mut lines = shown.lines();
         let (top, common) = (lines.next(), lines.next());

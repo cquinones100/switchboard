@@ -324,7 +324,7 @@ pub fn branch_name_ok(name: &str) -> bool {
 /// name, the most recently committed first, with how long ago: the refs
 /// already here, with no fetch.
 fn branches(repo: &Path) -> Vec<(String, String)> {
-    let out = worktree::git_at(
+    let out = worktree::git(
         repo,
         &[
             "for-each-ref",

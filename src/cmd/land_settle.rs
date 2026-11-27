@@ -54,7 +54,7 @@ use std::process::{Command, ExitCode, Stdio};
 use serde_json::{Value, json};
 
 use super::land_lock::{Lock, set_phase};
-use super::land_push::{self, git, this_program};
+use super::land_push::{self, this_program};
 use crate::sources::landing::{RECORD, own_git_dir, read_record};
 use crate::{repos, util, worktree};
 
@@ -143,7 +143,7 @@ fn settle(
         println!("conflict");
         return CONFLICT;
     }
-    if !worktree::git_at(here, &["status", "--porcelain"]).is_ok_and(|s| s.is_empty()) {
+    if !worktree::git(here, &["status", "--porcelain"]).is_ok_and(|s| s.is_empty()) {
         eprintln!(
             "land-lock settle: the worktree has uncommitted changes: commit or drop them first"
         );
@@ -172,12 +172,12 @@ fn settle(
     let base = onto.base();
     let record = read_record(here).unwrap_or_else(|| json!({}));
     let had_conflict = record.pointer("/settle/conflict") == Some(&Value::Bool(true));
-    let head = || worktree::git_at(here, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let head = || worktree::git(here, &["rev-parse", "HEAD"]).unwrap_or_default();
 
     let moved = !worktree::git_ok(here, &["merge-base", "--is-ancestor", &base, "HEAD"]);
     if moved {
         set_phase("rebasing again");
-        let (rebased, said) = git(here, &["rebase", &base]);
+        let (rebased, said) = worktree::git_said(here, &["rebase", &base]);
         if !rebased {
             if !(own.join("rebase-merge").exists() || own.join("rebase-apply").exists()) {
                 eprintln!("land-lock settle: the rebase onto {base} failed:\n{said}");
@@ -185,7 +185,7 @@ fn settle(
             }
             mark(&own, json!({ "conflict": true }));
             set_phase("rebase conflict");
-            if let Ok(files) = worktree::git_at(here, &["diff", "--name-only", "--diff-filter=U"]) {
+            if let Ok(files) = worktree::git(here, &["diff", "--name-only", "--diff-filter=U"]) {
                 for file in files.lines() {
                     println!("conflict in {file}");
                 }
@@ -252,7 +252,7 @@ fn settle(
         println!("changed");
         return CHANGED;
     }
-    let short = worktree::git_at(here, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+    let short = worktree::git(here, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     println!("ready {short}");
     0
 }
@@ -272,13 +272,13 @@ fn base_ci_passing(here: &Path, onto: &land_push::Onto, base: &str) -> bool {
     let Some((remote, _)) = &onto.remote else {
         return false;
     };
-    let Some(repo) = worktree::git_at(here, &["config", "--get", &format!("remote.{remote}.url")])
+    let Some(repo) = worktree::git(here, &["config", "--get", &format!("remote.{remote}.url")])
         .ok()
         .and_then(|url| repos::repo_of_url(&url))
     else {
         return false;
     };
-    let Ok(sha) = worktree::git_at(here, &["rev-parse", base]) else {
+    let Ok(sha) = worktree::git(here, &["rev-parse", base]) else {
         return false;
     };
     crate::integrations::run_by_you();

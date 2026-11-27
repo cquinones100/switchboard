@@ -49,6 +49,7 @@ use serde_json::Value;
 
 use crate::cmd::land_lock::{self, Lock};
 use crate::mux::socket;
+use crate::worktree::git_said;
 use crate::{repos, worktree};
 
 /// The lock isn't this worktree's.
@@ -161,7 +162,7 @@ pub(crate) fn fetch(here: &Path, onto: &Onto) -> Result<(), String> {
     };
     worktree::count_fetch(here, remote, "landing");
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    let (fetched, said) = git(here, &["fetch", "--quiet", remote, &spec]);
+    let (fetched, said) = git_said(here, &["fetch", "--quiet", remote, &spec]);
     if fetched {
         Ok(())
     } else {
@@ -221,24 +222,6 @@ pub(crate) fn tab_option(option: &str) -> String {
     socket::ask_ok(&["show", option])
         .map(|v| v.trim().to_string())
         .unwrap_or_default()
-}
-
-/// `git` in `dir`, its output (stdout and stderr) whichever way it went.
-pub(crate) fn git(dir: &Path, args: &[&str]) -> (bool, String) {
-    match Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-    {
-        Ok(out) => {
-            let mut said = String::from_utf8_lossy(&out.stdout).into_owned();
-            said.push_str(&String::from_utf8_lossy(&out.stderr));
-            (out.status.success(), said.trim().to_string())
-        }
-        Err(e) => (false, e.to_string()),
-    }
 }
 
 pub(crate) fn main(
@@ -316,7 +299,7 @@ pub(crate) fn main(
         let why = why_ask(&gate);
         if !why.is_empty() {
             land_lock::set_phase("asking to land");
-            let subject = worktree::git_at(here, &["log", "-1", "--format=%s"]).unwrap_or_default();
+            let subject = worktree::git(here, &["log", "-1", "--format=%s"]).unwrap_or_default();
             println!("ask: {subject}");
             for reason in why {
                 println!("why: {reason}");
@@ -328,7 +311,7 @@ pub(crate) fn main(
         }
     }
     // The commit the gate checked, which beforePush must leave as it is.
-    let checked = worktree::git_at(here, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let checked = worktree::git(here, &["rev-parse", "HEAD"]).unwrap_or_default();
     if !steps.before_push.trim().is_empty() {
         if !may_run_its_code(common, here) {
             return failed(
@@ -360,7 +343,7 @@ pub(crate) fn main(
         }
         // What was checked is what is pushed: a step that committed or
         // changed a tracked file leaves it for you.
-        let now = worktree::git_at(here, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let now = worktree::git(here, &["rev-parse", "HEAD"]).unwrap_or_default();
         if now != checked || !worktree::git_ok(here, &["diff", "--quiet", "HEAD"]) {
             return failed(
                 lock,
@@ -373,7 +356,7 @@ pub(crate) fn main(
     if !asked && !steps.before_push.trim().is_empty() && tab_option(crate::mux::server::LAND) != "1"
     {
         land_lock::set_phase("asking to land");
-        let subject = worktree::git_at(here, &["log", "-1", "--format=%s"]).unwrap_or_default();
+        let subject = worktree::git(here, &["log", "-1", "--format=%s"]).unwrap_or_default();
         println!("ask: {subject}");
         println!("why: the tab doesn't land without asking");
         return ExitCode::from(ASK);
@@ -384,19 +367,19 @@ pub(crate) fn main(
     // fast-forward it.
     let clone_before = common
         .parent()
-        .and_then(|root| worktree::git_at(root, &["rev-parse", "HEAD"]).ok());
+        .and_then(|root| worktree::git(root, &["rev-parse", "HEAD"]).ok());
     let pushed = match &onto.remote {
         Some((remote, branch)) => {
             worktree::count_fetch(here, remote, "landing");
-            git(here, &["push", remote, &format!("HEAD:{branch}")])
+            git_said(here, &["push", remote, &format!("HEAD:{branch}")])
         }
         None => move_local(here, &onto.name),
     };
     if !pushed.0 {
         return failed(lock, &format!("the push was refused:\n{}", pushed.1));
     }
-    let short = worktree::git_at(here, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
-    let head = worktree::git_at(here, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let short = worktree::git(here, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+    let head = worktree::git(here, &["rev-parse", "HEAD"]).unwrap_or_default();
     if socket::in_pane() {
         let _ = socket::ask(&["set", crate::autopilot::PUSHED, &short]);
     }
@@ -404,12 +387,12 @@ pub(crate) fn main(
     let mut ci_left = None;
     if let Some((remote, _)) = &onto.remote
         && steps.test_in == "ci"
-        && let Ok(branch) = worktree::git_at(here, &["rev-parse", "--abbrev-ref", "HEAD"])
+        && let Ok(branch) = worktree::git(here, &["rev-parse", "--abbrev-ref", "HEAD"])
         && let Some(ci) = ci_branch(here, &branch)
     {
         // Gone already, or never pushed, is fine; anything else is said.
         worktree::count_fetch(here, remote, "landing");
-        let (deleted, said) = git(here, &["push", "--quiet", remote, "--delete", &ci]);
+        let (deleted, said) = git_said(here, &["push", "--quiet", remote, "--delete", &ci]);
         if !deleted && !said.contains("remote ref does not exist") {
             let why = said.lines().last().unwrap_or_default().to_string();
             ci_left = Some(format!("{ci} not deleted: {why}"));
@@ -441,10 +424,10 @@ fn failed(lock: &Lock, why: &str) -> ExitCode {
 fn move_local(here: &Path, name: &str) -> (bool, String) {
     match worktree::holding_branch(here, name) {
         Some(at) => {
-            let head = worktree::git_at(here, &["rev-parse", "HEAD"]).unwrap_or_default();
-            git(&at, &["merge", "--ff-only", "--quiet", &head])
+            let head = worktree::git(here, &["rev-parse", "HEAD"]).unwrap_or_default();
+            git_said(&at, &["merge", "--ff-only", "--quiet", &head])
         }
-        None => git(here, &["push", ".", &format!("HEAD:refs/heads/{name}")]),
+        None => git_said(here, &["push", ".", &format!("HEAD:refs/heads/{name}")]),
     }
 }
 
@@ -459,10 +442,10 @@ fn follow(common: &Path, onto: &Onto, head: &str, before: Option<String>) -> Str
     let Some(before) = before else {
         return "main clone not updated: can't read where it is".to_string();
     };
-    let on = worktree::git_at(&root, &["branch", "--show-current"]).unwrap_or_default();
+    let on = worktree::git(&root, &["branch", "--show-current"]).unwrap_or_default();
     if on == onto.name {
         // A local target's move fast-forwarded it already.
-        let now = worktree::git_at(&root, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let now = worktree::git(&root, &["rev-parse", "HEAD"]).unwrap_or_default();
         if now == head && before != head {
             return format!("before {before}");
         }
@@ -471,7 +454,7 @@ fn follow(common: &Path, onto: &Onto, head: &str, before: Option<String>) -> Str
         {
             return "main clone not updated: already there".to_string();
         }
-        let (merged, said) = git(&root, &["merge", "--ff-only", "--quiet", head]);
+        let (merged, said) = git_said(&root, &["merge", "--ff-only", "--quiet", head]);
         return if merged {
             format!("before {before}")
         } else {
@@ -488,11 +471,11 @@ fn follow(common: &Path, onto: &Onto, head: &str, before: Option<String>) -> Str
         && Some(onto.name.as_str()) != crate::tabs::git::default_branch(common).as_deref()
     {
         let reference = format!("refs/heads/{}", onto.name);
-        if let Ok(ours) = worktree::git_at(&root, &["rev-parse", "--verify", "-q", &reference])
+        if let Ok(ours) = worktree::git(&root, &["rev-parse", "--verify", "-q", &reference])
             && worktree::holding_branch(&root, &onto.name).is_none()
             && worktree::git_ok(&root, &["merge-base", "--is-ancestor", &ours, head])
         {
-            let _ = worktree::git_at(&root, &["update-ref", &reference, head, &ours]);
+            let _ = worktree::git(&root, &["update-ref", &reference, head, &ours]);
         }
     }
     format!("main clone not updated: it has {on} checked out")

@@ -61,7 +61,7 @@ use crate::{repos, worktree, worktree_sweep};
 
 /// The branch checked out at `dir`.
 fn branch_at(dir: &Path) -> Option<String> {
-    worktree::git_at(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+    worktree::git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
         .ok()
         .filter(|b| !b.is_empty() && b != "HEAD")
 }
@@ -71,7 +71,7 @@ fn target_at(dir: &Path) -> Value {
     let Some(branch) = branch_at(dir) else {
         return Value::Null;
     };
-    let Some(target) = worktree::git_at(
+    let Some(target) = worktree::git(
         dir,
         &["config", "--get", &format!("branch.{branch}.wtnTarget")],
     )
@@ -89,7 +89,7 @@ fn target_at(dir: &Path) -> Value {
 /// When `wt` started the branch's item, as the module's opening says.
 pub fn started_at(dir: &Path) -> Option<i64> {
     let branch = branch_at(dir)?;
-    worktree::git_at(
+    worktree::git(
         dir,
         &["config", "--get", &format!("branch.{branch}.wtnStarted")],
     )
@@ -236,7 +236,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     map.insert("set".into(), json!(answer.set.map(repos::Way::key)));
     map.insert("repo".into(), json!(answer.repo));
     let target = target_at(&dir);
-    let default = repos::default_branch(&dir);
+    let default = repos::main_branch(&dir);
     let upstream = lands_on(&target, default.as_deref());
     let (note, item) = note_and_item_at(&dir);
     map.insert("target".into(), target);

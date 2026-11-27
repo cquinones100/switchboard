@@ -7954,18 +7954,7 @@ fn count_branch(tree: &Path, head: String) -> views::Counts {
 /// git names it, however the config says it, else the repository's config
 /// (`CONFIG`), which a push setting one writes.
 fn count_with_git(tree: &Path) -> Option<(String, u32, Option<u32>, String)> {
-    let git = |args: &[&str]| -> Option<String> {
-        let out = util::output_of(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(tree)
-                .args(args),
-        )
-        .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
+    let git = |args: &[&str]| crate::worktree::git(tree, args).ok();
     let place = crate::tabs::git::locate(tree)?;
     let default = crate::tabs::git::default_branch(&place.common_dir)?;
     let against = [format!("origin/{default}"), default.clone()]

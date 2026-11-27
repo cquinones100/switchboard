@@ -48,31 +48,11 @@ pub fn slugify(text: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// git's output, trimmed; an error when git fails.
-pub fn git_output(args: &[&str]) -> Result<String> {
-    Ok(util::run("git", args)?.trim().to_string())
-}
-
-/// Runs git with its output thrown away; an error when it fails.
-pub fn git_run(args: &[&str]) -> Result<()> {
-    let status = Command::new("git")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!("git {} failed", args.first().unwrap_or(&"")))
-    }
-}
-
 /// The main clone: `--git-common-dir` rather than `--show-toplevel`, since
 /// inside an existing worktree the latter is that worktree, and new worktrees
 /// belong beside the main repository.
 pub fn repo_root() -> Result<PathBuf> {
-    let common = git_output(&["rev-parse", "--git-common-dir"])
+    let common = git(Path::new("."), &["rev-parse", "--git-common-dir"])
         .map_err(|_| anyhow!("not inside a git repository"))?;
     let common = std::env::current_dir()?.join(common);
     let resolved = common.parent().map(Path::to_path_buf).unwrap_or(common);
@@ -298,7 +278,7 @@ pub fn ensure_worktree(
         // work, never taken for this one.
         let path = worktree.to_string_lossy();
         let checked_out =
-            git_output(&["-C", &path, "branch", "--show-current"]).unwrap_or_default();
+            git(Path::new(path.as_ref()), &["branch", "--show-current"]).unwrap_or_default();
         if checked_out != branch {
             let on = if checked_out.is_empty() {
                 "no branch of this repository".to_string()
@@ -353,7 +333,10 @@ pub fn add_worktree(root: &Path, path: &Path, branch: &str, start: &Start) -> Re
 
 // ── Running in a repository ─────────────────────────────────────────────────
 
-pub use switchboard_plugin_api::sdk::{git_at, git_ok};
+pub use switchboard_plugin_api::sdk::{
+    GIT_SAFE, git, git_as_is, git_async, git_bytes, git_command, git_isolated, git_ok, git_safe,
+    git_said, git_scratch, git_text,
+};
 
 /// How long a config write waits on another process's lock of the file.
 const CONFIG_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -453,7 +436,7 @@ pub fn git_loud(dir: &Path, args: &[&str], show_errors: bool) -> bool {
 /// The main clone of the repository `dir` is in, from `--git-common-dir`,
 /// or `None` outside one.
 pub fn repo_root_of(dir: &Path) -> Option<PathBuf> {
-    let common = git_at(dir, &["rev-parse", "--git-common-dir"]).ok()?;
+    let common = git(dir, &["rev-parse", "--git-common-dir"]).ok()?;
     let common = dir.join(common);
     Some(normalize(
         &common.parent().map(Path::to_path_buf).unwrap_or(common),
@@ -474,7 +457,7 @@ pub struct Worktree {
 
 /// Every worktree of the repository at `root`, the main clone first.
 pub fn worktrees(root: &Path) -> Result<Vec<Worktree>> {
-    let porcelain = git_at(root, &["worktree", "list", "--porcelain"])?;
+    let porcelain = git(root, &["worktree", "list", "--porcelain"])?;
     Ok(parse_worktrees(&porcelain))
 }
 
@@ -517,7 +500,7 @@ pub fn holding_branch(root: &Path, branch: &str) -> Option<PathBuf> {
 
 /// The repository's remotes, in git's order.
 pub fn remotes(root: &Path) -> Vec<String> {
-    git_at(root, &["remote"])
+    git(root, &["remote"])
         .unwrap_or_default()
         .lines()
         .filter(|l| !l.is_empty())
@@ -575,7 +558,7 @@ pub fn remote_host(url: &str) -> Option<String> {
 /// Counts a fetch from a remote in the request audit, under its host
 /// (GitHub for github.com), and not at all for a remote on this computer.
 pub fn count_fetch(root: &Path, remote: &str, source: &str) {
-    let url = git_at(root, &["remote", "get-url", remote]).unwrap_or_default();
+    let url = git(root, &["remote", "get-url", remote]).unwrap_or_default();
     if let Some(host) = remote_host(&url) {
         let service = if host == "github.com" || host == "gist.github.com" {
             "GitHub".to_string()
@@ -638,10 +621,10 @@ pub fn fetch_branch_answer(root: &Path, remote: &str, branch: &str, source: &str
 /// commits would otherwise land with the new branch's work.
 pub fn default_start(root: &Path, source: &str) -> Result<String, String> {
     if !remotes(root).iter().any(|r| r == "origin") {
-        return git_at(root, &["rev-parse", "HEAD"]).map_err(|e| e.to_string());
+        return git(root, &["rev-parse", "HEAD"]).map_err(|e| e.to_string());
     }
     let fetched = |base: &str| fetch_branch(root, "origin", base, source);
-    let named = git_at(
+    let named = git(
         root,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
@@ -705,7 +688,7 @@ pub fn with_retries<T>(
 
 /// The branch origin's `HEAD` names in the clone, without `origin/`.
 pub fn origin_head(root: &Path) -> Option<String> {
-    let head = git_at(
+    let head = git(
         root,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
@@ -738,7 +721,7 @@ pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, Strin
         })
         .find(|(_, r)| git_ok(root, &["show-ref", "--verify", "--quiet", r]))?;
     // The ref's reflog says when it was last moved, which a fetch does.
-    let at = git_at(
+    let at = git(
         root,
         &["log", "-g", "-1", "--date=unix", "--format=%gd", &fetched],
     )

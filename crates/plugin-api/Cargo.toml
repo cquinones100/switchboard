@@ -26,9 +26,13 @@ url = { version = "2", optional = true }
 # GitHub reached by a program with no HTTPS client of its own (the diff
 # alone). Its TLS compiles C, so it is a feature of its own.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking"], optional = true }
+# git from an async task (sdk::git_async), for the workspace's server.
+tokio = { version = "1", features = ["process", "time"], optional = true }
 
 [features]
 # What a release is, checking one and putting it in place.
 release = ["dep:sha2", "dep:flate2", "dep:tar", "dep:ssh-key", "dep:jiff", "dep:url"]
 # Reaching GitHub for one.
 net = ["release", "dep:reqwest"]
+# git from an async task.
+async = ["dep:tokio"]

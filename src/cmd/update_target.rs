@@ -167,7 +167,7 @@ impl Refs {
 /// `root` is set to the main clone once it is known.
 fn update(branch: &str, dir: &Path, found: &mut Option<PathBuf>) -> Result<String, Stop> {
     let outside = || format!("not in a git repository: {}", dir.display());
-    let top = worktree::git_at(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| outside())?;
+    let top = worktree::git(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| outside())?;
     let root = worktree::repo_root_of(Path::new(&top)).ok_or_else(outside)?;
     let common = land_lock::common_dir(&root).ok_or_else(outside)?;
     *found = Some(root.clone());
@@ -196,7 +196,7 @@ fn update(branch: &str, dir: &Path, found: &mut Option<PathBuf>) -> Result<Strin
         .join(worktree::DEFAULT_WORKTREE_DIR)
         .join(folder_for(branch));
     if !place.exists() {
-        worktree::git_at(
+        worktree::git(
             &root,
             &[
                 "worktree",
@@ -252,7 +252,7 @@ fn update(branch: &str, dir: &Path, found: &mut Option<PathBuf>) -> Result<Strin
     // Pushed, it holds nothing of yours: a run starts only with nothing
     // uncommitted there, and a step that changed a tracked file stopped it,
     // so what is left untracked (a test's report) is the steps' own.
-    let removed = worktree::git_at(
+    let removed = worktree::git(
         &root,
         &["worktree", "remove", "--force", &place.to_string_lossy()],
     );
@@ -268,7 +268,7 @@ fn update(branch: &str, dir: &Path, found: &mut Option<PathBuf>) -> Result<Strin
 /// The landing itself, under the lock, in the worktree at `at`.
 fn land(refs: &Refs, at: &Path) -> Result<String, Stop> {
     let (branch, default, root) = (refs.branch.as_str(), refs.default.as_str(), &refs.root);
-    let git = |args: &[&str]| worktree::git_at(at, args).map_err(|e| e.to_string());
+    let git = |args: &[&str]| worktree::git(at, args).map_err(|e| e.to_string());
     let is_ancestor =
         |a: &str, b: &str| worktree::git_ok(at, &["merge-base", "--is-ancestor", a, b]);
     let short = |sha: &str| sha.chars().take(9).collect::<String>();
@@ -446,7 +446,7 @@ fn land(refs: &Refs, at: &Path) -> Result<String, Stop> {
 /// Nothing when there is no local branch of that name.
 fn follow_locally(root: &Path, branch: &str, head: &str) -> String {
     let reference = format!("refs/heads/{branch}");
-    let Ok(ours) = worktree::git_at(root, &["rev-parse", "--verify", "-q", &reference]) else {
+    let Ok(ours) = worktree::git(root, &["rev-parse", "--verify", "-q", &reference]) else {
         return String::new();
     };
     if !worktree::git_ok(root, &["merge-base", "--is-ancestor", &ours, head]) {
@@ -454,9 +454,9 @@ fn follow_locally(root: &Path, branch: &str, head: &str) -> String {
     }
     match worktree::holding_branch(root, branch) {
         Some(at) => {
-            let clean = worktree::git_at(&at, &["status", "--porcelain", "--untracked-files=no"])
+            let clean = worktree::git(&at, &["status", "--porcelain", "--untracked-files=no"])
                 .is_ok_and(|s| s.is_empty());
-            if !clean || worktree::git_at(&at, &["merge", "--ff-only", "--quiet", head]).is_err() {
+            if !clean || worktree::git(&at, &["merge", "--ff-only", "--quiet", head]).is_err() {
                 return format!(
                     "; {branch} is checked out in {}, which has changes not committed, so it was left behind",
                     at.display()
@@ -464,7 +464,7 @@ fn follow_locally(root: &Path, branch: &str, head: &str) -> String {
             }
         }
         None => {
-            if worktree::git_at(root, &["update-ref", &reference, head, &ours]).is_err() {
+            if worktree::git(root, &["update-ref", &reference, head, &ours]).is_err() {
                 return format!("; couldn't move the local {branch}");
             }
         }
@@ -516,7 +516,7 @@ pub fn targets_to_follow(root: &Path, default: &str) -> Vec<String> {
         .into_iter()
         .filter_map(|w| w.branch)
         .collect();
-    let config = worktree::git_at(
+    let config = worktree::git(
         root,
         &["config", "--get-regexp", r"^branch\..*\.wtntarget$"],
     )

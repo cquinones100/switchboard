@@ -33,21 +33,7 @@ pub fn of(checkout: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    use crate::worktree::git_scratch;
 
     #[test]
     fn a_worktree_names_its_main_clone_and_the_main_clone_itself() {
@@ -55,10 +41,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("main");
         std::fs::create_dir_all(&main).unwrap();
-        git(&main, &["init", "-q", "-b", "main"]);
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_scratch(&main, &["init", "-q", "-b", "main"]);
+        git_scratch(&main, &["commit", "-q", "--allow-empty", "-m", "one"]);
         let wt = main.join(".claude/worktrees/item");
-        git(
+        git_scratch(
             &main,
             &["worktree", "add", "-q", "-b", "item", wt.to_str().unwrap()],
         );

@@ -30,6 +30,7 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::util;
+use crate::worktree::git_safe;
 
 /// The setting that turns this sweep on.
 pub const SETTING: &str = "sweep_pr_reviews";
@@ -151,22 +152,6 @@ fn unseen(c: &Checkout, seen: &Seen, now: SystemTime) -> bool {
     last_seen(c, seen).is_some_and(|at| ms(now).saturating_sub(at) >= UNSEEN.as_millis() as u64)
 }
 
-/// git in `dir`, reading only, never taking the index's lock.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = util::output_of(
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "core.fsmonitor=false"])
-            .args(args)
-            .env("GIT_OPTIONAL_LOCKS", "0"),
-    )
-    .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 /// The try's home for the checkout at `tree`, as `switchboard try` names it.
 fn try_home(tree: &Path) -> PathBuf {
     let real = tree.canonicalize().unwrap_or_else(|_| tree.to_path_buf());
@@ -200,7 +185,8 @@ pub fn kept(c: &Checkout, open: &[PathBuf]) -> bool {
         return true;
     }
     let real = c.tree.canonicalize().unwrap_or_else(|_| c.tree.clone());
-    let listed = git(&c.main, &["worktree", "list", "--porcelain"])
+    let listed = git_safe(&c.main, &["worktree", "list", "--porcelain"])
+        .ok()
         .map(|p| super::parse(&p))
         .unwrap_or_default();
     let its_own = listed.iter().any(|w| {
@@ -208,7 +194,10 @@ pub fn kept(c: &Checkout, open: &[PathBuf]) -> bool {
             && w.branch.as_deref() == Some(c.branch().as_str())
             && !w.locked
     });
-    !its_own || git(&c.tree, &["status", "--porcelain"]).is_none_or(|s| !s.trim().is_empty())
+    !its_own
+        || git_safe(&c.tree, &["status", "--porcelain"])
+            .ok()
+            .is_none_or(|s| !s.trim().is_empty())
 }
 
 /// The checkouts to remove at `now`, their PRs' states asked of `state`

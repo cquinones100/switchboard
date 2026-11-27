@@ -78,7 +78,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::mux::proto::{self, ClientMsg, ServerMsg};
-use crate::worktree::shell_quote;
+use crate::worktree::{git, shell_quote};
 use crate::{paths, util};
 
 /// Where the tries' homes are made.
@@ -282,9 +282,11 @@ fn start(mode: Mode, target: Option<&Path>) -> Result<ExitCode> {
         Some(dir) => dir.to_path_buf(),
         None => std::env::current_dir().context("can't read the directory you are in")?,
     };
-    let top = git(&from, &["rev-parse", "--show-toplevel"]).ok_or_else(|| {
-        anyhow!("not in a git repository: run it in a Switchboard worktree, or name one")
-    })?;
+    let top = git(&from, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .ok_or_else(|| {
+            anyhow!("not in a git repository: run it in a Switchboard worktree, or name one")
+        })?;
     let wt = PathBuf::from(top)
         .canonicalize()
         .context("the worktree can't be read")?;
@@ -1175,15 +1177,6 @@ fn walk_links(dir: &Path, skip: &Path) -> Vec<PathBuf> {
 
 // ── git ──────────────────────────────────────────────────────────────────────
 
-/// A git command's output in `dir`, trimmed; `None` when it fails.
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(dir).args(args);
-    util::run_command(&mut command)
-        .ok()
-        .map(|s| s.trim_end().to_string())
-}
-
 // ── Cleaning up ─────────────────────────────────────────────────────────────
 
 /// Ends the try's server, if one answers on its socket, and removes its
@@ -1227,9 +1220,11 @@ fn clean_named(target: Option<&Path>) -> Result<ExitCode> {
     let mut wt = match target {
         Some(dir) => resolve_gone(&cwd.join(dir)),
         None => resolve_gone(Path::new(
-            &git(&cwd, &["rev-parse", "--show-toplevel"]).ok_or_else(|| {
-                anyhow!("not in a git repository: name the worktree's path, or use --clean-all")
-            })?,
+            &git(&cwd, &["rev-parse", "--show-toplevel"])
+                .ok()
+                .ok_or_else(|| {
+                    anyhow!("not in a git repository: name the worktree's path, or use --clean-all")
+                })?,
         )),
     };
     let root = Path::new(ROOT);
@@ -1237,8 +1232,9 @@ fn clean_named(target: Option<&Path>) -> Result<ExitCode> {
     // A path inside a worktree still there names the try of its top level,
     // as trying it did.
     if !home.is_dir()
-        && let Some(top) =
-            git(&wt, &["rev-parse", "--show-toplevel"]).map(|t| resolve_gone(Path::new(&t)))
+        && let Some(top) = git(&wt, &["rev-parse", "--show-toplevel"])
+            .ok()
+            .map(|t| resolve_gone(Path::new(&t)))
         && home_of(root, &top).is_dir()
     {
         home = home_of(root, &top);

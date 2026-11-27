@@ -39,40 +39,18 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use switchboard_plugin_api::Pr;
+use switchboard_plugin_api::sdk::{git_as_is, git_bytes};
 
 use crate::{paths, util};
 
-/// Runs git in `dir` with its output as text: an error with the first line
-/// of what it said when it fails.
-pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir).args(args);
-    let out = util::output_of(&mut cmd)?;
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// As `git`, its output's bytes as they are (a file's text may not be UTF-8).
-pub fn git_bytes(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    out.status.success().then_some(out.stdout)
-}
-
 /// Whether git knows `rev` here.
 fn verifies(dir: &Path, rev: &str) -> bool {
-    git(dir, &["rev-parse", "--verify", "--quiet", rev]).is_ok()
+    git_as_is(dir, &["rev-parse", "--verify", "--quiet", rev]).is_ok()
 }
 
 /// The repository's top directory, its git directory and the commit HEAD is
@@ -84,7 +62,7 @@ pub struct Facts {
 }
 
 pub fn facts(dir: &Path) -> Result<Facts> {
-    let out = git(
+    let out = git_as_is(
         dir,
         &["rev-parse", "--absolute-git-dir", "--show-toplevel", "HEAD"],
     )
@@ -215,7 +193,7 @@ pub fn cached_for_opening(dir: &Path) -> Option<(String, Why)> {
 
 /// The branch checked out in `dir`, `None` on none.
 fn current_branch(dir: &Path) -> Option<String> {
-    git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+    git_as_is(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -224,7 +202,7 @@ fn current_branch(dir: &Path) -> Option<String> {
 /// A branch's upstream and its remote's name, as git's config has them:
 /// both empty with none, the remote "." or empty for a local branch.
 fn upstream_of(dir: &Path, branch: &str) -> (String, String) {
-    let out = git(
+    let out = git_as_is(
         dir,
         &[
             "for-each-ref",
@@ -315,7 +293,7 @@ fn default_base(dir: &Path) -> &'static str {
 pub fn fetch_base(dir: &Path) -> Option<Base> {
     let facts = facts(dir).ok()?;
     let branch = current_branch(dir);
-    let mut default = git(dir, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
+    let mut default = git_as_is(dir, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
         .ok()
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
@@ -356,10 +334,10 @@ pub fn fetch_base(dir: &Path) -> Option<Base> {
             // A repository with no origin has nothing to fetch, its own
             // branch as fresh as it gets, so nothing is asked and nothing
             // said.
-            let origin = git(dir, &["config", "--get", "remote.origin.url"]).is_ok();
+            let origin = git_as_is(dir, &["config", "--get", "remote.origin.url"]).is_ok();
             let fetched = !origin || {
                 crate::host::host().count_fetch(&facts.top, "origin", "M-d diff: fetch base");
-                git(dir, &["fetch", "--quiet", "origin", &base]).is_ok()
+                git_as_is(dir, &["fetch", "--quiet", "origin", &base]).is_ok()
             };
             // A repository with no origin compares with its own branch.
             let found = format!("origin/{base}");
@@ -697,8 +675,8 @@ pub fn parse_entries(name_status: &str, numstat: &str) -> Vec<Entry> {
 /// The change between `base`'s merge base with HEAD and HEAD, in the
 /// repository at `top`, as `DiffviewOpen <base>...HEAD` compared them.
 pub fn read_change(top: &Path, base: &str) -> Result<Change> {
-    let right = git(top, &["rev-parse", "HEAD"])?.trim().to_string();
-    let left = git(top, &["merge-base", base, "HEAD"])
+    let right = git_as_is(top, &["rev-parse", "HEAD"])?.trim().to_string();
+    let left = git_as_is(top, &["merge-base", base, "HEAD"])
         .map_err(|_| anyhow!("{base} and this branch have no commit in common"))?
         .trim()
         .to_string();
@@ -709,7 +687,7 @@ pub fn read_change(top: &Path, base: &str) -> Result<Change> {
 /// each its hash and subject, as diffview's history listed them with
 /// `--reverse`.
 pub fn commits_between(top: &Path, left: &str, right: &str) -> Vec<(String, String)> {
-    git(
+    git_as_is(
         top,
         &[
             "log",
@@ -734,19 +712,19 @@ pub fn read_commit(top: &Path, commit: &str) -> Result<Change> {
     if !safe_ref(commit) {
         bail!("Not a commit: {commit}");
     }
-    let right = git(
+    let right = git_as_is(
         top,
         &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
     )
     .map_err(|_| anyhow!("No commit {commit} here"))?
     .trim()
     .to_string();
-    let left = match git(
+    let left = match git_as_is(
         top,
         &["rev-parse", "--verify", "--quiet", &format!("{right}^")],
     ) {
         Ok(parent) => parent.trim().to_string(),
-        Err(_) => git(top, &["hash-object", "-t", "tree", "/dev/null"])?
+        Err(_) => git_as_is(top, &["hash-object", "-t", "tree", "/dev/null"])?
             .trim()
             .to_string(),
     };
@@ -760,13 +738,13 @@ fn read_range(top: &Path, base: &str, left: String, right: String) -> Result<Cha
         let mut args: Vec<&str> = plain(top);
         args.extend_from_slice(extra);
         args.extend_from_slice(&[left.as_str(), right.as_str()]);
-        git(top, &args)
+        git_as_is(top, &args)
     };
     let name_status = range(&["-M", "-z", "--name-status"])?;
     let numstat = range(&["-M", "-z", "--numstat"])?;
     let entries = parse_entries(&name_status, &numstat);
     let diff = range(&["--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M"])?;
-    let raw_commits = git(
+    let raw_commits = git_as_is(
         top,
         &[
             "log",
@@ -799,14 +777,14 @@ const NEW_FILE_LINES: usize = 400;
 /// its diff leaves out (diffview.lua's `read_diff` for plain
 /// `:DiffviewOpen`).
 pub fn read_working(top: &Path) -> Result<Change> {
-    let head = git(top, &["rev-parse", "HEAD"])
+    let head = git_as_is(top, &["rev-parse", "HEAD"])
         .map_err(|_| anyhow!("This repository has no commit yet"))?
         .trim()
         .to_string();
     let run = |extra: &[&str]| -> Result<String> {
         let mut args: Vec<&str> = plain(top);
         args.extend_from_slice(extra);
-        git(top, &args)
+        git_as_is(top, &args)
     };
     let mut entries = Vec::new();
     let mut texts = Vec::new();
@@ -849,7 +827,7 @@ fn add_untracked(
     diff: &mut String,
     section: Section,
 ) -> Result<()> {
-    let untracked = git(top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let untracked = git_as_is(top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     for path in untracked.split('\0').filter(|p| !p.is_empty()) {
         if entries
             .iter()
@@ -907,7 +885,7 @@ pub fn read_to_work_tree(top: &Path, base: &str) -> Result<Change> {
         let mut args: Vec<&str> = plain(top);
         args.extend_from_slice(extra);
         args.push(left.as_str());
-        git(top, &args)
+        git_as_is(top, &args)
     };
     let mut entries = parse_entries(
         &run(&["-M", "-z", "--name-status"])?,
@@ -917,7 +895,7 @@ pub fn read_to_work_tree(top: &Path, base: &str) -> Result<Change> {
     add_untracked(top, &mut entries, &mut diff, Section::Committed)?;
     // Read without the index's lock, which git status otherwise takes to
     // refresh it, so a commit being made meanwhile isn't refused.
-    let status = git(
+    let status = git_as_is(
         top,
         &[
             "--no-optional-locks",
@@ -989,7 +967,7 @@ pub fn text_at(top: &Path, commit: &str, path: &str) -> Option<String> {
             return None;
         }
     } else {
-        git_bytes(top, &["show", &format!("{commit}:{path}")])?
+        git_bytes(top, &["show", &format!("{commit}:{path}")]).ok()?
     };
     if bytes.iter().take(8000).any(|b| *b == 0) {
         return None;
@@ -999,7 +977,7 @@ pub fn text_at(top: &Path, commit: &str, path: &str) -> Option<String> {
 
 /// The GitHub repository `origin` names, as `owner/name`.
 pub fn github_repo(top: &Path) -> Option<String> {
-    let url = git(top, &["remote", "get-url", "origin"]).ok()?;
+    let url = git_as_is(top, &["remote", "get-url", "origin"]).ok()?;
     util::github_remote(url.trim()).map(|(owner, name)| format!("{owner}/{name}"))
 }
 

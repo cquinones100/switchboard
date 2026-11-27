@@ -4,7 +4,7 @@
 //! every entry naming the refactor issue that removes it, and the issue
 //! empties its entries as it lands; nothing is added to one.
 //!
-//! - git's wrapper: `fn git(` only in plugin-api's `sdk` (issue 399).
+//! - git's wrapper: `fn git(` only in plugin-api's `sdk`.
 //! - Claude's transcripts: read only by `agent::transcript` (issue 400
 //!   moved every reader onto it, so its list is empty).
 //! - Mission control: a view acts on an item through its menus, never a
@@ -15,38 +15,11 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
-/// Where git's one wrapper will live (issue 399).
+/// Where git's one wrapper lives.
 const GIT_HOME: &str = "crates/plugin-api/src/sdk";
 
-/// The files with a `fn git(` of their own today.
-const GIT_COPIES: &[(&str, u32)] = &[
-    ("crates/diff/src/git.rs", 399),
-    ("crates/diff/tests/alone.rs", 399),
-    ("src/cmd/clone_build.rs", 399),
-    ("src/cmd/codex_review.rs", 399),
-    ("src/cmd/item_done.rs", 399),
-    ("src/cmd/land_push.rs", 399),
-    ("src/cmd/land_squash.rs", 399),
-    ("src/cmd/leak_check.rs", 399),
-    ("src/cmd/pr_risk.rs", 399),
-    ("src/cmd/try_.rs", 399),
-    ("src/cmd/worktree_from_note.rs", 399),
-    ("src/cmd/wt_jump.rs", 399),
-    ("src/cmd/wt_revive.rs", 399),
-    ("src/day/standup.rs", 399),
-    ("src/demo/mod.rs", 399),
-    ("src/files/mod.rs", 399),
-    ("src/integrations/github.rs", 399),
-    ("src/merge_queue/train.rs", 399),
-    ("src/mux/behind.rs", 399),
-    ("src/mux/latest.rs", 399),
-    ("src/mux/main_clone.rs", 399),
-    ("src/relay/places.rs", 399),
-    ("src/tabs/git.rs", 399),
-    ("src/trust.rs", 399),
-    ("src/worktree_sweep/mod.rs", 399),
-    ("src/worktree_sweep/reviews.rs", 399),
-];
+/// The files with a `fn git(` of their own today: none, since issue 399.
+const GIT_COPIES: &[(&str, u32)] = &[];
 
 /// Where Claude's transcripts are read.
 const TRANSCRIPT_HOME: &str = "src/agent/transcript.rs";

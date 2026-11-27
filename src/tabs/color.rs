@@ -506,8 +506,9 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use super::super::git::tests::{Scratch, git, repo};
+    use super::super::git::tests::{Scratch, repo};
     use super::*;
+    use crate::worktree::git_scratch;
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -805,25 +806,22 @@ mod tests {
     fn real_directories_take_their_keys_names_and_colors() {
         let scratch = Scratch::new("color");
         let main = scratch.0.join("switchboard");
-        if !repo(&main) {
-            eprintln!("skipped: no git");
-            return;
-        }
+        repo(&main);
         let plain = scratch.0.join("app");
         std::fs::create_dir_all(&plain).unwrap();
         let web = scratch.0.join("web");
-        assert!(repo(&web));
-        assert!(git(&web, &["checkout", "-q", "-b", "eng-42-fix-login"]));
+        repo(&web);
+        git_scratch(&web, &["checkout", "-q", "-b", "eng-42-fix-login"]);
         let sub = web.join("src");
         std::fs::create_dir_all(&sub).unwrap();
         let wt = scratch.0.join("eng-7");
-        assert!(git(
+        git_scratch(
             &web,
-            &["worktree", "add", "-q", "-b", "eng-7", wt.to_str().unwrap()]
-        ));
+            &["worktree", "add", "-q", "-b", "eng-7", wt.to_str().unwrap()],
+        );
         let detached = scratch.0.join("api");
-        assert!(repo(&detached));
-        assert!(git(&detached, &["checkout", "-q", "--detach"]));
+        repo(&detached);
+        git_scratch(&detached, &["checkout", "-q", "--detach"]);
         for (dir, key, name) in [
             (&main, "switchboard | branch:main", "switchboard"),
             (&plain, "app", "app"),

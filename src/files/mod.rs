@@ -61,7 +61,7 @@ pub mod serve;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -253,17 +253,14 @@ pub fn repo() -> Option<String> {
 
 /// git in the clone, asking for nothing: its prompt and askpass off, ssh's
 /// too, its input closed.
-fn git(clone: &Path, helper: Option<&str>) -> Command {
-    let mut cmd = Command::new("git");
+fn unasked(clone: &Path, helper: Option<&str>) -> Command {
+    let mut cmd = worktree::git_command(clone);
     if let Some(helper) = helper {
         cmd.arg("-c").arg(format!("credential.helper={helper}"));
     }
-    cmd.arg("-C")
-        .arg(clone)
-        .env("GIT_TERMINAL_PROMPT", "0")
+    cmd.env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "false")
-        .env("SSH_ASKPASS_REQUIRE", "never")
-        .stdin(Stdio::null());
+        .env("SSH_ASKPASS_REQUIRE", "never");
     cmd
 }
 
@@ -314,8 +311,8 @@ fn pathspecs(dir: &Path) -> Vec<String> {
 /// `None` when nothing did.
 pub fn commit(clone: &Path, dir: &Path) -> Result<Option<String>, String> {
     let specs = pathspecs(dir);
-    run(git(clone, None).args(["add", "-A", "--"]).args(&specs))?;
-    let changed = run(git(clone, None)
+    run(unasked(clone, None).args(["add", "-A", "--"]).args(&specs))?;
+    let changed = run(unasked(clone, None)
         .args(["diff", "--cached", "--name-only", "--no-renames", "--"])
         .args(&specs))?;
     let names: Vec<&str> = changed
@@ -334,7 +331,7 @@ pub fn commit(clone: &Path, dir: &Path) -> Result<Option<String>, String> {
         [one, two] => format!("Switchboard: {one}, {two}"),
         [one, two, rest @ ..] => format!("Switchboard: {one}, {two} and {} more", rest.len()),
     };
-    run(git(clone, None)
+    run(unasked(clone, None)
         .args(["commit", "--quiet", "-m", &subject, "--"])
         .args(&specs))?;
     Ok(Some(subject))
@@ -343,35 +340,36 @@ pub fn commit(clone: &Path, dir: &Path) -> Result<Option<String>, String> {
 /// The commits not on the remote yet, as a range `git log` takes, and the
 /// commit at their tip; `None` when there are none.
 fn unpushed(clone: &Path) -> Option<(String, String)> {
-    let tip = run(git(clone, None).args(["rev-parse", "--verify", "--quiet", "HEAD"])).ok()?;
-    let upstream = run(git(clone, None).args(["rev-parse", "--verify", "--quiet", "@{u}"])).is_ok();
+    let tip = run(unasked(clone, None).args(["rev-parse", "--verify", "--quiet", "HEAD"])).ok()?;
+    let upstream =
+        run(unasked(clone, None).args(["rev-parse", "--verify", "--quiet", "@{u}"])).is_ok();
     if !upstream {
         return Some(("HEAD".into(), tip));
     }
-    let count = run(git(clone, None).args(["rev-list", "--count", "@{u}..HEAD"])).ok()?;
+    let count = run(unasked(clone, None).args(["rev-list", "--count", "@{u}..HEAD"])).ok()?;
     (count != "0").then(|| ("@{u}..HEAD".into(), tip))
 }
 
 /// What the remote has, fetched, or why it couldn't be reached.
 fn fetch(clone: &Path, helper: Option<&str>) -> Result<(), String> {
     worktree::count_fetch(clone, "origin", SOURCE);
-    run(git(clone, helper).args(["fetch", "--quiet", "origin"])).map(|_| ())
+    run(unasked(clone, helper).args(["fetch", "--quiet", "origin"])).map(|_| ())
 }
 
 /// What was fetched taken fast-forward only; fine too with no branch on the
 /// remote to take.
 fn fast_forward(clone: &Path) -> bool {
-    run(git(clone, None).args(["rev-parse", "--verify", "--quiet", "@{u}"])).is_err()
-        || run(git(clone, None).args(["merge", "--quiet", "--ff-only", "@{u}"])).is_ok()
+    run(unasked(clone, None).args(["rev-parse", "--verify", "--quiet", "@{u}"])).is_err()
+        || run(unasked(clone, None).args(["merge", "--quiet", "--ff-only", "@{u}"])).is_ok()
 }
 
 fn push(clone: &Path, helper: Option<&str>) -> Result<(), String> {
     worktree::count_fetch(clone, "origin", SOURCE);
-    run(git(clone, helper).args(["push", "--quiet", "-u", "origin", "HEAD"])).map(|_| ())
+    run(unasked(clone, helper).args(["push", "--quiet", "-u", "origin", "HEAD"])).map(|_| ())
 }
 
 fn origin_of(clone: &Path) -> String {
-    run(git(clone, None).args(["remote", "get-url", "origin"])).unwrap_or_default()
+    run(unasked(clone, None).args(["remote", "get-url", "origin"])).unwrap_or_default()
 }
 
 // ── The clone ───────────────────────────────────────────────────────────
@@ -442,7 +440,7 @@ fn set_up(
     if clone.join(".git").exists() {
         // A clone made another way (your rules' own, before this one
         // served both) checks out no links from here on either.
-        let _ = run(git(clone, None).args(["config", "core.symlinks", "false"]));
+        let _ = run(unasked(clone, None).args(["config", "core.symlinks", "false"]));
     }
     if !clone.join(".git").exists() {
         let partial = clone.with_file_name("files.partial");
@@ -450,7 +448,7 @@ fn set_up(
         if let Some(parent) = clone.parent() {
             util::make_dirs(parent).map_err(io)?;
         }
-        let cloned = run(git(parent_of(clone), helper().as_deref())
+        let cloned = run(unasked(parent_of(clone), helper().as_deref())
             .args(["clone", "--quiet", "-c", NO_LINKS, "--", &named.repo])
             .arg(&partial));
         if let Err(why) = cloned {
@@ -922,7 +920,7 @@ mod tests {
     }
 
     fn git_in(dir: &Path, args: &[&str]) -> String {
-        run(git(dir, None).args(args)).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+        run(unasked(dir, None).args(args)).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
     }
 
     /// A bare remote and a clone of it with an identity to commit under.
