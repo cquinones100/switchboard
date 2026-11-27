@@ -813,3 +813,4 @@ body.refused p { color: var(--dim); }
 .tab-sheet .card.asked .choices { color: var(--dim); font-size: var(--fact); overflow-wrap: anywhere; }
 .tab-sheet .card.asked .go { margin-top: var(--s2); color: var(--accent); }
 .tab-sheet .sheet-options { flex: none; border-top: 1px solid var(--line); padding: var(--s1) 0 calc(var(--s1) + var(--inset-bottom)); }
+.tab-sheet .md .link { color: var(--accent); }

@@ -960,24 +960,31 @@ function openSheet(pane) {
 }
 
 // A drag down on the sheet's top follows the finger, and past
-// SHEET_DRAG_CLOSES closes it; short of that it springs back.
+// SHEET_DRAG_CLOSES closes it; short of that it springs back. One that
+// starts on × is the button's tap, and a finger moving less than a tap
+// may moves nothing.
 function dragDown(top) {
   let from = null;
+  let dragging = false;
   const moved = (e) => Math.max(0, e.clientY - from);
-  // Captured only once it moves, so a tap on × stays the button's.
   top.addEventListener("pointerdown", (e) => {
-    from = e.clientY;
+    const onButton = e.target && e.target.closest && e.target.closest("button");
+    from = onButton ? null : e.clientY;
+    dragging = false;
   });
   top.addEventListener("pointermove", (e) => {
     if (from === null || !sheetShown) return;
-    if (top.setPointerCapture && e.pointerId !== undefined && moved(e) > 0) top.setPointerCapture(e.pointerId);
+    if (!dragging && moved(e) <= TAP_SLOP) return;
+    if (!dragging && top.setPointerCapture && e.pointerId !== undefined) top.setPointerCapture(e.pointerId);
+    dragging = true;
     sheetShown.box.style.transition = "none";
     sheetShown.box.style.transform = "translateY(" + moved(e) + "px)";
   });
   const end = (e) => {
     if (from === null) return;
-    const far = moved(e) > SHEET_DRAG_CLOSES;
+    const far = dragging && moved(e) > SHEET_DRAG_CLOSES;
     from = null;
+    dragging = false;
     if (!sheetShown) return;
     sheetShown.box.style.transition = "";
     sheetShown.box.style.transform = "";
@@ -1075,7 +1082,7 @@ function lastTurn(tab, messages) {
     const who = m.who === "you" ? "You" : m.who === "tab" ? m.from || "Another tab" : "Claude";
     const speaker = m.who === "tab" ? "tab" : m.who === "you" ? "you" : "claude";
     const when = el("span", { class: "when" }, ago(m.at));
-    const body = !m.text ? null : m.who === "claude" && md ? markdown(m.text) : el("div", { class: "body" }, m.text);
+    const body = !m.text ? null : m.who === "claude" && md ? unlinked(markdown(m.text)) : el("div", { class: "body" }, m.text);
     return el(
       "div",
       { class: "msg" },
@@ -1084,6 +1091,13 @@ function lastTurn(tab, messages) {
       body,
     );
   });
+}
+
+// Claude's words with each link a plain span, so a tap on one opens the
+// channel as the rest of the turn does rather than the link too.
+function unlinked(node) {
+  for (const a of Array.from(node.querySelectorAll("a"))) a.replaceWith(el("span", { class: "link" }, ...Array.from(a.childNodes)));
+  return node;
 }
 
 // A question the tab asks, as the channel's card draws it, read only: its
