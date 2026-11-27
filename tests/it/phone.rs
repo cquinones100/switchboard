@@ -4750,11 +4750,12 @@ console.log(out.join("\n"));
             // Most tabs first, each with its count, and every tab last.
             "sheet=api:9,web:9,docs:4,Every repository:22",
             "chip=api kept=api",
-            "heads=▾ Needs you2,▾ Working1,▾ Monitoring1,▾ CI loop1,▾ In merge queue1,▾ Landing1,▾ Idle1,▾ Reminders1,Elsewhere5,▸ Other repos8*",
-            "rows=api,api,api,api,api,api,api,api,api,web,web,web,web,docs",
-            "named=repository web,repository web,repository web,repository web,repository docs",
+            "heads=▾ Needs you2,▾ Working1,▾ Monitoring1,▾ CI loop1,▾ In merge queue1,▾ Landing1,▾ Idle1,▾ Reminders1,Elsewhere3,▸ Other repos10*",
+            // The waiting web tabs above the fold; a finished one folds away.
+            "rows=api,api,api,api,api,api,api,api,api,web,web,web",
+            "named=repository web,repository web,repository web",
             "opened=api,api,api,api,api,api,api,api,api,web,web,web,web,docs,web,web,docs,web,docs,web,web,docs",
-            "reloaded=api ▾ Needs you2,▾ Working1,▾ Monitoring1,▾ CI loop1,▾ In merge queue1,▾ Landing1,▾ Idle1,▾ Reminders1,Elsewhere5,▸ Other repos8*",
+            "reloaded=api ▾ Needs you2,▾ Working1,▾ Monitoring1,▾ CI loop1,▾ In merge queue1,▾ Landing1,▾ Idle1,▾ Reminders1,Elsewhere3,▸ Other repos10*",
             // A search past the filter: every web tab, and an api one naming it.
             "search=web,web,web,web,web,web,web,api,web,web",
             "cleared=All repos same=true kept=undefined",

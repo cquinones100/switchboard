@@ -770,7 +770,9 @@ function drawerList() {
 // them.
 function elsewhere() {
   const others = state.tabs.filter((t) => t.repo !== repoFilter);
-  const needsYou = (t) => t.needs || Boolean(t.remind && t.remind.due);
+  // Waiting on you, not merely under Needs you: a pinned or finished tab
+  // folds away with the rest.
+  const needsYou = (t) => t.state === "waiting" || Boolean(t.remind && t.remind.due);
   const shown = others.filter(needsYou);
   const rest = others.filter((t) => !needsYou(t));
   const out = [];
