@@ -1,7 +1,7 @@
 //! A GitHub issue as the ticket view shows it, for a tab whose ticket is
 //! the issue its branch was started for (`tickets::Ticket::Issue`):
-//! its number and title, who opened it and when, its body, then its
-//! comments, oldest first, drawn as the PR view draws a PR's; with its
+//! its number and title, its body, then its comments, oldest first, each
+//! in a box as the PR view draws a PR's (boards 131 to 133); with its
 //! state, labels, assignees and milestone beside them, as the board for a
 //! ticket.
 //!
@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use super::board::{self, Board, Part, Piece};
+use super::board::{self, Board, Comment, Part, Piece};
 use super::follow;
 use super::pager::{self, Content};
 use crate::integrations::github::{self, Repo};
@@ -72,22 +72,39 @@ fn comments(issue: &Value) -> Vec<&Value> {
     all
 }
 
-/// What a GitHub login wrote, beside their avatar.
-fn said(login: &str, then: String, body: String) -> Part {
-    Part::Said {
+/// What a GitHub login wrote, in a box (`board::Comment`): its own page
+/// at `url`, its key when it has none.
+fn comment(
+    login: &str,
+    verb: &str,
+    when: String,
+    body: String,
+    url: String,
+    key: String,
+) -> Comment {
+    Comment {
+        key: if url.is_empty() { key } else { url.clone() },
         who: (!login.is_empty()).then(|| Who::new(Service::GitHub, login)),
-        name: login.into(),
-        head: vec![
-            Piece::Name(login.into(), Tone::Text),
-            Piece::Text(then, Tone::Dim),
-        ],
+        name: if login.is_empty() {
+            "someone".into()
+        } else {
+            login.into()
+        },
+        verb: verb.into(),
+        when,
+        chip: None,
+        place: None,
         body,
-        indent: 0,
+        replies: Vec::new(),
+        link: (!url.is_empty()).then(|| ("Open it on GitHub".to_string(), url)),
+        folds: true,
+        whole: false,
+        chosen: false,
     }
 }
 
 /// The issue as the ticket's board draws a ticket: its number and title,
-/// who opened it, its body and its comments, its facts beside them.
+/// its body and its comments in boxes, its facts beside them.
 pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
     let opener = text(issue, "/user/login");
     let body = text(issue, "/body");
@@ -102,39 +119,47 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
             ),
             Piece::Name(format!("  {}", text(issue, "/title")), Tone::Text),
         ]),
-        said(
-            &opener,
-            format!(
-                "  opened it {}",
-                board::when(&text(issue, "/created_at"), now)
-            ),
-            String::new(),
-        ),
-        Part::Rule,
         Part::Blank,
-        Part::Text {
-            markdown: if body.trim().is_empty() {
-                "_No description._".into()
-            } else {
-                body
-            },
-            indent: 0,
-        },
+        Part::Comment(Box::new(Comment {
+            chip: Some(("Author".into(), Tone::Dim)),
+            folds: false,
+            ..comment(
+                &opener,
+                "opened this",
+                board::when(&text(issue, "/created_at"), now),
+                if body.trim().is_empty() {
+                    "_No description._".into()
+                } else {
+                    body
+                },
+                text(issue, "/html_url"),
+                "description".into(),
+            )
+        })),
     ];
-    let comments = comments(issue);
-    if !comments.is_empty() {
+    for (i, c) in comments(issue).into_iter().enumerate() {
+        let login = text(c, "/user/login");
+        let chip = if text(c, "/user/type") == "Bot" {
+            Some(("bot".into(), Tone::Dim))
+        } else if !login.is_empty() && login == opener {
+            Some(("Author".into(), Tone::Dim))
+        } else {
+            None
+        };
         main.extend([
             Part::Blank,
-            Part::Label("Comments".into(), Some(comments.len().to_string())),
+            Part::Comment(Box::new(Comment {
+                chip,
+                ..comment(
+                    &login,
+                    "commented",
+                    board::when(&text(c, "/created_at"), now),
+                    text(c, "/body"),
+                    text(c, "/html_url"),
+                    format!("comment-{i}"),
+                )
+            })),
         ]);
-    }
-    for c in comments {
-        main.push(Part::Blank);
-        main.push(said(
-            &text(c, "/user/login"),
-            format!("  {}", board::when(&text(c, "/created_at"), now)),
-            text(c, "/body"),
-        ));
     }
 
     let fact = |key: &str, value: Piece| {
@@ -166,6 +191,8 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
         place: PLACE.into(),
         keys: [
             ("j/k", "scroll"),
+            ("Tab", "next box"),
+            ("Enter", "its menu"),
             ("/", "search"),
             ("r", "read again"),
             ("M-l", "on GitHub"),
@@ -294,10 +321,10 @@ mod tests {
         let screen = pager.screen().join("\n");
         for want in [
             "#12  Make the widget blue",
-            "It is red.",
-            "COMMENTS",
-            "Which widget?",
-            "Found it.",
+            "│ It is red.",
+            "opened this",
+            "│ Which widget?",
+            "│ Found it.",
             "Closed: not planned",
             "Assignees   jo",
             "Labels      autopilot",

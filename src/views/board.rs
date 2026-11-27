@@ -1,10 +1,10 @@
 //! The PR (M-v) and the ticket (M-i) as UX 2.0's boards 13 and 14 draw
-//! them, in Claude's place: a column read top to bottom (the head, the
-//! description through Markdown, what follows it: the ticket's sub-issues,
-//! the comments with people's photos) and beside it a panel of what GitHub
-//! and Linear keep at the right of the page (the PR's checks, reviewers,
-//! open review threads and files; the ticket's facts, pull requests and
-//! related tickets). New, with no tmux-version file behind it:
+//! them, in Claude's place: a column read top to bottom (the head, then
+//! the description and each comment in a box as boards 131 to 133 draw
+//! them, the PR's open review threads among them, then the ticket's
+//! sub-issues) and beside it a panel of what GitHub and Linear keep at the
+//! right of the page (the PR's checks, reviewers and files; the ticket's
+//! facts, pull requests and related tickets). New, with no tmux-version file behind it:
 //! pr-view.js laid both out as one Markdown text.
 //!
 //! A board is plain data (`Board`, its `Part`s and `Piece`s), which
@@ -22,14 +22,15 @@
 //! (`super::pictures`, with Settings' `photos` on), from the cache Photos
 //! keeps (src/photos), cropped to a circle; until it is had, and wherever
 //! it can't be, it is the kit's text form, their initial on a color of
-//! their own (`kit::avatar`, board 0d). It is Large (`Part::Said`, 4 by 2)
-//! beside what someone wrote or did, Small (`Piece::Avatar`, 2 by 1) in a
+//! their own (`kit::avatar`, board 0d). It is Large (4 by 2) beside a
+//! comment's box (`Part::Comment`), Small (`Piece::Avatar`, 2 by 1) in a
 //! run of names.
 
 use ratatui::style::{Color, Modifier};
 
 use super::markdown::{
-    self, Doc, Images, Line, Markdown, PictureRow, Placement, Span, Style, Wanted,
+    self, Anchor, Doc, Images, Line, Markdown, PictureRow, Placement, Span, Style, Wanted,
+    expand_tabs,
 };
 use crate::photos::Who;
 use crate::ui::Theme;
@@ -71,6 +72,12 @@ pub enum Do {
     /// Runs one of the workspace's actions as its key would, in the view's
     /// tab (`switchboard press <name>`).
     Press(String),
+    /// Shows a folded comment whole, by its key (`Comment::key`).
+    Unfold(String),
+    /// Folds a long comment shown whole again.
+    Fold(String),
+    /// Copies a comment's words to the clipboard.
+    Copy(String),
 }
 
 /// One piece of a board's column or panel.
@@ -88,19 +95,93 @@ pub enum Part {
         markdown: String,
         indent: usize,
     },
-    /// What someone wrote or did, `indent` columns in (board 0d): their
-    /// Large avatar, `head` (their name, when) beside its first row and
-    /// `body`'s Markdown from its second, both `kit::SAID_INDENT` past
-    /// it; with no body, the second row is left blank.
-    Said {
-        who: Option<Who>,
-        name: String,
-        head: Vec<Piece>,
-        body: String,
-        indent: usize,
-    },
+    /// What someone wrote, in a box (`Comment`).
+    Comment(Box<Comment>),
     Rule,
     Blank,
+}
+
+/// What someone wrote, as GitHub draws its conversation (boards 131 to
+/// 133): a box whose header bar names who, what and when, `chip` at its
+/// right, the body's Markdown inside, a thread's replies under it; their
+/// Large avatar beside the box on a wide column, Small in the header bar
+/// on a narrow one (`Look::narrow`). Boxes one after another are joined
+/// by a line down the side, in place of the blank line between them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Comment {
+    /// What tells it apart when the view is read again: its URL, or its
+    /// place where it has none.
+    pub key: String,
+    pub who: Option<Who>,
+    pub name: String,
+    /// What they did ("opened this", "commented"), after their name.
+    pub verb: String,
+    pub when: String,
+    pub chip: Option<(String, Tone)>,
+    /// A review comment's file, line and the line of code it is on.
+    pub place: Option<Place>,
+    pub body: String,
+    pub replies: Vec<Reply>,
+    /// The words of the menu's option that opens its own page, and the page.
+    pub link: Option<(String, String)>,
+    /// Whether a long body is folded (a comment's, never a description's).
+    pub folds: bool,
+    /// Shown whole, and chosen: the pager's, for the layout.
+    pub whole: bool,
+    pub chosen: bool,
+}
+
+/// A review comment's place: the file, the line and the line of code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub path: String,
+    pub line: Option<u64>,
+    pub code: Option<String>,
+}
+
+/// A reply inside its thread's box.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reply {
+    pub who: Option<Who>,
+    pub name: String,
+    /// What they did and when ("replied · yesterday").
+    pub said: String,
+    pub body: String,
+}
+
+/// A comment's body past this many lines is folded...
+pub const FOLD_OVER: usize = 12;
+/// ...to its first this many, and a line saying how many more.
+pub const FOLD_KEEP: usize = 8;
+
+impl Comment {
+    /// Its box's menu: showing it whole or folding it, opening its page,
+    /// copying its words.
+    pub fn actions(&self, folded: bool) -> Vec<(String, Do)> {
+        let mut out = Vec::new();
+        if folded {
+            out.push(("Show all of it".into(), Do::Unfold(self.key.clone())));
+        } else if self.whole {
+            out.push(("Fold it again".into(), Do::Fold(self.key.clone())));
+        }
+        if let Some((words, url)) = &self.link {
+            out.push((words.clone(), Do::Open(url.clone())));
+        }
+        let mut text = self.body.clone();
+        for r in &self.replies {
+            text.push_str(&format!("\n\n{}: {}", r.name, r.body));
+        }
+        out.push(("Copy its text".into(), Do::Copy(text)));
+        out
+    }
+
+    /// The menu's title: whose comment it is.
+    pub fn title(&self) -> String {
+        match self.verb.as_str() {
+            "opened this" => format!("{}'s description", self.name),
+            _ => format!("{}'s comment", self.name),
+        }
+    }
 }
 
 /// A piece of a row.
@@ -124,6 +205,9 @@ pub enum Piece {
 pub struct Look {
     pub theme: Theme,
     pub caps: bool,
+    /// Whether the column has no panel beside it, where a comment's
+    /// avatar goes into its header bar (board 132).
+    pub narrow: bool,
 }
 
 impl Look {
@@ -137,6 +221,7 @@ impl Look {
                 Theme::DARK
             },
             caps: crate::mux::graphics::apps_round_ends(),
+            narrow: false,
         }
     }
 }
@@ -146,6 +231,7 @@ impl Default for Look {
         Look {
             theme: Theme::DARK,
             caps: false,
+            narrow: false,
         }
     }
 }
@@ -165,12 +251,13 @@ impl Board {
                 Part::Text { markdown, .. } => {
                     out.extend(Markdown::parse(markdown, place).wanted())
                 }
-                Part::Said {
-                    who, head, body, ..
-                } => {
-                    out.extend(who.iter().map(|w| Wanted::Photo(w.clone())));
-                    out.extend(photos(head));
-                    out.extend(Markdown::parse(body, place).wanted());
+                Part::Comment(c) => {
+                    out.extend(c.who.iter().map(|w| Wanted::Photo(w.clone())));
+                    out.extend(Markdown::parse(&c.body, place).wanted());
+                    for r in &c.replies {
+                        out.extend(r.who.iter().map(|w| Wanted::Photo(w.clone())));
+                        out.extend(Markdown::parse(&r.body, place).wanted());
+                    }
                 }
                 Part::Row(pieces) | Part::Ends(pieces, _) => out.extend(photos(pieces)),
                 Part::Flow(groups) => groups.iter().for_each(|g| out.extend(photos(g))),
@@ -213,6 +300,30 @@ pub fn lay_out(
             out.lines.push(Line::of(all, (base, at, 1)));
         };
         match part {
+            // Between two boxes, the line down the side joining them.
+            Part::Blank
+                if i > 0
+                    && let (Some(Part::Comment(_)), Some(Part::Comment(_))) =
+                        (parts.get(i - 1), parts.get(i + 1)) =>
+            {
+                let at = if wide(inner, look) {
+                    kit::SAID_INDENT + 3
+                } else {
+                    2
+                };
+                row(
+                    vec![
+                        Span::new(" ".repeat(at), Style::default()),
+                        Span::new("│", Style::fg(color(kit::border(&look.theme)))),
+                    ],
+                    &mut out,
+                    0,
+                )
+            }
+            Part::Comment(c) => {
+                let lines = comment_lines(c, inner, place, images, look, &mut out, base);
+                out.lines.extend(lines);
+            }
             Part::Blank => row(Vec::new(), &mut out, 0),
             Part::Rule => row(
                 vec![Span::new(
@@ -294,63 +405,235 @@ pub fn lay_out(
                     out.lines.push(line);
                 }
             }
-            Part::Said {
-                who,
-                name,
-                head,
-                body,
-                indent,
-            } => {
-                let face = avatar(who.as_ref(), name, kit::AvatarSize::Large, &mut out, images);
-                let mut rows = face.into_iter();
-                let past = indent + kit::SAID_INDENT;
-                // The avatar's rows, each beside the next line: the head's,
-                // wrapped (a review thread's place kept whole), then the
-                // body's; a row with nothing beside it on a line of its own.
-                let beside = |rows: &mut std::vec::IntoIter<Vec<Span>>| {
-                    let mut s = vec![Span::new(" ".repeat(indent + MARGIN), Style::default())];
-                    match rows.next() {
-                        Some(row) => s.extend(row),
-                        None => s.push(Span::new(
-                            " ".repeat(kit::AvatarSize::Large.cols()),
-                            Style::default(),
-                        )),
-                    }
-                    s.push(Span::new(" ", Style::default()));
-                    s
-                };
-                let head = spans_of(head, &mut out, images, look);
-                for (at, line) in wrap(head, inner.saturating_sub(past), 0)
-                    .into_iter()
-                    .enumerate()
-                {
-                    let mut all = beside(&mut rows);
-                    all.extend(line);
-                    out.lines.push(Line::of(all, (base, at, 1)));
-                }
-                let width = (inner + 2 * MARGIN).saturating_sub(past);
-                let mut lines = text_lines(body, width, place, images, &mut out, base);
-                let mut first_beside = false;
-                if rows.len() > 0 {
-                    if lines.first_mut().is_some_and(|l| drop_margin(&mut l.spans)) {
-                        lines[0].spans.splice(0..0, beside(&mut rows));
-                        first_beside = true;
-                    } else {
-                        out.lines
-                            .push(Line::of(beside(&mut rows), (base, 1 << 16, 1)));
-                    }
-                }
-                for (n, mut line) in lines.into_iter().enumerate() {
-                    if !(first_beside && n == 0) {
-                        line.spans
-                            .insert(0, Span::new(" ".repeat(past), Style::default()));
-                    }
-                    out.lines.push(line);
-                }
-            }
         }
     }
     out
+}
+
+/// Which of the parts laid out a line of the layout is in.
+pub fn part_of(line: &Line) -> usize {
+    line.anchor.0 / PART
+}
+
+/// Whether a line is a folded comment's "N more lines" row.
+pub fn is_fold(line: &Line) -> bool {
+    line.anchor.2 == FOLD
+}
+
+/// A fold row's anchor's last part, which no Markdown line has (a table's
+/// rows count up from 1): past the first line it hides, whose
+/// block and place it takes, so the layout that shows it whole finds that
+/// line where the fold was.
+const FOLD: usize = usize::MAX;
+
+/// How far apart, in blocks, a box's body and each reply under it are.
+const REPLY: usize = 1 << 16;
+
+/// Whether a comment's box has the avatar beside it (board 131), in a
+/// column `inner` wide: not without a panel (board 132), nor where the
+/// box would be too narrow with it.
+fn wide(inner: usize, look: &Look) -> bool {
+    !look.narrow && inner >= kit::SAID_INDENT + 40
+}
+
+/// How many lines of a comment's body its box folds away, laid out
+/// `inner` columns wide: none unless it folds and is longer than
+/// `FOLD_OVER` lines.
+fn folded(c: &Comment, shown: usize) -> usize {
+    if c.folds && !c.whole && shown > FOLD_OVER {
+        shown - FOLD_KEEP
+    } else {
+        0
+    }
+}
+
+/// A comment's box (`Comment`), its lines anchored in the part at `base`.
+fn comment_lines(
+    c: &Comment,
+    inner: usize,
+    place: &str,
+    images: Option<&Images>,
+    look: &Look,
+    out: &mut Doc,
+    base: usize,
+) -> Vec<Line> {
+    let theme = &look.theme;
+    let wide = wide(inner, look);
+    let (at, cols) = if wide {
+        (kit::SAID_INDENT, inner - kit::SAID_INDENT)
+    } else {
+        (0, inner)
+    };
+    let face = if wide {
+        avatar(c.who.as_ref(), &c.name, kit::AvatarSize::Large, out, images)
+    } else {
+        Vec::new()
+    };
+    let mut face = face.into_iter();
+    // The columns before the box: the margin and, on a wide column, the
+    // avatar's rows beside its top and header bar.
+    let before = |face: &mut std::vec::IntoIter<Vec<Span>>| {
+        let mut s = vec![Span::new(" ".repeat(MARGIN), Style::default())];
+        if at > 0 {
+            match face.next() {
+                Some(r) => s.extend(r),
+                None => s.push(Span::new(
+                    " ".repeat(kit::AvatarSize::Large.cols()),
+                    Style::default(),
+                )),
+            }
+            s.push(Span::new(" ", Style::default()));
+        }
+        s
+    };
+    // A Small avatar's room on a narrow box's header bar, filled after.
+    let small = kit::AvatarSize::Small.cols() + 1;
+    let mut head = Vec::new();
+    if !wide {
+        head.push(ratatui::text::Span::raw(" ".repeat(small)));
+    }
+    head.push(ratatui::text::Span::styled(
+        c.name.clone(),
+        Tone::Text.bold(theme),
+    ));
+    let mut what = format!(" {}", c.verb);
+    if !c.when.is_empty() {
+        what.push_str(&format!(" · {}", c.when));
+    }
+    head.push(ratatui::text::Span::styled(what, Tone::Dim.style(theme)));
+    let chip = c
+        .chip
+        .as_ref()
+        .map(|(t, tone)| kit::chip(t, *tone, look.caps, theme))
+        .unwrap_or_default();
+    let frame = kit::comment(cols, head, chip, c.chosen, theme);
+    let side = from_kit(vec![frame.side.clone()]);
+    let mut lines = Vec::new();
+    let mut row = before(&mut face);
+    row.extend(from_kit(frame.top.clone()));
+    lines.push(Line::of(row, (base, 0, 1)));
+    let mut row = before(&mut face);
+    let mut bar = from_kit(frame.head.clone());
+    if !wide && bar.len() > 2 {
+        // `│`, a space, then the room left for the avatar.
+        let fill = bar[1].style;
+        let mut face = avatar(c.who.as_ref(), &c.name, kit::AvatarSize::Small, out, images)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        face.push(Span::new(" ", fill));
+        bar.splice(2..3, face);
+    }
+    row.extend(bar);
+    lines.push(Line::of(row, (base, 1, 1)));
+    let mut row = before(&mut face);
+    row.extend(from_kit(frame.rule.clone()));
+    lines.push(Line::of(row, (base, 2, 1)));
+    // A line inside the box, between its sides; one wider than the box
+    // (a code block) or ending in a picture goes on past its right side.
+    let inside = |content: Vec<Span>, picture: Option<PictureRow>, anchor: Anchor| {
+        let mut spans = vec![Span::new(" ".repeat(MARGIN + at), Style::default())];
+        spans.extend(side.clone());
+        spans.push(Span::new(" ", Style::default()));
+        let w: usize = content.iter().map(Span::width).sum();
+        spans.extend(content);
+        if picture.is_none() && w <= frame.inner {
+            spans.push(Span::new(" ".repeat(frame.inner - w + 1), Style::default()));
+            spans.extend(side.clone());
+        }
+        let mut line = Line::of(spans, anchor);
+        line.picture = picture;
+        line
+    };
+    let body_lines = |markdown: &str, cols: usize, block: usize, out: &mut Doc| {
+        let width = cols + 2 * MARGIN;
+        text_lines(markdown, width, place, images, out, base + block)
+            .into_iter()
+            .map(|mut l| {
+                drop_margin(&mut l.spans);
+                l
+            })
+            .collect::<Vec<_>>()
+    };
+    if let Some(p) = &c.place {
+        let mut spans = vec![Span::new(p.path.clone(), tone(Tone::Dim, false, look))];
+        if let Some(n) = p.line {
+            spans.push(Span::new(
+                format!(" line {n}"),
+                tone(Tone::Faint, false, look),
+            ));
+        }
+        lines.push(inside(cut(spans, frame.inner), None, (base, 3, 1)));
+        if let Some(code) = &p.code {
+            let tint = Style {
+                bg: Some(color(Tone::Done.tint(theme))),
+                ..tone(Tone::Text, false, look)
+            };
+            let code = crate::ui::draw::cut(&expand_tabs(code), frame.inner);
+            let pad = frame.inner - markdown::width(&code);
+            lines.push(inside(
+                vec![Span::new(format!("{code}{}", " ".repeat(pad)), tint)],
+                None,
+                (base, 4, 1),
+            ));
+        }
+    }
+    let body = body_lines(&c.body, frame.inner, 0, out);
+    let hidden = folded(c, body.len());
+    let shown = body.len() - hidden;
+    // What the fold hides, as it shows, for a search to know it holds a
+    // match (`Line::searched` on the fold row).
+    let fold_anchor = body.get(shown).map_or((base + REPLY - 1, 0, FOLD), |l| {
+        (l.anchor.0, l.anchor.1, FOLD)
+    });
+    let folded_text = body[shown..]
+        .iter()
+        .map(|l| l.searchable())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for l in body.into_iter().take(shown) {
+        lines.push(inside(l.spans, l.picture, l.anchor));
+    }
+    if hidden > 0 {
+        let mut row = vec![Span::new(" ".repeat(MARGIN + at), Style::default())];
+        row.extend(side.clone());
+        row.extend(from_kit(kit::comment_fold(
+            &format!("{hidden} more lines · Show all of it in its menu"),
+            frame.inner,
+            theme,
+        )));
+        row.extend(side.clone());
+        let mut fold = Line::of(row, fold_anchor);
+        fold.searched = folded_text;
+        lines.push(fold);
+    }
+    for (j, r) in c.replies.iter().enumerate() {
+        let block = (j + 1) * REPLY;
+        let mut row = vec![Span::new(" ".repeat(MARGIN + at), Style::default())];
+        row.extend(from_kit(frame.rule.clone()));
+        lines.push(Line::of(row, (base + block, 0, 0)));
+        let mut head = avatar(r.who.as_ref(), &r.name, kit::AvatarSize::Small, out, images)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        head.push(Span::new(" ", Style::default()));
+        head.push(Span::new(r.name.clone(), tone(Tone::Text, true, look)));
+        head.push(Span::new(
+            format!("  {}", r.said),
+            tone(Tone::Dim, false, look),
+        ));
+        lines.push(inside(cut(head, frame.inner), None, (base + block, 0, 1)));
+        let indent = small;
+        for l in body_lines(&r.body, frame.inner.saturating_sub(indent), block, out) {
+            let mut spans = vec![Span::new(" ".repeat(indent), Style::default())];
+            spans.extend(l.spans);
+            lines.push(inside(spans, l.picture, l.anchor));
+        }
+    }
+    let mut row = before(&mut face);
+    row.extend(from_kit(frame.bottom));
+    lines.push(Line::of(row, (base + PART - 1, 1, 1)));
+    lines
 }
 
 /// Takes the Markdown's margin, its first `MARGIN` columns of spaces,
@@ -921,70 +1204,6 @@ mod tests {
             "the photo's cells: {drawn:?}"
         );
         assert!(drawn.contains("ana"));
-    }
-
-    #[test]
-    fn what_someone_said_has_a_large_avatar_and_its_words_five_in() {
-        let who = Who::new(Service::Linear, "u-ana");
-        let said = |body: &str| {
-            vec![Part::Said {
-                who: Some(who.clone()),
-                name: "ana".into(),
-                head: vec![Piece::Name("ana".into(), Tone::Text)],
-                body: body.into(),
-                indent: 0,
-            }]
-        };
-        // Without the photo: the initial on the first row, the words 5 in
-        // from the second; with no words, the second row blank.
-        let text = lay_out(&said("Looks good."), 40, "", None, &Look::default());
-        assert_eq!(plain(&text), vec!["  A    ana", "       Looks good."]);
-        let alone = lay_out(&said(""), 40, "", None, &Look::default());
-        assert_eq!(alone.lines.len(), 2);
-        assert_eq!(alone.lines[1].plain().trim(), "");
-        // With it: one 4 by 2 picture over both rows, its own image beside
-        // the Small one.
-        let mut images = Images::default();
-        images
-            .ready
-            .insert(markdown::photo_key(&who), (77, (128, 128)));
-        let doc = lay_out(
-            &said("Looks good."),
-            40,
-            "",
-            Some(&images),
-            &Look::default(),
-        );
-        assert_eq!((doc.placed[0].cols, doc.placed[0].rows), (4, 2));
-        assert_ne!(doc.placed[0].id, 77);
-        let rows: Vec<u16> = doc
-            .lines
-            .iter()
-            .flat_map(|l| l.spans.iter().filter_map(|s| s.picture.map(|p| p.row)))
-            .collect();
-        assert_eq!(rows, vec![0, 1]);
-        assert!(plain(&doc)[1].ends_with("   Looks good."));
-        // A head too long for its line wraps, a review thread's place kept
-        // whole, the avatar's second row beside its second line.
-        let place = vec![Part::Said {
-            who: None,
-            name: "ana".into(),
-            head: vec![
-                Piece::Name("ana".into(), Tone::Text),
-                Piece::Text("  tests/notes_bench.rs:38".into(), Tone::Dim),
-            ],
-            body: "Looks good.".into(),
-            indent: 0,
-        }];
-        let narrow = lay_out(&place, 34, "", None, &Look::default());
-        assert_eq!(
-            plain(&narrow),
-            vec![
-                "  A    ana",
-                "       tests/notes_bench.rs:38",
-                "       Looks good."
-            ]
-        );
     }
 
     #[test]

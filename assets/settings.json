@@ -1286,6 +1286,13 @@
     "default": true
   },
   {
+    "key": "view_box_keys",
+    "category": "Appearance",
+    "label": "Act on a comment's box in the PR and ticket views",
+    "description": "In the PR and ticket views, where the description and each comment are drawn in a box, folds a comment longer than 12 lines to its first 8, Tab and Shift-Tab choose a box, and Enter (on the chosen box, the one the cursor is in, or a folded one on the screen), a click on its header bar or a right click in it opens its menu: Show all of it or Fold it again, open it on GitHub or in Linear, copy its text. Off, every comment shows whole, and Tab, Enter and clicks do what they did before the boxes",
+    "default": true
+  },
+  {
     "key": "theme",
     "category": "Appearance",
     "label": "Theme",

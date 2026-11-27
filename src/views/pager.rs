@@ -178,6 +178,15 @@ pub enum Act {
     Press(String),
 }
 
+/// A comment's box where it is laid out: its first and last lines, and
+/// whether its body is folded.
+struct BoxAt {
+    comment: board::Comment,
+    from: usize,
+    to: usize,
+    folded: bool,
+}
+
 pub struct Pager {
     content: Content,
     markdown: Option<Markdown>,
@@ -234,6 +243,15 @@ pub struct Pager {
     /// Whether the terminal reports every movement of the mouse, as it
     /// does while the menu is up.
     any_motion: bool,
+    /// The comments' boxes as laid out (`board::Comment`), in order.
+    boxes: Vec<BoxAt>,
+    /// The box Tab chose, by its key, drawn with its edge in the accent.
+    chosen_box: Option<String>,
+    /// The long comments shown whole rather than folded, by their keys.
+    whole: std::collections::HashSet<String>,
+    /// Whether Tab, Enter and clicks act on the comments' boxes, and long
+    /// ones fold (Settings' `view_box_keys`).
+    box_keys: bool,
 }
 
 /// The prompt line's words for the menu, which a click opens.
@@ -282,6 +300,10 @@ impl Pager {
             unfocused: None,
             menu: None,
             any_motion: false,
+            boxes: Vec::new(),
+            chosen_box: None,
+            whole: std::collections::HashSet::new(),
+            box_keys: true,
         };
         pager.set_content(content);
         pager
@@ -344,6 +366,14 @@ impl Pager {
     /// How old the copy shown is, once that is worth saying.
     pub fn age(&self, now: SystemTime) -> Option<String> {
         follow::age(self.read_at.filter(|_| self.follows)?, now)
+    }
+
+    /// Tab, Enter and clicks acting on the comments' boxes, and long
+    /// comments folded, or neither (`view_box_keys`).
+    pub fn with_box_keys(mut self, on: bool) -> Pager {
+        self.box_keys = on;
+        self.lay_out();
+        self
     }
 
     /// Gives Markdown a cursor, on the first line with something on it.
@@ -530,8 +560,13 @@ impl Pager {
         let body = self.body();
         let images = self.pictures.as_mut().map(|p| p.layout(body));
         self.panel = None;
+        self.boxes.clear();
         if let Content::Board(b) = &self.content {
             let beside = self.cols >= board::PANEL_MIN;
+            let look = board::Look {
+                narrow: !beside,
+                ..self.look
+            };
             let side = board::panel_width(self.cols);
             // The panel's sections beside the column while they fit its
             // height and width (a code line kept whole may not), the rest
@@ -563,7 +598,33 @@ impl Pager {
                 parts.extend(under);
             }
             parts.push(board::Part::Blank);
-            self.doc = board::lay_out(&parts, main_cols, &b.place, images.as_ref(), &self.look);
+            for part in &mut parts {
+                if let board::Part::Comment(c) = part {
+                    c.whole = self.whole.contains(&c.key);
+                    c.folds &= self.box_keys;
+                    c.chosen = self.chosen_box.as_ref() == Some(&c.key);
+                }
+            }
+            self.doc = board::lay_out(&parts, main_cols, &b.place, images.as_ref(), &look);
+            for (i, line) in self.doc.lines.iter().enumerate() {
+                let Some(board::Part::Comment(c)) = parts.get(board::part_of(line)) else {
+                    continue;
+                };
+                match self.boxes.last_mut() {
+                    Some(b) if b.comment.key == c.key && b.to + 1 == i => b.to = i,
+                    _ => self.boxes.push(BoxAt {
+                        comment: (**c).clone(),
+                        from: i,
+                        to: i,
+                        folded: false,
+                    }),
+                }
+                if board::is_fold(line)
+                    && let Some(b) = self.boxes.last_mut()
+                {
+                    b.folded = true;
+                }
+            }
             if !kept.is_empty() {
                 let laid = board::lay_out(&kept, side, &b.place, images.as_ref(), &self.look);
                 self.panel = Some((laid, main_cols));
@@ -925,6 +986,55 @@ impl Pager {
         Act::Redraw
     }
 
+    /// Every folded comment holding a match of the search shown whole,
+    /// before a search looks, so what a fold hides is found as the rest is;
+    /// the screen and the cursor kept on what they showed.
+    fn unfold_for_search(&mut self) {
+        // With the cursor, Vim searches, by its own pattern, a line at a
+        // time.
+        let pattern = self
+            .has_cursor()
+            .then_some(self.query.as_deref())
+            .flatten()
+            .and_then(Editor::pattern);
+        let hit = |text: &str| {
+            text.lines().any(|line| match &pattern {
+                Some(re) => re.is_match(line),
+                None => !self.matches(line).is_empty(),
+            })
+        };
+        let unfold: Vec<String> = self
+            .boxes
+            .iter()
+            .filter(|b| {
+                (b.from..=b.to).any(|i| {
+                    let line = &self.doc.lines[i];
+                    board::is_fold(line) && hit(&line.searched)
+                })
+            })
+            .map(|b| b.comment.key.clone())
+            .collect();
+        if unfold.is_empty() {
+            return;
+        }
+        self.whole.extend(unfold);
+        self.lay_out_in_place();
+    }
+
+    /// Laid out again after a box is folded or shown whole, the screen and
+    /// the cursor kept on what they showed (or on the last line before what
+    /// a fold took away).
+    fn lay_out_in_place(&mut self) {
+        let top = self.doc.lines.get(self.top).map(|l| l.anchor);
+        let at = self.cursor_anchor();
+        self.lay_out();
+        if let Some(anchor) = top {
+            self.top = self.doc.line_at(anchor);
+        }
+        self.clamp();
+        self.put_cursor_back(at);
+    }
+
     /// A key while a search is typed after `/`.
     fn typing_key(&mut self, key: KeyEvent) -> Act {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -944,6 +1054,7 @@ impl Pager {
                         if !typed.is_empty() {
                             self.query = Some(typed.clone());
                         }
+                        self.unfold_for_search();
                         let from = self.cursor;
                         self.vim.top = self.top;
                         self.vim.search_for(&typed, kind == '/');
@@ -959,6 +1070,7 @@ impl Pager {
                 if !query.is_empty() {
                     self.query = Some(query);
                 }
+                self.unfold_for_search();
                 // From the top line on: what is at the top counts.
                 return self.find(self.top, true);
             }
@@ -1011,6 +1123,21 @@ impl Pager {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let page = self.body() as isize;
         let half = (page / 2).max(1);
+        let vim_idle = !self.has_cursor() || (self.vim.mode == Mode::Normal && self.vim.no_keys());
+        if self.box_keys
+            && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+            && !self.boxes.is_empty()
+            && vim_idle
+        {
+            let back = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+            return self.next_box(!back);
+        }
+        if key.code == KeyCode::Enter
+            && !self.has_cursor()
+            && let Some(at) = self.enter_box()
+        {
+            return self.open_box_menu(at, None);
+        }
         if self.has_cursor()
             && let Some(act) = self.vim_key(key)
         {
@@ -1059,8 +1186,14 @@ impl Pager {
                 Act::Redraw
             }
             // From the cursor's line where there is one, else the top's.
-            KeyCode::Char('n') => self.find(self.place() + 1, true),
-            KeyCode::Char('N') => self.find(self.place(), false),
+            KeyCode::Char('n') => {
+                self.unfold_for_search();
+                self.find(self.place() + 1, true)
+            }
+            KeyCode::Char('N') => {
+                self.unfold_for_search();
+                self.find(self.place(), false)
+            }
             KeyCode::Char('o') => match &self.url {
                 Some(url) => Act::Open(url.clone()),
                 None => Act::Same,
@@ -1114,10 +1247,127 @@ impl Pager {
                     Some(Choice::Again) => self.read_again(),
                     Some(Choice::Board(Do::Open(url))) => Act::Open(url),
                     Some(Choice::Board(Do::Press(name))) => Act::Press(name),
+                    Some(Choice::Board(Do::Unfold(key))) => {
+                        self.whole.insert(key);
+                        self.lay_out_in_place();
+                        Act::Redraw
+                    }
+                    Some(Choice::Board(Do::Fold(key))) => {
+                        self.whole.remove(&key);
+                        self.lay_out_in_place();
+                        Act::Redraw
+                    }
+                    Some(Choice::Board(Do::Copy(text))) => {
+                        self.note = Some(match (self.copy)(&text) {
+                            Ok(()) => "Copied".into(),
+                            Err(e) => format!("Couldn't copy: {e}"),
+                        });
+                        Act::Redraw
+                    }
                     None => Act::Redraw,
                 }
             }
         }
+    }
+
+    /// The box Enter opens the menu of: the one the cursor is in, else the
+    /// one Tab chose while any of it is on the screen.
+    fn enter_box(&self) -> Option<usize> {
+        if !self.box_keys {
+            return None;
+        }
+        if self.has_cursor()
+            && let Some(at) = self.box_at(self.cursor)
+        {
+            return Some(at);
+        }
+        let bottom = (self.top + self.body()).min(self.doc.lines.len());
+        let chosen = self.chosen_box.as_ref().and_then(|key| {
+            self.boxes
+                .iter()
+                .position(|b| &b.comment.key == key && b.to >= self.top && b.from < bottom)
+        });
+        // Else the first folded box whose "N more lines" is on the screen,
+        // which says Enter shows them.
+        chosen.or_else(|| {
+            (self.top..bottom)
+                .find(|i| board::is_fold(&self.doc.lines[*i]))
+                .and_then(|i| self.box_at(i))
+        })
+    }
+
+    /// A board's footer keys, leaving out the boxes' Tab and Enter while
+    /// `view_box_keys` is off.
+    fn footer_keys(&self, keys: &[(String, String)]) -> Vec<(String, String)> {
+        keys.iter()
+            .filter(|(k, _)| self.box_keys || !matches!(k.as_str(), "Tab" | "Enter"))
+            .cloned()
+            .collect()
+    }
+
+    /// The box line `line` is in.
+    fn box_at(&self, line: usize) -> Option<usize> {
+        self.boxes
+            .iter()
+            .position(|b| (b.from..=b.to).contains(&line))
+    }
+
+    /// Tab (or Shift-Tab): the next box (or the one before) chosen, from
+    /// the one chosen, else from the cursor's line or the top of the
+    /// screen, wrapping; the screen scrolled to show its top, the cursor
+    /// put on its header.
+    fn next_box(&mut self, forward: bool) -> Act {
+        let n = self.boxes.len();
+        let from = if self.has_cursor() {
+            self.cursor
+        } else {
+            self.top
+        };
+        let current = if self.has_cursor() {
+            self.box_at(self.cursor)
+        } else {
+            self.chosen_box
+                .as_ref()
+                .and_then(|k| self.boxes.iter().position(|b| &b.comment.key == k))
+        };
+        let to = match current {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None if forward => self.boxes.iter().position(|b| b.from >= from).unwrap_or(0),
+            None => self
+                .boxes
+                .iter()
+                .rposition(|b| b.to < from)
+                .unwrap_or(n - 1),
+        };
+        self.chosen_box = Some(self.boxes[to].comment.key.clone());
+        self.lay_out();
+        let Some(b) = self.boxes.get(to) else {
+            return Act::Redraw;
+        };
+        let (first, last) = (b.from, b.to);
+        if first < self.top || last >= self.top + self.body() {
+            self.top = first.min(self.last_top());
+        }
+        if self.has_cursor() {
+            self.cursor = (first + 1).min(self.doc.lines.len().saturating_sub(1));
+            self.vim.go_to(self.cursor, 0);
+            self.vim.top = self.top;
+        }
+        Act::Redraw
+    }
+
+    /// A box's menu, beside `near` (a click's cell) or in the middle.
+    fn open_box_menu(&mut self, at: usize, near: Option<(u16, u16)>) -> Act {
+        let Some(b) = self.boxes.get(at) else {
+            return Act::Same;
+        };
+        self.chosen_box = Some(b.comment.key.clone());
+        let actions = b.comment.actions(b.folded);
+        let title = b.comment.title();
+        self.menu = Some(super::menu::Open::new(&title, false, &actions, near));
+        self.lay_out();
+        Act::Redraw
     }
 
     /// Whether `col` of the prompt line is on its "m view actions".
@@ -1128,8 +1378,9 @@ impl Pager {
         let Content::Board(b) = &self.content else {
             return false;
         };
-        let mut keys = b.keys.clone();
+        let mut keys = self.footer_keys(&b.keys);
         if self.has_cursor() && self.full_at(self.cursor).is_some() {
+            keys.retain(|(k, _)| k != "Enter");
             keys.insert(0, ("Enter".to_string(), "full size".to_string()));
         }
         let text = board::hints(&keys, &self.look).plain();
@@ -1176,13 +1427,26 @@ impl Pager {
                     if let Some(full) = self.full_at(self.cursor) {
                         return Some(full);
                     }
+                    if let Some(at) = self.enter_box() {
+                        return Some(self.open_box_menu(at, None));
+                    }
                 }
                 _ => {}
             }
         }
         let vim_key = vim_key_of(key)?;
+        // Vim's * and # search for the word under the cursor: what a fold
+        // hides of it is shown first, as for a typed search.
+        if self.box_keys && idle && !ctrl && matches!(key.code, KeyCode::Char('*' | '#')) {
+            let line = self.doc.lines.get(self.cursor).map(|l| l.plain());
+            if let Some(word) = line.and_then(|l| word_at(&l, self.vim.col())) {
+                self.query = Some(word);
+                self.unfold_for_search();
+            }
+        }
         let searching = idle && !ctrl && matches!(key.code, KeyCode::Char('n' | 'N'));
         if searching {
+            self.unfold_for_search();
             let from = self.cursor;
             self.vim.top = self.top;
             self.vim.key(vim_key);
@@ -1256,6 +1520,11 @@ impl Pager {
         for effect in effects {
             match effect {
                 Effect::Copy(text) => {
+                    let text = if self.boxes.is_empty() {
+                        text
+                    } else {
+                        unboxed(&text)
+                    };
                     let lines = text.trim_end_matches('\n').lines().count().max(1);
                     self.note = Some(match (self.copy)(&text) {
                         Err(e) => format!("Couldn't copy: {e}"),
@@ -1351,9 +1620,36 @@ impl Pager {
             let came = menu.mouse(mouse);
             return self.menu_came(came);
         }
+        // A box's menu on a right click anywhere in it, and on a click on
+        // its header bar or its "N more lines".
+        let near = Some((mouse.column, mouse.row));
+        let line = self.top + mouse.row as usize;
+        let in_column = self
+            .panel
+            .as_ref()
+            .is_none_or(|(_, at)| (mouse.column as usize) <= *at);
+        let on_scroll_bar =
+            matches!(self.scroll_bar(), (Some(_), Some(x)) if x == mouse.column as usize);
+        let on_box =
+            self.box_keys && (mouse.row as usize) < self.body() && in_column && !on_scroll_bar;
+        if on_box && let Some(at) = self.box_at(line) {
+            let b = &self.boxes[at];
+            let on_bar = line <= b.from + 2 || self.doc.lines.get(line).is_some_and(board::is_fold);
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Right) => return self.open_box_menu(at, near),
+                MouseEventKind::Down(MouseButton::Left) if on_bar => {
+                    if self.has_cursor() {
+                        self.move_cursor(line);
+                        self.vim.go_to(self.cursor, 0);
+                    }
+                    return self.open_box_menu(at, near);
+                }
+                _ => {}
+            }
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Right) => {
-                return self.open_menu(Some((mouse.column, mouse.row)));
+                return self.open_menu(near);
             }
             MouseEventKind::Down(MouseButton::Left)
                 if mouse.row as usize + 1 == self.rows
@@ -1637,8 +1933,9 @@ impl Pager {
         }
         let full = self.has_cursor() && self.full_at(self.cursor).is_some();
         if let Content::Board(b) = &self.content {
-            let mut keys = b.keys.clone();
+            let mut keys = self.footer_keys(&b.keys);
             if full {
+                keys.retain(|(k, _)| k != "Enter");
                 keys.insert(0, ("Enter".to_string(), "full size".to_string()));
             }
             let line = board::hints(&keys, &self.look);
@@ -1701,6 +1998,46 @@ impl Pager {
             })
             .collect()
     }
+}
+
+/// Copied text with a comment box's sides taken off each line: the
+/// margin and `│ ` before its words, and the padding and ` │` after them,
+/// so a yank from a box copies what the comment says.
+fn unboxed(text: &str) -> String {
+    let end = if text.ends_with('\n') { "\n" } else { "" };
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|line| {
+            let line = line.trim_end();
+            let line = line.strip_suffix('│').map_or(line, str::trim_end);
+            let start = line.trim_start();
+            match start.strip_prefix('│') {
+                Some(rest) => rest.strip_prefix(' ').unwrap_or(rest),
+                None => line,
+            }
+        })
+        .collect();
+    format!("{}{end}", lines.join("\n"))
+}
+
+/// The word (letters, digits and `_`) at or after byte `at` of `line`,
+/// as Vim's `*` takes it.
+fn word_at(line: &str, at: usize) -> Option<String> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let at = (0..=at.min(line.len()))
+        .rev()
+        .find(|i| line.is_char_boundary(*i))
+        .unwrap_or(0);
+    let start = line[..at]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_word(*c))
+        .last()
+        .map_or(at, |(i, _)| i);
+    let rest = &line[start..];
+    let from = rest.find(is_word)?;
+    let word: String = rest[from..].chars().take_while(|c| is_word(*c)).collect();
+    (!word.is_empty()).then_some(word)
 }
 
 /// A terminal's key as the shared Vim takes it; None for one it has no
@@ -1829,7 +2166,8 @@ fn run_with(
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let mut pager = Pager::new(content, cols as usize, rows as usize)
         .with_url(url)
-        .with_cursor(crate::settings::is_on("view_cursor"));
+        .with_cursor(crate::settings::is_on("view_cursor"))
+        .with_box_keys(crate::settings::is_on("view_box_keys"));
     if let Some(follow) = &follow {
         pager = pager.following(follow.read_at);
     }
@@ -2691,5 +3029,18 @@ mod tests {
         let mut plain = Pager::new(markdown("# A file"), 80, 10);
         plain.focus(false, start);
         assert!(!plain.focus(true, after(900)));
+    }
+}
+
+#[cfg(test)]
+mod unboxed_tests {
+    #[test]
+    fn a_yank_from_a_box_leaves_its_sides_behind() {
+        let copied = "       │ The test reads only small.json.     │\n       │    will add it                      │\n";
+        assert_eq!(
+            super::unboxed(copied),
+            "The test reads only small.json.\n   will add it\n"
+        );
+        assert_eq!(super::unboxed("plain text"), "plain text");
     }
 }

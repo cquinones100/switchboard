@@ -1,8 +1,8 @@
 //! A Linear ticket as the ticket view shows it (tmux/ticket-view.sh, and
 //! pr-view.js's `ticket`, which laid it out as its page in Linear does):
 //! its title, the facts from its side panel, who opened it and when, the
-//! description, sub-issues, related tickets and links, then the comments,
-//! oldest first, each reply under the comment it answers.
+//! description, the comments, oldest first, each reply inside the box of
+//! the comment it answers, then sub-issues, related tickets and links.
 //!
 //! The ticket is the one the pane's branch names, else the one the tab's
 //! name gives (a "Shaping ABC-123: ..." tab before there is a branch), which
@@ -12,8 +12,8 @@
 //! the key `integrations::linear` finds.
 //!
 //! The ticket is laid out as board 14 draws it (`board`,
-//! through `super::board`): the description, sub-issues and comment
-//! threads, with its facts, pull requests, related tickets and links beside
+//! through `super::board`), its conversation as board 133 does: the
+//! description and each comment thread in a box, then its sub-issues, with its facts, pull requests, related tickets and links beside
 //! them.
 
 use std::process::ExitCode;
@@ -22,12 +22,12 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use super::board::{self, Board, Part, Piece};
+use super::board::{self, Board, Comment, Part, Piece, Reply};
 use super::follow;
 use super::pager::{self, Content};
 use crate::integrations::linear;
 use crate::photos::{Service, Who};
-use crate::ui::kit::{self, Mark, Tone};
+use crate::ui::kit::{Mark, Tone};
 use crate::{paths, util};
 
 const SOURCE: &str = "M-i ticket view";
@@ -41,7 +41,7 @@ const QUERY: &str = "query($id: String!) { issue(id: $id) { \
     children { nodes { identifier title url state { name type } } } \
     relations { nodes { type relatedIssue { identifier title url state { name type } } } } \
     attachments { nodes { title url metadata } } \
-    comments(first: 100) { nodes { id body createdAt parent { id } user { id name } botActor { name } } } } }";
+    comments(first: 100) { nodes { id url body createdAt parent { id } user { id name } botActor { name } } } } }";
 
 static LINEAR_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(^|[^(<])<?(https://linear\.app/[^/\s]+/issue/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?")
@@ -99,36 +99,97 @@ static PR_LINK: LazyLock<Regex> =
 pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
     let text = |path: &str| name_at(issue, path).unwrap_or_default();
     let creator = name_at(issue, "/creator/name").unwrap_or_else(|| "Someone".into());
+    let url = text("/url");
+    let in_linear = |url: String| {
+        Some(url)
+            .filter(|u| !u.is_empty())
+            .map(|u| ("Open it in Linear".to_string(), u))
+    };
+    let description = tidy(&text("/description"));
     let mut main = vec![
         Part::Row(vec![
             Piece::Name(text("/identifier"), Tone::Accent),
             Piece::Name(format!("  {}", text("/title")), Tone::Text),
         ]),
-        Part::Said {
-            who: who_of(issue.get("creator").unwrap_or(&Value::Null)),
-            name: creator.clone(),
-            head: vec![Piece::Text(
-                format!(
-                    "{creator} opened it {}",
-                    board::when(&text("/createdAt"), now)
-                ),
-                Tone::Dim,
-            )],
-            body: String::new(),
-            indent: 0,
-        },
-        Part::Rule,
         Part::Blank,
+        // The description as the ticket's first box, then each comment
+        // thread in its own, its replies inside it, as Linear threads them
+        // (board 133).
+        Part::Comment(Box::new(Comment {
+            key: format!("{url}#description"),
+            who: who_of(issue.get("creator").unwrap_or(&Value::Null)),
+            name: creator,
+            verb: "opened this".into(),
+            when: board::when(&text("/createdAt"), now),
+            chip: Some(("Author".into(), Tone::Dim)),
+            place: None,
+            body: if description.trim().is_empty() {
+                "_No description._".into()
+            } else {
+                description
+            },
+            replies: Vec::new(),
+            link: in_linear(url.clone()),
+            folds: false,
+            whole: false,
+            chosen: false,
+        })),
     ];
-    let description = tidy(&text("/description"));
-    main.push(Part::Text {
-        markdown: if description.trim().is_empty() {
-            "_No description._".into()
-        } else {
-            description
-        },
-        indent: 0,
-    });
+    let mut comments = nodes(issue, "/comments/nodes");
+    comments.sort_by_key(|c| name_at(c, "/createdAt").unwrap_or_default());
+    let parent_of = |c: &Value| name_at(c, "/parent/id");
+    let name_of = |c: &Value| {
+        name_at(c, "/user/name")
+            .or_else(|| name_at(c, "/botActor/name"))
+            .unwrap_or_else(|| "Someone".into())
+    };
+    let when_of = |c: &Value| board::when(&name_at(c, "/createdAt").unwrap_or_default(), now);
+    let body_of = |c: &Value| tidy(c.get("body").and_then(Value::as_str).unwrap_or(""));
+    for (i, c) in comments
+        .iter()
+        .filter(|c| parent_of(c).is_none())
+        .enumerate()
+    {
+        let id = name_at(c, "/id");
+        let replies = comments
+            .iter()
+            .filter(|r| parent_of(r).is_some() && parent_of(r) == id)
+            .map(|r| Reply {
+                who: who_of(r.get("user").unwrap_or(&Value::Null)),
+                name: name_of(r),
+                said: format!("replied · {}", when_of(r)),
+                body: body_of(r),
+            })
+            .collect();
+        let bot =
+            c.get("user").is_none_or(Value::is_null) && name_at(c, "/botActor/name").is_some();
+        main.extend([
+            Part::Blank,
+            Part::Comment(Box::new(Comment {
+                key: id.unwrap_or_else(|| format!("{url}#comment-{i}")),
+                who: who_of(c.get("user").unwrap_or(&Value::Null)),
+                name: name_of(c),
+                verb: "commented".into(),
+                when: when_of(c),
+                chip: if bot {
+                    Some(("bot".into(), Tone::Dim))
+                } else if name_at(c, "/user/id").is_some()
+                    && name_at(c, "/user/id") == name_at(issue, "/creator/id")
+                {
+                    Some(("Author".into(), Tone::Dim))
+                } else {
+                    None
+                },
+                place: None,
+                body: body_of(c),
+                replies,
+                link: in_linear(name_at(c, "/url").unwrap_or_default()),
+                folds: true,
+                whole: false,
+                chosen: false,
+            })),
+        ]);
+    }
     let children = nodes(issue, "/children/nodes");
     if !children.is_empty() {
         let done = children
@@ -156,49 +217,6 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
                     Tone::Text,
                 ),
             ]));
-        }
-    }
-    let mut comments = nodes(issue, "/comments/nodes");
-    comments.sort_by_key(|c| name_at(c, "/createdAt").unwrap_or_default());
-    let parent_of = |c: &Value| name_at(c, "/parent/id");
-    if !comments.is_empty() {
-        main.extend([
-            Part::Blank,
-            Part::Label("Comments".into(), Some(comments.len().to_string())),
-        ]);
-    }
-    let comment = |c: &Value, indent: usize| {
-        let name = name_at(c, "/user/name")
-            .or_else(|| name_at(c, "/botActor/name"))
-            .unwrap_or_else(|| "Someone".into());
-        Part::Said {
-            who: who_of(c.get("user").unwrap_or(&Value::Null)),
-            name: name.clone(),
-            head: vec![
-                Piece::Name(name, Tone::Text),
-                Piece::Text(
-                    format!(
-                        "  {}",
-                        board::when(&name_at(c, "/createdAt").unwrap_or_default(), now)
-                    ),
-                    Tone::Dim,
-                ),
-            ],
-            body: tidy(c.get("body").and_then(Value::as_str).unwrap_or("")),
-            indent,
-        }
-    };
-    for c in comments.iter().filter(|c| parent_of(c).is_none()) {
-        main.push(Part::Blank);
-        main.push(comment(c, 0));
-        let id = name_at(c, "/id");
-        for r in comments
-            .iter()
-            .filter(|r| parent_of(r).is_some() && parent_of(r) == id)
-        {
-            main.push(Part::Blank);
-            // A reply's avatar at its parent's words.
-            main.push(comment(r, kit::SAID_INDENT));
         }
     }
 
@@ -336,6 +354,8 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
         place: PLACE.into(),
         keys: [
             ("j/k", "scroll"),
+            ("Tab", "next box"),
+            ("Enter", "its menu"),
             ("/", "search"),
             ("r", "read again"),
             ("M-l", "in Linear"),
@@ -447,19 +467,25 @@ mod tests {
         let screen = pager.screen().join("\n");
         for want in [
             "AB-1  Make it faster",
-            "S    Sam opened it 3 days ago",
-            "It is slow. See AB-2 for more.",
+            // The description as the first box, each thread in its own,
+            // a reply inside its thread's box, joined down the side.
+            "S    ╭─",
+            "     │ Sam opened this · 3 days ago",
+            "     │ It is slow. See AB-2 for more.",
+            "  B    ╭─".trim_start(),
+            "     │ Bot commented · 3 days ago",
+            "bot ",
+            "     │ Where is it slow?",
+            "     │──",
+            "     │ J  Jo  replied · 2 days ago",
+            "     │    Agreed.",
+            "\n          │ ",
+            "     │ Sam commented · yesterday",
+            "     │ Found it.",
             "SUB-ISSUES",
             "1 of 2 done",
             "✓ AB-3  Cache it",
             "○ AB-5  Warm it",
-            "COMMENTS",
-            "  B    Bot  3 days ago",
-            "       Where is it slow?",
-            "       J    Jo  2 days ago",
-            "            Agreed.",
-            "  S    Sam  yesterday",
-            "       Found it.",
             "Status      In Review",
             "Priority    High",
             "Assignee    Jo",

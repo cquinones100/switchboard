@@ -1423,7 +1423,10 @@ impl<N: Note> Editor<N> {
 
     // ── Search ────────────────────────────────────────────────────────────
 
-    fn pattern(text: &str) -> Option<Regex> {
+    /// What a search for `text` matches a line by, as `/` and `?` take it:
+    /// a regular expression, smart case, the text itself where it isn't
+    /// one.
+    pub fn pattern(text: &str) -> Option<Regex> {
         let smart = if text.chars().any(char::is_uppercase) {
             ""
         } else {
