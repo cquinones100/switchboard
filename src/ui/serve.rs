@@ -1489,8 +1489,11 @@ impl Server {
             palette::remember(&picked.value, &picked.query, learn);
             server.count_pick(entry);
             // Over mission control, a pick that isn't one of its views runs
-            // in the pane it was opened over, once it has closed.
-            if server.mission_open(client) && !entry.action.in_mission() {
+            // in the pane it was opened over, once it has closed; one that
+            // reads the view in front keeps it while a view is.
+            let reads_the_view = matches!(&entry.action, crate::mux::keys::Action::View(c) if c.reads_view_in_front())
+                && server.view_shown_in_mission(client);
+            if server.mission_open(client) && !entry.action.in_mission() && !reads_the_view {
                 server.mission_close(client);
             }
             let action = entry.action.clone();

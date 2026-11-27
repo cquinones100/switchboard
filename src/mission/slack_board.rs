@@ -1474,6 +1474,7 @@ fn said_of(item: &Item) -> Said {
         ts: get(item, "ts").to_string(),
         files: Vec::new(),
         refs: Vec::new(),
+        links: Vec::new(),
     }
 }
 
@@ -2211,6 +2212,7 @@ mod tests {
                     ts: ts(400),
                     files: Vec::new(),
                     refs: Vec::new(),
+                    links: Vec::new(),
                 },
                 Said {
                     user: "UDee".into(),
@@ -2219,6 +2221,7 @@ mod tests {
                     ts: ts(300),
                     files: Vec::new(),
                     refs: Vec::new(),
+                    links: Vec::new(),
                 },
                 Said {
                     user: "UEd".into(),
@@ -2227,6 +2230,7 @@ mod tests {
                     ts: ts(60),
                     files: Vec::new(),
                     refs: Vec::new(),
+                    links: Vec::new(),
                 },
             ],
             replies: 2,

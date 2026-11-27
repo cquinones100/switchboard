@@ -35,6 +35,7 @@ use super::search_box::SearchBox;
 use super::shown::{self, Shown};
 use super::{Command, ViewsEvent, page, seen};
 use crate::integrations::{github, linear};
+use crate::items::Item;
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{Direction, PaneId, TabId};
 use crate::net::{self, ErrorKind};
@@ -84,6 +85,16 @@ const IN_THE_NOTE: &str = "in the note";
 
 /// What the media list shows beside a file only the conversation named.
 const CONVERSATION: &str = "from the conversation";
+
+/// The mission control view in front of a client, as the link, tab and
+/// media commands read it (`Server::view_in_front`).
+struct InFront {
+    title: String,
+    slack: bool,
+    texts: Vec<crate::mission::view_text::Text>,
+    /// Its rows, the chosen one first, then newest first.
+    rows: Vec<Item>,
+}
 
 /// The rows of a list of what a pane shows, each giving its address.
 fn rows(found: &[Shown]) -> Vec<PickItem> {
@@ -1675,20 +1686,85 @@ impl Server {
         Ok(found)
     }
 
+    /// The mission control view in front of `client`, when one after the
+    /// tabs is: what it shows as text (`mission::view_text`), its chosen
+    /// row's Slack thread after the row, and its rows in that order.
+    fn view_in_front(&self, client: ClientId) -> Option<InFront> {
+        let m = self
+            .clients
+            .get(&client)?
+            .overlays
+            .find::<crate::mission::Mission>()?;
+        let view = m.current()?;
+        let chosen = m.chosen_item().map(|_| m.cursor as usize);
+        let beside = m
+            .chosen_item()
+            .filter(|_| view.id == crate::mission::views::ViewId::Slack)
+            .map(|item| self.slack_thread_texts(item))
+            .unwrap_or_default();
+        let mut rows: Vec<Item> = view.data.items.clone();
+        if let Some(at) = chosen {
+            let first = rows.remove(at);
+            rows.sort_by_key(|item| std::cmp::Reverse(item.time));
+            rows.insert(0, first);
+        } else {
+            rows.sort_by_key(|item| std::cmp::Reverse(item.time));
+        }
+        Some(InFront {
+            title: view.title.clone(),
+            slack: view.id == crate::mission::views::ViewId::Slack,
+            texts: view.texts(chosen, beside),
+            rows,
+        })
+    }
+
+    /// The links in front of `client`: the mission control view's when one
+    /// is in front, else the pane's (`pane_links`).
+    fn links_in_front(&mut self, client: ClientId, pane: PaneId) -> Result<Vec<Shown>, String> {
+        match self.view_in_front(client) {
+            Some(front) => {
+                let found = crate::mission::view_text::links_of(&front.texts);
+                if found.is_empty() {
+                    return Err(format!("No links in the {} view", front.title));
+                }
+                Ok(found)
+            }
+            None => self.pane_links(pane),
+        }
+    }
+
+    /// Whether mission control shows `client` a view after the tabs.
+    pub(crate) fn view_shown_in_mission(&self, client: ClientId) -> bool {
+        self.clients
+            .get(&client)
+            .and_then(|c| c.overlays.find::<crate::mission::Mission>())
+            .is_some_and(|m| m.current().is_some())
+    }
+
+    /// A box about the tab in front (`about_tab`), unless mission control
+    /// shows a view, where it opens in the middle, about the view.
+    fn about_here(&mut self, client: ClientId, tab: TabId, open: impl FnOnce(&mut Server)) {
+        if self.view_shown_in_mission(client) {
+            open(self);
+        } else {
+            self.about_tab(client, tab, open);
+        }
+    }
+
     /// A link to read beside the pane: one typed, or one of those the pane
     /// shows (link-view.sh's `pick`); Ctrl-O opens it in the browser.
     fn ask_link(&mut self, client: ClientId) {
         let Some((pane, tab, _)) = self.here(client) else {
             return;
         };
-        let shown = self.pane_links(pane).unwrap_or_default();
+        let shown = self.links_in_front(client, pane).unwrap_or_default();
         let picker = Picker::new("Read a link beside this pane", rows(&shown))
             .named("links")
             .prompt("Read: ")
             .exact()
             .free()
             .also("read it beside", "open in browser");
-        self.about_tab(client, tab, move |s| {
+        self.about_here(client, tab, move |s| {
             s.pick_also(client, picker, move |server, client, picked| {
                 let Some((picked, other)) = picked else {
                     return;
@@ -1705,7 +1781,7 @@ impl Server {
         let Some((pane, tab, _)) = self.here(client) else {
             return;
         };
-        let shown = match self.pane_links(pane) {
+        let shown = match self.links_in_front(client, pane) {
             Ok(found) => found,
             Err(why) => return self.say(Some(client), &why),
         };
@@ -1719,7 +1795,7 @@ impl Server {
             .prompt(prompt)
             .exact()
             .also(enter, other);
-        self.about_tab(client, tab, move |s| {
+        self.about_here(client, tab, move |s| {
             s.pick_also(client, picker, move |server, client, picked| {
                 let Some((picked, other)) = picked else {
                     return;
@@ -1760,13 +1836,19 @@ impl Server {
             texts.push(slot.pane.text_and_links(3000).0);
             texts.extend(note);
         }
+        self.tabs_named(&texts, Some(slot.tab))
+    }
+
+    /// The open tabs `texts` name by number, in their order, each once,
+    /// `leave_out` left out.
+    fn tabs_named(&self, texts: &[String], leave_out: Option<TabId>) -> Vec<TabId> {
         let mut tabs: Vec<TabId> = Vec::new();
         for text in texts {
-            for tab in shown::tabs_in(&text)
+            for tab in shown::tabs_in(text)
                 .into_iter()
                 .filter_map(|n| self.tab_numbered(n))
             {
-                if tab != slot.tab && !tabs.contains(&tab) {
+                if Some(tab) != leave_out && !tabs.contains(&tab) {
                     tabs.push(tab);
                 }
             }
@@ -1781,14 +1863,27 @@ impl Server {
         let Some((pane, tab, _)) = self.here(client) else {
             return;
         };
-        let tabs = self.mentioned_tabs(pane);
+        let (tabs, none) = match self.view_in_front(client) {
+            Some(front) => {
+                let texts: Vec<String> = front.texts.into_iter().map(|t| t.text).collect();
+                let none = format!("No tabs named in the {} view", front.title);
+                (self.tabs_named(&texts, None), none)
+            }
+            None => (
+                self.mentioned_tabs(pane),
+                "No tabs named in this pane".into(),
+            ),
+        };
         if tabs.is_empty() {
-            return self.say(Some(client), "No tabs named in this pane");
+            return self.say(Some(client), &none);
         }
         if let [tab] = tabs[..]
             && !copy
         {
             let n = self.tab_number(tab);
+            if self.mission_open(client) {
+                self.mission_close(client);
+            }
             self.go_to_tab(client, tab);
             let label = self.tab_label(tab);
             return self.say(Some(client), &format!("Went to tab {n} {label}"));
@@ -1819,7 +1914,7 @@ impl Server {
             .named("mentioned-tabs")
             .prompt(prompt)
             .also(enter, other);
-        self.about_tab(client, tab, move |s| {
+        self.about_here(client, tab, move |s| {
             s.pick_also(client, picker, move |server, client, picked| {
                 let Some((picked, other)) = picked else {
                     return;
@@ -1837,6 +1932,9 @@ impl Server {
                     server.to_clipboard(Some(client), &n);
                     server.say(Some(client), &format!("Copied tab {n}"));
                 } else {
+                    if server.mission_open(client) {
+                        server.mission_close(client);
+                    }
                     server.go_to_tab(client, tab);
                 }
             })
@@ -1861,6 +1959,10 @@ impl Server {
             self.say(Some(client), "That isn't a link that can be read here");
             return;
         }
+        // Read beside the tab's pane, which mission control would cover.
+        if self.mission_open(client) {
+            self.mission_close(client);
+        }
         let pane = Some(pane)
             .filter(|p| self.panes.contains_key(p))
             .or_else(|| self.current_pane(client));
@@ -1880,6 +1982,9 @@ impl Server {
         let Some((pane, tab, dir)) = self.here(client) else {
             return;
         };
+        if let Some(front) = self.view_in_front(client) {
+            return self.view_media(client, tab, pane, front);
+        }
         let links = self.pane_links(pane).unwrap_or_default();
         let Some(slot) = self.panes.get(&pane) else {
             return;
@@ -1915,7 +2020,11 @@ impl Server {
             }
         }
         found.extend(links.into_iter().filter(|l| shown::is_media(&l.url)));
-        let in_note = note.is_some() && self.reads_tab();
+        let none = if note.is_some() && self.reads_tab() {
+            "No image or video in this pane or its note"
+        } else {
+            "No image or video in this pane"
+        };
         // The tab's Claude pane, whose directory its relative paths are from.
         let claude = self
             .panes_with_parked(tab)
@@ -1927,7 +2036,7 @@ impl Server {
         let (true, Some(claude), Some(file)) =
             (settings::is_on("conversation_media"), claude, transcript)
         else {
-            return self.pick_media(client, tab, pane, found, in_note);
+            return self.pick_media(client, tab, pane, found, none, Vec::new());
         };
         let dir = self.pane_own_dir(claude).unwrap_or_else(paths::home);
         self.off_task(
@@ -1946,35 +2055,67 @@ impl Server {
                         });
                     }
                 }
-                server.pick_media(client, tab, pane, found, in_note);
+                server.pick_media(client, tab, pane, found, none, Vec::new());
             },
         );
     }
 
+    /// "Open an image or video" over the mission control view in front:
+    /// the links to one in what it shows, then, on the Slack view, the
+    /// pictures and videos of its rows' threads kept on this computer, the
+    /// chosen row's first, each shown with Quick Look alone, as the view's
+    /// own play shows them, since a message's sender chose its file.
+    fn view_media(&mut self, client: ClientId, tab: TabId, pane: PaneId, front: InFront) {
+        let mut found: Vec<Shown> = crate::mission::view_text::links_of(&front.texts)
+            .into_iter()
+            .filter(|l| shown::is_media(&l.url))
+            .collect();
+        let mut quick_look = Vec::new();
+        if front.slack && settings::is_on("slack_threads") {
+            for item in &front.rows {
+                // Its thread's place, since the files are any of its
+                // messages', not only the row's sender's.
+                let place = item.data.get("where").and_then(Value::as_str).unwrap_or("");
+                let from = crate::mission::view_text::slack_from(place, "");
+                for (_, name, file, _) in self.slack_playable(item, None).0 {
+                    let url = file.display().to_string();
+                    if found.iter().any(|s| s.url == url) {
+                        continue;
+                    }
+                    let name: String = name.chars().filter(|c| !c.is_control()).collect();
+                    found.push(Shown {
+                        text: format!("{} · {from}", crate::ui::draw::cut(&name, 40)),
+                        url: url.clone(),
+                    });
+                    quick_look.push(url);
+                }
+            }
+        }
+        let none = format!("No image or video in the {} view", front.title);
+        self.pick_media(client, tab, pane, found, &none, quick_look);
+    }
+
     /// The media picker over what `open_media` found, or why it found
-    /// nothing.
+    /// nothing (`none`); the files in `quick_look` are shown with Quick
+    /// Look rather than opened in their app.
     fn pick_media(
         &mut self,
         client: ClientId,
         tab: TabId,
         pane: PaneId,
         found: Vec<Shown>,
-        in_note: bool,
+        none: &str,
+        quick_look: Vec<String>,
     ) {
         if found.is_empty() {
-            let why = if in_note {
-                "No image or video in this pane or its note"
-            } else {
-                "No image or video in this pane"
-            };
-            return self.say(Some(client), why);
+            return self.say(Some(client), none);
         }
         let picker = Picker::new("Images and videos", rows(&found))
             .named("media")
             .prompt("Open: ")
             .exact()
             .also("open it", "show in its folder");
-        self.about_tab(client, tab, move |s| {
+        self.about_here(client, tab, move |s| {
             s.pick_also(client, picker, move |server, client, picked| {
                 let Some((picked, folder)) = picked else {
                     return;
@@ -1991,6 +2132,8 @@ impl Server {
                 tokio::task::spawn_blocking(move || {
                     let opened = if folder {
                         crate::platform::reveal(&file)
+                    } else if quick_look.contains(&target) {
+                        crate::platform::preview(&file)
                     } else {
                         crate::platform::open(&target)
                     };

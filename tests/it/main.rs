@@ -31,6 +31,7 @@ mod land_test;
 mod leak_check;
 mod links;
 mod mission;
+mod mission_links;
 mod mission_nav;
 mod mux;
 mod notes_workspace;
