@@ -1104,6 +1104,15 @@ mod tests {
             line.link_at(crate::ui::draw::width(&line.plain()[..col]))
                 .is_some()
         );
+        // A search for what a fold hides shows the comment whole and finds it.
+        let mut pager = pager::Pager::new(Content::Board(board(&pr, now)), 130, 80);
+        pager.key(key(KeyCode::Char('/')));
+        for c in "Line 19.".chars() {
+            pager.key(key(KeyCode::Char(c)));
+        }
+        pager.key(key(KeyCode::Enter));
+        assert!(!pager.frame().contains("Pattern not found"));
+        assert!(pager.screen().iter().any(|l| l.contains("Line 19.")));
     }
 
     #[test]
