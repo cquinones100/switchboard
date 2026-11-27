@@ -572,6 +572,13 @@ fn comment_lines(
     let body = body_lines(&c.body, frame.inner, 0, out);
     let hidden = folded(c, body.len());
     let shown = body.len() - hidden;
+    // What the fold hides, as it shows, for a search to know it holds a
+    // match (`Line::searched` on the fold row).
+    let folded_text = body[shown..]
+        .iter()
+        .map(|l| l.searchable())
+        .collect::<Vec<_>>()
+        .join("\n");
     for l in body.into_iter().take(shown) {
         lines.push(inside(l.spans, l.picture, l.anchor));
     }
@@ -584,7 +591,9 @@ fn comment_lines(
             theme,
         )));
         row.extend(side.clone());
-        lines.push(Line::of(row, (base + PART - 1, 0, 1)));
+        let mut fold = Line::of(row, (base + PART - 1, 0, 1));
+        fold.searched = folded_text;
+        lines.push(fold);
     }
     for (j, r) in c.replies.iter().enumerate() {
         let block = (j + 1) << 18;

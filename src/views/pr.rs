@@ -1132,6 +1132,24 @@ mod tests {
             .filter(|l| l.plain().contains("Line 19."))
             .count();
         assert_eq!(hits, 2, "the folded comment shown whole");
+        // A match in what the fold hides as it shows, not as it is written.
+        let mut marked = pr.clone();
+        let mut lines = long.clone();
+        lines[17] = "Run **cargo test** first.".into();
+        marked["comments"]["nodes"][0]["body"] = json!(lines.join("\n\n"));
+        let mut pager = pager::Pager::new(Content::Board(board(&marked, now)), 130, 80);
+        pager.key(key(KeyCode::Char('/')));
+        for c in "cargo test first".chars() {
+            pager.key(key(KeyCode::Char(c)));
+        }
+        pager.key(key(KeyCode::Enter));
+        assert!(!pager.frame().contains("Pattern not found"));
+        assert!(
+            pager
+                .screen()
+                .iter()
+                .any(|l| l.contains("Run cargo test first."))
+        );
     }
 
     #[test]

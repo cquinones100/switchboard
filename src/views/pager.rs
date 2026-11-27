@@ -980,15 +980,27 @@ impl Pager {
         let unfold: Vec<String> = self
             .boxes
             .iter()
-            .filter(|b| b.folded && !self.matches(&b.comment.body).is_empty())
+            .filter(|b| {
+                (b.from..=b.to).any(|i| {
+                    let line = &self.doc.lines[i];
+                    board::is_fold(line) && !self.matches(&line.searched).is_empty()
+                })
+            })
             .map(|b| b.comment.key.clone())
             .collect();
         if unfold.is_empty() {
             return;
         }
+        self.whole.extend(unfold);
+        self.lay_out_in_place();
+    }
+
+    /// Laid out again after a box is folded or shown whole, the screen and
+    /// the cursor kept on what they showed (or on the last line before what
+    /// a fold took away).
+    fn lay_out_in_place(&mut self) {
         let top = self.doc.lines.get(self.top).map(|l| l.anchor);
         let at = self.cursor_anchor();
-        self.whole.extend(unfold);
         self.lay_out();
         if let Some(anchor) = top {
             self.top = self.doc.line_at(anchor);
@@ -1208,13 +1220,12 @@ impl Pager {
                     Some(Choice::Board(Do::Press(name))) => Act::Press(name),
                     Some(Choice::Board(Do::Unfold(key))) => {
                         self.whole.insert(key);
-                        self.lay_out();
+                        self.lay_out_in_place();
                         Act::Redraw
                     }
                     Some(Choice::Board(Do::Fold(key))) => {
                         self.whole.remove(&key);
-                        self.lay_out();
-                        self.clamp();
+                        self.lay_out_in_place();
                         Act::Redraw
                     }
                     Some(Choice::Board(Do::Copy(text))) => {
