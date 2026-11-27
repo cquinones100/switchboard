@@ -625,12 +625,14 @@ fn settings_checks_a_merge_service_s_label_and_its_check_on_recent_prs() {
                     "statusCheckRollup": { "contexts": { "nodes": [{ "name": check }] } } } }] } }] } } } }),
         ))
     });
-    let server = TestServer::start_with_env(&[
-        ("GH_TOKEN", "test-token"),
-        ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
-        ("SWITCHBOARD_GITHUB_API", &github.url),
-    ]);
-    settings(&server, json!({ "github": true }));
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+        ],
+        &all_settings(json!({ "github": true })).to_string(),
+    );
     let own = server.home.join(".config/switchboard");
     std::fs::create_dir_all(&own).unwrap();
     let service =
@@ -644,7 +646,7 @@ fn settings_checks_a_merge_service_s_label_and_its_check_on_recent_prs() {
     client.wait_text("$");
     open(&mut client);
     client.type_text("vsett\r");
-    client.wait_text("INTEGRATIONS");
+    client.wait_text("CATEGORIES");
     client.type_text("/acme/\r");
     client.wait_text("REPOSITORIES");
     client.wait_text("✓ the merge-ready label and mergebot's check");

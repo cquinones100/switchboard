@@ -987,6 +987,14 @@ impl Setup {
         })
     }
 
+    /// Whether this answer holds what `service`'s check reads: its labels
+    /// when it is handed a PR by a label, and the checks on recent PRs.
+    pub fn knows(&self, service: &Service) -> bool {
+        self.names
+            .as_ref()
+            .is_some_and(|n| n.checks.is_some() && (service.label.is_none() || n.labels.is_some()))
+    }
+
     /// The way GitHub's rules suggest, which only you choose: GitHub's
     /// merge queue where there is one, straight on the branch where nothing
     /// asks for a PR and you can push, else auto-merge where it is allowed,
@@ -1022,8 +1030,19 @@ pub fn setup_in(file: &Path, key: &str) -> Option<Setup> {
 }
 
 /// Keeps what GitHub said of a repository.
+/// A merge service's names asked for and not answered keep the ones kept
+/// before, so one failed look doesn't lose a good answer.
 pub fn remember_setup(file: &Path, key: &str, setup: &Setup) {
     let mut data = util::read_json_object(file);
+    let mut setup = setup.clone();
+    if setup.names.is_none() {
+        setup.names = data
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .and_then(|(_, v)| Setup::of(v))
+            .and_then(|kept| kept.names);
+    }
+    data.retain(|k, _| !k.eq_ignore_ascii_case(key));
     data.insert(key.to_string(), setup.json());
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -1087,7 +1106,8 @@ pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Che
             let Some(names) = &s.names else {
                 return Check {
                     ok: None,
-                    words: "not checked yet: Settings asks GitHub while it is open".into(),
+                    words: "not checked yet: GitHub hasn't answered for its labels and checks"
+                        .into(),
                 };
             };
             let unknown = |what: &str| Check {
@@ -2254,6 +2274,46 @@ mod tests {
                 { "name": "ci.yml", "object": { "text": workflow } },
                 { "name": "README.md", "object": { "text": "ci/train-" } },
             ] } } })
+    }
+
+    #[test]
+    fn a_failed_look_for_a_service_s_names_keeps_the_ones_before() {
+        let scratch = Scratch::new("repos-names");
+        let file = scratch.0.join("repos-setup.json");
+        let names = Names {
+            labels: Some(vec!["merge-ready".into()]),
+            checks: Some(vec!["mergebot".into()]),
+        };
+        let good = Setup {
+            at: 1,
+            names: Some(names.clone()),
+            ..Setup::default()
+        };
+        remember_setup(&file, "acme/svc", &good);
+        let failed = Setup {
+            at: 2,
+            ..Setup::default()
+        };
+        remember_setup(&file, "Acme/Svc", &failed);
+        let kept = setup_in(&file, "acme/svc").unwrap();
+        assert_eq!(kept.at, 2);
+        assert_eq!(kept.names, Some(names), "the names from before");
+        let service = |label: Option<&str>| Service {
+            label: label.map(str::to_string),
+            comment: Some("/merge".into()),
+            check: "mergebot".into(),
+        };
+        assert!(kept.knows(&service(Some("merge-ready"))));
+        let no_labels = Setup {
+            names: Some(Names {
+                labels: None,
+                checks: Some(vec![]),
+            }),
+            ..Setup::default()
+        };
+        assert!(!no_labels.knows(&service(Some("merge-ready"))));
+        assert!(no_labels.knows(&service(None)), "a comment needs no labels");
+        assert!(!failed.knows(&service(None)));
     }
 
     #[test]

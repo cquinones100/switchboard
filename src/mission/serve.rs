@@ -7616,10 +7616,12 @@ impl Server {
         for repo in repos {
             // A merge service's check needs its names, which an answer kept
             // by an earlier build, or a look for them that failed, lacks.
-            let service = crate::repos::lands_of(&crate::repos::landing_entry(&data, &repo))
-                == Some(crate::repos::Way::Service);
+            let entry = crate::repos::landing_entry(&data, &repo);
+            let service = (crate::repos::lands_of(&entry) == Some(crate::repos::Way::Service))
+                .then(|| crate::repos::service_of(&entry))
+                .flatten();
             let fresh = crate::repos::setup_in(&file, &repo).is_some_and(|s| {
-                now - s.at < crate::repos::DAY_MS && (s.names.is_some() || !service)
+                now - s.at < crate::repos::DAY_MS && service.as_ref().is_none_or(|v| s.knows(v))
             });
             let asked = self
                 .mission
