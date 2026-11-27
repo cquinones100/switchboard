@@ -28,10 +28,12 @@ fn main() -> ExitCode {
     // A command that prints, piped into something that stops reading
     // (`| head`), ends quietly as other programs do, rather than panicking
     // on the broken pipe Rust's ignored SIGPIPE turns into an error. Not the
-    // server, the attached client or a hook, which must outlive a peer gone.
+    // server, the attached client, a hook, the Slack relay or the phone app,
+    // which must outlive a peer gone: a phone drops its connections all the
+    // time, and a TLS write to a reset socket would otherwise end the app.
     if !matches!(
         command,
-        None | Some("server" | "hook" | "slack-relay" | "-s")
+        None | Some("server" | "hook" | "slack-relay" | "phone" | "-s")
     ) {
         // SAFETY: setting a signal's disposition back to its default.
         unsafe {
