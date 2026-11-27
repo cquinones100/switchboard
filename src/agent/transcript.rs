@@ -1,7 +1,7 @@
 //! The one reader of Claude Code's transcripts, which every part that
 //! reads a conversation goes through: the sidebar, the history, the
 //! conversation search, M-y's copy, the Slack relay, the phone app,
-//! `claude-here`, `claude-reply` and `wt-revive`. Each of those decides
+//! `claude-here`, `claude-reply`, `wt-revive` and the statusline. Each of those decides
 //! what it makes of a conversation; this reads the file and says what
 //! each line is.
 //!
