@@ -175,7 +175,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (the plugin, with the hooks, skills and statusline; the terminal, the optional report), a new build's first run, and release downloads |
 | the hourly update popup (git pull) | the same box, offering a new release |
 | `lib/sidebar/autopilot.js`, `tmux/wtn-open.zsh`'s `queue` and `next` | `src/autopilot/`, `src/cmd/worktree_from_note.rs`'s `queue` |
-| `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`; `--sealed`'s under macOS's sandbox) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`; `src/cmd/try_sealed.rs`: `--sealed`, the build, server and clients in the sandbox) |
+| `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`; `--sealed`'s under macOS's sandbox) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`; `src/cmd/try_sealed.rs`: `--sealed`, the build, server and clients in the sandbox; `src/cmd/try_tab.rs`: M-p's "Try this tab's branch", the try in a tab behind) |
 | `bin/*` Node programs, `lib/` | `src/cmd/`, `src/integrations/`, `src/relay/`, ... |
 
 ### Not ported

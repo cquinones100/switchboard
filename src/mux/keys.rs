@@ -119,6 +119,9 @@ pub enum Action {
     /// `/review-pr <number>`, listed only in a repository with that project
     /// skill (src/cmd/work.rs).
     ReviewPr,
+    /// Try the tab's worktree: `switchboard try` in a new background tab,
+    /// attaching the try's workspace there once it's built (src/cmd/try_tab.rs).
+    TryBranch,
     /// Work on a note's checklist items, each in a new tab running `wt` (M-I).
     WorkOnNote,
     /// Work on one of a repository's open GitHub issues in a new tab running
@@ -310,6 +313,7 @@ impl Action {
             "work-on-task" => Action::WorkOnTask,
             "work-on-pr" => Action::WorkOnPr,
             "review-pr" => Action::ReviewPr,
+            "try-branch" => Action::TryBranch,
             "work-on-note" => Action::WorkOnNote,
             "work-on-issue" => Action::WorkOnIssue,
             "continue-shaping" => Action::ContinueShaping,
@@ -395,6 +399,7 @@ impl Action {
             Action::WorkOnTask => "work-on-task".into(),
             Action::WorkOnPr => "work-on-pr".into(),
             Action::ReviewPr => "review-pr".into(),
+            Action::TryBranch => "try-branch".into(),
             Action::WorkOnNote => "work-on-note".into(),
             Action::WorkOnIssue => "work-on-issue".into(),
             Action::ContinueShaping => "continue-shaping".into(),
@@ -501,6 +506,7 @@ impl Action {
             }
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
             Action::ReviewPr => "Review a contributor's PR in a new tab (/review-pr)".into(),
+            Action::TryBranch => "Try this tab's branch".into(),
             Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wt)".into(),
             Action::WorkOnIssue => "Start work on a GitHub issue in a new tab (wt --issue)".into(),
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
@@ -664,6 +670,9 @@ impl Action {
             Action::WorkOnPr => {
                 "Asks for the PR's number or link. Claude reads the PR and says where it stands, changing nothing until you say; a fork's PR opens untrusted, running none of its code.".into()
             }
+            Action::TryBranch => {
+                "Builds the tab's worktree with switchboard try in a new tab in the background, its build shown there, then attaches the try's workspace in that tab, under a home of its own. Someone else's code is refused, as try refuses it.".into()
+            }
             Action::ReviewPr => {
                 "Lists the repository's open PRs from forks; the tab runs Claude in the main clone, reviewing without running the PR's code outside the sealed try.".into()
             }
@@ -798,6 +807,7 @@ impl Action {
             Action::WorkOnTask => &["git", "branch", "worktree", "new"],
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
             Action::ReviewPr => &["github", "pr", "review"],
+            Action::TryBranch => &["tabs", "switchboard", "try", "build"],
             Action::WorkOnNote => &["notes", "worktree", "new"],
             Action::WorkOnIssue => &["github", "issue", "worktree", "new"],
             Action::ContinueShaping => &["linear", "ticket", "shape"],
@@ -942,6 +952,7 @@ impl Action {
             Action::WorkOnTask,
             Action::WorkOnPr,
             Action::ReviewPr,
+            Action::TryBranch,
             Action::WorkOnIssue,
             Action::ContinueShaping,
             Action::ShapeNote,
@@ -1247,6 +1258,7 @@ mod tests {
             Action::TabTitle,
             Action::TabPrs,
             Action::ReopenLastTab,
+            Action::TryBranch,
             Action::Upgrade,
             Action::HideBuildRow,
             Action::RestoreLayout,
