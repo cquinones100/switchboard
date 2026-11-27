@@ -245,7 +245,7 @@ pub fn real_program(
 /// `path` with `real`'s folder added at its end when it isn't on it, so a
 /// cargo found in rustup's folders finds `rustc` beside it; `None` when
 /// nothing needs adding.
-fn path_reaching(real: &Path, path: &str) -> Option<String> {
+pub(crate) fn path_reaching(real: &Path, path: &str) -> Option<String> {
     let dir = real.parent()?;
     if path.split(':').any(|d| Path::new(d) == dir) {
         return None;

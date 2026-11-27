@@ -47,6 +47,7 @@ pub mod tickets;
 pub mod today_save;
 pub mod try_;
 pub mod try_sealed;
+pub mod try_tab;
 pub mod update_main;
 pub mod update_target;
 pub mod wait_ci;

@@ -366,7 +366,6 @@ fn lands(server: &TestServer, repo: &Path, way: &str) {
 /// Waits for the tab just opened to be in front, its row `row` in the
 /// sidebar, and for the server to read its pane's directory as `dir`,
 /// which the palette reads as it opens.
-#[cfg(feature = "net")]
 fn in_front_at(server: &TestServer, client: &mut common::TestClient, row: &str, dir: &Path) {
     client.wait_for("the tab in front", |s| s.iter().any(|l| l.contains(row)));
     let dir = dir.canonicalize().unwrap();
@@ -1032,4 +1031,78 @@ fn wt_alone_asks_in_its_own_terminal_for_the_work_and_starts_the_one_picked() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// The palette's "Try this tab's branch": in a tab with no Switchboard
+/// worktree it says there's nothing to try; in one, it opens a tab behind,
+/// named after the tab, running `switchboard try --print` for the worktree,
+/// whose refusal (a merge partway, here, so nothing is built) stays on the
+/// tab's screen.
+#[test]
+fn trying_a_tabs_branch_runs_try_in_a_tab_behind_and_says_so_where_theres_none() {
+    let (server, repo, mut client) = world();
+    in_front_at(&server, &mut client, "repo", &repo);
+    server.ok(&["press", "try-branch"]);
+    client.wait_text("Switchboard worktree");
+    client.type_text("\r");
+    client.wait_for("the message to close", |s| {
+        !s.iter().any(|l| l.contains("Switchboard worktree"))
+    });
+
+    // A Switchboard clone, as dev::is_switchboard_clone tells one.
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"switchboard\"\n",
+    )
+    .unwrap();
+    for dir in ["assets/skills", "src/mux"] {
+        std::fs::create_dir_all(repo.join(dir)).unwrap();
+        std::fs::write(repo.join(dir).join("keep"), "").unwrap();
+    }
+    git(&repo, &["add", "Cargo.toml", "assets", "src"]);
+    git(&repo, &["commit", "-q", "-m", "sources"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/switchboard.git",
+        ],
+    );
+    let worktree = repo.join(".claude/worktrees/t");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "t",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(
+        repo.join(".git/worktrees/t/MERGE_HEAD"),
+        "0000000000000000000000000000000000000000\n",
+    )
+    .unwrap();
+    server.ok(&["new-tab", "-c", worktree.to_str().unwrap()]);
+    server.ok(&["set", "@tab_name", "Try it"]);
+    in_front_at(&server, &mut client, "Try it", &worktree);
+    let before = tabs(&server).len();
+    server.ok(&["press", "try-branch"]);
+    client.wait_text("Trying ");
+    let all = tabs(&server);
+    assert_eq!(all.len(), before + 1);
+    let tab = all
+        .iter()
+        .find(|t| t["options"]["@tab_name"] == "Try: Try it")
+        .unwrap_or_else(|| panic!("{all:#?}"));
+    assert_eq!(tab["current"], false, "opened behind");
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    wait("try's refusal on the tab's screen", || {
+        let screen = server.ok(&["capture-pane", "-t", &pane]);
+        screen.contains("MERGE_HEAD") && screen.contains("Press Enter to close this tab.")
+    });
 }

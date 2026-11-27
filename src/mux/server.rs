@@ -3783,6 +3783,7 @@ impl Server {
             | Action::WorkOnIssue
             | Action::ContinueShaping => self.work_action(id, action, pane),
             Action::ReviewPr => self.review_pr(id, pane),
+            Action::TryBranch => self.try_branch(id, pane),
             Action::ShapeNote => self.shape_note(id, false),
             Action::ShapeNewTicket => self.shape_note(id, true),
             Action::PrImage => self.image_view(id, false),

@@ -54,12 +54,13 @@ pub const MARK: &str = "switchboard.untrusted";
 const REVIEW: &str = "pr-review";
 
 /// git's files that say a merge, rebase, cherry-pick or revert is under way.
+/// Not `REBASE_HEAD`, which git leaves behind after a rebase completes: only
+/// `rebase-merge` or `rebase-apply` mean one is under way.
 const MIDWAY: &[&str] = &[
     "MERGE_HEAD",
     "SQUASH_MSG",
     "CHERRY_PICK_HEAD",
     "REVERT_HEAD",
-    "REBASE_HEAD",
     "rebase-merge",
     "rebase-apply",
 ];
@@ -654,6 +655,22 @@ mod tests {
             why.contains("MERGE_HEAD") && why.contains("--trusted"),
             "{why}"
         );
+    }
+
+    #[test]
+    fn a_leftover_rebase_head_is_no_rebase_but_rebase_merge_is() {
+        let t = Temp::new("rebase");
+        let wt = t.0.join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        clone_of(&wt, "me@example.com");
+        write(
+            &wt.join(".git/REBASE_HEAD"),
+            "0000000000000000000000000000000000000000\n",
+        );
+        assert_eq!(midway_in(&wt), None);
+        assert_eq!(yours_or_listed(&t.0, &wt), Ok(()));
+        write(&wt.join(".git/rebase-merge/head-name"), "refs/heads/main\n");
+        assert_eq!(midway_in(&wt), Some("rebase-merge"));
     }
 
     #[test]

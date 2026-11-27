@@ -375,8 +375,16 @@ fn start(mode: Mode, target: Option<&Path>) -> Result<ExitCode> {
 /// to date, and gives its path, from cargo's own account of what it built.
 /// Cargo's progress goes to the terminal as it comes.
 fn build(wt: &Path) -> Result<PathBuf> {
-    eprintln!("Building {}…", wt.display());
-    let output = Command::new("cargo")
+    let path = std::env::var("PATH").unwrap_or_default();
+    let cargo = find_cargo(&path, &crate::platform::rustup_dirs()).ok_or_else(|| {
+        anyhow!("couldn't find cargo: it isn't on your PATH or in rustup's usual folders")
+    })?;
+    eprintln!("Building {} with {}…", wt.display(), cargo.display());
+    let mut command = Command::new(&cargo);
+    if let Some(path) = super::slot::path_reaching(&cargo, &path) {
+        command.env("PATH", path);
+    }
+    let output = command
         .args(["build", "--message-format=json-render-diagnostics"])
         .current_dir(wt)
         .stdin(Stdio::null())
@@ -389,6 +397,22 @@ fn build(wt: &Path) -> Result<PathBuf> {
     }
     built_binary(&String::from_utf8_lossy(&output.stdout))
         .ok_or_else(|| anyhow!("cargo built no switchboard binary in {}", wt.display()))
+}
+
+/// The cargo a build runs: the first `cargo` on `path` (in a pane, the
+/// stand-in that waits for a build slot), else the first of `rustup_dirs`
+/// (`platform::rustup_dirs`) that has one, since a terminal outside
+/// Switchboard may have neither on its PATH.
+fn find_cargo(path: &str, rustup_dirs: &[PathBuf]) -> Option<PathBuf> {
+    path.split(':')
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .chain(rustup_dirs.iter().cloned())
+        .map(|dir| dir.join("cargo"))
+        .find(|candidate| {
+            fs::metadata(candidate)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
 }
 
 /// The `switchboard` executable cargo's JSON messages say it built.
@@ -1456,6 +1480,33 @@ mod tests {
                 real.display()
             )
         );
+    }
+
+    #[test]
+    fn cargo_is_the_first_on_the_path_else_in_rustups_folders_in_order() {
+        let t = Temp::new("cargo");
+        let (on_path, empty, cargo_home, brew) = (
+            t.0.join("path"),
+            t.0.join("empty"),
+            t.0.join("cargo-home/bin"),
+            t.0.join("brew/bin"),
+        );
+        let runnable = |dir: &Path| {
+            fs::create_dir_all(dir).unwrap();
+            write(&dir.join("cargo"), "#!/bin/sh\n");
+            fs::set_permissions(dir.join("cargo"), fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        fs::create_dir_all(&empty).unwrap();
+        runnable(&brew);
+        let path = empty.to_string_lossy().into_owned();
+        let rustups = [cargo_home.clone(), brew.clone()];
+        assert_eq!(find_cargo(&path, &rustups), Some(brew.join("cargo")));
+        runnable(&cargo_home);
+        assert_eq!(find_cargo(&path, &rustups), Some(cargo_home.join("cargo")));
+        runnable(&on_path);
+        let path = format!("{}:{}", empty.display(), on_path.display());
+        assert_eq!(find_cargo(&path, &rustups), Some(on_path.join("cargo")));
+        assert_eq!(find_cargo("", &[empty]), None);
     }
 
     #[test]
