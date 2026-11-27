@@ -472,11 +472,12 @@ impl Server {
                 // a leading word shaped like an ID stays part of it.
                 let items = shape_batch::items_of(std::slice::from_ref(&text));
                 // As `items_from` splits them: every word an ID or a link.
-                let only_ids = text
+                let words: Vec<&str> = text
                     .split(|c: char| c.is_whitespace() || c == ',')
                     .filter(|w| !w.is_empty())
-                    .all(worktree::looks_like_ticket)
-                    && !items.is_empty();
+                    .collect();
+                let only_ids =
+                    !words.is_empty() && words.iter().all(|w| worktree::looks_like_ticket(w));
                 let source = if only_ids {
                     if !settings::is_on("linear") {
                         let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
