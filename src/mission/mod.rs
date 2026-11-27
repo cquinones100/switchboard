@@ -101,6 +101,7 @@ mod serve;
 pub mod settings_board;
 pub mod slack_board;
 pub mod summary;
+pub mod text_box;
 pub mod usage_board;
 pub mod view_acts;
 pub mod views;

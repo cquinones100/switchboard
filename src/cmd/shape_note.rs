@@ -4,9 +4,13 @@
 //! with), and the repository they belong to, and each item gets a tab of
 //! its own running `shape`, as shape-batch opens them. /shape looks for a
 //! ticket that already covers an item first, and offers to resume shaping
-//! that one instead. M-p's "Shape a new Linear ticket" is the same with one
-//! idea typed in place of a note's items, in an ask box that takes more
-//! than a line. Ported from tmux/note-shape.sh.
+//! that one instead. M-p's "Shape a new ticket" is the same with one idea
+//! typed in place of a note's items, in an ask box drawn as a text box
+//! (`Ask::text_box`) titled after where the pane's repository keeps its
+//! tickets, and filed where the chosen repository's `tickets` says: while
+//! that is unset, its source is off, or the directory chosen isn't in a
+//! repository, the box comes back with what was typed and why. Ported from
+//! tmux/note-shape.sh.
 //!
 //! The notes are the notes app's: Markdown in `$NOTES_DIR` or `~/Notes`,
 //! the one open in the app first, then the rest, newest first. An item is
@@ -34,8 +38,10 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::cmd::{shape_batch, work, worktree_from_note};
+use crate::mission::ask::Ask;
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Server};
+use crate::tickets::Kept;
 use crate::ui::{PickItem, Picker};
 use crate::{paths, settings, util, worktree};
 
@@ -195,35 +201,35 @@ fn notes_offered(notes: &Path) -> Vec<String> {
 
 /// The tab command that runs `shape` with one item, as shape-batch makes it,
 /// filed in `source` (`linear`, `github` or `notes`) whatever the
-/// repository keeps its work in.
-fn shape_tab(item: &str, source: &str) -> Vec<String> {
-    let script = format!("{} --{source} \"$@\"", worktree::self_command("shape"));
+/// repository keeps its work in, or, with none, where its `tickets` says.
+fn shape_tab(item: &str, source: Option<&str>) -> Vec<String> {
+    let flag = source.map(|s| format!(" --{s}")).unwrap_or_default();
+    let script = format!("{}{flag} \"$@\"", worktree::self_command("shape"));
     worktree::tab_command(&script, "shape", &[item.to_string()])
+}
+
+/// The Shape a new ticket box, titled after `kept`, `text` typed in it.
+fn shape_box(kept: Option<Kept>, text: &str) -> Ask {
+    Ask::new(Kept::shape_title(kept), "What should it be about?")
+        .multi_line()
+        .text(text)
+        .text_box("Shape it")
 }
 
 impl Server {
     /// M-p's "Shape a note's checklist items" (`typed` false) and "Shape a
-    /// new Linear ticket" (`typed` true).
+    /// new ticket" (`typed` true).
     pub fn shape_note(&mut self, client: ClientId, typed: bool) {
-        if !settings::is_on("linear") {
-            self.service_off(client, "linear");
+        if typed {
+            let kept = self
+                .current_pane(client)
+                .and_then(|p| self.pane_own_dir(p))
+                .and_then(|dir| crate::tickets::kept_known(&dir));
+            self.ask_new_ticket(client, shape_box(kept, ""));
             return;
         }
-        if typed {
-            let ask = crate::mission::ask::Ask::new(
-                "Shape a new ticket",
-                "What should it be about? S-Enter starts a new line.",
-            )
-            .multi_line();
-            self.open(
-                client,
-                Box::new(ask),
-                Some(Box::new(|server: &mut Server, client, outcome| {
-                    if let crate::ui::Outcome::Picked(p) = outcome {
-                        server.shape_in_repo(client, vec![p.value]);
-                    }
-                })),
-            );
+        if !settings::is_on("linear") {
+            self.service_off(client, "linear");
             return;
         }
         let notes = worktree_from_note::notes_dir();
@@ -390,11 +396,7 @@ impl Server {
             self.say(Some(client), &crate::repos::unset_words(&name));
             return;
         };
-        let ask = crate::mission::ask::Ask::new(
-            "Shape a new ticket",
-            "What should it be about? S-Enter starts a new line.",
-        )
-        .multi_line();
+        let ask = shape_box(Kept::parse(&source), "");
         self.open(
             client,
             Box::new(ask),
@@ -405,7 +407,7 @@ impl Server {
                 let Some(session) = server.clients.get(&client).map(|c| c.session.clone()) else {
                     return;
                 };
-                let command = shape_tab(&p.value, &source);
+                let command = shape_tab(&p.value, Some(&source));
                 match server.new_tab(
                     &session,
                     Some(dir.clone()),
@@ -420,6 +422,70 @@ impl Server {
                     Err(e) => server.say(Some(client), &format!("Couldn't open a tab: {e}")),
                 }
             })),
+        );
+    }
+
+    /// The Shape a new ticket box: what is typed is shaped in the
+    /// repository asked for next.
+    fn ask_new_ticket(&mut self, client: ClientId, ask: Ask) {
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(|server: &mut Server, client, outcome| {
+                if let crate::ui::Outcome::Picked(p) = outcome {
+                    server.shape_typed(client, p.value);
+                }
+            })),
+        );
+    }
+
+    /// Asks which repository `text` is a ticket for, the pane's own first,
+    /// and opens a tab there running `shape`, filed where the repository's
+    /// `tickets` says; where it can't be, the box comes back with `text`
+    /// and why.
+    fn shape_typed(&mut self, client: ClientId, text: String) {
+        self.pick_dir_for(
+            client,
+            "The repo this ticket is for",
+            move |server, client, dir| {
+                let again = |server: &mut Server, kept: Option<Kept>, why: String| {
+                    server.ask_new_ticket(client, shape_box(kept, &text).failed(why));
+                };
+                let Some(repo) = work::main_clone(&dir) else {
+                    let why = format!(
+                        "{} is not in a repository, so shape has no code to read. Pick the repo the ticket belongs to.",
+                        paths::tilde(&dir)
+                    );
+                    return again(server, None, why);
+                };
+                let kept = crate::tickets::kept_known(&repo);
+                let Some(kept) = kept else {
+                    let name = crate::repos::name_known(&repo);
+                    return again(server, None, crate::repos::unset_words(&name));
+                };
+                if let Some(source) = kept.source().filter(|s| !s.is_on()) {
+                    let why = format!(
+                        "{} keeps its tickets in {}, which is off in Settings.",
+                        crate::repos::name_known(&repo),
+                        source.name()
+                    );
+                    return again(server, Some(kept), why);
+                }
+                // Ticket IDs typed are a tab each, as shape-batch takes them.
+                let mut opened: Vec<TabId> = Vec::new();
+                for item in shape_batch::items_of(std::slice::from_ref(&text)) {
+                    match server.tab_at_end(
+                        client,
+                        &repo,
+                        shape_tab(&item, None),
+                        crate::mux::server::Opened::Background,
+                    ) {
+                        Some(tab) => opened.push(tab),
+                        None => break,
+                    }
+                }
+                server.front(client, &opened);
+            },
         );
     }
 
@@ -448,7 +514,7 @@ impl Server {
                 };
                 let mut opened: Vec<TabId> = Vec::new();
                 for item in &items {
-                    match server.new_tab(&session, Some(repo.clone()), Some(shape_tab(item, "linear")), None, crate::mux::server::Opened::Background)
+                    match server.new_tab(&session, Some(repo.clone()), Some(shape_tab(item, Some("linear"))), None, crate::mux::server::Opened::Background)
                     {
                         Ok((tab, _)) => {
                             server.tab_to_end(tab);

@@ -1106,3 +1106,54 @@ fn trying_a_tabs_branch_runs_try_in_a_tab_behind_and_says_so_where_theres_none()
         screen.contains("MERGE_HEAD") && screen.contains("Press Enter to close this tab.")
     });
 }
+
+/// M-p's "Shape a new ticket" in a repository whose `tickets` is `github`:
+/// a text box titled after it, two lines typed and sent, and `shape` run in
+/// a new tab with no source of its own, filing where repos.json says.
+#[test]
+fn shape_a_new_ticket_is_a_text_box_titled_after_the_repository_s_tickets() {
+    let (server, repo, mut client) = world();
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        serde_json::json!({ repo.join(".git").to_str().unwrap(): { "tickets": "github" } })
+            .to_string(),
+    )
+    .unwrap();
+    let before = tabs(&server).len();
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("shape a new ticket from what you type");
+    client.wait_text("› Shape a new ticket from what");
+    client.type_text("\r");
+    let screen = client.wait_text("Shape a new GitHub issue");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Cancel") && l.contains("Shape it")),
+        "its buttons: {screen:#?}"
+    );
+    client.type_text("first line");
+    // S-Enter, as a terminal without kitty's keyboard protocol sends it.
+    client.send(b"\x1b\r");
+    client.type_text("second line");
+    client.wait_text("second line");
+    client.send(b"\r");
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    wait("a tab running shape", || tabs(&server).len() == before + 1);
+    wait("Claude to run /shape", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.contains("/shape first line"))
+    });
+    let ran = std::fs::read_to_string(server.home.join("claude-ran")).unwrap();
+    assert!(
+        ran.starts_with(&format!(
+            "{} /shape first line\nsecond line",
+            repo.display()
+        )),
+        "{ran}"
+    );
+    assert!(!ran.contains("--linear"), "{ran}");
+}

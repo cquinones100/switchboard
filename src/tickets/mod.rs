@@ -229,6 +229,16 @@ impl Kept {
         }
     }
 
+    /// The Shape a new ticket box's title, naming where it is filed.
+    pub fn shape_title(kept: Option<Kept>) -> &'static str {
+        match kept {
+            Some(Kept::In(Source::Github)) => "Shape a new GitHub issue",
+            Some(Kept::In(Source::Linear)) => "Shape a new Linear ticket",
+            Some(Kept::Notes) => "Shape a new note item",
+            None => "Shape a new ticket",
+        }
+    }
+
     /// "Shape a new ticket…" naming where it is filed.
     pub fn shape_label(kept: Option<Kept>) -> &'static str {
         match kept {
