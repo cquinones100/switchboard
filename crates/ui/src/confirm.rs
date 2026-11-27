@@ -101,7 +101,7 @@ impl Overlay for Confirm {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let question = Style::new().fg(draw::YELLOW).add_modifier(Modifier::BOLD);
-        let mut lines = vec![BoxLine::text(format!(" {} [Y/n]", self.text), question)];
+        let mut lines = vec![BoxLine::text(format!(" {} [Y/n]", self.text), question).wraps()];
         if !self.list.is_empty() {
             lines.push(BoxLine::blank());
             let room = buf.area.width.saturating_sub(12) as usize;

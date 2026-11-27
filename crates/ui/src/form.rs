@@ -1,7 +1,6 @@
 //! What every box with parts to move between keeps (the settings box, the
 //! routine's box, the work item box, the remind box, the text box, the
-//! views box, the key finder, the answer box, the search box, the menus
-//! and the question), so none keeps a copy of its own: which part has
+//! views box and the key finder), so none keeps a copy of its own: which part has
 //! Tab's focus and which is under the mouse, where each part was drawn on
 //! the box's lines (whole lines, or a run of columns on one, as a button
 //! is), what saving found wrong with a field, and the box's close with
@@ -11,7 +10,9 @@
 //! index into a list), and its easy-mode × is one of them, `close`, which
 //! the ring takes after the box's own stops while the look draws a ×.
 //! Tab and Shift-Tab go round the stops a box gives (`Form::tab`), wrapping
-//! at either end; a list's index moves round the same way (`step_index`).
+//! at either end; a list's index moves round the same way (`step_index`),
+//! which the answer box, the search box, the menu and the question step
+//! their focus with.
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;

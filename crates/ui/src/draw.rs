@@ -6,11 +6,11 @@
 //! own. With easy mode's close button (`Look::close`), a ` × ` sits in the
 //! top edge a cell short of the corner, as `closeAt` placed it.
 //!
-//! A box sized by its lines wraps a line of text wider than 72 columns
-//! (`WRAP`) at its spaces, each row indented as the line's first, and is
-//! no wider than that; a row of a list or a menu (one a click means
-//! something on, or one on a highlight) is cut with … instead, as is any
-//! line of a box that fills a share of the screen.
+//! A box sized by its lines wraps a line of its text (`BoxLine::wraps`: a
+//! question, a message) wider than 72 columns (`WRAP`) at its spaces, each
+//! row indented as the line's first, and is no wider than that; every other
+//! line (a row of a list or a menu, a field being typed in) is cut with …
+//! as before, as is any line of a box that fills a share of the screen.
 //!
 //! A box remembers where it drew each line (`Drawn`), as `lastModal` did, so
 //! a click is read against what is on the screen rather than worked out
@@ -144,6 +144,8 @@ pub struct BoxLine {
     pub spans: Vec<Span<'static>>,
     pub fill: Option<Color>,
     pub clickable: bool,
+    /// Text that wraps at `WRAP` columns rather than being cut.
+    pub wraps: bool,
 }
 
 impl BoxLine {
@@ -170,6 +172,12 @@ impl BoxLine {
         self
     }
 
+    /// Text the box wraps at `WRAP` columns rather than cuts.
+    pub fn wraps(mut self) -> BoxLine {
+        self.wraps = true;
+        self
+    }
+
     pub fn clickable(mut self) -> BoxLine {
         self.clickable = true;
         self
@@ -177,12 +185,6 @@ impl BoxLine {
 
     fn width(&self) -> usize {
         self.spans.iter().map(|s| width(&s.content)).sum()
-    }
-
-    /// A line of text, which wraps, rather than a row of a list or a menu,
-    /// which is cut.
-    fn is_text(&self) -> bool {
-        !self.clickable && self.fill.is_none()
     }
 
     /// The spaces it starts with.
@@ -202,7 +204,7 @@ impl BoxLine {
     /// its indent; and two to spare, as modalBox kept.
     fn wants(&self) -> usize {
         let w = self.width();
-        if self.is_text() {
+        if self.wraps {
             w.min(self.indent() + WRAP) + 2
         } else {
             w + 2
@@ -214,7 +216,7 @@ impl BoxLine {
     /// a word where it can't, two columns to spare, each row indented as
     /// its first.
     fn rows(&self, inner: usize) -> Vec<BoxLine> {
-        if !self.is_text() || self.width() <= inner {
+        if !self.wraps || self.width() <= inner {
             return vec![self.clone()];
         }
         let indent = self.indent();

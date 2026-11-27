@@ -82,7 +82,7 @@ impl Message {
             .chain(
                 self.text
                     .split('\n')
-                    .map(|l| BoxLine::text(format!("  {l}"), look.text())),
+                    .map(|l| BoxLine::text(format!("  {l}"), look.text()).wraps()),
             )
             .collect();
         if !self.list.is_empty() {
