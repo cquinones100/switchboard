@@ -4479,3 +4479,188 @@ const out = [];
         "{stdout}"
     );
 }
+
+/// The Autopilot view on the phone (board 200, src/phone/mission.rs): the
+/// run `autopilot-board` answers carried with it for its card, its columns
+/// with what needs you first, and Pause and Resume among its own options,
+/// run through `phone-view` as mission control's are.
+#[test]
+fn the_autopilot_view_carries_its_run_and_pauses_and_resumes_from_the_phone() {
+    let notes = common::TempDir::new("sbn");
+    std::fs::write(
+        notes.path().join("Work.md"),
+        "# Work\n\n- [ ] First thing\n",
+    )
+    .unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"phone": true, "notifications": false, "tips": false, "github": false, "linear": false}),
+    );
+    common::stand_in::Claude::new().install(&server.home.join("bin"));
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "start",
+    ]);
+    let repo = repo.canonicalize().unwrap();
+    std::fs::write(
+        server.home.join(".config/switchboard/repos.json"),
+        json!({ repo.join(".git").to_str().unwrap(): { "lands": "direct", "tickets": "notes" } })
+            .to_string(),
+    )
+    .unwrap();
+    let mut stream = watch(&server);
+    let pilot = |v: &Value| -> Option<Value> {
+        v["views"]
+            .as_array()?
+            .iter()
+            .find(|v| v["key"] == "autopilot")
+            .cloned()
+    };
+    // Off, the card says so and nothing starts it.
+    let off = next_line(&mut stream, |v| {
+        pilot(v).is_some_and(|a| a["run"]["on"] == false)
+    });
+    assert_eq!(pilot(&off).unwrap()["acts"], json!([]), "{off}");
+
+    let fields = json!({
+        "note": "Work.md", "repo": repo.to_str().unwrap(), "target": "",
+        "slots": 2, "cap": 3, "limit": "$5",
+        "ready_only": false, "land_without_asking": false, "hands_free": false,
+        "skipped": [], "skipped_of": "", "taken_back": [],
+    });
+    server.ok(&["autopilot-start", &fields.to_string()]);
+    let on = next_line(&mut stream, |v| {
+        pilot(v).is_some_and(|a| a["run"]["on"] == true)
+    });
+    let a = pilot(&on).unwrap();
+    let run = &a["run"];
+    assert_eq!(run["paused"], false, "{run}");
+    assert_eq!(run["slots"], 2);
+    assert_eq!(run["limit"], 5.0);
+    assert_eq!(run["limited"], false);
+    assert!(run["spent"].is_number(), "{run}");
+    assert!(run["eta"].is_string(), "{run}");
+    let pause = &a["acts"][0];
+    assert_eq!(pause["label"], "Pause: open no more tabs for now", "{a}");
+    assert_eq!(pause["pilot"], "pause");
+    assert!(pause["ask"].is_null(), "Pause runs at once");
+
+    let said = server.ok(&[
+        "phone-view",
+        "autopilot",
+        "Pause: open no more tabs for now",
+    ]);
+    assert_eq!(said.trim(), "Paused");
+    let paused = next_line(&mut stream, |v| {
+        pilot(v).is_some_and(|a| a["run"]["paused"] == true)
+    });
+    let a = pilot(&paused).unwrap();
+    assert!(a["run"]["pausedAt"].as_i64().unwrap() > 0, "{a}");
+    let resume = &a["acts"][0];
+    assert_eq!(resume["label"], "Resume");
+    assert!(resume["ask"].is_string(), "Resume asks first: {resume}");
+    // What was offered before is gone.
+    let (code, _, err) = server.run(&[
+        "phone-view",
+        "autopilot",
+        "Pause: open no more tabs for now",
+    ]);
+    assert_ne!(code, 0);
+    assert!(err.contains("changed"), "{err}");
+
+    let said = server.ok(&["phone-view", "autopilot", "Resume"]);
+    assert_eq!(said.trim(), "Resumed");
+    next_line(&mut stream, |v| {
+        pilot(v).is_some_and(|a| a["run"]["on"] == true && a["run"]["paused"] == false)
+    });
+}
+
+/// Autopilot's card in assets/phone/app.js (board 200): its state, tabs at
+/// once, spend and the line saying when it is done over its columns; Pause
+/// sent at once, Resume asked first; at its limit red with no button; off,
+/// saying so with nothing to start it; skipped without Node.
+#[test]
+fn the_autopilot_view_draws_its_card_and_resume_asks_first() {
+    let script = PRELUDE.to_string()
+        + r##"vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const run = (over) => JSON.stringify(Object.assign({ on: true, paused: false, limited: false, away: false, weekly: null, slots: 3, spent: 4.1, limit: 20, eta: "done by about 11:11 AM · 16 left · 2 wait on you", said: "" }, over));
+const view = (over, acts) => `state.views = [{ key: "autopilot", title: "Autopilot", line: "", needs: 1, mark: "●", tone: "needs", loaded: true,
+  groups: [{ title: "Waiting on you", items: [{ id: "a1", title: "review PR 41", detail: "tab 6", mark: "●", tone: "needs", options: [] }] },
+           { title: "Blocked", items: [{ id: "a5", title: "Notes in the relay", detail: "after: Pin", mark: "○", tone: "idle", options: [] }] }],
+  acts: ${JSON.stringify(acts)}, run: ${run(over)} }]; drawPanel && state.panel && drawPanel();`;
+const PAUSE = [{ label: "Pause: open no more tabs for now", shown: "Pause: open no more tabs for now", pilot: "pause" }];
+const RESUME = [{ label: "Resume", shown: "Resume…", pilot: "resume", ask: "Resume autopilot? It takes the next item up in a new tab." }];
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = [
+    { index: 2, pane: "%12", name: "stable note IDs", state: "idle", stage: "idle", group: "Idle", mark: "○", tone: "idle", words: "idle" },
+  ];
+  ${view({}, PAUSE)}
+  state.open = "12";
+  render();
+`, ctx);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const card = () => body.all((x) => (x.className || "").split(" ")[0] === "pilot")[0];
+const out = [];
+(async () => {
+  app.all((x) => x.attrs["aria-label"] === "Tab 2's menu")[0].fire("click");
+  button("Mission control›").fire("click");
+  body.all((x) => x.attrs["data-view"] === "autopilot")[0].fire("click");
+  out.push("card=" + card().className + " " + card().text);
+  out.push("labels=" + body.all((x) => (x.className || "").startsWith("label ")).map((l) => l.className + ":" + l.text).join("|"));
+  card().all((x) => x.attrs["data-pilot"] === "pause")[0].fire("click");
+  await new Promise((r) => setImmediate(r));
+  out.push("paused=" + posted.join(","));
+  vm.runInContext(view({ paused: true, pausedAt: 0, eta: "" }, RESUME), ctx);
+  card().all((x) => x.attrs["data-pilot"] === "resume")[0].fire("click");
+  out.push("asks=" + body.text.includes("Resume autopilot? It takes the next item up in a new tab. [Y/n]") + " posted=" + posted.length);
+  button("Yes").fire("click");
+  await new Promise((r) => setImmediate(r));
+  out.push("resumed=" + posted.length);
+  vm.runInContext(view({ limited: true, spent: 20, eta: "" }, PAUSE), ctx);
+  out.push("limited=" + card().className + " " + card().text + " buttons=" + card().all((x) => x.tag === "button").length);
+  vm.runInContext(view({ on: false }, []), ctx);
+  out.push("off=" + card().text + " buttons=" + card().all((x) => x.tag === "button").length);
+  console.log(out.join("\n"));
+})();
+"##;
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "card=pilot on3 at once$4.10 of $20Done by about 11:11 AM · 16 left · 2 wait on youPause",
+            "labels=label needs:Waiting on you1|label failed:Blocked1",
+            "paused=/api/views/autopilot/act",
+            "asks=true posted=1",
+            "resumed=2",
+            "limited=pilot limited limited3 at once$20 of $20At its limit: takes nothing new today buttons=0",
+            "off=Autopilot is offStart it from mission control on the computer. buttons=0",
+        ],
+        "{stdout}"
+    );
+}

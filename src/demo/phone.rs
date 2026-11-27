@@ -1056,7 +1056,40 @@ pub fn views(now_ms: i64) -> Vec<Value> {
             vec![("Open the PR", Kind::Open(pr(86)))],
         ),
     ];
+    // Its items as mission control files them, Next up first; the phone
+    // lists Waiting on you first (board 200).
     let autopilot: Vec<MadeUp> = vec![
+        (
+            Item::new("a3", "acme/web#51 FEAT: Pin a channel")
+                .detail("1st")
+                .group("Next up"),
+            vec![
+                ("Skip its item: acme/web#51 FEAT: Pin a channel", run()),
+                (
+                    "Move down (priority 3)",
+                    asked("Label acme/web#51 \"priority: 3\" on GitHub?"),
+                ),
+            ],
+        ),
+        (
+            Item::new("a4", "BUG: Search keeps old results")
+                .detail("2nd")
+                .group("Next up"),
+            vec![("Skip its item: BUG: Search keeps old results", run())],
+        ),
+        (
+            Item::new("a5", "FEAT: Notes in the relay")
+                .detail("after: Pin a channel")
+                .group("Blocked"),
+            vec![("Skip its item: FEAT: Notes in the relay", run())],
+        ),
+        (
+            Item::new("a2", "planning")
+                .detail("tab 1 · Monitor: fork parity")
+                .state(State::Active)
+                .group("Working"),
+            vec![("Go to tab 1", go(11)), ("Skip its item: planning", run())],
+        ),
         (
             Item::new("a1", "review PR 41")
                 .detail("tab 6 · asks: which fixture?")
@@ -1068,11 +1101,23 @@ pub fn views(now_ms: i64) -> Vec<Value> {
             ],
         ),
         (
-            Item::new("a2", "planning")
-                .detail("tab 1 · Monitor: fork parity")
+            Item::new("a6", "stable note IDs")
+                .detail("tab 2 · testing in train 14")
                 .state(State::Active)
-                .group("Working"),
-            vec![("Go to tab 1", go(11)), ("Skip its item: planning", run())],
+                .group("Landing"),
+            vec![("Go to tab 2", go(12))],
+        ),
+        (
+            Item::new("a7", "BUG: Gap under the composer")
+                .detail("landed 9:12")
+                .group("Landed"),
+            vec![],
+        ),
+        (
+            Item::new("a8", "FEAT: Copy a turn")
+                .detail("skipped by you from autopilot's menu")
+                .group("Skipped"),
+            vec![("Take this item again", run())],
         ),
     ];
     let prs: Vec<MadeUp> = vec![
@@ -1225,7 +1270,15 @@ pub fn views(now_ms: i64) -> Vec<Value> {
     };
     vec![
         made(ViewId::Landing, "Landing", landing, vec![]),
-        made(ViewId::Autopilot, "Autopilot", autopilot, vec![]),
+        views::autopilot_json(
+            made(
+                ViewId::Autopilot,
+                "Autopilot",
+                autopilot,
+                vec![(views::PAUSE, views::pause_kind(true))],
+            ),
+            autopilot_run(now_ms, false),
+        ),
         made(
             ViewId::Prs,
             "PRs",
@@ -1260,6 +1313,30 @@ pub fn views(now_ms: i64) -> Vec<Value> {
         ),
         usage(now_ms),
     ]
+}
+
+/// Autopilot's run as `Server::autopilot_board` answers it, made up:
+/// three tabs at once, $4.10 of a $20 limit spent, done by about two
+/// hours from now; paused since now when `paused`.
+pub fn autopilot_run(now_ms: i64, paused: bool) -> Value {
+    let done = crate::ui::when::stamp(now_ms + 2 * 3_600_000, &jiff::Zoned::now());
+    json!({
+        "on": true,
+        "note": "Phone app",
+        "paused": paused,
+        "pausedAt": paused.then_some(now_ms / 1000),
+        "away": false,
+        "limited": false,
+        "weekly": null,
+        "said": "",
+        "slots": 3,
+        "spent": 4.1,
+        "limit": 20.0,
+        "eta": if paused { String::new() } else { format!("done by about {done} · 7 left · 1 wait on you") },
+        "columns": [["Next up", 2], ["Blocked", 1], ["Working", 1], ["Waiting on you", 1], ["Landing", 1], ["Landed", 1], ["Skipped", 1]],
+        "landedToday": 1,
+        "tabs": [],
+    })
 }
 
 /// The Usage view, made up: the 5-hour limit filling past itself at its

@@ -4370,12 +4370,9 @@ impl Server {
                 let mode = &self.autopilot.mode;
                 if mode.on {
                     if mode.paused {
-                        add("Resume", ViewAct::Pilot(Act::Resume));
+                        add(crate::autopilot::line::RESUME, ViewAct::Pilot(Act::Resume));
                     } else {
-                        add(
-                            "Pause: open no more tabs for now",
-                            ViewAct::Pilot(Act::Pause),
-                        );
+                        add(crate::autopilot::line::PAUSE, ViewAct::Pilot(Act::Pause));
                     }
                     if mode.land_without_asking {
                         add("Ask before landing", ViewAct::Pilot(Act::AskBeforeLanding));

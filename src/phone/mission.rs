@@ -10,7 +10,9 @@
 //! offered, is refused. Settings' `phone_views` off sends no views and
 //! refuses both. The Usage view goes as its board's numbers
 //! (`views::usage_json`), worked out again at most once a minute for it, and
-//! refuses both commands: nothing on it acts. `phone::views` sorts what
+//! refuses both commands: nothing on it acts. The Autopilot view goes
+//! with its run (`Server::autopilot_board`) for its card (board 200), and
+//! its Pause and Resume run through `Server::autopilot_pause`. `phone::views` sorts what
 //! they give; this only reaches the server for it. New with the phone's
 //! panel.
 
@@ -62,19 +64,29 @@ struct Offered {
     kind: Kind,
 }
 
+/// What an option of a view's own menu does on the phone: one of
+/// mission control's `view_acts`, or the Autopilot view's Pause (`true`)
+/// or Resume, run through `Server::autopilot_pause` as mission control's
+/// and the Slack relay's are.
+enum ViewOption {
+    Whole(view_acts::Whole),
+    Pause(bool),
+}
+
 impl Server {
     /// The views mission control shows that the phone lists, in the
     /// phone's order: `None` while Settings' `phone_views` is off. The
     /// Usage view is worked out off the task at most every `USAGE_EVERY`
     /// for the phone, which the phone app follows whether or not a phone
-    /// has it open.
+    /// has it open. Autopilot is kept while it is stopped, as mission
+    /// control keeps it in front, so its card says it is off (board 200).
     fn phone_shown_views(&mut self) -> Option<Vec<View>> {
         if !settings::is_on("phone_views") {
             return None;
         }
         self.usage_keep_within(ViewKind::Usage, USAGE_EVERY);
         let look = NoticeLook::every(views::SCREENFUL);
-        let all = self.mission_views(false, false, false, &look);
+        let all = self.mission_views(false, false, true, &look);
         Some(
             views::SHOWN
                 .iter()
@@ -138,20 +150,39 @@ impl Server {
         (self.item_choices(&view.id, &menu, &view.data.items), None)
     }
 
-    /// What a view's own menu offers on the phone.
-    fn phone_view_options(&self, view: &View) -> Vec<(Offered, view_acts::Whole)> {
+    /// What a view's own menu offers on the phone: the Autopilot view's
+    /// Pause or Resume first while autopilot works, as mission control's
+    /// menu lists it, then what `view_acts` gives that the phone keeps.
+    fn phone_view_options(&self, view: &View) -> Vec<(Offered, ViewOption)> {
+        let mode = &self.autopilot.mode;
+        let pilot =
+            (view.id == ViewId::Autopilot && settings::is_on("autopilot") && mode.on).then(|| {
+                let pause = !mode.paused;
+                let label = if pause { views::PAUSE } else { views::RESUME };
+                (
+                    Offered {
+                        label: label.to_string(),
+                        kind: views::pause_kind(pause),
+                    },
+                    ViewOption::Pause(pause),
+                )
+            });
         let facts = view_acts::Facts {
             github: settings::is_on("github"),
             linear: settings::is_on("linear"),
             ..view_acts::Facts::default()
         };
         let items = &view.data.items;
-        view_acts::of(Some(&view.id), items, items, &facts)
+        pilot
             .into_iter()
-            .filter_map(|(label, act)| {
-                let kind = views::whole_kind(&act, &label)?;
-                Some((Offered { label, kind }, act))
-            })
+            .chain(
+                view_acts::of(Some(&view.id), items, items, &facts)
+                    .into_iter()
+                    .filter_map(|(label, act)| {
+                        let kind = views::whole_kind(&act, &label)?;
+                        Some((Offered { label, kind }, ViewOption::Whole(act)))
+                    }),
+            )
             .collect()
     }
 
@@ -168,6 +199,11 @@ impl Server {
             return Some(kept.clone());
         }
         let shown = self.phone_shown_views()?;
+        // The run the Autopilot view's card shows (board 200).
+        let run = shown
+            .iter()
+            .any(|v| v.id == ViewId::Autopilot)
+            .then(|| self.autopilot_board());
         let pane_of = self.phone_pane_of();
         let now = crate::util::now_ms().div_euclid(1000);
         let out: Vec<Value> = shown
@@ -187,7 +223,13 @@ impl Server {
                     .iter()
                     .map(|(o, _)| views::option_json(&o.label, &o.kind))
                     .collect();
-                views::view_json(v, &options, acts)
+                let made = views::view_json(v, &options, acts);
+                match &run {
+                    Some(run) if v.id == ViewId::Autopilot => {
+                        views::autopilot_json(made, run.clone())
+                    }
+                    _ => made,
+                }
             })
             .collect();
         let value = Value::Array(out);
@@ -287,8 +329,12 @@ impl Server {
                 if !matches!(offered.kind, Kind::Run(_)) {
                     return answer(reply, Reply::fail("The phone does that one itself."));
                 }
-                self.whole_run(act)
-                    .map_err(|_| "The phone can't do that one.".to_string())
+                match act {
+                    ViewOption::Pause(pause) => self.autopilot_pause(pause).map(Ran::Said),
+                    ViewOption::Whole(act) => self
+                        .whole_run(act)
+                        .map_err(|_| "The phone can't do that one.".to_string()),
+                }
             }
         };
         eprintln!("switchboard server: from your phone: {view_key}: {label}");

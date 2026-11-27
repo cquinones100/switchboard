@@ -783,6 +783,20 @@ body.refused p { color: var(--dim); }
 .pct.failed { color: var(--red); }
 .spend { display: flex; justify-content: space-between; align-items: center; min-height: var(--tap); padding: 0 var(--edge); }
 .usage-tab { grid-template-columns: 1.5ch 1fr auto; }
+
+/* Autopilot's card (board 200): its state, tabs at once and spend over a
+   meter of it, the line saying when it is done, and Pause or Resume; red
+   at its limit. */
+.pilot { display: grid; row-gap: var(--s2); margin: var(--s3) var(--edge) 0; padding: var(--s3); border: 1px solid var(--line); border-radius: var(--round); background: var(--surface); }
+.pilot.limited { border-color: var(--red); }
+.pilot .top { display: flex; align-items: center; gap: var(--s2); }
+.pilot .pilot-spend { margin-left: auto; color: var(--dim); font-size: var(--fact); }
+.pilot .pilot-spend.r { color: var(--red); }
+.pilot .meter { grid-column: auto; height: 4px; }
+.pilot .meter .fill.on { background: var(--accent); }
+.pilot .line { font-size: var(--fact); }
+.pilot .pilot-button { text-align: center; }
+.pilot.off .sub { color: var(--dim); font-size: var(--fact); }
 .usage-tab .when { font-size: var(--fact); color: var(--dim); align-self: center; }
 
 /* ── A tab's sheet (board 197): from a long press on its row in the drawer,

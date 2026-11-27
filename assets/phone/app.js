@@ -2987,6 +2987,66 @@ function tabViewBody(row) {
 
 const TONE_OF_GROUP = (items) => (items[0] && items[0].tone) || "idle";
 
+// The Autopilot view's columns in the tones the board gives them (board 200).
+const TONE_OF_COLUMN = {
+  "Waiting on you": "needs",
+  Working: "working",
+  Landing: "landing",
+  "Next up": "idle",
+  Blocked: "failed",
+  Landed: "passed",
+  Skipped: "idle",
+};
+
+// Autopilot's run as a card over its items (board 200), from what
+// `autopilot-board` answers (src/phone/views.rs's autopilot_json): on,
+// paused or at its limit as a chip, its tabs at once, its spend against its
+// limit as a meter, when it should be done, and Pause, or Resume lit, which
+// asks first; at its limit, red with no button; off, saying so with nothing
+// to start it, which stays the computer's.
+function autopilotCard(view) {
+  const run = view.run;
+  if (!run.on) {
+    return el("div", { class: "pilot off" }, el("b", {}, "Autopilot is off"), el("span", { class: "sub" }, "Start it from mission control on the computer."));
+  }
+  const weekly = !!run.weekly;
+  const limited = run.limited || weekly;
+  const status = limited ? ["limited", "r"] : run.paused ? ["paused", "y"] : run.away ? ["away", "y"] : ["on", "g"];
+  const card = el("div", { class: "pilot" + (limited ? " limited" : "") });
+  const spend = run.limit > 0 ? el("span", { class: "pilot-spend" + (limited ? " r" : "") }, dollars(run.spent).replace(/\.00$/, "") + " of " + dollars(run.limit).replace(/\.00$/, "")) : el("span", {});
+  card.append(el("div", { class: "top" }, el("span", { class: "chip " + status[1] }, status[0]), el("span", { class: "chip" }, run.slots + " at once"), spend));
+  if (run.limit > 0) {
+    const fill = el("span", { class: "fill " + (limited ? "failed" : "on") });
+    fill.style.width = Math.max(0, Math.min(100, (100 * run.spent) / run.limit)) + "%";
+    card.append(el("span", { class: "meter" }, fill));
+  }
+  const words = [];
+  if (run.limited) words.push("At its limit: takes nothing new today");
+  else if (weekly) words.push("At its weekly limit: takes nothing new this week");
+  else if (run.paused) words.push(run.pausedAt ? "Paused since " + new Date(run.pausedAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "Paused");
+  if (run.eta && !limited) words.push(run.eta.charAt(0).toUpperCase() + run.eta.slice(1));
+  if (!words.length && run.said) words.push(run.said);
+  if (words.length) card.append(el("div", { class: "line" }, words.join(" · ")));
+  const pilot = !limited && (view.acts || []).find((a) => a.pilot);
+  if (pilot) {
+    card.append(
+      el(
+        "button",
+        { class: "option pilot-button" + (pilot.pilot === "resume" ? " lit" : ""), "data-pilot": pilot.pilot, onclick: () => pilotTap(view, pilot) },
+        pilot.pilot === "resume" ? "Resume" : "Pause",
+      ),
+    );
+  }
+  return card;
+}
+
+// Pause runs at once and Resume asks first, as the view's menu would.
+function pilotTap(view, o) {
+  state.menu = { panel: true, view: view.key, id: null, key: optionsKey(view.acts), asking: false };
+  document.addEventListener("keydown", menuKeys);
+  runOption(view.key, null, o);
+}
+
 // A view's items under its groups, in its order and tones, or its own words
 // for having none, needing setting up, or its last look failing.
 function viewItems(view) {
@@ -2997,9 +3057,12 @@ function viewItems(view) {
   else if (!items) list.append(el("div", { class: "empty" }, view.loaded === false ? "Loading…" : view.empty || "Nothing here."));
   if (view.error) list.append(el("div", { class: "empty refused" }, view.error));
   if (view.setup) return list;
+  const pilot = view.key === "autopilot" && view.run;
+  if (pilot) list.prepend(autopilotCard(view));
   for (const g of view.groups) {
     const group = el("div", { class: "group" });
-    if (g.title) group.append(el("div", { class: "label " + TONE_OF_GROUP(g.items) }, el("span", {}, g.title), el("span", {}, g.items.length)));
+    const tone = (pilot && TONE_OF_COLUMN[g.title]) || TONE_OF_GROUP(g.items);
+    if (g.title) group.append(el("div", { class: "label " + tone }, el("span", {}, g.title), el("span", {}, g.items.length)));
     for (const item of g.items) {
       group.append(
         el(
