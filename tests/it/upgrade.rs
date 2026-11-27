@@ -1173,7 +1173,6 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
         1,
         "one notification: {screen:#?}"
     );
-    client.type_text("j");
     client.type_text("\r");
     let screen = client.wait_text("Dismiss it");
     let all = screen.join("\n");

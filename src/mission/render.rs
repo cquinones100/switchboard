@@ -10305,7 +10305,7 @@ mod tests {
 
     // Board 115: a heading per source in place of the keycaps and the days.
     #[test]
-    fn with_ux2_notifications_grouped_are_under_their_sources_headings() {
+    fn notifications_grouped_are_under_their_sources_headings() {
         use crate::sidebar::history::{Entry, Sidebar};
         const DAY: i64 = 86_400_000;
         let now = rules().now_ms;
