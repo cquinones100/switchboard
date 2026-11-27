@@ -689,7 +689,7 @@ impl Action {
                 "Picks a note, its items and a repository, then opens a background tab running /shape for each item. The items go to Claude only once you choose them.".into()
             }
             Action::ShapeNewTicket => {
-                "The idea typed goes to a background tab running /shape in the repository you pick, filed where its tickets are kept.".into()
+                "The idea typed goes to a background tab running /shape in the repository you pick, filed where its tickets are kept; Linear ticket IDs typed alone are shaped further in Linear.".into()
             }
             Action::PrImage => {
                 "Chrome draws its HTML with GitHub's stylesheet and Mermaid diagrams, shown a page at a time; j, k and Space page, q closes it.".into()
