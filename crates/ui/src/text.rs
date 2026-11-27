@@ -540,9 +540,9 @@ impl Badge {
             Badge::Working => l(67, 255, "⠋", "working"),
             Badge::Slot => l(67, 255, "◌", "waits for a slot"),
             Badge::Background => l(60, 255, "⠋", "working in background"),
-            Badge::Review => l(97, 255, "⠋", "review loop"),
+            Badge::Review => l(97, 255, "◐", "review loop"),
             Badge::Ci => l(30, 255, "⠋", "CI loop"),
-            Badge::Queue => l(166, 255, "⠋", "queue-and-clean"),
+            Badge::Queue => l(166, 255, "△", "queue-and-clean"),
             Badge::Deploy => l(133, 255, "⠋", "testing deploy"),
             Badge::Scheduled => l(31, 255, "↻", "looping"),
             Badge::Monitor => l(37, 232, "◉", "monitoring"),
@@ -562,7 +562,8 @@ impl Badge {
         }
     }
 
-    /// Whether its mark is the spinner, turning while Claude works.
+    /// Whether its mark turns while Claude works (the spinner, or the review
+    /// loop's and queue-and-clean's own, `kit::mark`).
     pub fn spins(self) -> bool {
         matches!(
             self,

@@ -18,6 +18,7 @@ use super::text::{self, Badge};
 use crate::facts::{Checks, Landing, Method, PrState};
 use crate::mux::{PaneId, TabId};
 use crate::tabs::Rgb;
+use crate::ui::kit::Mark;
 
 /// What a tab's Claude is doing, as the sidebar tells it: the agent state's
 /// waiting, done and working, and two of its own. A Claude tab whose turn
@@ -645,6 +646,16 @@ impl Stage {
             Stage::Idle | Stage::Other | Stage::OtherRepos => Badge::Idle,
             Stage::Later => Badge::Later,
             Stage::RemindersElsewhere => Badge::Reminder,
+        }
+    }
+
+    /// The mark its header leads with: the review loop's and
+    /// queue-and-clean's own, which their rows wear too (board 130); none
+    /// for a group told apart by its header's color alone.
+    pub fn mark(self) -> Option<Mark> {
+        match self {
+            Stage::Review | Stage::Queue => Some(Mark::of_badge(self.color())),
+            _ => None,
         }
     }
 
