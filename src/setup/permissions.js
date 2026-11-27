@@ -657,7 +657,9 @@ export async function landingRefused(command, look) {
       }
     } else if (call.kind === 'merge' && !MERGES.has(way)) {
       const base = way === 'service' ? main : await look.prBase(call.args);
-      if (base === null || base === main) {
+      // A base that can't be read leaves the call to the rules, as a way
+      // that can't be read does.
+      if (base === main) {
         return `Switchboard's permissions in its panes deny this: ${name}, not \`gh pr merge\`: ${change}`;
       }
     }
