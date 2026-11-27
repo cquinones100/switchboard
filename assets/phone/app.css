@@ -611,7 +611,10 @@ body.refused p { color: var(--dim); }
 
 /* ── A tab's menu and Close tab's question (board 175) ── */
 .row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-.row.held { background: var(--chosen); box-shadow: inset 3px 0 0 var(--accent); position: relative; z-index: 11; }
+/* Lifted over the veil only for a box drawn beside it; a tab's sheet covers the
+   rows, so its row stays lit under the veil. */
+.row.held { background: var(--chosen); box-shadow: inset 3px 0 0 var(--accent); }
+.row.held.lifted { position: relative; z-index: 11; }
 .veil {
   position: fixed;
   inset: 0;
@@ -773,3 +776,45 @@ body.refused p { color: var(--dim); }
 .spend { display: flex; justify-content: space-between; align-items: center; min-height: var(--tap); padding: 0 var(--edge); }
 .usage-tab { grid-template-columns: 1.5ch 1fr auto; }
 .usage-tab .when { font-size: var(--fact); color: var(--dim); align-self: center; }
+
+/* ── A tab's sheet (board 197): from a long press on its row in the drawer,
+   three quarters of the screen high from its foot, the tab's last turn
+   scrolling between its head and its options. ── */
+.box.tab-sheet {
+  left: 0;
+  right: 0;
+  top: 25%;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border-bottom: 0;
+  border-radius: var(--round) var(--round) 0 0;
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.5);
+  animation: sheet-in var(--move) var(--ease);
+  transition: transform var(--quick) var(--ease);
+}
+.veil.going .box.tab-sheet { animation: sheet-out var(--quick) var(--ease) forwards; }
+@keyframes sheet-in { from { transform: translateY(100%); } }
+@keyframes sheet-out { to { transform: translateY(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .box.tab-sheet { animation: fade-in var(--quick) var(--ease); }
+  .veil.going .box.tab-sheet { animation: fade-out var(--quick) var(--ease) forwards; }
+}
+.tab-sheet .sheet-top { flex: none; touch-action: none; border-bottom: 1px solid var(--line); }
+.tab-sheet .grabber { width: 36px; height: 4px; margin: 6px auto 0; border-radius: 2px; background: var(--faint); }
+.tab-sheet .sheet-head { display: flex; align-items: center; gap: var(--s2); min-height: var(--tap); padding: 0 var(--s1) 0 var(--s4); }
+.tab-sheet .sheet-head .name { flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-sheet .sheet-head .num { margin-right: 2px; }
+.tab-sheet .sheet-head .icon { color: var(--text); background: var(--chosen); }
+.tab-sheet .turn { flex: 1; min-height: 0; overflow-y: auto; padding: var(--s2) 0; cursor: pointer; outline: none; }
+.tab-sheet .turn:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.tab-sheet .turn .empty { padding: var(--s2) var(--edge); color: var(--dim); }
+.tab-sheet .tool.running { color: var(--blue); }
+.tab-sheet .tool.running::before { content: none; }
+.tab-sheet .card.asked { margin-left: calc(var(--edge) + var(--avatar) + 10px); }
+.tab-sheet .card.asked .choices { color: var(--dim); font-size: var(--fact); overflow-wrap: anywhere; }
+.tab-sheet .card.asked .go { margin-top: var(--s2); color: var(--accent); }
+.tab-sheet .sheet-options { flex: none; border-top: 1px solid var(--line); padding: var(--s1) 0 calc(var(--s1) + var(--inset-bottom)); }
+.tab-sheet .md .link { color: var(--accent); }
+.tab-sheet .sheet-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--s2); }

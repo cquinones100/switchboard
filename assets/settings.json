@@ -2223,7 +2223,7 @@
     "key": "phone_haptics",
     "category": "Phone app",
     "label": "Buzz the phone",
-    "description": "The phone app gives a short buzz as you answer a prompt, send a message, open a tab's menu with a long press and swipe far enough to open the drawer, a vibration on Android and a haptic tick on an iPhone with iOS 18 or later. Off, the app never buzzes",
+    "description": "The phone app gives a short buzz as you answer a prompt, send a message, open a tab's sheet with a long press and swipe far enough to open the drawer, a vibration on Android and a haptic tick on an iPhone with iOS 18 or later. Off, the app never buzzes",
     "default": true
   },
   {

@@ -792,6 +792,10 @@
     "PhoneAutopilotList.dc.html": {
       "title": "200. Autopilot on the phone, option C: a summary card with Pause at the top of one list grouped by column, what needs you first, Resume asked first and a limited state in red",
       "page": "design"
+    },
+    "PhoneTabSheet.dc.html": {
+      "title": "197. A tab's sheet on the phone, from a long press on its row in the drawer: three quarters of the screen high, the tab's last turn as its channel draws it (live while it works, a question it asks ending it) above the options board 175's menu had, fixed at its foot; a tap on the turn opens the channel, Close tab still asks first",
+      "page": "design"
     }
   }
 }
