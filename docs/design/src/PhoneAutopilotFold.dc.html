@@ -400,13 +400,13 @@ const NEXT = [['idle', 'FEAT: Pin a channel', '1st', '', 'd'], ['idle', 'BUG: Se
   y += 1; colHead(sx, y, 'Working', 'b', 3, true); y++;
   for (const it of WORK) { apItem(sx, y, ...it); y += 2; } }
 
-// A tap on an item: the menu the phone allows today.
+// A tap on an item: the menu the phone allows today, mission control's own options for it (Put next, Move up and Move down on an item not yet started, asked first).
 { const sx = phone(122, 'A: a tap on an item', '1');
   apHead(sx, 'Autopilot');
   let y = apSum(sx, 6.4, false);
   colHead(sx, y, 'Waiting on you', 'y', 2, true); y++;
   apItem(sx, y, ...WAIT[0], true); y += 2; apItem(sx, y, ...WAIT[1]);
-  apMenu(sx, 'FEAT: Sidebar groups by repo', [['Go to tab 12'], ['Move it up…'], ['Move it down…'], ['Skip it']]); }
+  apMenu(sx, 'FEAT: Sidebar groups by repo', [['Go to tab 12'], ['Skip its item: FEAT: Sidebar…']]); }
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
