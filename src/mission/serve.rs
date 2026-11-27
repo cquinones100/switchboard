@@ -353,6 +353,9 @@ pub(crate) struct NoticeLook {
     /// of before it orders the sources, so they stand by their newest
     /// match.
     text: String,
+    /// How many of the newest notifications the list by source holds: a
+    /// phone's screenful for the phone, every one in mission control.
+    most: usize,
 }
 
 impl NoticeLook {
@@ -447,6 +450,7 @@ impl NoticeLook {
             whole: true,
             shown: true,
             text: String::new(),
+            most: screenful,
         }
     }
 }
@@ -1359,6 +1363,7 @@ impl Server {
             shown: m.current().is_some_and(|v| v.id == ViewId::Notifications)
                 || m.grid_has("notifications"),
             text: text.clone(),
+            most: usize::MAX,
         };
         let mut all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot, &look);
         // What the Slack board's From your work reads: today's Calendar and
@@ -1897,6 +1902,7 @@ impl Server {
                                 kind.is_none()
                                     || crate::sidebar::history::kind_of(&e.source) == kind
                             })
+                            .take(look.most)
                             .map(|e| {
                                 // A folded source's rows only counted, so
                                 // not copied whole (a filter folds none).
@@ -5001,10 +5007,13 @@ impl Server {
             return;
         }
         let mut list = vec![(fold, ViewAct::FoldGroup(group.to_string(), !folded))];
-        if shown > 0 {
+        // (Only while one of them can be: a suggestion is put away from
+        // its own menu.)
+        let words = self.notice_group_words(group);
+        if !words.is_empty() {
             list.push((
                 format!("Dismiss every notification in {group}"),
-                ViewAct::DismissGroup(group.to_string(), self.notice_group_words(group)),
+                ViewAct::DismissGroup(group.to_string(), words),
             ));
         }
         // Then every source's, as every notification's menu ends.
