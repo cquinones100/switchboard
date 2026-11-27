@@ -747,16 +747,16 @@ impl Overlay for Menu {
         // An option's own key, but never one the menu moves or closes with
         // unless its options' keys come first.
         // A capital may come with Shift held, as a terminal reporting keys
-        // in full sends it.
-        let typed = key.mods == Mods::NONE || (key.mods == Mods::SHIFT && self.keys_first);
-        if typed
+        // in full sends it: it is the capital alone.
+        let capital = matches!(key.code, KeyCode::Char(c) if c.is_uppercase());
+        let plain = key.mods == Mods::NONE || (key.mods == Mods::SHIFT && capital);
+        if plain
             && let KeyCode::Char(c) = key.code
             && (self.keys_first || (!"jkgGqQ /".contains(c) && !c.is_ascii_digit()))
             && let Some(i) = self.options.iter().position(|o| o.key == Some(c))
         {
             return Step::Close(Outcome::Chose(i));
         }
-        let plain = key.mods == Mods::NONE;
         let ctrl = key.mods == Mods::CTRL;
         let moved = |to: usize, cursor: &mut usize| {
             if to == *cursor {

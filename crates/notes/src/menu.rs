@@ -470,6 +470,10 @@ mod tests {
             Step::Close(Outcome::Chose(underline.unwrap())),
             "a capital with Shift held"
         );
+        assert_eq!(
+            format_menu(false).key(Key::new(KeyCode::Char('Q'), Mods::SHIFT), &look),
+            Step::Close(Outcome::Dismissed)
+        );
     }
 
     #[test]
