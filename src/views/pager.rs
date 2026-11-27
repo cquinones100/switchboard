@@ -946,6 +946,18 @@ impl Pager {
         if self.query.is_none() {
             return Act::Same;
         }
+        // A folded comment holding a match is shown whole, so what it
+        // folds away is found as the rest is.
+        let unfold: Vec<String> = self
+            .boxes
+            .iter()
+            .filter(|b| b.folded && !self.matches(&b.comment.body).is_empty())
+            .map(|b| b.comment.key.clone())
+            .collect();
+        if !unfold.is_empty() {
+            self.whole.extend(unfold);
+            self.lay_out();
+        }
         let hit = |i: &usize| !self.matches(&self.doc.lines[*i].searchable()).is_empty();
         let found = if forward {
             (from..self.doc.lines.len()).find(hit)
@@ -1518,7 +1530,9 @@ impl Pager {
             .panel
             .as_ref()
             .is_none_or(|(_, at)| (mouse.column as usize) <= *at);
-        let on_box = (mouse.row as usize) < self.body() && in_column;
+        let on_scroll_bar =
+            matches!(self.scroll_bar(), (Some(_), Some(x)) if x == mouse.column as usize);
+        let on_box = (mouse.row as usize) < self.body() && in_column && !on_scroll_bar;
         if on_box && let Some(at) = self.box_at(line) {
             let b = &self.boxes[at];
             let on_bar = line <= b.from + 2 || self.doc.lines.get(line).is_some_and(board::is_fold);
