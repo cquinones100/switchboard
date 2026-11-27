@@ -316,8 +316,9 @@ impl Overlay for AnswerBox {
         if self.typing_line() {
             // Tab puts focus on easy mode's close button, Enter pressing it;
             // typing takes it back to the line.
-            if matches!(k.code, KeyCode::Tab | KeyCode::BackTab) && look.close {
-                self.close_focus = !self.close_focus;
+            if let Some(by) = crate::ui::form::tab_by(&k).filter(|_| look.close) {
+                // Round the line (false) and the × (true).
+                self.close_focus = crate::ui::form::step(&[false, true], self.close_focus, by);
                 return Step::Redraw;
             }
             if self.close_focus && matches!(k.code, KeyCode::Enter | KeyCode::Char(' ')) {
