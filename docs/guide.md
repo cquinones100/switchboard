@@ -1162,11 +1162,11 @@ With Settings' "Easy mode" (`easy_keys`, under Help) on, the diff has a row of b
 
 ### Keys in the diff
 
-The keys depend on where the cursor is: in the file list, or in the diff on its right. The list moves as every list does (`j` `k` and the arrows, `Ctrl-n` `Ctrl-p`, `G`, `Home` `End`); a side of the diff moves by the shared Vim, read-only, as the views and the code viewer read: every motion, with counts (`h` `j` `k` `l`, `w` `b` `e`, `0` `$`, `f` `t`, `{` `}`, `H` `M` `L`, `gg` `G`, `Ctrl-d` `Ctrl-u` `Ctrl-f` `Ctrl-b`) and marks, over the file's lines as they show, a line wrapped onto several being several; a key that would change the text changes nothing and says "E21: Cannot make changes". The diff's own keys below come first.
+The keys depend on where the cursor is: in the file list, or in the diff on its right. The list moves as every list does (`j` `k` and the arrows, `G`, `Home` `End`); a side of the diff moves by the shared Vim, read-only, as the views and the code viewer read: every motion, with counts (`h` `j` `k` `l`, `w` `b` `e`, `0` `$`, `f` `t`, `{` `}`, `M`, `gg` `G`, `Ctrl-d` `Ctrl-u` `Ctrl-f` `Ctrl-b`) and marks, over the file's lines as they show, a line wrapped onto several being several; a key that would change the text changes nothing and says "E21: Cannot make changes". The diff's own keys below come first.
 
 | Key | In the file list | In the diff |
 |---|---|---|
-| `j` `k`, `↓` `↑`, `Ctrl-n` `Ctrl-p` | The next or previous file | The next or previous line, stopping at the file's first and last |
+| `j` `k`, `↓` `↑` | The next or previous file | The next or previous line, stopping at the file's first and last |
 | `Ctrl-d` `Ctrl-u` | Half a screen of files down or up | Half a screen down or up |
 | `gg` `G`, `Home` `End` | The first or last file | The first or last line (`gg` and `G` with a count, that line) |
 | `]c` `[c` | The next or previous chapter (in a story told as a list, page) | The next or previous change |
@@ -1185,6 +1185,7 @@ These work wherever the cursor is:
 
 | Key | What it does |
 |---|---|
+| `Ctrl-f` `Ctrl-b`, `PageDown` `PageUp` | The diff a screen down or up |
 | `Ctrl-e` `Ctrl-y` | The diff scrolled a line down or up, the cursor kept in sight while its file is |
 | `zo`, `za`, `zv` | Open the fold under the diff's cursor |
 | `zR` `zM` | Open every fold of the file, or fold them again |

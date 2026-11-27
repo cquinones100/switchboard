@@ -116,6 +116,7 @@ mod select;
 mod talk;
 mod trail;
 mod vim;
+use vim::{g_key, input_code};
 mod width;
 
 pub use page::story_page;
@@ -2818,6 +2819,15 @@ impl App {
                     self.focus = Focus::New;
                 }
             }
+            // Home and End the file's first and last line, as ever.
+            KeyCode::Home if !list => return self.vim_keys(&[g_key(), g_key()], 1),
+            KeyCode::End if !list => return self.vim_keys(&[Key::plain(input_code('G'))], 1),
+            // A screen of the file from the list too.
+            KeyCode::Char('f' | 'b') | KeyCode::PageDown | KeyCode::PageUp
+                if list && (ctrl || !matches!(key.code, KeyCode::Char(_))) =>
+            {
+                return self.page_from_list(&key);
+            }
             // The rest is the shared Vim's, on a side of the file.
             _ if !list && let Some(key) = Key::of_crossterm(&key) => {
                 return self.vim_keys(&[key], count);
@@ -2880,8 +2890,7 @@ impl App {
             ('y', 'S') => self.copy_story(),
             ('g', 'g') if self.focus == Focus::List => self.move_list(isize::MIN / 2),
             ('g', 'g') => {
-                let g = Key::plain(switchboard_ui::input::KeyCode::Char('g'));
-                return self.vim_keys(&[g, g], count);
+                return self.vim_keys(&[g_key(), g_key()], count);
             }
             (']', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(1),
             ('[', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(-1),
@@ -4777,10 +4786,12 @@ impl App {
 }
 
 /// The step `key` is in one of the diff's lists, as in every list
-/// (`kit::nav`), but `g`, which starts a pair here (`gg` the top).
+/// (`kit::nav`), but `g`, which starts a pair here (`gg` the top), and
+/// C-n and C-p, since the palette's commands press C-\ C-n first.
 fn nav(key: &KeyEvent) -> Option<Move> {
+    use switchboard_ui::input::KeyCode as K;
     Key::of_crossterm(key)
-        .filter(|k| k.code != switchboard_ui::input::KeyCode::Char('g'))
+        .filter(|k| !k.mods.ctrl && k.code != K::Char('g'))
         .and_then(kit::nav::step)
 }
 

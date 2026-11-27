@@ -41,6 +41,18 @@ impl App {
         self.focus != Focus::List && self.vim.pending()
     }
 
+    /// A screen of the shown file from the list (Ctrl-F, Ctrl-B and the
+    /// page keys), moved on its side as there, the list keeping the keys.
+    pub(super) fn page_from_list(&mut self, key: &crossterm::event::KeyEvent) -> Act {
+        let Some(key) = Key::of_crossterm(key) else {
+            return Act::Same;
+        };
+        self.focus = self.main_side();
+        let act = self.vim_keys(&[key], 1);
+        self.focus = Focus::List;
+        act
+    }
+
     /// `keys` on the side with the focus, `count` times: the cursor goes
     /// where Vim takes it and the view follows.
     pub(super) fn vim_keys(&mut self, keys: &[Key], count: usize) -> Act {
@@ -102,4 +114,14 @@ fn byte_at(line: &str, col: usize) -> usize {
     line.char_indices()
         .find(|(i, _)| width(&line[..*i]) >= col)
         .map_or(line.len(), |(i, _)| i)
+}
+
+/// `g`, for `gg`.
+pub(super) fn g_key() -> Key {
+    Key::plain(input_code('g'))
+}
+
+/// A character as the shared Vim's keys name it.
+pub(super) fn input_code(c: char) -> switchboard_ui::input::KeyCode {
+    switchboard_ui::input::KeyCode::Char(c)
 }

@@ -8565,7 +8565,9 @@ fn alone_label(m: &Mission) -> Option<&'static str> {
             Some("Show its ticket")
         }
         ViewId::Slack
-            if super::render::slack_board_shown(v) && !super::slack_board::beside(cols) =>
+            if super::render::slack_board_shown(v)
+                && !super::slack_board::beside(cols)
+                && settings::is_on("slack_threads") =>
         {
             Some("Show the chosen thread")
         }
