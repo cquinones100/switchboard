@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-25 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-27 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -361,6 +361,12 @@ The relay's DM, threads and Home tab.
 - [194. After: Autopilot naming how its repository lands, a Landing card where it is in that way, Landed the PRs merged and cleaned up, the chosen card saying when it is done (today: board 16)](https://cquinones100.github.io/switchboard/design/194.html)
 - [195. After: PRs, Merge queue become Landing, each card saying where it is in its repository's way (a train, GitHub's queue, the service), the pane naming the way (today: board 10)](https://cquinones100.github.io/switchboard/design/195.html)
 - [196. After: CI saying what each run means for landing in its repository's way, a train of Switchboard's merge queue listed by the PRs it tests (today: board 20)](https://cquinones100.github.io/switchboard/design/196.html)
+
+## Proposal: autopilot on the phone
+
+- [198. Autopilot on the phone, option A: a summary (on or paused, tabs at once, spend against its limit, when it will be done) with Pause over its columns, what needs you first, each folding at a tap on its head](https://cquinones100.github.io/switchboard/design/198.html)
+- [199. Autopilot on the phone, option B: a slim summary over a board of columns swiped sideways a column at a time, a strip of their names and counts to tap, Pause in ⋯](https://cquinones100.github.io/switchboard/design/199.html)
+- [200. Autopilot on the phone, option C: a summary card with Pause at the top of one list grouped by column, what needs you first, Resume asked first and a limited state in red](https://cquinones100.github.io/switchboard/design/200.html)
 
 ## Other boards
 

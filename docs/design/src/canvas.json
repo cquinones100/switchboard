@@ -780,6 +780,18 @@
     "LandsCi.dc.html": {
       "title": "196. After: CI saying what each run means for landing in its repository's way, a train of Switchboard's merge queue listed by the PRs it tests (today: board 20)",
       "page": "design"
+    },
+    "PhoneAutopilotFold.dc.html": {
+      "title": "198. Autopilot on the phone, option A: a summary (on or paused, tabs at once, spend against its limit, when it will be done) with Pause over its columns, what needs you first, each folding at a tap on its head",
+      "page": "design"
+    },
+    "PhoneAutopilotSwipe.dc.html": {
+      "title": "199. Autopilot on the phone, option B: a slim summary over a board of columns swiped sideways a column at a time, a strip of their names and counts to tap, Pause in ⋯",
+      "page": "design"
+    },
+    "PhoneAutopilotList.dc.html": {
+      "title": "200. Autopilot on the phone, option C: a summary card with Pause at the top of one list grouped by column, what needs you first, Resume asked first and a limited state in red",
+      "page": "design"
     }
   }
 }
