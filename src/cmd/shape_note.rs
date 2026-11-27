@@ -226,7 +226,7 @@ impl Server {
                 .current_pane(client)
                 .and_then(|p| self.pane_own_dir(p))
                 .and_then(|dir| crate::tickets::kept_known(&dir));
-            self.ask_new_ticket(client, shape_box(kept, ""));
+            self.ask_new_ticket(client, shape_box(kept, ""), false);
             return;
         }
         if !settings::is_on("linear") {
@@ -427,8 +427,17 @@ impl Server {
     }
 
     /// The Shape a new ticket box: what is typed is shaped in the
-    /// repository asked for next.
-    fn ask_new_ticket(&mut self, client: ClientId, ask: Ask) {
+    /// repository asked for next. Esc in that question comes back to it,
+    /// with what was typed (`Ask::kept`), however it was opened; one come
+    /// back after a failure (`again`) takes the first one's place.
+    fn ask_new_ticket(&mut self, client: ClientId, ask: Ask, again: bool) {
+        if again {
+            self.in_place_of_last(client);
+        }
+        self.reopens_with(
+            client,
+            std::sync::Arc::new(|s: &mut Server, c| s.shape_note(c, true)),
+        );
         self.open(
             client,
             Box::new(ask),
@@ -455,7 +464,7 @@ impl Server {
             "The repo this ticket is for",
             move |server, client, dir| {
                 let again = |server: &mut Server, kept: Option<Kept>, why: String| {
-                    server.ask_new_ticket(client, shape_box(kept, &text).failed(why));
+                    server.ask_new_ticket(client, shape_box(kept, &text).failed(why), true);
                 };
                 let Some(repo) = work::main_clone(&dir) else {
                     let why = format!(
@@ -525,7 +534,7 @@ impl Server {
                         n => format!("Opened {n}, then couldn't open a tab for the rest."),
                     };
                     let rest = if opened.is_empty() { text.clone() } else { left.join(" ") };
-                    server.ask_new_ticket(client, shape_box(kept, &rest).failed(why));
+                    server.ask_new_ticket(client, shape_box(kept, &rest).failed(why), true);
                     return;
                 }
                 let n = opened.len();
@@ -539,11 +548,15 @@ impl Server {
                 );
             },
             // A directory that isn't there: back to the box, with what was
-            // typed and why. Esc goes back to the box by itself, which keeps
-            // what was typed (`Ask::kept`).
+            // typed and why. Esc goes back to the box by itself
+            // (`ask_new_ticket`).
             move |server, client, why| {
                 if let Some(why) = why {
-                    server.ask_new_ticket(client, shape_box(kept_here, &back_text).failed(why));
+                    server.ask_new_ticket(
+                        client,
+                        shape_box(kept_here, &back_text).failed(why),
+                        true,
+                    );
                 }
             },
         );

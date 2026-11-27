@@ -1167,3 +1167,34 @@ fn shape_a_new_ticket_is_a_text_box_titled_after_the_repository_s_tickets() {
     );
     assert!(!ran.contains("--linear"), "{ran}");
 }
+
+/// With the repository's `tickets` unset, the box comes back with what was
+/// typed and why, in the first box's place: Esc in it goes back to M-p, as
+/// Esc in the first would, rather than to a copy of the first.
+#[test]
+fn shape_a_new_ticket_comes_back_with_the_text_and_why_in_place_of_the_first() {
+    let (server, _repo, mut client) = world();
+    let before = tabs(&server).len();
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("shape a new ticket from what you type");
+    client.wait_text("› Shape a new ticket from what");
+    client.type_text("\r");
+    client.wait_text("Shape a new ticket");
+    client.type_text("an idea");
+    client.wait_text("an idea");
+    client.send(b"\r");
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    let screen = client.wait_text("ticket source isn't set");
+    assert!(
+        screen.iter().any(|l| l.contains("an idea")),
+        "what was typed kept: {screen:#?}"
+    );
+    client.send(b"\x1b");
+    client.wait_for("M-p again", |s| {
+        s.iter().any(|l| l.contains("╭─ Actions"))
+            && !s.iter().any(|l| l.contains("ticket source isn't set"))
+    });
+    assert_eq!(tabs(&server).len(), before, "no tab opened");
+}
