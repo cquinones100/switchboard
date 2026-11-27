@@ -402,7 +402,7 @@ const dots = (sx, i) => { for (let j = 0; j < 7; j++) K(sx + 15.2 + j * 0.85, 42
   K(sx + 25, 20, 2.6, 1.2, 'border-radius:50%;background:#ffffff33');
   dots(sx, 2); }
 
-// ⋯: the view's own menu, Pause first.
+// ⋯: the view's own menu, Pause first; while paused, the summary's chip says paused and Resume autopilot takes Pause's place, asked first as option C's frame 3 asks.
 { const sx = phone(122, 'B: the view menu, Pause', '1');
   apHead(sx, 'Autopilot');
   let y = apSum(sx, 6.4, false, true);
