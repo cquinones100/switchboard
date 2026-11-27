@@ -19,7 +19,9 @@
 //! words that name Settings' row for it (`not_set_words`), and
 //! queue-and-clean and autopilot stopping there. Settings' Repositories
 //! checks that each way is set up, from what GitHub said when last asked
-//! (`Setup`, kept in the state directory's `repos-setup.json`), and may
+//! (`Setup`, kept in the state directory's `repos-setup.json`, a merge
+//! service's by its label among the repository's and its check on its
+//! recent PRs, `Names`), and may
 //! suggest a way from GitHub's rules, which only you choose. A branch keeps
 //! the way it started landing with (`branch.<branch>.wtnLands`, written by
 //! `switchboard landing --start`), so a change of way applies from the next
@@ -924,7 +926,22 @@ pub struct Setup {
     pub strict: bool,
     /// A workflow of the default branch runs on a push to `ci/train-*`.
     pub train_ci: bool,
+    /// What a merge service's check reads: `None` in an answer kept by a
+    /// build from before it was asked.
+    pub names: Option<Names>,
 }
+
+/// The repository's labels and the checks reported on its most recently
+/// updated PRs (`RECENT_PRS`), for a merge service's check.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Names {
+    pub labels: Vec<String>,
+    pub checks: Vec<String>,
+}
+
+/// How many of a repository's most recently updated PRs a merge service's
+/// check is looked for on.
+pub const RECENT_PRS: usize = 20;
 
 impl Setup {
     fn json(&self) -> Value {
@@ -937,6 +954,7 @@ impl Setup {
             "requiresPr": self.requires_pr,
             "strict": self.strict,
             "trainCi": self.train_ci,
+            "names": self.names.as_ref().map(|n| json!({ "labels": n.labels, "checks": n.checks })),
         })
     }
 
@@ -951,6 +969,21 @@ impl Setup {
             requires_pr: on("requiresPr"),
             strict: on("strict"),
             train_ci: on("trainCi"),
+            names: v.get("names").filter(|n| n.is_object()).map(|n| {
+                let list = |k: &str| {
+                    n.get(k)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                };
+                Names {
+                    labels: list("labels"),
+                    checks: list("checks"),
+                }
+            }),
         })
     }
 
@@ -1017,11 +1050,9 @@ pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Che
         ok: Some(false),
         words: w,
     };
-    if way == Way::Service {
-        return match service_of(entry) {
-            Some(s) => yes(format!("{} and {}'s check", s.hand_over(), s.check)),
-            None => no("the label or comment and the check the service uses aren't named".into()),
-        };
+    let service = service_of(entry);
+    if way == Way::Service && service.is_none() {
+        return no("the label or comment and the check the service uses aren't named".into());
     }
     let Some(s) = setup else {
         return Check {
@@ -1051,7 +1082,31 @@ pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Che
             (false, _) => no(format!("you can't push to {branch}")),
             (true, true) => no(format!("a rule asks for a PR on {branch}")),
         },
-        Way::Service => unreachable!("answered above"),
+        Way::Service => {
+            let service = service.expect("answered above");
+            let Some(names) = &s.names else {
+                return Check {
+                    ok: None,
+                    words: "not checked yet: Settings asks GitHub while it is open".into(),
+                };
+            };
+            if let Some(label) = &service.label
+                && !names.labels.iter().any(|l| l.eq_ignore_ascii_case(label))
+            {
+                return no(format!("the repository has no {label} label on GitHub"));
+            }
+            if !names.checks.contains(&service.check) {
+                return no(format!(
+                    "{} isn't reported on any of its last {RECENT_PRS} PRs",
+                    service.check
+                ));
+            }
+            yes(format!(
+                "{} and {}'s check, seen on its recent PRs",
+                service.hand_over(),
+                service.check
+            ))
+        }
     }
 }
 
@@ -1067,8 +1122,8 @@ pub fn ask_setup(repo: &str, now: i64) -> Result<Setup, String> {
     let (owner, name) = repo.split_once('/').ok_or("not owner/name")?;
     let source = "settings: how a repository lands";
     let data = wait_for(github::graphql(
-        "query($o: String!, $n: String!) { repository(owner: $o, name: $n) { autoMergeAllowed viewerPermission mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } } }",
-        json!({ "o": owner, "n": name }),
+        "query($o: String!, $n: String!, $prs: Int!) { repository(owner: $o, name: $n) { autoMergeAllowed viewerPermission mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } labels(first: 100) { nodes { name } } pullRequests(first: $prs, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { context } } } } } } } } } } }",
+        json!({ "o": owner, "n": name, "prs": RECENT_PRS }),
         source,
     ))
     .map_err(|e| e.to_string())?;
@@ -1145,6 +1200,7 @@ pub fn setup_of(
         requires_pr: reviews || !can_push,
         strict: false,
         train_ci: false,
+        names: Some(names_of(repository)),
     };
     setup.requires_pr |= setup.merge_queue;
     if let Some(b) = branch.as_deref() {
@@ -1178,6 +1234,33 @@ pub fn setup_of(
         .filter_map(|e| e.pointer("/object/text").and_then(Value::as_str))
         .any(runs_on_trains);
     Ok(setup)
+}
+
+/// The labels and the checks on the recent PRs in GitHub's answer for a
+/// repository, each check once.
+fn names_of(repository: &Value) -> Names {
+    let nodes = |v: Option<&Value>| -> Vec<Value> {
+        v.and_then(Value::as_array).cloned().unwrap_or_default()
+    };
+    let labels = nodes(repository.pointer("/labels/nodes"))
+        .iter()
+        .filter_map(|l| l.get("name")?.as_str().map(str::to_string))
+        .collect();
+    let mut checks: Vec<String> = Vec::new();
+    for pr in nodes(repository.pointer("/pullRequests/nodes")) {
+        for commit in nodes(pr.pointer("/commits/nodes")) {
+            let contexts = commit.pointer("/commit/statusCheckRollup/contexts/nodes");
+            for c in nodes(contexts) {
+                let name = c.get("name").or_else(|| c.get("context"));
+                if let Some(name) = name.and_then(Value::as_str)
+                    && !checks.iter().any(|k| k == name)
+                {
+                    checks.push(name.to_string());
+                }
+            }
+        }
+    }
+    Names { labels, checks }
 }
 
 /// Whether a workflow's text runs it on a push to a merge queue train's
@@ -2132,6 +2215,32 @@ mod tests {
     }
 
     #[test]
+    fn github_s_answer_names_the_labels_and_the_checks_on_recent_prs_and_keeps_them() {
+        let none = |_: &str| Ok(Value::Array(Vec::new()));
+        let mut data = answer(false, false, Value::Null, "");
+        data["repository"]["labels"] =
+            json!({ "nodes": [{ "name": "merge-ready" }, { "name": "bug" }] });
+        let rollup = |contexts: Value| json!({ "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": { "nodes": contexts } } } }] } });
+        data["repository"]["pullRequests"] = json!({ "nodes": [
+            rollup(json!([{ "name": "mergebot" }, { "name": "ci" }])),
+            rollup(json!([{ "context": "legacy/status" }, { "name": "ci" }])),
+            { "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] } },
+        ] });
+        let s = setup_of(&data, 1, &none).unwrap();
+        let names = s.names.clone().unwrap();
+        assert_eq!(names.labels, vec!["merge-ready", "bug"]);
+        assert_eq!(names.checks, vec!["mergebot", "ci", "legacy/status"]);
+        assert_eq!(Setup::of(&s.json()), Some(s.clone()), "kept as it was read");
+        let mut before = s.json();
+        before.as_object_mut().unwrap().remove("names");
+        assert_eq!(
+            Setup::of(&before).unwrap().names,
+            None,
+            "an answer kept before it was asked"
+        );
+    }
+
+    #[test]
     fn github_s_answer_says_which_ways_are_set_up_and_a_404_ruleset_is_none() {
         let none = |_: &str| Ok(Value::Array(Vec::new()));
         let open = setup_of(&answer(false, false, Value::Null, "on: push"), 1, &none).unwrap();
@@ -2195,8 +2304,59 @@ mod tests {
         assert_eq!(missing(Way::Direct).ok, Some(true));
         assert_eq!(missing(Way::Service).ok, Some(false));
         let named = json!({ "serviceLabel": "merge-ready", "serviceCheck": "mergebot" });
-        let set = check(Way::Service, None, named.as_object().unwrap());
-        assert_eq!(set.ok, Some(true), "a service needs nothing of GitHub's");
+        let named = named.as_object().unwrap();
+        assert_eq!(
+            check(Way::Service, None, named).ok,
+            None,
+            "the label and the check not looked for yet"
+        );
+        let kept_before = Setup {
+            names: None,
+            ..s.clone()
+        };
+        assert_eq!(
+            check(Way::Service, Some(&kept_before), named).ok,
+            None,
+            "an answer kept from before they were asked"
+        );
+        let seen = |labels: &[&str], checks: &[&str]| Setup {
+            names: Some(Names {
+                labels: labels.iter().map(|l| l.to_string()).collect(),
+                checks: checks.iter().map(|c| c.to_string()).collect(),
+            }),
+            ..s.clone()
+        };
+        let set = check(
+            Way::Service,
+            Some(&seen(&["Merge-Ready"], &["ci", "mergebot"])),
+            named,
+        );
+        assert_eq!(set.ok, Some(true), "{}", set.words);
+        let unlabeled = check(Way::Service, Some(&seen(&["bug"], &["mergebot"])), named);
+        assert_eq!(unlabeled.ok, Some(false));
+        assert!(
+            unlabeled.words.contains("no merge-ready label"),
+            "{}",
+            unlabeled.words
+        );
+        let unseen = check(Way::Service, Some(&seen(&["merge-ready"], &["ci"])), named);
+        assert_eq!(unseen.ok, Some(false));
+        assert!(
+            unseen.words.contains("mergebot isn't reported"),
+            "{}",
+            unseen.words
+        );
+        let by_comment = json!({ "serviceComment": "/merge", "serviceCheck": "mergebot" });
+        assert_eq!(
+            check(
+                Way::Service,
+                Some(&seen(&[], &["mergebot"])),
+                by_comment.as_object().unwrap()
+            )
+            .ok,
+            Some(true),
+            "a comment needs no label"
+        );
         assert_eq!(
             check(Way::AutoMerge, None, &empty).ok,
             None,

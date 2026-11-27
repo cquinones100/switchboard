@@ -7611,9 +7611,10 @@ impl Server {
                 repos.push(key.clone());
             }
         }
+        let mut due = Vec::new();
         for repo in repos {
             let fresh = crate::repos::setup_in(&file, &repo)
-                .is_some_and(|s| now - s.at < crate::repos::DAY_MS);
+                .is_some_and(|s| now - s.at < crate::repos::DAY_MS && s.names.is_some());
             let asked = self
                 .mission
                 .landing_asked
@@ -7625,12 +7626,21 @@ impl Server {
             self.mission
                 .landing_asked
                 .insert(repo.clone(), Instant::now());
-            let file = file.clone();
-            tokio::task::spawn_blocking(move || match crate::repos::ask_setup(&repo, now) {
-                Ok(setup) => crate::repos::remember_setup(&file, &repo, &setup),
-                Err(e) => eprintln!("settings: how {repo} can land: {e}"),
-            });
+            due.push(repo);
         }
+        if due.is_empty() {
+            return;
+        }
+        // One at a time, since each answer is read into the file and
+        // written back whole.
+        tokio::task::spawn_blocking(move || {
+            for repo in due {
+                match crate::repos::ask_setup(&repo, now) {
+                    Ok(setup) => crate::repos::remember_setup(&file, &repo, &setup),
+                    Err(e) => eprintln!("settings: how {repo} can land: {e}"),
+                }
+            }
+        });
     }
 
     /// Settings' "Your CLAUDE.md": where your rules come from, the local
