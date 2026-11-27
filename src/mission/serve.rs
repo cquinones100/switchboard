@@ -212,6 +212,13 @@ enum ViewAct {
     RemindersLists,
     /// A day of the Notifications history unfolded.
     Unfold(String),
+    /// A source of the Notifications view folded to its heading, or
+    /// unfolded.
+    FoldGroup(String, bool),
+    /// Every notification of a source the sidebar shows dismissed, after a
+    /// yes, while they are still the ones its menu opened on (their words,
+    /// `notice_group_words`).
+    DismissGroup(String, Vec<String>),
     /// The Calendar a day back or forward, or on today.
     Day(i64),
     Today,
@@ -336,6 +343,100 @@ pub(crate) struct NoticeLook {
     kind: usize,
     unfolded: std::collections::HashSet<String>,
     screenful: usize,
+    /// A filter's text is on, which looks through every source, folded or
+    /// not.
+    whole: bool,
+    /// Whether the Notifications view is in front (or a cell of several
+    /// views at once): else its rows are only counted, not copied whole.
+    shown: bool,
+    /// That filter's text, which the list by source keeps only the matches
+    /// of before it orders the sources, so they stand by their newest
+    /// match.
+    text: String,
+    /// How many of the newest notifications the list by source holds: a
+    /// phone's screenful for the phone, every one in mission control.
+    most: usize,
+}
+
+impl NoticeLook {
+    /// The rows its own filter finds, all of them with none on.
+    fn matches(&self, mut rows: Vec<Item>) -> Vec<Item> {
+        if !self.whole || self.text.trim().is_empty() {
+            return rows;
+        }
+        // What a sub-heading names it by (a repository's whole name, a
+        // conversation) is found by a filter too.
+        for row in &mut rows {
+            let source = row.id.split_once('\t').map_or("", |(s, _)| s).to_string();
+            // (The name a sub-heading shows, of a row in a part, never an id
+            // it groups by: a Slack row's place, else nothing.)
+            let in_a_part = crate::sidebar::notices::part_of(&source, row).is_some();
+            let part = match source.as_str() {
+                _ if !in_a_part => String::new(),
+                "slack" => row
+                    .data
+                    .get("where")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                _ => crate::sidebar::notices::part_name(&source, row).unwrap_or_default(),
+            };
+            if part.is_empty() || !row.data.is_object() {
+                continue;
+            }
+            let had = row
+                .data
+                .get("search")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            row.data["search"] = serde_json::Value::String(format!("{had} {part}"));
+        }
+        let words = views::Words::new(&self.text.trim().to_lowercase());
+        rows.into_iter()
+            .filter(|r| words.find(&views::search_text(r)))
+            .collect()
+    }
+}
+
+/// A notification's title as its menu says it: a meeting's without the
+/// sidebar's hint that Enter joins it, which isn't this menu's first choice.
+fn menu_title(item: &Item) -> String {
+    if item.id.starts_with("meeting\t") {
+        crate::sidebar::notices::without_join_hint(&item.title)
+    } else {
+        item.title.clone()
+    }
+}
+
+/// A notification as a dismissal question asked about it, so one changed
+/// in place under its id counts as changed.
+fn notice_words(item: &Item) -> String {
+    // What it says, when and what it leads to, but not its data, which a
+    // source fills in after listing it (a Slack thread's replies), nor a
+    // meeting's title, which counts down the minutes to it: neither is a
+    // change to what was asked about.
+    let mut item = item.clone();
+    item.data = serde_json::Value::Null;
+    if item.id.starts_with("meeting\t") {
+        item.title.clear();
+        item.lines.clear();
+    }
+    serde_json::to_string(&item).unwrap_or_default()
+}
+
+/// A view opened by name takes the keys: Tab's focus, wherever it was,
+/// goes to its list, and what was being typed (a filter, the views'
+/// filter, a view's name after v) ends, a filter's text kept.
+fn take_keys(m: &mut Mission) {
+    if let Some(f) = m.filter.as_mut() {
+        f.typing = false;
+    }
+    // (One matching no view is let go, so the list of views is there.)
+    super::nav::end_typing(m);
+    m.jump = None;
+    if m.focus.is_some() {
+        m.focus = Some(Focus::Item);
+    }
 }
 
 impl NoticeLook {
@@ -346,6 +447,10 @@ impl NoticeLook {
             kind: 0,
             unfolded: Default::default(),
             screenful,
+            whole: true,
+            shown: true,
+            text: String::new(),
+            most: screenful,
         }
     }
 }
@@ -453,6 +558,7 @@ impl Server {
         if let Some(at) = shown_by_name {
             m.slack_fresh = how == Opening::View("slack".into());
             show_view(&mut m, at);
+            take_keys(&mut m);
             self.put_mission(client, m);
             self.mission_prepare(client);
             return;
@@ -461,6 +567,7 @@ impl Server {
         m.picker = false;
         m.cursor = 0;
         m.slack_fresh = how == Opening::View("slack".into());
+        m.at_top = true;
         // The Landing view opens even with nothing landing, saying so.
         m.keep_landing = how == Opening::View("landing".into());
         m.keep_autopilot = how == Opening::View("autopilot".into());
@@ -489,6 +596,7 @@ impl Server {
         };
         // The view opened starts on its list.
         m.pane = None;
+        let named = !matches!(how, Opening::Picker(_));
         // With several views at once, one shown takes the focus and
         // another shows alone.
         match how {
@@ -498,7 +606,19 @@ impl Server {
                 m.cursor = 0;
             }
             _ if m.grid.is_some() => show_view(&mut m, to),
-            _ => m.view = to,
+            _ => {
+                // From the top, wherever the view before left the cursor.
+                if m.view != to {
+                    m.cursor = 0;
+                }
+                m.view = to;
+            }
+        }
+        // Opened by name (a picker types its own filter), its list takes
+        // the keys from wherever Tab had them, a filter being typed ending
+        // with its text kept.
+        if named {
+            take_keys(&mut m);
         }
         self.put_mission(client, m);
         self.mission_prepare(client);
@@ -1236,6 +1356,14 @@ impl Server {
             } else {
                 usize::MAX
             },
+            // Only a filter that is this view's own: one typed in a view
+            // shown beside it leaves its folds.
+            whole: !text.is_empty()
+                && (m.grid.is_none() || m.current().is_some_and(|v| v.id == ViewId::Notifications)),
+            shown: m.current().is_some_and(|v| v.id == ViewId::Notifications)
+                || m.grid_has("notifications"),
+            text: text.clone(),
+            most: usize::MAX,
         };
         let mut all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot, &look);
         // What the Slack board's From your work reads: today's Calendar and
@@ -1340,6 +1468,7 @@ impl Server {
         // row coming in moves them: the cursor follows the chosen one. So
         // does the Slack board, whose conversations move up as new messages
         // come and which shows only the chosen one's section.
+        let typing_filter = m.filter.as_ref().is_some_and(|f| f.typing);
         let follows = |id: &ViewId| {
             matches!(
                 id,
@@ -1352,6 +1481,13 @@ impl Server {
                     | ViewId::Landing
                     | ViewId::Reopen
             ) || *id == ViewId::Slack
+                // By source, a new notification reorders the sources: the
+                // cursor stays on its heading or its notification.
+                // (Not while its filter is typed, each letter of which
+                // starts the list again from the first row it finds.)
+                || *id == ViewId::Notifications
+                    && settings::is_on("notices_grouped")
+                    && !typing_filter
         };
         // The Reminders view's chosen reminder, moved to another day, takes
         // the chosen day with it.
@@ -1360,10 +1496,33 @@ impl Server {
                 .and_then(|v| super::reminders::chosen(&m, v))
                 .is_some_and(|i| i as isize == m.cursor);
         let followed = m.current().map(|v| v.id.clone()).filter(follows);
+        // With which occurrence it is, for a notification kept more than
+        // once under one id (`history::occurrence_of`).
+        // (None while the view starts again from its top, a kind or a
+        // filter just changed: its newest is chosen in the new list.)
         let pilot_chosen = followed
             .as_ref()
+            .filter(|id| !(m.at_top && **id == ViewId::Notifications))
             .and_then(|_| m.chosen_item())
-            .map(|i| i.id.clone());
+            // (Not a heading of a filtered list, which the cursor only
+            // stands on once the filter's Esc has put it back at the top.)
+            .filter(|i| !super::history::under_filter(i))
+            .map(|i| (i.id.clone(), super::history::occurrence_of(i)));
+        if followed.is_some()
+            && m.chosen_item().is_some_and(super::history::under_filter)
+            && m.cursor == 0
+        {
+            m.at_top = true;
+        }
+        // The source a chosen notification is under, whose heading stands
+        // for it once a fold hides its row.
+        let chosen_source = pilot_chosen
+            .as_ref()
+            .filter(|_| followed == Some(ViewId::Notifications))
+            .and_then(|_| m.chosen_item())
+            // (Its heading's too, which goes with its last notification.)
+            .filter(|i| !super::history::is_part(i))
+            .and_then(|i| i.group.clone());
         // The Slack board's chosen row: its section, and whether it was
         // that section's newest.
         let slack_before = m.current().filter(|v| v.id == ViewId::Slack).and_then(|v| {
@@ -1423,6 +1582,7 @@ impl Server {
                 .and_then(|c| self.graphics_of(c))
                 .map(|g| g.cell),
             diagrams: self.mission.diagrams.ready(crate::status::theme::light()),
+            notices_grouped: settings::is_on("notices_grouped"),
             notice_counts: Self::notice_history_on().then(|| {
                 super::history::counts(
                     &self.sidebar.history.newest_first(),
@@ -1458,11 +1618,47 @@ impl Server {
         m.keep_landing |= m.grid_has("landing");
         m.keep_autopilot |= m.grid_has("autopilot");
         let mut chosen_found = false;
-        if let Some(id) = pilot_chosen
+        if let Some((id, occurrence)) = pilot_chosen
             && let Some(at) = m
                 .current()
                 .filter(|v| Some(&v.id) == followed.as_ref())
-                .and_then(|v| v.data.items.iter().position(|i| i.id == id))
+                .and_then(|v| {
+                    let items = &v.data.items;
+                    items
+                        .iter()
+                        .position(|i| i.id == id && super::history::occurrence_of(i) == occurrence)
+                        .or_else(|| {
+                            let source = chosen_source.as_deref()?;
+                            // Where a fold hides the row, its heading. One
+                            // dismissed leaves the cursor at its place,
+                            // unless that is now a heading or another
+                            // source's row: then on its own source's nearest.
+                            let hidden = items.iter().position(|i| {
+                                super::history::group_heading(i) == Some(source)
+                                    && super::history::folded(i)
+                            });
+                            let row =
+                                |i: &Item| !views::is_header(i) && !super::history::is_part(i);
+                            let at = usize::try_from(m.cursor).unwrap_or(0);
+                            let own = |i: &Item| row(i) && i.group.as_deref() == Some(source);
+                            let off_its_rows = items.get(at).is_none_or(|i| !own(i));
+                            hidden.or_else(|| {
+                                // The nearest of its source's rows left,
+                                // or with none left, where the cursor is
+                                // now on a heading, the nearest notification.
+                                let nearest = |keep: &dyn Fn(&Item) -> bool| {
+                                    (0..items.len())
+                                        .filter(|&i| keep(&items[i]))
+                                        .min_by_key(|&i| i.abs_diff(at))
+                                };
+                                let off_a_row = items.get(at).is_none_or(|i| !row(i));
+                                off_its_rows
+                                    .then(|| nearest(&own))
+                                    .flatten()
+                                    .or_else(|| off_a_row.then(|| nearest(&row)).flatten())
+                            })
+                        })
+                })
         {
             m.cursor = at as isize;
             chosen_found = true;
@@ -1635,7 +1831,10 @@ impl Server {
     pub(crate) fn mission_view_list(
         &mut self,
     ) -> Vec<(views::Group, String, Option<String>, usize)> {
-        let look = NoticeLook::every(usize::MAX);
+        let look = NoticeLook {
+            shown: false,
+            ..NoticeLook::every(usize::MAX)
+        };
         let all = self.mission_views(false, false, false, &look);
         views::groups(&all)
             .into_iter()
@@ -1643,7 +1842,14 @@ impl Server {
             .map(|(g, at)| match at.checked_sub(1).and_then(|i| all.get(i)) {
                 None => (g, "Tabs".to_string(), None, 0),
                 Some(v) => {
-                    let rows = v.data.items.iter().filter(|i| !views::is_header(i)).count();
+                    // Notifications by source: its sources' counts, a folded
+                    // one's too.
+                    let rows = (v.id == ViewId::Notifications)
+                        .then(|| super::history::held(&v.data.items))
+                        .flatten()
+                        .unwrap_or_else(|| {
+                            v.data.items.iter().filter(|i| !views::is_header(i)).count()
+                        });
                     (g, views::bar_title(v).to_string(), Some(v.slug()), rows)
                 }
             })
@@ -1686,8 +1892,48 @@ impl Server {
             let tz = jiff::tz::TimeZone::system();
             let today = util::local_now().date();
             let kind = crate::sidebar::history::Kind::of_key(look.kind);
-            let items =
-                super::history::rows(&entries, kind, &look.unfolded, today, &tz, look.screenful);
+            let items = if settings::is_on("notices_grouped") {
+                super::history::grouped(
+                    look.matches(
+                        entries
+                            .iter()
+                            // Every kind: by source, the headings take the
+                            // kinds' place.
+                            .take(look.most)
+                            .map(|e| {
+                                // A folded source's rows only counted, so
+                                // not copied whole (a filter folds none).
+                                let group = crate::sidebar::notices::group_name(&e.source);
+                                let mut row = if !look.shown && look.text.trim().is_empty()
+                                    || !look.whole && self.mission.notice_folded.contains(group)
+                                {
+                                    super::history::folded_row_of(e)
+                                } else {
+                                    super::history::row_of(e)
+                                };
+                                // One still shown whose words changed since
+                                // it came ranks by the change, as the
+                                // sidebar has it.
+                                let changed = self
+                                    .notice_changed
+                                    .get(&(e.source.clone(), e.id.clone()))
+                                    .and_then(|(_, _, changed)| *changed);
+                                if let Some(changed) = changed
+                                    && e.sidebar == Sidebar::Shown
+                                    && changed > e.at
+                                {
+                                    row.time = Some(changed);
+                                }
+                                row
+                            })
+                            .collect(),
+                    ),
+                    &self.mission.notice_folded,
+                    look.whole,
+                )
+            } else {
+                super::history::rows(&entries, kind, &look.unfolded, today, &tz, look.screenful)
+            };
             let data = ViewData {
                 items,
                 empty: Some("No notifications in the last two weeks.".into()),
@@ -1710,6 +1956,15 @@ impl Server {
                     })
                 })
                 .collect();
+            let items = if settings::is_on("notices_grouped") {
+                super::history::grouped(
+                    look.matches(items),
+                    &self.mission.notice_folded,
+                    look.whole,
+                )
+            } else {
+                items
+            };
             let data = ViewData {
                 items,
                 empty: Some("No notifications.".into()),
@@ -2528,6 +2783,8 @@ impl Server {
                     if let Some(f) = m.filter.as_mut().filter(|f| f.typing) {
                         f.text.push_str(&text);
                         m.cursor = 0;
+                        // From the top again, as a typed edit leaves it.
+                        m.at_top = true;
                     } else if let Some(f) = m.nav_filter.as_mut().filter(|f| f.typing) {
                         f.text.push_str(&text);
                         nav_focus_listed(m);
@@ -2566,7 +2823,13 @@ impl Server {
         }
         let view = m.view;
         let only_moving = !looked && only_moves(&m, key);
+        // A key that leaves the view and its cursor where they were (its
+        // menu, the keys' help) leaves its newest still to be chosen.
+        let (cursor, waiting) = (m.cursor, m.at_top);
         self.mission_key_in(client, &mut m, key);
+        if waiting && m.view == view && m.cursor == cursor {
+            m.at_top = true;
+        }
         // Another view brought to the front starts on its list.
         if m.view != view {
             m.pane = None;
@@ -2598,6 +2861,8 @@ impl Server {
     }
 
     fn mission_key_in(&mut self, client: ClientId, m: &mut Mission, key: Key) {
+        // A key may move the cursor; one that shows a view says so again.
+        m.at_top = false;
         let context_menu =
             self.bindings.root.get(&key) == Some(&crate::mux::keys::Action::ContextMenu);
         let k = if context_menu {
@@ -2904,6 +3169,14 @@ impl Server {
             KeyCode::Esc if m.filter.is_some() => {
                 // Esc clears a filter before it closes mission control.
                 m.filter = None;
+                // The Notifications view by source from its top again, on
+                // its first notification, as a filter's edit leaves it.
+                if m.snap.notices_grouped
+                    && m.current().is_some_and(|v| v.id == ViewId::Notifications)
+                {
+                    m.cursor = 0;
+                    m.at_top = true;
+                }
             }
             KeyCode::Esc => self.mission_close_from(client, m),
             KeyCode::Char('q') if none => self.mission_close_from(client, m),
@@ -3363,6 +3636,9 @@ impl Server {
             _ => return,
         }
         m.cursor = 0;
+        // From the top again, as a view just shown: the Notifications view
+        // by source on the first notification it lists.
+        m.at_top = true;
     }
 
     /// A key taken while a filter is typed, as if it weren't, the filter
@@ -3854,7 +4130,15 @@ impl Server {
             self.autopilot_menu(client);
             return;
         }
-        if views::is_header(&item) {
+        if view.id == ViewId::Notifications
+            && let Some(group) = super::history::group_heading(&item)
+        {
+            self.notice_group_menu(client, group, &item);
+            return;
+        }
+        if views::is_header(&item)
+            || (view.id == ViewId::Notifications && super::history::is_part(&item))
+        {
             return;
         }
         // An app's own key only says so: a workspace key's menu presses it.
@@ -3906,7 +4190,11 @@ impl Server {
         let notice = (*view == ViewId::Notifications)
             .then(|| notice_for(&item, true))
             .flatten();
-        let title = item.title.clone();
+        let title = if *view == ViewId::Notifications {
+            menu_title(&item)
+        } else {
+            item.title.clone()
+        };
         // A calendar event's choices keep their keys, unshown (board 54).
         let keyed = *view == ViewId::Calendar;
         self.mission_menu(
@@ -4035,8 +4323,9 @@ impl Server {
             Some(ViewId::Notifications) => {
                 use crate::sidebar::history::Kind;
                 add("Dismiss every notification shown", ViewAct::DismissShown);
-                if m.snap.notice_counts.is_none() {
-                    // The view lists only what the sidebar shows: no kinds.
+                // The view lists only what the sidebar shows, or by source,
+                // whose headings take the kinds' place: no kinds.
+                if m.snap.notice_counts.is_none() || m.snap.notices_grouped {
                 } else {
                     for key in 1..=7 {
                         let name = Kind::of_key(key).map_or("All", Kind::name);
@@ -4385,6 +4674,62 @@ impl Server {
             ViewAct::EditFile(dir, file) => return self.edit_own_file(client, &dir, &file),
             ViewAct::RemindOn(day) => return self.remind_on_day(client, day),
             ViewAct::NewRoutine => return self.routine_new(client),
+            ViewAct::DismissGroup(group, opened_on) => {
+                let Some(Do::DismissAll(every_one)) =
+                    choices::dismiss_all(&self.notice_group_shown(&group))
+                else {
+                    self.mission_note(client, format!("Nothing of {group} to dismiss."));
+                    return;
+                };
+                let n = every_one.len();
+                let s = if n == 1 { "" } else { "s" };
+                // What it leaves, a suggestion being put away from its own
+                // menu, so the sidebar's count and the question's agree.
+                let left = self.notice_group_shown(&group).len().saturating_sub(n);
+                let kept = match left {
+                    0 => String::new(),
+                    1 => " Its suggestion stays.".to_string(),
+                    _ => format!(" Its {left} suggestions stay."),
+                };
+                // What was asked about, its words and time too, which a yes
+                // dismisses only while it is still what the source shows;
+                // else it dismisses nothing, so a change is seen first.
+                let asked = self.notice_group_words(&group);
+                // Changed since its menu opened: the menu described others.
+                if asked != opened_on {
+                    self.say(
+                        Some(client),
+                        &format!("{group} changed while its menu was open: nothing dismissed."),
+                    );
+                    return;
+                }
+                self.ask(
+                    client,
+                    Confirm::new(format!("Dismiss {n} notification{s} in {group}?{kept}")),
+                    move |server, client, yes| {
+                        if !yes {
+                            return;
+                        }
+                        // Dismissed as the source holds them now, by what a
+                        // refresh filled in since (a Slack thread's root).
+                        let now = choices::dismiss_all(&server.notice_group_shown(&group));
+                        if let (true, Some(now)) = (server.notice_group_words(&group) == asked, now)
+                        {
+                            server.mission_do(client, now, "");
+                        } else {
+                            // Not what was asked about: nothing dismissed, the
+                            // change left to be seen first.
+                            server.say(
+                                Some(client),
+                                &format!(
+                                    "{group} changed while you were asked: nothing dismissed."
+                                ),
+                            );
+                        }
+                    },
+                );
+                return;
+            }
             ViewAct::DismissShown => {
                 match choices::dismiss_all(&self.sidebar_notice_items()) {
                     Some(all) => self.mission_do(client, all, ""),
@@ -4432,6 +4777,18 @@ impl Server {
                 let today = super::reminders::today(&m);
                 choose_day(&mut m, today);
             }
+            ViewAct::FoldGroup(group, fold) => {
+                // The cursor stays on its heading, where the view lists it
+                // for every client.
+                if fold {
+                    self.mission.notice_folded.insert(group);
+                } else {
+                    self.mission.notice_folded.remove(&group);
+                }
+                // Every client's view lists it so, each taking its rows
+                // again.
+                self.mission_changed();
+            }
             ViewAct::Unfold(day) => {
                 // On its first notification, under its heading.
                 m.unfolded.insert(day);
@@ -4472,6 +4829,15 @@ impl Server {
     /// window off: nothing picked yet, and never a view that doesn't show it
     /// (its history lists what the sidebar shows only once written).
     pub(crate) fn mission_on_notice(&mut self, client: ClientId, source: &str, id: &str) {
+        // Its source unfolded, so the view lists it.
+        if settings::is_on("notices_grouped")
+            && self
+                .mission
+                .notice_folded
+                .remove(crate::sidebar::notices::group_name(source))
+        {
+            self.mission_changed();
+        }
         self.open_mission(client, Opening::View("notifications".into()));
         let wanted = (source.to_string(), id.to_string());
         if let Some(m) = self.mission_mut(client)
@@ -4486,6 +4852,7 @@ impl Server {
                 })
         {
             m.cursor = at as isize;
+            m.at_top = false;
         }
         self.mission_redraw();
         // A kind's row names its first notification.
@@ -4498,6 +4865,49 @@ impl Server {
             item.id = format!("{source}\t{}", item.id);
             self.notice_menu(client, item);
         }
+    }
+
+    /// Mission control on its Notifications view, the cursor on a source's
+    /// heading where the view lists it, as the sidebar's line for that
+    /// source leads to it.
+    /// Whether the view lists that source: not one whose notifications the
+    /// history no longer keeps.
+    pub(crate) fn mission_on_notice_group(&mut self, client: ClientId, group: &str) -> bool {
+        self.open_mission(client, Opening::View("notifications".into()));
+        let mut found = false;
+        if let Some(m) = self.mission_mut(client)
+            && let Some(at) = m
+                .current()
+                .filter(|v| v.id == ViewId::Notifications)
+                .and_then(|v| {
+                    v.data
+                        .items
+                        .iter()
+                        .position(|i| super::history::group_heading(i) == Some(group))
+                })
+        {
+            m.cursor = at as isize;
+            m.at_top = false;
+            found = true;
+        }
+        self.mission_redraw();
+        found
+    }
+
+    /// A source's heading's menu in the Notifications view, the view opened
+    /// on it, as a right click on its line in the sidebar opens it; whether
+    /// the view lists that source.
+    pub(crate) fn mission_notice_group_menu(&mut self, client: ClientId, group: &str) -> bool {
+        if !self.mission_on_notice_group(client, group) {
+            return false;
+        }
+        let heading = self
+            .mission_mut(client)
+            .and_then(|m| m.chosen_item().cloned());
+        if let Some(heading) = heading {
+            self.notice_group_menu(client, group, &heading);
+        }
+        true
     }
 
     /// A notification's menu, over whatever is in front (the Notifications
@@ -4514,6 +4924,10 @@ impl Server {
         let Some(item) = m.chosen_item().cloned() else {
             return;
         };
+        if let Some(group) = super::history::group_heading(&item) {
+            self.notice_group_menu(client, group, &item);
+            return;
+        }
         if let Some(day) = super::history::fold_of(&item) {
             self.small_view_menu(
                 client,
@@ -4552,6 +4966,96 @@ impl Server {
             return None;
         }
         Some((self.notice_menu_choices(item), kept_notice(item)))
+    }
+
+    /// The words and times of what a source's dismissal would dismiss,
+    /// sorted, since the window's order may change meanwhile: a dismissal
+    /// goes ahead only while they are what was shown.
+    fn notice_group_words(&self, group: &str) -> Vec<String> {
+        let mut words: Vec<String> = self
+            .notice_group_shown(group)
+            .into_iter()
+            .filter(|i| choices::dismisses(i).is_some())
+            .map(|i| notice_words(&i))
+            .collect();
+        words.sort();
+        words
+    }
+
+    /// Enter on a source's heading (board 116): folding it first, so Enter
+    /// twice folds it and unfolds it again, then dismissing every one of its
+    /// notifications the sidebar shows, which asks first.
+    fn notice_group_menu(&mut self, client: ClientId, group: &str, heading: &Item) {
+        let count = heading
+            .data
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let folded = super::history::folded(heading);
+        let shown = self.notice_group_shown(group).len();
+        let fold = if folded {
+            format!("Unfold {group}")
+        } else {
+            format!("Fold {group}")
+        };
+        // Under a filter a heading has no menu, by a key or a click: every
+        // source is listed whole there, and its dismissal would reach the
+        // notifications the filter hides.
+        if super::history::under_filter(heading) {
+            return;
+        }
+        let mut list = vec![(fold, ViewAct::FoldGroup(group.to_string(), !folded))];
+        // (Only while one of them can be: a suggestion is put away from
+        // its own menu.)
+        let words = self.notice_group_words(group);
+        if !words.is_empty() {
+            list.push((
+                format!("Dismiss every notification in {group}"),
+                ViewAct::DismissGroup(group.to_string(), words),
+            ));
+        }
+        // Then every source's, as every notification's menu ends.
+        if choices::dismiss_all(&self.sidebar_notice_items()).is_some() {
+            list.push((
+                "Dismiss every notification shown".to_string(),
+                ViewAct::DismissShown,
+            ));
+        }
+        let options: Vec<MenuOption> = list.iter().map(|(l, _)| MenuOption::new(l)).collect();
+        let s = if count == 1 { "" } else { "s" };
+        // How many the sidebar still shows and when the newest came, as
+        // board 116 says them under its title.
+        let now = util::local_now();
+        let newest = heading
+            .data
+            .get("newest")
+            .and_then(serde_json::Value::as_i64)
+            .map(|ms| crate::ui::when::notice(ms, &now))
+            .filter(|w| !w.is_empty())
+            .map(|w| format!(" · newest {w}"))
+            .unwrap_or_default();
+        let menu = Menu::new(format!("{group} · {count} notification{s}"), options)
+            .body(format!("{shown} in the sidebar{newest}"));
+        self.choose(client, menu, move |server, client, chose| {
+            let Some((_, act)) = chose.and_then(|i| list.into_iter().nth(i)) else {
+                return;
+            };
+            // A choice taken: keys typed ahead after it are dropped, so the
+            // question it opens isn't answered unseen.
+            if let Some(at) = server.clients.get_mut(&client) {
+                at.options_taken = at.options_taken.wrapping_add(1);
+            }
+            server.view_act(client, act);
+        });
+    }
+
+    /// The notifications of a source the sidebar shows, each under the id
+    /// the Notifications view gives it.
+    fn notice_group_shown(&self, group: &str) -> Vec<Item> {
+        self.sidebar_notice_items()
+            .into_iter()
+            .filter(|i| super::history::group_of_row(i) == group)
+            .collect()
     }
 
     /// A kept notification's menu: its menu as the sidebar's has it, but
@@ -4596,7 +5100,7 @@ impl Server {
         let body = choices::item_body(&ViewId::Notifications, &item);
         let seen = choices::is_slack_message(&ViewId::Notifications, &item);
         let notice = kept_notice(&item);
-        let title = item.title.clone();
+        let title = menu_title(&item);
         self.mission_menu(
             client,
             title,
@@ -5550,6 +6054,8 @@ impl Server {
             }
             Do::Dismiss { source, item } => {
                 self.notice_dismiss(&source, &item);
+                // The view's rows taken again, with the history off too.
+                self.mission_changed();
                 Ran::Said("Dismissed.".into())
             }
             Do::DismissAll(notices) => {
@@ -5562,6 +6068,8 @@ impl Server {
                 for (source, item) in &notices {
                     self.notice_history_mark(source, &item.id, Sidebar::Dismissed, true);
                 }
+                // The view's rows taken again, with the history off too.
+                self.mission_changed();
                 Ran::Said(format!("Dismissed {} notifications.", notices.len()))
             }
             Do::Autopilot(act) => self.autopilot_run(act).map_err(Do::Autopilot)?,
@@ -7775,6 +8283,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 }
                 Spot::Index(i) => {
                     m.cursor = i;
+                    m.at_top = false;
                     choose_check(m, None);
                     follow_reminder(m);
                     Then::Prepare
@@ -8264,6 +8773,7 @@ fn fit_cursor(m: &mut Mission) {
         None => m.order().len(),
     } as isize;
     m.cursor = m.cursor.min(count - 1).max(floor(m));
+    to_newest_notice(m);
     settle(m);
 }
 
@@ -8883,7 +9393,49 @@ fn show_view(m: &mut Mission, to: usize) {
     // The Slack board brought to the front opens at its newest row, even
     // picked again while in front.
     m.slack_fresh = m.current().is_some_and(|v| v.id == ViewId::Slack);
+    // Its newest chosen once its rows are taken (`fit_cursor`), which a
+    // view not shown before has only counted.
+    m.at_top = true;
     m.scope = None;
+}
+
+/// The Notifications view by source, just brought to the front
+/// (`Mission::at_top`), starts on its newest notification, under the first
+/// heading, as it does under a day's, so Enter acts on it; a heading the
+/// cursor was moved to keeps it.
+fn to_newest_notice(m: &mut Mission) {
+    if !m.at_top || m.cursor != 0 {
+        return;
+    }
+    let Some(items) = m
+        .current()
+        .filter(|v| v.id == ViewId::Notifications)
+        .map(|v| &v.data.items)
+    else {
+        return;
+    };
+    // Its rows not come yet: the choice waits for them.
+    if !items
+        .first()
+        .is_some_and(|i| super::history::group_heading(i).is_some())
+    {
+        return;
+    }
+    // The newest listed, past a folded source's heading; a view with every
+    // source folded stays on its first heading. Once, either way: a later
+    // fold or unfold from another client leaves the cursor on its heading.
+    // The newest by its time, the first listed of equal ones: a split
+    // source lists its parts first, which may hold older ones.
+    let first = items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| !views::is_header(i) && !super::history::is_part(i))
+        .min_by_key(|(at, i)| (std::cmp::Reverse(i.time.unwrap_or(i64::MIN)), *at))
+        .map(|(at, _)| at);
+    m.at_top = false;
+    if let Some(first) = first {
+        m.cursor = first as isize;
+    }
 }
 
 /// Tab and Shift-Tab with tab_focus: focus a section at a time, in reading
@@ -9056,7 +9608,7 @@ fn move_focus(m: &mut Mission, by: isize) {
 /// Whether the Notifications view in front shows the history with its
 /// keycaps (UX 2.0).
 fn notice_board(m: &Mission) -> bool {
-    notice_history_here(m)
+    notice_history_here(m) && !m.snap.notices_grouped
 }
 
 /// Whether the Notifications view in front shows the history, by day.
@@ -9069,6 +9621,8 @@ fn notice_history_here(m: &Mission) -> bool {
 fn choose_kind(m: &mut Mission, key: usize) {
     m.notice_kind = key;
     m.cursor = 0;
+    // By source, on the newest of what the kind lists.
+    m.at_top = true;
 }
 
 /// Keys while typing a view's name after `v`: the first view whose name
@@ -9084,6 +9638,9 @@ fn jump_key(m: &mut Mission, k: Key) {
         KeyCode::Enter => {
             if let Some(v) = j.matched {
                 show_view(m, v);
+                // Opened by name: its list takes the keys.
+                m.jump = None;
+                take_keys(m);
             }
             m.jump = None;
             return;
@@ -9605,6 +10162,60 @@ mod tests {
         );
         move_focus(&mut m, -1);
         assert_eq!(m.focus, Some(Focus::Filter));
+    }
+
+    // The Notifications view by source: a heading starts its source's
+    // section, a sub-heading none, and j rests on the heading and passes
+    // the sub-heading over.
+    #[test]
+    fn the_notifications_sources_are_sections_whose_headings_the_cursor_rests_on() {
+        let message = |id: &str, place: &str, at: i64| {
+            let mut item =
+                Item::new(format!("slack\t{id}"), id).data(serde_json::json!({ "where": place }));
+            item.time = Some(at);
+            item
+        };
+        let mut rows: Vec<Item> = (0..5)
+            .map(|i| message(&format!("g{i}"), "#general", 50 - i))
+            .collect();
+        rows.push(message("dm", "Ada", 10));
+        let mut note = Item::new("new-notes\tn", "Plan");
+        note.time = Some(5);
+        rows.push(note);
+        let items = super::super::history::grouped(rows, &Default::default(), false);
+        let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Slack", "#general", "g0", "g1", "g2", "g3", "g4", "Ada", "dm", "Notes", "Plan"
+            ]
+        );
+        let view = View {
+            id: ViewId::Notifications,
+            title: "Notifications".into(),
+            data: ViewData {
+                items,
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![view]);
+        m.view = 1;
+        assert_eq!(m.sections(), [0, 9], "a section a source");
+        let passed: Vec<bool> = m
+            .current()
+            .unwrap()
+            .data
+            .items
+            .iter()
+            .map(|i| m.passes_over(i))
+            .collect();
+        assert_eq!(
+            passed,
+            [
+                false, true, false, false, false, false, false, true, false, false, false
+            ]
+        );
     }
 
     #[test]

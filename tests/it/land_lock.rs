@@ -615,7 +615,8 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     let server = TestServer::start();
     common::write_settings(
         &server.home,
-        json!({ "tips": false, "notifications": false, "notice_list": false, "autopilot_landing_notices": true }),
+        json!({ "tips": false, "notifications": false, "notice_list": false,
+            "autopilot_landing_notices": true, "notices_grouped": false }),
     );
     let mut client = server.attach(140, 36);
     client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));

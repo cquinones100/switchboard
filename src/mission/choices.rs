@@ -1878,6 +1878,16 @@ pub fn item_body(view: &ViewId, item: &Item) -> Option<String> {
             let mut own = item.clone();
             own.id = id;
             return match notices::view_of(&source) {
+                // A failing branch's and a failed routine's why, a PR's
+                // title and who did what on a ticket, which their views show
+                // in a pane of their own rather than a box, and which a
+                // source's line in the sidebar may cut.
+                // A meeting's tickets alone: its lines say what its own
+                // Enter did in the sidebar, which isn't this menu's first.
+                Some(ViewId::Calendar) => Some(item.detail.clone()).filter(|b| !b.is_empty()),
+                Some(ViewId::Ci | ViewId::Routines | ViewId::Prs | ViewId::Inbox) => {
+                    Some(whole(item)).filter(|b| !b.is_empty())
+                }
                 Some(view) => item_body(&view, &notices::as_its_view_has_it(&source, &own)),
                 None => Some(whole(item)).filter(|b| !b.is_empty()),
             };
@@ -2952,11 +2962,14 @@ mod tests {
         let mut notice = message.clone();
         notice.id = "slack\tD1:1.5".into();
         assert_eq!(item_body(&ViewId::Notifications, &notice), whole);
-        // The Inbox shows nothing above an item's menu, so neither does its
-        // notification.
+        // The Inbox shows nothing above an item's menu, but its
+        // notification, whose words a source's line may cut, shows them.
         let inbox = Item::new("inbox\tn1", "AB-3 Do it").detail("Ada: a comment");
         assert_eq!(item_body(&ViewId::Inbox, &inbox), None);
-        assert_eq!(item_body(&ViewId::Notifications, &inbox), None);
+        assert_eq!(
+            item_body(&ViewId::Notifications, &inbox).as_deref(),
+            Some("Ada: a comment")
+        );
         // One no view lists is read here alone.
         let mut closed = Item::new("landed\tabc", "Landed: Make the thing");
         closed.lines = vec!["Closed by autopilot once it landed".into()];

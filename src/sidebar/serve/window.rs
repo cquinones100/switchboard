@@ -73,7 +73,8 @@ impl Server {
     /// The notifications as the window lists them, one by one in the order
     /// of their kinds, each as the sidebar names it and its item.
     pub(crate) fn notice_entries(&self) -> Vec<(Owner, Item)> {
-        self.notice_lists()
+        let mut entries: Vec<(Owner, Item)> = self
+            .notice_lists()
             .into_iter()
             .flat_map(|(source, items)| {
                 items.iter().map(move |item| {
@@ -86,7 +87,32 @@ impl Server {
                     )
                 })
             })
-            .collect()
+            .collect();
+        // By source, each source's newest first, so the one its line in
+        // the sidebar names is its first here and Tab from the line goes
+        // through them all.
+        if settings::is_on("notices_grouped") {
+            let mut sources: Vec<&'static str> = Vec::new();
+            let mut keyed: Vec<(usize, i64, (Owner, Item))> = entries
+                .into_iter()
+                .map(|entry| {
+                    let source = match &entry.0 {
+                        Owner::Notice { source, .. } => source.as_str(),
+                        _ => "",
+                    };
+                    let group = super::super::notices::group_name(source);
+                    let place = sources.iter().position(|g| *g == group).unwrap_or_else(|| {
+                        sources.push(group);
+                        sources.len() - 1
+                    });
+                    let at = self.notice_time(source, &entry.1).unwrap_or(0);
+                    (place, at, entry)
+                })
+                .collect();
+            keyed.sort_by_key(|(place, at, _)| (*place, std::cmp::Reverse(*at)));
+            entries = keyed.into_iter().map(|(_, _, entry)| entry).collect();
+        }
+        entries
     }
 
     /// The window's notifications as it draws them, each with a time.
@@ -106,7 +132,17 @@ impl Server {
             .windows
             .at
             .get(session)
-            .and_then(|o| entries.iter().position(|(e, _)| e == o))
+            .and_then(|o| {
+                // One no longer listed (dismissed) gives way to the first
+                // still on its line, before the list's first.
+                entries.iter().position(|(e, _)| e == o).or_else(|| {
+                    // (By source, where the sidebar's cursor is put
+                    // on the same one, `notice_line_now`.)
+                    settings::is_on("notices_grouped")
+                        .then(|| entries.iter().position(|(e, _)| e.same_row(o)))
+                        .flatten()
+                })
+            })
             .unwrap_or(0)
     }
 

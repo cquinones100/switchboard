@@ -120,7 +120,12 @@ fn fact(m: &Mission, place: usize, short: bool) -> Option<(String, Tone)> {
             Tone::Failed,
         ),
         ViewId::Reminders => (items.count(), Tone::Needs),
-        ViewId::Inbox | ViewId::Slack | ViewId::Notifications => (items.count(), Tone::Accent),
+        // By source, its notifications whatever is folded or split.
+        ViewId::Notifications => (
+            super::history::held(&view.data.items).unwrap_or_else(|| items.count()),
+            Tone::Accent,
+        ),
+        ViewId::Inbox | ViewId::Slack => (items.count(), Tone::Accent),
         ViewId::WorkMap
         | ViewId::Reopen
         | ViewId::Prs
