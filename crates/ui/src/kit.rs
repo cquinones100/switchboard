@@ -54,7 +54,7 @@ use ratatui::text::Span;
 
 use crate::Theme;
 use crate::draw::{cut, width};
-use crate::text::{Badge, SPINNER};
+use crate::text::{Badge, SPINNER, SPINNER_MS};
 use crate::theme::ACCENT;
 
 /// The mark a watch line starts with (`Mark::Watch`), which the diff's
@@ -203,6 +203,10 @@ pub enum Mark {
     Slot,
     /// What a reviewer should watch for, a diff story chapter's watch line.
     Watch,
+    /// A tab under the review loop: a half circle turning (board 130, A).
+    Review,
+    /// A tab under queue-and-clean: the landing mark filling (board 130, A).
+    Queue,
 }
 
 impl Mark {
@@ -212,11 +216,11 @@ impl Mark {
             Badge::Waiting => Mark::Needs,
             Badge::Pinned => Mark::Pinned,
             Badge::Done | Badge::Merged => Mark::Passed,
+            Badge::Review => Mark::Review,
+            Badge::Queue => Mark::Queue,
             Badge::Working
             | Badge::Background
-            | Badge::Review
             | Badge::Ci
-            | Badge::Queue
             | Badge::Deploy
             | Badge::Scheduled
             | Badge::Monitor => Mark::Working,
@@ -230,7 +234,7 @@ impl Mark {
         }
     }
 
-    /// Its glyph (the spinner's first frame for working) and tone.
+    /// Its glyph (the first frame of a mark that turns) and tone.
     pub fn look(self) -> (&'static str, Tone) {
         match self {
             Mark::Needs => ("●", Tone::Needs),
@@ -250,24 +254,48 @@ impl Mark {
             Mark::Selected => ("◆", Tone::Accent),
             Mark::Slot => ("◌", Tone::Working),
             Mark::Watch => (WATCH_MARK, Tone::Needs),
+            Mark::Review => (REVIEW_FRAMES[0], Tone::Working),
+            Mark::Queue => (QUEUE_FRAMES[0], Tone::Landing),
         }
     }
 }
 
+/// The review loop's frames, a half circle turning at the spinner's pace
+/// (board 130, A).
+pub const REVIEW_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// Queue-and-clean's frames, the landing mark filling (board 130, A).
+pub const QUEUE_FRAMES: [&str; 2] = ["△", "▲"];
+
+/// How long queue-and-clean's mark holds each frame: twice a second.
+const QUEUE_MS: u64 = 500;
+
 /// Whether a tab's badge is drawn turning: the spinner's own states and
-/// every state the kit marks as working (a loop between its
-/// ticks, Monitor watches), so whatever draws it keeps the spinner going.
+/// every state whose mark turns (a loop between its ticks, Monitor
+/// watches), so whatever draws it keeps the spinner's frame going.
 pub fn spins(b: Badge) -> bool {
-    b.spins() || Mark::of_badge(b) == Mark::Working
+    b.spins() || turns(Mark::of_badge(b))
 }
 
-/// A state's mark in its tone; working's turns with the spinner's frame.
+/// Whether a mark turns with the spinner's frame: working's spinner, the
+/// review loop's half circle and queue-and-clean's filling triangle.
+pub fn turns(m: Mark) -> bool {
+    matches!(m, Mark::Working | Mark::Review | Mark::Queue)
+}
+
+/// A state's mark in its tone; one that turns is drawn at `frame`, the
+/// spinner's count of turns (one every `SPINNER_MS`), and at its first
+/// frame when `frame` stays put.
 pub fn mark(m: Mark, frame: usize, theme: &Theme) -> Span<'static> {
     let (glyph, tone) = m.look();
-    let glyph = if m == Mark::Working {
-        SPINNER[frame % SPINNER.len()]
-    } else {
-        glyph
+    let glyph = match m {
+        Mark::Working => SPINNER[frame % SPINNER.len()],
+        Mark::Review => REVIEW_FRAMES[frame % REVIEW_FRAMES.len()],
+        Mark::Queue => {
+            let held = frame as u64 * SPINNER_MS / QUEUE_MS;
+            QUEUE_FRAMES[held as usize % QUEUE_FRAMES.len()]
+        }
+        _ => glyph,
     };
     Span::styled(glyph, tone.bold(theme))
 }
@@ -486,6 +514,24 @@ pub fn label(
         out.push(Span::raw(" ".repeat(gap)));
         out.push(Span::styled(n, tone.style(theme)));
     }
+    fit(out, cols, Style::new())
+}
+
+/// A group's label led by its state's mark, in the mark's tone, so a
+/// folded group still says what its tabs are doing (board 130); the mark
+/// turns at `frame` as a row's does.
+pub fn marked_label(
+    m: Mark,
+    frame: usize,
+    text: &str,
+    count: Option<usize>,
+    cols: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let mut out = label(text, m.look().1, count, cols.saturating_sub(2), theme);
+    let at = out.len().min(1);
+    out.insert(at, mark(m, frame, theme));
+    out.insert(at + 1, Span::raw(" "));
     fit(out, cols, Style::new())
 }
 
@@ -2459,6 +2505,8 @@ mod tests {
             Mark::Comment,
             Mark::Awake,
             Mark::Selected,
+            Mark::Review,
+            Mark::Queue,
         ];
         let glyphs: Vec<&str> = marks.iter().map(|m| m.look().0).collect();
         let mut unique = glyphs.clone();
@@ -2469,9 +2517,43 @@ mod tests {
         assert_eq!(mark(Mark::Working, 1, &T).content, SPINNER[1]);
         assert_eq!(Mark::of_badge(Badge::Waiting), Mark::Needs);
         assert_eq!(Mark::of_badge(Badge::Pinned), Mark::Pinned);
-        assert_eq!(Mark::of_badge(Badge::Review), Mark::Working);
+        assert_eq!(Mark::of_badge(Badge::Ci), Mark::Working);
         assert_eq!(Mark::of_badge(Badge::Merged), Mark::Passed);
         assert!(spins(Badge::Scheduled) && spins(Badge::Working) && !spins(Badge::Idle));
+    }
+
+    #[test]
+    fn the_review_loop_and_queue_and_clean_have_marks_of_their_own_that_turn() {
+        assert_eq!(Mark::of_badge(Badge::Review), Mark::Review);
+        assert_eq!(Mark::of_badge(Badge::Queue), Mark::Queue);
+        assert_eq!(Mark::Review.look(), ("◐", Tone::Working));
+        assert_eq!(Mark::Queue.look(), ("△", Tone::Landing));
+        for glyph in REVIEW_FRAMES.iter().chain(&QUEUE_FRAMES) {
+            assert_eq!(width(glyph), 1, "{glyph}");
+        }
+        assert!(spins(Badge::Review) && spins(Badge::Queue));
+        assert!(turns(Mark::Review) && turns(Mark::Queue) && !turns(Mark::Landing));
+        // The review loop's at the spinner's pace, a frame a turn.
+        let review: Vec<String> = (0..5)
+            .map(|f| mark(Mark::Review, f, &T).content.to_string())
+            .collect();
+        assert_eq!(review, ["◐", "◓", "◑", "◒", "◐"]);
+        // Queue-and-clean's twice a second: △ until 500ms, then ▲.
+        let queue = |f| mark(Mark::Queue, f, &T).content.to_string();
+        assert_eq!(queue(0), "△");
+        assert_eq!(queue(4), "△");
+        assert_eq!(queue(5), "▲");
+        assert_eq!(queue(9), "△");
+    }
+
+    #[test]
+    fn a_marked_label_leads_with_its_mark_and_keeps_the_label_s_width() {
+        let plain = label("Review loop", Tone::Working, Some(2), 30, &T);
+        let marked = marked_label(Mark::Review, 1, "Review loop", Some(2), 30, &T);
+        assert_eq!(text(&marked), " ◓ REVIEW LOOP              2 ");
+        assert_eq!(spans_width(&marked), spans_width(&plain));
+        assert_eq!(marked[1].style.fg, plain[1].style.fg);
+        assert!(marked_label(Mark::Queue, 0, "Queue", None, 0, &T).len() <= 2);
     }
 
     #[test]

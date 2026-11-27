@@ -647,6 +647,21 @@ pub fn sidebar_lines(
             spans.push(Span::raw(" ".repeat(gap.max(1))));
             spans.push(Span::styled(n, tone.style(theme)));
             heading.spans = kit::fit(spans, cols, Style::new());
+        } else if let Some(mark) = group.stage.mark() {
+            // The review loop's and queue-and-clean's lead with their
+            // tabs' mark, turning while they work (board 130).
+            spins |= group
+                .tabs
+                .iter()
+                .any(|t| kit::spins(model::badge_state(t, r)));
+            heading.spans = kit::marked_label(
+                mark,
+                view.frame,
+                group.stage.title(),
+                Some(group.tabs.len()),
+                cols,
+                theme,
+            );
         } else {
             // The kit's label in its stage's tone, so what needs you reads
             // yellow and what works blue, its count at the right edge.
@@ -1397,10 +1412,43 @@ mod tests {
         let out = lines(&tabs, 30, 14, &view(1));
         let text: Vec<String> = out.lines.iter().map(Line::text).collect();
         let at = |heading: &str| text.iter().position(|l| l.starts_with(heading));
-        let queue = at(" QUEUE-AND-CLEAN").expect("a Queue-and-clean heading");
+        let queue = at(" △ QUEUE-AND-CLEAN").expect("a Queue-and-clean heading");
         let working = at(" WORKING").expect("a Working heading");
         assert!(working < queue, "{text:?}");
         assert_eq!(out.owners[queue + 1], Some(Owner::Tab(TabId(1))));
+    }
+
+    #[test]
+    fn the_review_loop_and_queue_and_clean_wear_their_own_marks_in_the_row_and_the_heading() {
+        let mut reviewing = tab(1, "reviewing", TabState::Working);
+        reviewing.loop_skill = Some("review".into());
+        let mut landing = tab(2, "landing", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        let tabs = vec![reviewing, landing, tab(3, "busy", TabState::Working)];
+        // The first frame at frame 0; a later one as the spinner turns, the
+        // queue's at half a second.
+        for (frame, review, queue) in [(0, "◐", "△"), (1, "◓", "△"), (5, "◓", "▲")] {
+            let v = View { frame, ..view(3) };
+            let out = lines(&tabs, 34, 16, &v);
+            let text: Vec<String> = out.lines.iter().map(Line::text).collect();
+            let at = |heading: &str| {
+                text.iter()
+                    .position(|l| l.starts_with(heading))
+                    .unwrap_or_else(|| panic!("{heading}: {text:#?}"))
+            };
+            let review_at = at(&format!(" {review} REVIEW LOOP"));
+            assert!(text[review_at + 1].contains(review), "{text:#?}");
+            assert!(!text[review_at + 1].contains("⠋"), "{text:#?}");
+            let queue_at = at(&format!(" {queue} QUEUE-AND-CLEAN"));
+            assert!(text[queue_at + 1].contains(queue), "{text:#?}");
+            // Working's heading stays its name alone, its row the spinner.
+            let working_at = at(" WORKING");
+            assert!(
+                text[working_at + 1].contains(text::SPINNER[frame]),
+                "{text:#?}"
+            );
+            assert!(out.spins);
+        }
     }
 
     #[test]

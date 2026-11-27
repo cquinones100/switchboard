@@ -1444,9 +1444,17 @@ fn cards(
                     fill: None,
                 });
             }
-            let tone = Mark::of_badge(stage.color()).look().1;
             let label_at = drawn.len();
-            let mut label = kit::label(stage.title(), tone, Some(tabs_in.len()), cols, theme);
+            let count = Some(tabs_in.len());
+            let mut label = match stage.mark() {
+                Some(mark) => {
+                    kit::marked_label(mark, snap.frame, stage.title(), count, cols, theme)
+                }
+                None => {
+                    let tone = Mark::of_badge(stage.color()).look().1;
+                    kit::label(stage.title(), tone, count, cols, theme)
+                }
+            };
             if stage_folded(*stage, folded, repos) {
                 let chosen = m.cursor == place as isize;
                 if chosen {
