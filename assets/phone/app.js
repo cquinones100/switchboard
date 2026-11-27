@@ -38,7 +38,7 @@ const state = {
   turnKeys: [], // the keys of the open tab's turns last drawn, oldest first (`turns`)
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
-  menu: null, // { pane, asking, sheet }: the tab whose menu or sheet shows, whether Close tab's question or the reminder's sheet does, and the sheet's { messages } (null until read)
+  menu: null, // { pane, asking, sheet, remind }: the tab whose menu or sheet shows, whether Close tab's question or the reminder's sheet does, and the sheet's { messages } (null until read)
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
   haptics: true, // whether the app buzzes (Settings' phone_haptics), from the stream
@@ -756,7 +756,7 @@ function drawerList() {
         held(
           el(
             "button",
-            { class: "row" + (state.menu && state.menu.pane === number(t) ? (state.menu.sheet ? " held" : " held lifted") : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
+            { class: "row" + (state.menu && state.menu.pane === number(t) ? (state.menu.sheet || state.menu.remind ? " held" : " held lifted") : ""), "aria-haspopup": "dialog", "data-pane": number(t) },
             follow(el("span", { class: "mark " + kind }, m), "row-mark:" + number(t), t.needs),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
             el("span", { class: "sub" }, lit(sayingOf(t), words)),
@@ -1121,6 +1121,8 @@ function ask(n) {
   const tab = state.tabs.find((t) => number(t) === n);
   if (!tab) return closeMenu();
   state.menu = { pane: n, asking: true };
+  // Its row lifted over the veil beside the question, as the sheet leaves it under it.
+  if (!state.open) drawer();
   const yes = el("button", { class: "option lit", onclick: () => closeTab(n) }, "Close");
   const box = el(
     "div",
@@ -1173,7 +1175,8 @@ async function stopTab(n) {
 function remindSheet(n) {
   const tab = state.tabs.find((t) => number(t) === n);
   if (!tab) return closeMenu();
-  state.menu = { pane: n, asking: true };
+  // A sheet over the rows, as the tab's is, so its row stays under the veil.
+  state.menu = { pane: n, asking: true, remind: true };
   const change = !!tab.remind;
   let chosen = "";
   const typed = el("input", { type: "text", class: "field", placeholder: "45m, 3pm, tue 9am, nov 20", autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": "Or type a time" });
