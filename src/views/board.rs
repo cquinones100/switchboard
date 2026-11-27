@@ -417,8 +417,16 @@ pub fn part_of(line: &Line) -> usize {
 
 /// Whether a line is a folded comment's "N more lines" row.
 pub fn is_fold(line: &Line) -> bool {
-    line.anchor.0 % PART == PART - 1 && line.anchor.1 == 0
+    line.anchor.2 == FOLD
 }
+
+/// A fold row's anchor's last part: past the first line it hides, whose
+/// block and place it takes, so the layout that shows it whole finds that
+/// line where the fold was.
+const FOLD: usize = 2;
+
+/// How far apart, in blocks, a box's body and each reply under it are.
+const REPLY: usize = 1 << 18;
 
 /// Whether a comment's box has the avatar beside it (board 131), in a
 /// column `inner` wide: not without a panel (board 132), nor where the
@@ -516,10 +524,10 @@ fn comment_lines(
         bar.splice(2..3, face);
     }
     row.extend(bar);
-    lines.push(Line::of(row, (base, 0, 1)));
+    lines.push(Line::of(row, (base, 1, 1)));
     let mut row = before(&mut face);
     row.extend(from_kit(frame.rule.clone()));
-    lines.push(Line::of(row, (base, 0, 1)));
+    lines.push(Line::of(row, (base, 2, 1)));
     // A line inside the box, between its sides; one wider than the box
     // (a code block) or ending in a picture goes on past its right side.
     let inside = |content: Vec<Span>, picture: Option<PictureRow>, anchor: Anchor| {
@@ -554,7 +562,7 @@ fn comment_lines(
                 tone(Tone::Faint, false, look),
             ));
         }
-        lines.push(inside(cut(spans, frame.inner), None, (base, 0, 1)));
+        lines.push(inside(cut(spans, frame.inner), None, (base, 3, 1)));
         if let Some(code) = &p.code {
             let tint = Style {
                 bg: Some(color(Tone::Done.tint(theme))),
@@ -565,7 +573,7 @@ fn comment_lines(
             lines.push(inside(
                 vec![Span::new(format!("{code}{}", " ".repeat(pad)), tint)],
                 None,
-                (base, 0, 1),
+                (base, 4, 1),
             ));
         }
     }
@@ -574,6 +582,9 @@ fn comment_lines(
     let shown = body.len() - hidden;
     // What the fold hides, as it shows, for a search to know it holds a
     // match (`Line::searched` on the fold row).
+    let fold_anchor = body.get(shown).map_or((base + REPLY - 1, 0, FOLD), |l| {
+        (l.anchor.0, l.anchor.1, FOLD)
+    });
     let folded_text = body[shown..]
         .iter()
         .map(|l| l.searchable())
@@ -591,12 +602,12 @@ fn comment_lines(
             theme,
         )));
         row.extend(side.clone());
-        let mut fold = Line::of(row, (base + PART - 1, 0, 1));
+        let mut fold = Line::of(row, fold_anchor);
         fold.searched = folded_text;
         lines.push(fold);
     }
     for (j, r) in c.replies.iter().enumerate() {
-        let block = (j + 1) << 18;
+        let block = (j + 1) * REPLY;
         let mut row = vec![Span::new(" ".repeat(MARGIN + at), Style::default())];
         row.extend(from_kit(frame.rule.clone()));
         lines.push(Line::of(row, (base + block, 0, 0)));
@@ -610,7 +621,7 @@ fn comment_lines(
             format!("  {}", r.said),
             tone(Tone::Dim, false, look),
         ));
-        lines.push(inside(cut(head, frame.inner), None, (base + block, 0, 0)));
+        lines.push(inside(cut(head, frame.inner), None, (base + block, 0, 1)));
         let indent = small;
         for l in body_lines(&r.body, frame.inner.saturating_sub(indent), block, out) {
             let mut spans = vec![Span::new(" ".repeat(indent), Style::default())];

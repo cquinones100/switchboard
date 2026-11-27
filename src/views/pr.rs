@@ -1150,6 +1150,41 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Run cargo test first."))
         );
+        // Shown whole with the cursor on its header, the box stays where it
+        // was, the cursor on its header still.
+        let mut pager =
+            pager::Pager::new(Content::Board(board(&pr, now)), 130, 20).with_cursor(true);
+        pager.key(key(KeyCode::Tab));
+        pager.key(key(KeyCode::Tab));
+        let top = pager.screen()[0].clone();
+        pager.key(key(KeyCode::Enter));
+        pager.key(key(KeyCode::Enter));
+        let screen = pager.screen();
+        assert_eq!(screen[0], top, "{screen:#?}");
+        assert!(
+            pager
+                .doc()
+                .lines
+                .iter()
+                .any(|l| l.plain().contains("Line 20."))
+        );
+        // Vim's * shows what a fold hides of the word under the cursor.
+        let mut star = pr.clone();
+        star["body"] = json!("Line");
+        let mut pager =
+            pager::Pager::new(Content::Board(board(&star, now)), 130, 80).with_cursor(true);
+        pager.key(key(KeyCode::Tab));
+        pager.key(key(KeyCode::Char('j')));
+        pager.key(key(KeyCode::Char('j')));
+        pager.key(key(KeyCode::Char('w')));
+        pager.key(key(KeyCode::Char('*')));
+        assert!(
+            pager
+                .doc()
+                .lines
+                .iter()
+                .any(|l| l.plain().contains("Line 20."))
+        );
     }
 
     #[test]

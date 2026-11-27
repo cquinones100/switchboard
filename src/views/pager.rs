@@ -1383,6 +1383,15 @@ impl Pager {
             }
         }
         let vim_key = vim_key_of(key)?;
+        // Vim's * and # search for the word under the cursor: what a fold
+        // hides of it is shown first, as for a typed search.
+        if idle && !ctrl && matches!(key.code, KeyCode::Char('*' | '#')) {
+            let line = self.doc.lines.get(self.cursor).map(|l| l.plain());
+            if let Some(word) = line.and_then(|l| word_at(&l, self.vim.col())) {
+                self.query = Some(word);
+                self.unfold_for_search();
+            }
+        }
         let searching = idle && !ctrl && matches!(key.code, KeyCode::Char('n' | 'N'));
         if searching {
             self.unfold_for_search();
@@ -1930,6 +1939,26 @@ impl Pager {
             })
             .collect()
     }
+}
+
+/// The word (letters, digits and `_`) at or after byte `at` of `line`,
+/// as Vim's `*` takes it.
+fn word_at(line: &str, at: usize) -> Option<String> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let at = (0..=at.min(line.len()))
+        .rev()
+        .find(|i| line.is_char_boundary(*i))
+        .unwrap_or(0);
+    let start = line[..at]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_word(*c))
+        .last()
+        .map_or(at, |(i, _)| i);
+    let rest = &line[start..];
+    let from = rest.find(is_word)?;
+    let word: String = rest[from..].chars().take_while(|c| is_word(*c)).collect();
+    (!word.is_empty()).then_some(word)
 }
 
 /// A terminal's key as the shared Vim takes it; None for one it has no
