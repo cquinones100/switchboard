@@ -46,6 +46,10 @@ switchboard set @tab_name 'Review loop: settings page layout'
 
 In a tab autopilot opened, when the work it was opened for is already started or done elsewhere (another item, issue, PR or tab), mark it so with `switchboard autopilot-duplicate '<which>'`, which `switchboard set` can't do: autopilot skips the item with that reason and closes the tab.
 
+# Landing work
+
+Before pushing to a repository's default branch or merging a PR (`gh pr merge`), run `switchboard landing` in its checkout and follow the way it prints (set in Settings' Repositories): `direct` lands straight on the default branch; any other way lands through a PR only that way merges, so `/queue-and-clean` lands it, never your own push or merge. When it fails, no way is set: follow the repository's own rules.
+
 # What I see in the workspace
 
 When I name one of these, I mean what Switchboard shows me:

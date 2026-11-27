@@ -32,7 +32,11 @@
 //!   shell command that reads one, `git pull`, and the options that make
 //!   an allowed git command write a file or run a program: `--output`,
 //!   `--ext-diff`, `--upload-pack`, and fetch's `--multiple`, which fetches
-//!   from addresses), whatever the verdict.
+//!   from addresses), whatever the verdict; and it refuses what the
+//!   repository's way to land (`switchboard landing`) forbids, `gh pr
+//!   merge` where GitHub doesn't merge its PRs (but a stacked PR's) and a
+//!   push to its default branch where it doesn't land straight on it,
+//!   naming the way and Settings' Repositories.
 //!   Settings' `pane_permissions` off leaves every call to Claude Code.
 //!
 //! Matching a shell command outside Claude Code is where a matcher goes
@@ -207,6 +211,8 @@ mod tests {
                 "Bash(switchboard look *)",
                 "Bash(switchboard set *)",
                 "Bash(switchboard setting relay_*)",
+                "Bash(switchboard landing)",
+                "Bash(switchboard landing *)",
                 "Bash(switchboard autopilot-duplicate *)",
             ]
         );
@@ -365,6 +371,11 @@ mod tests {
             ("switchboard tabs\nrm x", false),
             ("switchboard show a\\ b", false),
             ("switchboard codex-review", false),
+            ("switchboard landing", true),
+            ("switchboard landing --json", true),
+            ("switchboard landing --start=direct", false),
+            ("switchboard landing --json --start direct", false),
+            ("switchboard landing /tmp/x", false),
             (
                 "switchboard item-done --says 'Make the hook allow it.' --close-issue",
                 true,
@@ -612,5 +623,269 @@ mod tests {
             .map(|(c, (g, _))| format!("{c} gave {g}"))
             .collect();
         assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The module's landing check under node, with the lookups answered:
+    /// what each way refuses, and that it names the way and Settings' row.
+    #[test]
+    fn the_module_refuses_what_the_way_to_land_forbids() {
+        let Some(node) = crate::util::which("node") else {
+            eprintln!("no node on the PATH: the module's landing check isn't tried");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("sb-landing-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("permissions.mjs"), module()).unwrap();
+        // Each case: the way, the PR's base (read by nothing: the hook asks
+        // GitHub nothing), the branch checked out (and
+        // pushed to by a bare push), the command.
+        fs::write(
+            dir.join("ask.mjs"),
+            "import { landingRefused } from './permissions.mjs';\n\
+             const cases = JSON.parse(process.argv[2]);\n\
+             const out = [];\n\
+             for (const [way, base, branch, command] of cases) {\n\
+               const look = {\n\
+                 landing: async () => way && { lands: way, defaultBranch: 'main', repo: 'acme/app' },\n\
+                 branch: async (_, ref) => ref === 'HEAD' ? branch : branch && 'origin/' + branch,\n\
+               };\n\
+               out.push(await landingRefused(command, look));\n\
+             }\n\
+             console.log(JSON.stringify(out));\n",
+        )
+        .unwrap();
+        let cases = [
+            ("switchboard-queue", "main", "x", "gh pr merge 1", true),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push origin main",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push origin HEAD:main",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push -u origin HEAD:refs/heads/main",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push --force origin +main",
+                true,
+            ),
+            ("switchboard-queue", "main", "main", "git push", true),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push origin HEAD",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push --all origin",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "cd y && git -C /r push origin 'main' 2>&1",
+                true,
+            ),
+            ("switchboard-queue", "main", "x", "git push", false),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push origin HEAD:x",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push origin main-fix",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git commit -m 'git push origin main'",
+                false,
+            ),
+            ("switchboard-queue", "main", "x", "gh pr view 1", false),
+            (
+                "switchboard-queue",
+                "feat/base",
+                "x",
+                "gh pr merge 2 --auto --match-head-commit abc --squash",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 2 --auto --squash",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 2 --squash",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git status; gh pr merge 1 --squash",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push alice HEAD:main",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push --tags",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push origin --tags",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push --follow-tags",
+                true,
+            ),
+            ("switchboard-queue", "main", "x", "git push --all", true),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge -R acme/other 5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge --repo=acme/other 5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "GH_REPO=acme/other gh pr merge 5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge https://github.com/acme/other/pull/5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 5 --disable-auto",
+                false,
+            ),
+            (
+                "direct",
+                "feat/base",
+                "x",
+                "gh pr merge 3 --auto --match-head-commit abc --merge",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 1 --body=https://x/y",
+                true,
+            ),
+            ("direct", "main", "x", "git push origin main", false),
+            ("direct", "main", "x", "gh pr merge 1", true),
+            (
+                "auto-merge",
+                "main",
+                "x",
+                "gh pr merge 1 --auto --squash",
+                false,
+            ),
+            ("auto-merge", "main", "x", "git push origin main", true),
+            ("github-queue", "main", "x", "gh pr merge 1", false),
+            ("service", "feat/base", "x", "gh pr merge 1 --auto", true),
+            ("service", "main", "x", "git push origin HEAD:main", true),
+        ];
+        let mut input: Vec<Value> = cases
+            .iter()
+            .map(|(way, base, branch, c, _)| serde_json::json!([way, base, branch, c]))
+            .collect();
+        // No way set: nothing refused.
+        input.push(serde_json::json!([
+            null,
+            "main",
+            "main",
+            "git push origin main"
+        ]));
+        let out = std::process::Command::new(node)
+            .arg(dir.join("ask.mjs"))
+            .arg(serde_json::to_string(&input).unwrap())
+            .output()
+            .unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let got: Vec<Option<String>> = serde_json::from_slice(&out.stdout).unwrap();
+        let mut wrong = Vec::new();
+        for ((way, _, _, command, refused), why) in cases.iter().zip(&got) {
+            if why.is_some() != *refused {
+                wrong.push(format!("{way}: {command} gave {why:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+        assert_eq!(got.last(), Some(&None));
+        let why = got[0].as_deref().unwrap();
+        assert!(
+            why.contains("acme/app lands by Switchboard's merge queue (`switchboard-queue`)")
+                && why.contains("Settings' Repositories"),
+            "{why}"
+        );
+        assert!(got[1].as_deref().unwrap().contains("default branch, main"));
     }
 }

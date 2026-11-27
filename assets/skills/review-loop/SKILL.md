@@ -30,6 +30,14 @@ The reviewer is the `switchboard codex-review` command. It runs Codex read-only 
 
 Working straight on the default branch, with no branch or PR, "the branch" here is the commits not yet pushed: `switchboard codex-review` reviews what `origin/main` doesn't have, and says there is nothing to review once everything is pushed. Their commit messages stand in for a PR description. If the user wants pushed commits reviewed, pass `--base <commit>` to every round.
 
+## Where the review comes, by the way
+
+Before the first round, run `switchboard landing` and read the way its first line prints, which decides where this review sits and what the push question at the end pushes:
+
+- `switchboard-queue`, `github-queue`, `auto-merge` or `service`: the work lands through a PR, which every one of those ways reviews with this loop before the branch's first push, so the PR opens on a reviewed change. The push at the end pushes the branch to its own remote copy, never to the default branch, and nothing here merges the PR: that way does, through `/queue-and-clean`.
+- `direct`: the work lands straight on the default branch, and the review is a step of that landing, run by `/queue-and-clean` before it pushes (when the repository's `review` is `review-loop`), not before a branch's first push: no branch is pushed for a PR. Run on its own, the loop reviews the same commits, and the push at the end is the landing's: recommend landing with `/queue-and-clean`, which takes the landing lock and runs the repository's tests, over a push of your own to the default branch, which only the user's explicit yes makes.
+- When it fails (no way set), Switchboard decides nothing there: review and ask whether to push as the rest of this file says, the default branch's commits too when working straight on it.
+
 ## Only this repository
 
 The loop changes, commits and pushes only the repository it reviews: the one `git rev-parse --show-toplevel` names from where it started. Never edit, commit or push in any other, even when a finding points there: a skill, hook or script this repository uses may live in another clone (Switchboard's own skills, in `~/.local/share/switchboard/claude/plugin/skills/...` or `~/.claude/skills/...`, are written there by its setup and belong to no repository), and so may a shared library or a sibling service.
