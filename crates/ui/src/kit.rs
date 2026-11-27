@@ -1057,6 +1057,106 @@ fn framed(
     out
 }
 
+/// A comment's box in a conversation, as GitHub draws one (boards 131 to
+/// 133): its edges, `cols` wide, and its header bar, for the caller to put
+/// the comment's lines between `side`s, `inner` columns of them with a
+/// space either side.
+pub struct CommentBox {
+    /// `╭───╮`.
+    pub top: Vec<Span<'static>>,
+    /// The header bar on the panel's surface: who, what and when at the
+    /// left, a chip and `⋯` (the box's menu) at the right.
+    pub head: Vec<Span<'static>>,
+    /// `│───│`, under the header, and between a thread's comments.
+    pub rule: Vec<Span<'static>>,
+    /// `╰───╯`.
+    pub bottom: Vec<Span<'static>>,
+    /// `│`, at either end of a line inside.
+    pub side: Span<'static>,
+    /// The columns for the comment's lines, between `│ ` and ` │`.
+    pub inner: usize,
+}
+
+/// The narrowest a comment's box is drawn.
+pub const COMMENT_MIN: usize = 16;
+
+/// A comment's box `cols` wide (never under `COMMENT_MIN`): `head` (who,
+/// what and when) at the left of its header bar, `chip` (Author, bot)
+/// at its right before the `⋯` that opens its menu, its edge in the
+/// accent while it is chosen.
+pub fn comment(
+    cols: usize,
+    head: Vec<Span<'static>>,
+    chip: Vec<Span<'static>>,
+    chosen: bool,
+    theme: &Theme,
+) -> CommentBox {
+    let cols = cols.max(COMMENT_MIN);
+    let edge = Style::new().fg(card_edge(chosen, Some(border(theme)), theme));
+    let bar = Surface::Panel.color(theme);
+    let on_bar = |spans: Vec<Span<'static>>| -> Vec<Span<'static>> {
+        spans
+            .into_iter()
+            .map(|s| {
+                let style =
+                    if s.style.bg.is_some() && s.content != CAP_LEFT && s.content != CAP_RIGHT {
+                        s.style
+                    } else {
+                        s.style.bg(bar)
+                    };
+                Span::styled(s.content, style)
+            })
+            .collect()
+    };
+    let fill = Style::new().bg(bar);
+    // `│ head … chip ⋯ │`: the chip dropped where it would leave the head
+    // under half the bar.
+    let menu = vec![Span::styled("⋯", Tone::Dim.style(theme).bg(bar))];
+    let mut right = on_bar(chip);
+    let room = cols - 2;
+    if spans_width(&right) + 4 > room / 2 {
+        right.clear();
+    }
+    right.push(Span::styled(" ", fill));
+    right.extend(menu);
+    right.push(Span::styled(" ", fill));
+    let left_room = room - 1 - spans_width(&right);
+    let mut head_row = vec![Span::styled("│", edge), Span::styled(" ", fill)];
+    head_row.extend(fit(on_bar(head), left_room, fill));
+    head_row.extend(right);
+    head_row.push(Span::styled("│", edge));
+    let line = |l: &str, r: &str| {
+        vec![Span::styled(
+            format!("{l}{}{r}", "─".repeat(cols - 2)),
+            edge,
+        )]
+    };
+    CommentBox {
+        top: line("╭", "╮"),
+        head: head_row,
+        rule: line("│", "│"),
+        bottom: line("╰", "╯"),
+        side: Span::styled("│", edge),
+        inner: cols - 4,
+    }
+}
+
+/// A folded comment's last row inside its box, between its `side`s:
+/// `▾ words` in the accent on the panel's surface, `inner` + 2 wide.
+pub fn comment_fold(words: &str, inner: usize, theme: &Theme) -> Vec<Span<'static>> {
+    let bar = Surface::Panel.color(theme);
+    let mut out = vec![Span::styled(" ", Style::new().bg(bar))];
+    out.extend(fit(
+        vec![Span::styled(
+            format!("▾ {words}"),
+            Tone::Accent.style(theme).bg(bar),
+        )],
+        inner + 1,
+        Style::new().bg(bar),
+    ));
+    out
+}
+
 /// How a board's card shows its title: live, a past one's (dim, under the
 /// board), or a done one's (faint and struck through).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1939,6 +2039,32 @@ mod tests {
     }
 
     const T: Theme = Theme::DARK;
+
+    #[test]
+    fn a_comments_border_and_header_fit_its_width() {
+        for cols in [60, 160] {
+            let head = vec![
+                Span::styled("ana", Tone::Text.bold(&T)),
+                Span::styled(" commented · 2 days ago", Tone::Dim.style(&T)),
+            ];
+            let b = comment(cols, head, chip("Author", Tone::Dim, true, &T), false, &T);
+            for row in [&b.top, &b.head, &b.rule, &b.bottom] {
+                assert_eq!(spans_width(row), cols, "{:?}", text(row));
+            }
+            assert_eq!(b.inner, cols - 4);
+            let head = text(&b.head);
+            assert!(head.starts_with("│ ana commented · 2 days ago"), "{head:?}");
+            assert!(head.ends_with("Author\u{E0B4}  ⋯ │"), "{head:?}");
+            assert!(text(&b.top).starts_with('╭') && text(&b.bottom).ends_with('╯'));
+            let fold = comment_fold("31 more lines", b.inner, &T);
+            assert_eq!(spans_width(&fold), b.inner + 2);
+        }
+        // A head too long for its bar is cut; a chosen box's edge is the accent.
+        let long = vec![Span::raw("x".repeat(200))];
+        let b = comment(40, long, Vec::new(), true, &T);
+        assert_eq!(spans_width(&b.head), 40);
+        assert_eq!(b.side.style.fg, Some(Tone::Accent.fg(&T)));
+    }
 
     #[test]
     fn a_pane_without_the_keys_is_greyed_toward_the_surface_in_light_and_dark() {

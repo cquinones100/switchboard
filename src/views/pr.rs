@@ -14,16 +14,17 @@
 //! did: not a repository, no remote on GitHub, no token, no PR yet.
 //!
 //! The PR is laid out as board 13 draws it (`board`,
-//! through `super::board`): the description and the conversation's comments
-//! with the PR's checks, reviewers, open review threads and files beside
-//! them, all from the same query.
+//! through `super::board`): the description, the conversation's comments
+//! and its open review threads, each in a box as GitHub draws them (boards
+//! 131 and 132), with the PR's checks, reviewers and files beside them,
+//! all from the same query.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use super::board::{self, Board, Do, Part, Piece};
+use super::board::{self, Board, Comment, Do, Part, Piece, Place, Reply};
 use super::follow;
 use super::pager::{self, Content};
 use super::ready;
@@ -49,19 +50,19 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { rep
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } \
     latestReviews(first: 20) { nodes { author { login } state } } \
     reviewThreads(first: 100) { pageInfo { hasNextPage endCursor } nodes { isResolved path line \
-      comments(first: 1) { totalCount nodes { author { login } body } } \
-      latest: comments(last: 1) { nodes { author { login } body } } } } \
+      comments(first: 1) { totalCount nodes { author { login } body url createdAt diffHunk } } \
+      latest: comments(last: 1) { nodes { author { login } body createdAt } } } } \
     files(first: 100) { nodes { path additions deletions } } \
-    comments(first: 100) { nodes { author { login } body createdAt } } } } }";
+    comments(first: 100) { nodes { author { login __typename } body createdAt url } } } } }";
 
 /// The PR's review threads after the first hundred, a page at a time, for
-/// the panel to count the open ones among them all: GitHub can't be asked
+/// the column to count the open ones among them all: GitHub can't be asked
 /// for only the unresolved ones.
 const THREADS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { \
     repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
     reviewThreads(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { isResolved path line \
-      comments(first: 1) { totalCount nodes { author { login } body } } \
-      latest: comments(last: 1) { nodes { author { login } body } } } } } } }";
+      comments(first: 1) { totalCount nodes { author { login } body url createdAt diffHunk } } \
+      latest: comments(last: 1) { nodes { author { login } body createdAt } } } } } } }";
 /// The most pages of review threads read, five hundred threads.
 const THREAD_PAGES: usize = 5;
 
@@ -146,7 +147,9 @@ fn check_name(c: &Value) -> &str {
 
 /// How many of a list the panel shows before "N more".
 const FILES: usize = 8;
-const THREADS: usize = 4;
+/// How many open review threads the column shows in boxes before saying
+/// how many more GitHub has.
+const THREADS: usize = 20;
 
 fn str_at<'a>(v: &'a Value, path: &str) -> &'a str {
     v.pointer(path).and_then(Value::as_str).unwrap_or("")
@@ -168,18 +171,13 @@ fn avatar(login: &str) -> Piece {
     Piece::Avatar(Some(Who::new(Service::GitHub, login)), login.to_string())
 }
 
-/// What a GitHub login wrote, beside their Large avatar: their name and
-/// `then` (when, or where) at its first row, `body` under them.
-fn said(login: &str, then: String, body: &str) -> Part {
-    Part::Said {
-        who: Some(Who::new(Service::GitHub, login)),
-        name: login.into(),
-        head: vec![
-            Piece::Name(login.into(), Tone::Text),
-            Piece::Text(then, Tone::Dim),
-        ],
-        body: body.into(),
-        indent: 0,
+/// The name a GitHub login shows as: itself, or "someone" for a deleted
+/// account, which GitHub answers with no author.
+fn name_of(login: &str) -> String {
+    if login.is_empty() {
+        "someone".into()
+    } else {
+        login.into()
     }
 }
 
@@ -204,9 +202,9 @@ fn state_mark(state: &str) -> Mark {
     }
 }
 
-/// The PR as board 13 draws it: its head, its description through
-/// Markdown and its conversation's comments, with its checks, reviewers,
-/// open review threads and files beside them.
+/// The PR as board 13 draws it, its conversation as boards 131 and 132
+/// do: its head, then its description, its comments and its open review
+/// threads each in a box, with its checks, reviewers and files beside them.
 pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
     let login = str_at(pr, "/author/login");
     let author = Some(login).filter(|a| !a.is_empty()).unwrap_or("someone");
@@ -265,40 +263,137 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         main.push(verdict_row(v));
     }
     main.extend([Part::Rule, Part::Blank]);
-    if !login.is_empty() {
-        let when = board::when(str_at(pr, "/createdAt"), now);
-        main.push(said(
-            login,
-            format!(" opened this {when}").trim_end().into(),
-            "",
-        ));
-    }
+    let url = str_at(pr, "/url");
+    let on_github = |url: &str| {
+        Some(url)
+            .filter(|u| !u.is_empty())
+            .map(|u| ("Open it on GitHub".to_string(), u.to_string()))
+    };
     let body = str_at(pr, "/body");
-    main.push(Part::Text {
-        markdown: if body.trim().is_empty() {
+    main.push(Part::Comment(Box::new(Comment {
+        key: format!("{url}#description"),
+        who: (!login.is_empty()).then(|| Who::new(Service::GitHub, login)),
+        name: author.into(),
+        verb: "opened this".into(),
+        when: board::when(str_at(pr, "/createdAt"), now),
+        chip: Some(("Author".into(), Tone::Dim)),
+        place: None,
+        body: if body.trim().is_empty() {
             "_No description._".into()
         } else {
             body.into()
         },
-        indent: 0,
-    });
-    let comments = nodes(pr, "/comments/nodes");
-    if !comments.is_empty() {
+        replies: Vec::new(),
+        link: on_github(url),
+        folds: false,
+        whole: false,
+        chosen: false,
+    })));
+    // The conversation after it, each comment in a box, then the open
+    // review threads, each with its line of code and its latest reply.
+    for (i, c) in nodes(pr, "/comments/nodes").iter().enumerate() {
+        let who = str_at(c, "/author/login");
+        let chip = if str_at(c, "/author/__typename") == "Bot" || who.ends_with("[bot]") {
+            Some(("bot".into(), Tone::Dim))
+        } else if !who.is_empty() && who == login {
+            Some(("Author".into(), Tone::Dim))
+        } else {
+            None
+        };
         main.extend([
             Part::Blank,
-            Part::Label("Comments".into(), Some(comments.len().to_string())),
+            Part::Comment(Box::new(Comment {
+                key: match str_at(c, "/url") {
+                    "" => format!("{url}#comment-{i}"),
+                    u => u.into(),
+                },
+                who: (!who.is_empty()).then(|| Who::new(Service::GitHub, who)),
+                name: name_of(who),
+                verb: "commented".into(),
+                when: board::when(str_at(c, "/createdAt"), now),
+                chip,
+                place: None,
+                body: str_at(c, "/body").into(),
+                replies: Vec::new(),
+                link: on_github(str_at(c, "/url")),
+                folds: true,
+                whole: false,
+                chosen: false,
+            })),
         ]);
-        for c in comments {
-            let who = str_at(c, "/author/login");
-            main.extend([
-                Part::Blank,
-                said(
-                    who,
-                    format!("  {}", board::when(str_at(c, "/createdAt"), now)),
-                    str_at(c, "/body"),
+    }
+    let open: Vec<&Value> = nodes(pr, "/reviewThreads/nodes")
+        .iter()
+        .filter(|t| t.get("isResolved").and_then(Value::as_bool) != Some(true))
+        .collect();
+    for (i, t) in open.iter().take(THREADS).enumerate() {
+        let first = nodes(t, "/comments/nodes")
+            .first()
+            .cloned()
+            .unwrap_or(Value::Null);
+        let who = str_at(&first, "/author/login");
+        let replies = count(t, "/comments/totalCount").saturating_sub(1);
+        let latest = nodes(t, "/latest/nodes")
+            .last()
+            .cloned()
+            .unwrap_or(Value::Null);
+        let reply = (replies > 0).then(|| {
+            let by = str_at(&latest, "/author/login");
+            let when = board::when(str_at(&latest, "/createdAt"), now);
+            let mut said = "replied".to_string();
+            for more in [when, format!("{replies} replies")] {
+                if !more.is_empty() && (replies > 1 || !more.ends_with("replies")) {
+                    said.push_str(&format!(" · {more}"));
+                }
+            }
+            Reply {
+                who: (!by.is_empty()).then(|| Who::new(Service::GitHub, by)),
+                name: name_of(by),
+                said,
+                body: str_at(&latest, "/body").into(),
+            }
+        });
+        main.extend([
+            Part::Blank,
+            Part::Comment(Box::new(Comment {
+                key: match str_at(&first, "/url") {
+                    "" => format!("{url}#thread-{i}"),
+                    u => u.into(),
+                },
+                who: (!who.is_empty()).then(|| Who::new(Service::GitHub, who)),
+                name: name_of(who),
+                verb: "commented".into(),
+                when: board::when(str_at(&first, "/createdAt"), now),
+                chip: None,
+                place: Some(Place {
+                    path: str_at(t, "/path").into(),
+                    line: t.get("line").and_then(Value::as_u64),
+                    code: str_at(&first, "/diffHunk")
+                        .lines()
+                        .last()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(str::to_string),
+                }),
+                body: str_at(&first, "/body").into(),
+                replies: reply.into_iter().collect(),
+                link: on_github(str_at(&first, "/url")),
+                folds: true,
+                whole: false,
+                chosen: false,
+            })),
+        ]);
+    }
+    if open.len() > THREADS {
+        main.extend([
+            Part::Blank,
+            Part::Row(vec![Piece::Text(
+                format!(
+                    "{} more open review comments on GitHub",
+                    open.len() - THREADS
                 ),
-            ]);
-        }
+                Tone::Dim,
+            )]),
+        ]);
     }
 
     let mut panel = Vec::new();
@@ -437,54 +532,6 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         panel.extend(reviewers);
         panel.push(Part::Blank);
     }
-    let open: Vec<&Value> = nodes(pr, "/reviewThreads/nodes")
-        .iter()
-        .filter(|t| t.get("isResolved").and_then(Value::as_bool) != Some(true))
-        .collect();
-    if !open.is_empty() {
-        panel.push(Part::Label(
-            "Review comments".into(),
-            Some(format!("{} open", open.len())),
-        ));
-        for t in open.iter().take(THREADS) {
-            let first = nodes(t, "/comments/nodes")
-                .first()
-                .cloned()
-                .unwrap_or(Value::Null);
-            let who = str_at(&first, "/author/login");
-            let place = match t.get("line").and_then(Value::as_u64) {
-                Some(line) => format!("{}:{line}", str_at(t, "/path")),
-                None => str_at(t, "/path").to_string(),
-            };
-            panel.extend([
-                Part::Blank,
-                said(who, format!("  {place}"), str_at(&first, "/body")),
-            ]);
-            let replies = count(t, "/comments/totalCount").saturating_sub(1);
-            if replies > 0 {
-                let last = nodes(t, "/latest/nodes")
-                    .last()
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let said = str_at(&last, "/body")
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("");
-                panel.push(Part::Row(vec![Piece::Text(
-                    format!(
-                        "   {replies} repl{} · {}: {said}",
-                        if replies == 1 { "y" } else { "ies" },
-                        str_at(&last, "/author/login")
-                    ),
-                    Tone::Dim,
-                )]));
-            }
-        }
-        if open.len() > THREADS {
-            panel.push(board::more(open.len() - THREADS));
-        }
-        panel.push(Part::Blank);
-    }
     let files = nodes(pr, "/files/nodes");
     if !files.is_empty() {
         let total = count(pr, "/changedFiles").max(files.len() as u64) as usize;
@@ -515,6 +562,8 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         place: PLACE.into(),
         keys: [
             ("j/k", "scroll"),
+            ("Tab", "next box"),
+            ("Enter", "its menu"),
             ("/", "search"),
             ("r", "read again"),
             ("M-r", "on GitHub"),
@@ -809,8 +858,8 @@ mod tests {
             "latestReviews": { "nodes": [{ "author": { "login": "ana" }, "state": "CHANGES_REQUESTED" }, { "author": { "login": "lee" }, "state": "APPROVED" }] },
             "reviewThreads": { "nodes": [
                 { "isResolved": false, "path": "tests/notes_bench.rs", "line": 38, "comments": { "totalCount": 3, "nodes": [
-                    { "author": { "login": "ana" }, "body": "The test reads only small.json." }
-                ] }, "latest": { "nodes": [{ "author": { "login": "priya" }, "body": "will add it" }] } },
+                    { "author": { "login": "ana" }, "body": "The test reads only small.json.", "createdAt": "2026-11-08T09:00:00Z" }
+                ] }, "latest": { "nodes": [{ "author": { "login": "priya" }, "body": "will add it", "createdAt": "2026-11-08T11:00:00Z" }] } },
                 { "isResolved": true, "path": "a.rs", "line": 1, "comments": { "totalCount": 1, "nodes": [{ "author": { "login": "ana" }, "body": "Done." }] } }
             ] },
             "files": { "nodes": (0..10).map(|i| json!({ "path": format!("f{i}.rs"), "additions": 10 + i, "deletions": i % 2 })).collect::<Vec<_>>() },
@@ -869,20 +918,29 @@ mod tests {
         for want in [
             "#41 Benchmark fixtures for Notes' redraw",
             "priya wants to merge 4 commits into main from notes-bench · +812 −14",
-            "P    priya opened this",
-            "Summary",
-            "Adds two fixture sets.",
-            "COMMENTS",
-            "S    sam  2h ago",
-            "       Nice.",
+            // The description in a box of its own, the avatar beside it.
+            "P    ╭─",
+            "     │ priya opened this",
+            "Author   ⋯ │",
+            "     │ Summary",
+            "     │ Adds two fixture sets.",
+            // A line down the side joins it to the next box.
+            "\n          │ ",
+            "S    ╭─",
+            "     │ sam commented · 2h ago",
+            "     │ Nice.",
             "✕ deploy   ◌ test (macos)",
             "A  ana  requested again",
             "L  lee  approved",
             "J  jo  requested",
             "C  core  requested",
-            "A    ana  tests/notes_bench.rs:38",
-            "       The test reads only",
-            "2 replies · priya: will add it",
+            // An open review thread in its box: its place, its words,
+            // its latest reply inside it.
+            "     │ ana commented · 3h ago",
+            "     │ tests/notes_bench.rs line 38",
+            "     │ The test reads only small.json.",
+            "     │ P  priya  replied · 1h ago · 2 replies",
+            "     │    will add it",
             "FILES",
             "f0.rs",
             "2 more",
@@ -897,16 +955,16 @@ mod tests {
                 .to_string()
         };
         assert!(row("CHECKS").trim_end().ends_with("1 of 3"), "{screen}");
-        assert!(row("REVIEW COMMENTS").trim_end().ends_with("1 open"));
+        assert!(!screen.contains("COMMENTS"), "no labels between the boxes");
         assert!(
             row("Benchmark fixtures").contains("CHECKS"),
             "the panel starts by the head"
         );
-        assert!(!screen.contains("a.rs:1"), "a resolved thread is left out");
+        assert!(!screen.contains("a.rs"), "a resolved thread is left out");
         assert_eq!(
-            screen.matches("A  ana").count() + screen.matches("A    ana").count(),
-            2,
-            "a reviewer asked again is listed once, and once in the threads"
+            screen.matches("A  ana").count(),
+            1,
+            "a reviewer asked again is listed once"
         );
         assert!(pager.frame().contains("M-r"), "its keys on the footer");
         // A search finds what only the panel says, and lights it there.
@@ -928,7 +986,7 @@ mod tests {
         assert!(!frame.contains("Pattern not found"));
         assert!(frame.contains("7;38;5;") && frame.contains("core"), "lit");
         // Shorter than the panel, the sections that don't fit beside it
-        // follow the description, so each can be scrolled to.
+        // follow the conversation, so each can be scrolled to.
         pager.resize(130, 12);
         let lines = pager.screen();
         assert!(lines[0].contains("CHECKS"), "{lines:#?}");
@@ -941,24 +999,21 @@ mod tests {
             "{:#?}",
             pager.screen()
         );
-        // A thread with a code line wider than the panel follows the
-        // description, where it scrolls across.
+        // A code line wider than its box runs on past the box's side,
+        // where it scrolls across.
         let mut wide = rich();
         wide["reviewThreads"]["nodes"][0]["comments"]["nodes"][0]["body"] =
             json!(format!("```\n{}\n```", "y".repeat(80)));
         let pager_wide = pager::Pager::new(Content::Board(board(&wide, now)), 130, 60);
         let lines = pager_wide.screen();
-        let row = lines
-            .iter()
-            .find(|l| l.contains("REVIEW COMMENTS"))
-            .unwrap();
-        assert!(row.starts_with("  REVIEW COMMENTS"), "{lines:#?}");
         assert!(
             lines
                 .iter()
-                .any(|l| l.contains("CHECKS") && l.contains('│'))
+                .any(|l| l.starts_with("       │ ") && l.contains(&"y".repeat(40))),
+            "{lines:#?}"
         );
-        // Narrower, the panel's sections follow the description.
+        // Narrower, with no panel beside it, each avatar goes into its
+        // box's header bar (board 132) and the panel's sections follow.
         pager.resize(80, 200);
         let lines = pager.screen();
         let at = |s: &str| {
@@ -968,7 +1023,87 @@ mod tests {
                 .unwrap_or_else(|| panic!("{s} in {lines:#?}"))
         };
         assert!(at("Nice.") < at("CHECKS"));
-        assert!(!lines.iter().any(|l| l.contains('│')));
+        assert!(lines[at("CHECKS")].starts_with("  CHECKS"), "{lines:#?}");
+        assert!(lines[at("sam commented")].starts_with("  │ S  sam commented"));
+        assert!(lines[at("sam commented") + 2].starts_with("  │ Nice."));
+        assert!(lines.iter().any(|l| l == "    │"), "the line down the side");
+    }
+
+    #[test]
+    fn tab_chooses_a_box_and_enter_opens_its_menu_which_unfolds_a_long_one() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let now = "2026-11-08T12:00:00Z".parse().unwrap();
+        let mut pr = rich();
+        let long: Vec<String> = (1..=20).map(|i| format!("Line {i}.")).collect();
+        pr["comments"]["nodes"][0]["body"] = json!(long.join("\n\n"));
+        pr["comments"]["nodes"][0]["url"] = json!("https://github.com/o/r/pull/41#issuecomment-1");
+        pr["comments"]["nodes"].as_array_mut().unwrap().push(json!({
+            "author": { "login": "ci-bot", "__typename": "Bot" },
+            "body": "See [the run](https://ci.example/run/7).", "createdAt": "2026-11-08T11:00:00Z"
+        }));
+        let mut pager = pager::Pager::new(Content::Board(board(&pr, now)), 130, 80);
+        let screen = pager.screen().join("\n");
+        // A long comment is folded, saying how much more it has.
+        assert!(screen.contains("Line 1."), "{screen}");
+        assert!(!screen.contains("Line 20."), "{screen}");
+        assert!(
+            screen.contains("▾ 31 more lines · Enter shows them"),
+            "{screen}"
+        );
+        assert!(screen.contains("ci-bot commented · 1h ago") && screen.contains("bot "));
+        // Tab chooses the description's box, Enter opens its menu.
+        pager.key(key(KeyCode::Tab));
+        pager.key(key(KeyCode::Enter));
+        let menu = pager.frame_with_menu();
+        assert!(menu.contains("priya's description"), "{menu}");
+        assert!(menu.contains("Copy its text"));
+        pager.key(key(KeyCode::Esc));
+        assert!(!pager.menu_open());
+        // The next box is sam's, folded: its menu shows it whole first.
+        pager.key(key(KeyCode::Tab));
+        pager.key(key(KeyCode::Enter));
+        let menu = pager.frame_with_menu();
+        assert!(
+            menu.contains("sam's comment") && menu.contains("Show all of it"),
+            "{menu}"
+        );
+        assert!(menu.contains("Open it on GitHub"));
+        pager.key(key(KeyCode::Enter));
+        let screen = pager.screen().join("\n");
+        assert!(screen.contains("Line 20."), "{screen}");
+        assert!(!screen.contains("more lines"));
+        // Shift-Tab goes back, wrapping from the first box to the last.
+        pager.key(key(KeyCode::BackTab));
+        pager.key(key(KeyCode::BackTab));
+        pager.key(key(KeyCode::Enter));
+        assert!(pager.frame_with_menu().contains("ana's comment"));
+        pager.key(key(KeyCode::Esc));
+        // A link inside a box is found by a search and kept as a link.
+        pager.key(key(KeyCode::Char('/')));
+        for c in "the run".chars() {
+            pager.key(key(KeyCode::Char(c)));
+        }
+        pager.key(key(KeyCode::Enter));
+        assert!(!pager.frame().contains("Pattern not found"));
+        assert!(
+            pager
+                .doc()
+                .links
+                .iter()
+                .any(|l| l == "https://ci.example/run/7")
+        );
+        let line = pager
+            .doc()
+            .lines
+            .iter()
+            .find(|l| l.plain().contains("the run"))
+            .unwrap();
+        let col = line.plain().find("the run").unwrap();
+        assert!(
+            line.link_at(crate::ui::draw::width(&line.plain()[..col]))
+                .is_some()
+        );
     }
 
     #[test]

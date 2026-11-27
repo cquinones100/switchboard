@@ -90,7 +90,7 @@ pub const STEPS: &[Step] = &[
     Step {
         name: "ticket-view",
         keys: &["M-i"],
-        wait: "opened it",
+        wait: "opened this",
         leave: &["M-c"],
     },
     Step {

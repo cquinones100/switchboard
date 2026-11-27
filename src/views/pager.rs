@@ -178,6 +178,15 @@ pub enum Act {
     Press(String),
 }
 
+/// A comment's box where it is laid out: its first and last lines, and
+/// whether its body is folded.
+struct BoxAt {
+    comment: board::Comment,
+    from: usize,
+    to: usize,
+    folded: bool,
+}
+
 pub struct Pager {
     content: Content,
     markdown: Option<Markdown>,
@@ -234,6 +243,12 @@ pub struct Pager {
     /// Whether the terminal reports every movement of the mouse, as it
     /// does while the menu is up.
     any_motion: bool,
+    /// The comments' boxes as laid out (`board::Comment`), in order.
+    boxes: Vec<BoxAt>,
+    /// The box Tab chose, by its key, drawn with its edge in the accent.
+    chosen_box: Option<String>,
+    /// The long comments shown whole rather than folded, by their keys.
+    whole: std::collections::HashSet<String>,
 }
 
 /// The prompt line's words for the menu, which a click opens.
@@ -282,6 +297,9 @@ impl Pager {
             unfocused: None,
             menu: None,
             any_motion: false,
+            boxes: Vec::new(),
+            chosen_box: None,
+            whole: std::collections::HashSet::new(),
         };
         pager.set_content(content);
         pager
@@ -530,8 +548,13 @@ impl Pager {
         let body = self.body();
         let images = self.pictures.as_mut().map(|p| p.layout(body));
         self.panel = None;
+        self.boxes.clear();
         if let Content::Board(b) = &self.content {
             let beside = self.cols >= board::PANEL_MIN;
+            let look = board::Look {
+                narrow: !beside,
+                ..self.look
+            };
             let side = board::panel_width(self.cols);
             // The panel's sections beside the column while they fit its
             // height and width (a code line kept whole may not), the rest
@@ -563,7 +586,32 @@ impl Pager {
                 parts.extend(under);
             }
             parts.push(board::Part::Blank);
-            self.doc = board::lay_out(&parts, main_cols, &b.place, images.as_ref(), &self.look);
+            for part in &mut parts {
+                if let board::Part::Comment(c) = part {
+                    c.whole = self.whole.contains(&c.key);
+                    c.chosen = self.chosen_box.as_ref() == Some(&c.key);
+                }
+            }
+            self.doc = board::lay_out(&parts, main_cols, &b.place, images.as_ref(), &look);
+            for (i, line) in self.doc.lines.iter().enumerate() {
+                let Some(board::Part::Comment(c)) = parts.get(board::part_of(line)) else {
+                    continue;
+                };
+                match self.boxes.last_mut() {
+                    Some(b) if b.comment.key == c.key && b.to + 1 == i => b.to = i,
+                    _ => self.boxes.push(BoxAt {
+                        comment: (**c).clone(),
+                        from: i,
+                        to: i,
+                        folded: false,
+                    }),
+                }
+                if board::is_fold(line)
+                    && let Some(b) = self.boxes.last_mut()
+                {
+                    b.folded = true;
+                }
+            }
             if !kept.is_empty() {
                 let laid = board::lay_out(&kept, side, &b.place, images.as_ref(), &self.look);
                 self.panel = Some((laid, main_cols));
@@ -1011,6 +1059,18 @@ impl Pager {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let page = self.body() as isize;
         let half = (page / 2).max(1);
+        let vim_idle = !self.has_cursor() || (self.vim.mode == Mode::Normal && self.vim.no_keys());
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && !self.boxes.is_empty() && vim_idle
+        {
+            let back = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+            return self.next_box(!back);
+        }
+        if key.code == KeyCode::Enter
+            && !self.has_cursor()
+            && let Some(at) = self.enter_box()
+        {
+            return self.open_box_menu(at, None);
+        }
         if self.has_cursor()
             && let Some(act) = self.vim_key(key)
         {
@@ -1114,10 +1174,106 @@ impl Pager {
                     Some(Choice::Again) => self.read_again(),
                     Some(Choice::Board(Do::Open(url))) => Act::Open(url),
                     Some(Choice::Board(Do::Press(name))) => Act::Press(name),
+                    Some(Choice::Board(Do::Unfold(key))) => {
+                        self.whole.insert(key);
+                        self.lay_out();
+                        Act::Redraw
+                    }
+                    Some(Choice::Board(Do::Fold(key))) => {
+                        self.whole.remove(&key);
+                        self.lay_out();
+                        self.clamp();
+                        Act::Redraw
+                    }
+                    Some(Choice::Board(Do::Copy(text))) => {
+                        self.note = Some(match (self.copy)(&text) {
+                            Ok(()) => "Copied".into(),
+                            Err(e) => format!("Couldn't copy: {e}"),
+                        });
+                        Act::Redraw
+                    }
                     None => Act::Redraw,
                 }
             }
         }
+    }
+
+    /// The box Enter opens the menu of: the one the cursor is in, else the
+    /// one Tab chose while any of it is on the screen.
+    fn enter_box(&self) -> Option<usize> {
+        if self.has_cursor() {
+            return self.box_at(self.cursor);
+        }
+        let key = self.chosen_box.as_ref()?;
+        let bottom = self.top + self.body();
+        self.boxes
+            .iter()
+            .position(|b| &b.comment.key == key && b.to >= self.top && b.from < bottom)
+    }
+
+    /// The box line `line` is in.
+    fn box_at(&self, line: usize) -> Option<usize> {
+        self.boxes
+            .iter()
+            .position(|b| (b.from..=b.to).contains(&line))
+    }
+
+    /// Tab (or Shift-Tab): the next box (or the one before) chosen, from
+    /// the one chosen, else from the cursor's line or the top of the
+    /// screen, wrapping; the screen scrolled to show its top, the cursor
+    /// put on its header.
+    fn next_box(&mut self, forward: bool) -> Act {
+        let n = self.boxes.len();
+        let from = if self.has_cursor() {
+            self.cursor
+        } else {
+            self.top
+        };
+        let current = if self.has_cursor() {
+            self.box_at(self.cursor)
+        } else {
+            self.chosen_box
+                .as_ref()
+                .and_then(|k| self.boxes.iter().position(|b| &b.comment.key == k))
+        };
+        let to = match current {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None if forward => self.boxes.iter().position(|b| b.from >= from).unwrap_or(0),
+            None => self
+                .boxes
+                .iter()
+                .rposition(|b| b.to < from)
+                .unwrap_or(n - 1),
+        };
+        self.chosen_box = Some(self.boxes[to].comment.key.clone());
+        self.lay_out();
+        let Some(b) = self.boxes.get(to) else {
+            return Act::Redraw;
+        };
+        let (first, last) = (b.from, b.to);
+        if first < self.top || last >= self.top + self.body() {
+            self.top = first.min(self.last_top());
+        }
+        if self.has_cursor() {
+            self.cursor = (first + 1).min(self.doc.lines.len().saturating_sub(1));
+            self.vim.go_to(self.cursor, 0);
+            self.vim.top = self.top;
+        }
+        Act::Redraw
+    }
+
+    /// A box's menu, beside `near` (a click's cell) or in the middle.
+    fn open_box_menu(&mut self, at: usize, near: Option<(u16, u16)>) -> Act {
+        let Some(b) = self.boxes.get(at) else {
+            return Act::Same;
+        };
+        self.chosen_box = Some(b.comment.key.clone());
+        let actions = b.comment.actions(b.folded);
+        let title = b.comment.title();
+        self.menu = Some(super::menu::Open::new(&title, false, &actions, near));
+        self.lay_out();
+        Act::Redraw
     }
 
     /// Whether `col` of the prompt line is on its "m view actions".
@@ -1175,6 +1331,9 @@ impl Pager {
                 KeyCode::Enter => {
                     if let Some(full) = self.full_at(self.cursor) {
                         return Some(full);
+                    }
+                    if let Some(at) = self.enter_box() {
+                        return Some(self.open_box_menu(at, None));
                     }
                 }
                 _ => {}
@@ -1351,9 +1510,33 @@ impl Pager {
             let came = menu.mouse(mouse);
             return self.menu_came(came);
         }
+        // A box's menu on a right click anywhere in it, and on a click on
+        // its header bar or its "N more lines".
+        let near = Some((mouse.column, mouse.row));
+        let line = self.top + mouse.row as usize;
+        let in_column = self
+            .panel
+            .as_ref()
+            .is_none_or(|(_, at)| (mouse.column as usize) <= *at);
+        let on_box = (mouse.row as usize) < self.body() && in_column;
+        if on_box && let Some(at) = self.box_at(line) {
+            let b = &self.boxes[at];
+            let on_bar = line <= b.from + 2 || self.doc.lines.get(line).is_some_and(board::is_fold);
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Right) => return self.open_box_menu(at, near),
+                MouseEventKind::Down(MouseButton::Left) if on_bar => {
+                    if self.has_cursor() {
+                        self.move_cursor(line);
+                        self.vim.go_to(self.cursor, 0);
+                    }
+                    return self.open_box_menu(at, near);
+                }
+                _ => {}
+            }
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Right) => {
-                return self.open_menu(Some((mouse.column, mouse.row)));
+                return self.open_menu(near);
             }
             MouseEventKind::Down(MouseButton::Left)
                 if mouse.row as usize + 1 == self.rows

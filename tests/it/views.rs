@@ -703,13 +703,7 @@ mod with_github {
         cd(&server, &mut client, &work);
 
         client.send(b"\x1bv");
-        let screen = client.wait_text("REVIEW COMMENTS");
-        let row = screen
-            .iter()
-            .find(|l| l.contains("REVIEW COMMENTS"))
-            .unwrap();
-        assert!(row.trim_end().ends_with("1 open"), "{row:?}");
-        client.wait_text("src/late.rs:3");
+        client.wait_text("src/late.rs line 3");
     }
 
     #[test]
