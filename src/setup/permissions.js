@@ -532,9 +532,11 @@ export function denied(tool, input) {
 // What a repository's way to land forbids: `gh pr merge` where the way
 // doesn't merge PRs through GitHub, and a push to the default branch where
 // the way isn't straight on it (`switchboard landing`'s `lands`, src/repos.rs's
-// `Way`). A stacked PR, whose base isn't the default branch, is merged by
-// GitHub's auto-merge whatever the way but a merge service, as
-// queue-and-clean's "GitHub's auto-merge" says. A repository with no way set,
+// `Way`). A branch that lands on another branch (`landing`'s `target`) has
+// its PR onto that branch, stacked, which GitHub's auto-merge merges
+// whatever the way but a merge service, as queue-and-clean's "GitHub's
+// auto-merge" says; read from what `landing` knows of the branch, not
+// asked of GitHub, which only `src/integrations` reaches, counted. A repository with no way set,
 // or a push whose branch can't be read from its words (`git push origin
 // "$b"`), is left to the rules above: this keeps a Claude from landing
 // another way by mistake, and reads the directory a `-C` names, else the
@@ -619,7 +621,8 @@ export function landingCalls(command) {
           args.push(w[k]);
         }
       }
-      found.push({ kind: 'merge', args: otherRepo ? null : args });
+      // `--disable-auto` stops a merge rather than making one.
+      if (!w.includes('--disable-auto')) found.push({ kind: 'merge', args: otherRepo ? null : args });
     }
   }
   return found;
@@ -629,8 +632,7 @@ export function landingCalls(command) {
 // the command's words can't: `landing(dir)` (`switchboard landing --json`,
 // null when it fails, as it does with no way set), `branch(dir, ref)` (the
 // branch `HEAD` names, or the `<remote>/<branch>` `@{push}` does, null when
-// none) and `prBase(args)` (the PR's base branch, null when it can't be
-// read). A push counts only to origin, whose default branch `landing`
+// none). A push counts only to origin, whose default branch `landing`
 // names, never to another remote, a fork's `main` among them.
 export async function landingRefused(command, look) {
   for (const call of landingCalls(command)) {
@@ -656,10 +658,7 @@ export async function landingRefused(command, look) {
         return `Switchboard's permissions in its panes deny this: ${name}, not a push to its default branch, ${main}: ${change}`;
       }
     } else if (call.kind === 'merge' && !MERGES.has(way)) {
-      const base = way === 'service' ? main : await look.prBase(call.args);
-      // A base that can't be read leaves the call to the rules, as a way
-      // that can't be read does.
-      if (base === main) {
+      if (way === 'service' || !landing.target) {
         return `Switchboard's permissions in its panes deny this: ${name}, not \`gh pr merge\`: ${change}`;
       }
     }
@@ -693,7 +692,6 @@ function lookOn($) {
       if (!out || out === 'HEAD') return null;
       return out;
     },
-    prBase: (args) => run(['gh', 'pr', 'view', ...args, '--json', 'baseRefName', '--jq', '.baseRefName']),
   };
 }
 

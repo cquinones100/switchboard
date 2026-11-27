@@ -45,7 +45,7 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR.
 
 2. Stop and ask when the PR's `headRefName` is not the branch checked out here, since fixes would land on the wrong branch. If the PR is `MERGED` or `CLOSED`, reply `ci-loop: stopped: PR is <state>`. A draft is fine.
 3. If there is no PR for this branch, say so and stop.
-4. Read how the repository lands, `switchboard landing --json`, and keep its `lands` and `defaultBranch` for "Fixing". Fixing the PR's checks is the same in every way, and merging it is never this loop's in any; what differs is bringing it up to date:
+4. Read how the repository lands, `switchboard landing --json`, and keep its `lands` and `defaultBranch` for "Fixing". A PR whose `baseRefName` isn't `defaultBranch` is stacked on another branch, which GitHub's auto-merge lands whatever the way but `service`, as queue-and-clean does: take it as `auto-merge` below, unless the way is `service`. Fixing the PR's checks is the same in every way, and merging it is never this loop's in any; what differs is bringing it up to date:
    - `switchboard-queue`: Switchboard's merge queue tests the PR merged onto the default branch with the PRs ahead of it, so a PR only behind its base is left as it is; one in conflict is rebased, as "Fixing" says.
    - `github-queue` and `auto-merge`: a PR in conflict, or behind a base that requires it to be up to date, is rebased, as "Fixing" says.
    - `service`: the merge service keeps the PR up to date, so it is never rebased: "When queue-and-clean runs this" says what to do instead, run by queue-and-clean or not.
