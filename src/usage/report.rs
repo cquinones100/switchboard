@@ -107,8 +107,7 @@ pub fn report_lines(i: &Inputs) -> Vec<Line> {
             .map(String::as_str)
             .unwrap_or("");
         lines.push(text(format!(
-            "   {}{}{}{}",
-            text::pad(&key, 10),
+            "   {key:<10}{}{}{}",
             text::pad(
                 &format!("{:>5}", key_week.get(&key).copied().unwrap_or(0)),
                 7

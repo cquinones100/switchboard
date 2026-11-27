@@ -331,11 +331,11 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
     let mut x = 1 + width(&date);
     if let Some(at) = view.data.at.filter(|at| *at > 1) {
         let said = format!(
-            "  updated {} ago",
+            "  updated {}",
             when::ago(
                 Some(at.div_euclid(1000)),
                 look.now_ms.div_euclid(1000),
-                Said::Short
+                Said::Ago
             )
         );
         head.put(x, &said, Style::new().fg(theme.faint), cols);

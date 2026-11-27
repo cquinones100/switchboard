@@ -22,7 +22,8 @@ unicode-segmentation = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 # Matching what is typed in a picker, as fzf did.
 nucleo-matcher = "0.3"
+# A row's times and dates (`when`), in the time zone of the one who reads it.
+jiff = "0.2"
 # A terminal's colour as the emulator names it (`Rgb`): alacritty_terminal's
 # own vte, so the multiplexer's panes and the apps share the type.
-jiff = "0.2"
 vte = { version = "0.15", default-features = false, features = ["ansi"] }

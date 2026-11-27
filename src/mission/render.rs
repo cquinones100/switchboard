@@ -77,7 +77,7 @@ impl Row {
     }
 
     fn width(&self) -> usize {
-        kit::spans_width(&self.spans)
+        text::spans_width(&self.spans)
     }
 
     /// The spans cut to `cols` (an ellipsis in place of what didn't fit) and
@@ -452,7 +452,7 @@ fn card_foot(
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     let checks = checks_words(tab, theme);
-    let checks_w = kit::spans_width(&checks);
+    let checks_w = text::spans_width(&checks);
     let branch = branch.unwrap_or_default();
     let lead = if branch.is_empty() { 0 } else { 2 };
     let room = inner.saturating_sub(checks_w + lead).max(1);
@@ -469,7 +469,7 @@ fn card_foot(
         .opened
         .map(|at| format!("opened {}", text::span(now_secs - at)))
         .unwrap_or_default();
-    let used = kit::spans_width(&line);
+    let used = text::spans_width(&line);
     if !opened.is_empty() && used + 2 + width(&opened) <= inner {
         line.push(Span::raw(" ".repeat(inner - used - width(&opened))));
         line.push(Span::styled(opened, Tone::Dim.style(theme)));
@@ -497,7 +497,7 @@ fn pr_lines(tab: &TabModel, inner: usize, theme: &Theme) -> Vec<Vec<Span<'static
     let mut lines = vec![Vec::new()];
     let count = tab.prs.len().to_string();
     let mut label = card_label("PRs", Tone::Dim, theme);
-    let used = kit::spans_width(&label);
+    let used = text::spans_width(&label);
     label.push(Span::raw(
         " ".repeat(inner.saturating_sub(used + width(&count))),
     ));
@@ -1566,7 +1566,7 @@ fn rows_bar(
     }
     let bar = kit::scrollbar(total, top, body, body, &m.snap.theme);
     for (line, mark) in lines.iter_mut().zip(bar) {
-        let mut spans = kit::clip(std::mem::take(&mut line.spans), cols - 1);
+        let mut spans = text::clip_spans(std::mem::take(&mut line.spans), cols - 1);
         spans.push(mark);
         line.spans = spans;
     }
@@ -2133,7 +2133,7 @@ fn face_card(face: Face, chosen: bool, hovered: bool, past: bool, theme: &Theme)
         },
         facts: [face.meta]
             .into_iter()
-            .filter(|line| kit::spans_width(line) > 0)
+            .filter(|line| text::spans_width(line) > 0)
             .collect(),
         meter: None,
         chosen,
@@ -2290,12 +2290,7 @@ fn estimate(d: &serde_json::Value) -> Option<String> {
 fn week_words(item: &Item, tickets: bool, now_secs: i64) -> String {
     let when = item
         .time
-        .map(|ms| {
-            format!(
-                "{} ago",
-                when::ago(Some(ms.div_euclid(1000)), now_secs, Said::Short)
-            )
-        })
+        .map(|ms| when::ago(Some(ms.div_euclid(1000)), now_secs, Said::Ago))
         .unwrap_or_default();
     let who = if !tickets {
         item.data["mergedBy"].as_str().unwrap_or("").to_string()
@@ -3792,10 +3787,10 @@ fn review_line(review: &serde_json::Value, now_ms: i64) -> String {
     let ago = when::ago(
         review["at"].as_i64().map(|ms| ms / 1000),
         now_ms / 1000,
-        Said::Short,
+        Said::Ago,
     );
     if !ago.is_empty() {
-        parts.push(format!("{ago} ago"));
+        parts.push(ago);
     }
     if let Some(n) = review["clean_rounds"].as_u64().filter(|n| *n > 0) {
         parts.push(format!("{n} clean"));
@@ -3863,7 +3858,7 @@ fn landing_detail(
         let y = (top_row + lines.len()) as u16;
         let mut spans = vec![Span::raw(" ".repeat(DETAIL_LABEL))];
         for (key, what) in keys {
-            let x0 = kit::spans_width(&spans);
+            let x0 = text::spans_width(&spans);
             let parsed = footer_key(key);
             let pointed = parsed
                 .is_some_and(|k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k)));
@@ -3873,7 +3868,7 @@ fn landing_detail(
                 hits.push(HitBox {
                     y,
                     x0: x0 as u16,
-                    x1: kit::spans_width(&spans).saturating_sub(1) as u16,
+                    x1: text::spans_width(&spans).saturating_sub(1) as u16,
                     spot: Spot::Key(k),
                 });
             }
@@ -4491,7 +4486,7 @@ fn pilot_board(
         let button_lit = m.hover == Some(Spot::Menu(at as isize))
             || (m.focus == Some(Focus::Item) && chosen(at));
         let button = kit::keycap("m", "☰ Menu", button_lit, m.snap.caps, theme);
-        let button_w = kit::spans_width(&button);
+        let button_w = text::spans_width(&button);
         let button_x = cols.saturating_sub(spend_w + button_w);
         hits.push(HitBox {
             y: lines.len() as u16,
@@ -4875,7 +4870,7 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
         for on in after {
             let mut lead = blocker_line(on, false, 0, theme);
             lead.pop();
-            let indent = kit::spans_width(&lead);
+            let indent = text::spans_width(&lead);
             let name = on["item"].as_str().unwrap_or_default();
             for (n, l) in text::wrap(name, inner.saturating_sub(indent).max(1))
                 .into_iter()
@@ -5120,7 +5115,7 @@ fn with_right(
     right: Vec<Span<'static>>,
     cols: usize,
 ) -> Vec<Span<'static>> {
-    let right_w = kit::spans_width(&right);
+    let right_w = text::spans_width(&right);
     let mut out = text::fit_spans(left, cols.saturating_sub(right_w + 1), Style::new());
     out.extend(right);
     out.push(Span::raw(" "));
@@ -5659,7 +5654,7 @@ fn notice_board(
                 })
                 .collect();
         }
-        let w = kit::spans_width(&cap);
+        let w = text::spans_width(&cap);
         hits.push(HitBox {
             y: (top_row + lines.len()) as u16,
             x0: x as u16,
@@ -6007,7 +6002,7 @@ fn key_footer(
             }
             spans.splice(0..1, parts);
         }
-        x += kit::spans_width(&spans);
+        x += text::spans_width(&spans);
         out.extend(spans);
     }
     out
@@ -6029,7 +6024,7 @@ fn with_close(
     } else {
         cols
     };
-    let right_w = kit::spans_width(&right);
+    let right_w = text::spans_width(&right);
     if right_w > 0 && head.width() + 2 + right_w < room {
         head.put(" ".repeat(room - 1 - right_w - head.width()), Style::new());
         head.spans.extend(right);
@@ -6122,7 +6117,7 @@ fn header(m: &Mission, mut bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &
         hits.push(HitBox {
             y: 0,
             x0: x as u16,
-            x1: (head.width() + kit::spans_width(&bar.filter)).saturating_sub(1) as u16,
+            x1: (head.width() + text::spans_width(&bar.filter)).saturating_sub(1) as u16,
             spot: Spot::Filter,
         });
     }

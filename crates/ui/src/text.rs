@@ -152,12 +152,47 @@ pub fn pad(text: &str, cols: usize) -> String {
     out
 }
 
+/// The columns spans take, as `width` counts them.
+pub fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| width(&s.content)).sum()
+}
+
+/// Spans cut to `cols` columns as `width` counts them, with no ellipsis,
+/// the cells past them dropped, and padded to fill them: mission control's
+/// row a scroll bar is put beside.
+pub fn clip_spans(spans: Vec<Span<'static>>, cols: usize) -> Vec<Span<'static>> {
+    let (mut out, mut used) = (Vec::new(), 0);
+    for span in spans {
+        let mut kept = String::new();
+        let mut before = 0;
+        for c in span.content.chars() {
+            let w = width_after(c, before);
+            if used + w > cols {
+                break;
+            }
+            kept.push(c);
+            used += w;
+            before = w;
+        }
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, span.style));
+        }
+        if used >= cols {
+            break;
+        }
+    }
+    if used < cols {
+        out.push(Span::raw(" ".repeat(cols - used)));
+    }
+    out
+}
+
 /// Spans cut to `cols` columns as `width` counts them and padded in `pad`
 /// to fill them: when they don't all fit, what fits before the last column,
 /// then an ellipsis in the style it cut into, as text.js's `cut` over a
 /// whole line. The sidebar's and mission control's rows.
 pub fn fit_spans(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'static>> {
-    let total: usize = spans.iter().map(|s| width(&s.content)).sum();
+    let total = spans_width(&spans);
     let (mut out, mut used) = (Vec::new(), 0);
     if total <= cols {
         (out, used) = (spans, total);

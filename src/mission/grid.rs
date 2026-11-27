@@ -868,8 +868,8 @@ fn calendar(
             .filter(|at| *at > 1)
             .map(|at| {
                 format!(
-                    " (updated {} ago)",
-                    when::ago(Some(at.div_euclid(1000)), m.snap.now_secs, Said::Short)
+                    " (updated {})",
+                    when::ago(Some(at.div_euclid(1000)), m.snap.now_secs, Said::Ago)
                 )
             })
             .unwrap_or_default();

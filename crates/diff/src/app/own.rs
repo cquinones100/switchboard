@@ -704,11 +704,11 @@ impl App {
                         false,
                         &theme,
                     ));
-                    let ago = when::ago(newer.published, util::now_secs(), Said::Short);
+                    let ago = when::ago(newer.published, util::now_secs(), Said::Ago);
                     let right = if ago.is_empty() {
                         Vec::new()
                     } else {
-                        vec![Span::styled(format!("released {ago} ago "), dim)]
+                        vec![Span::styled(format!("released {ago} "), dim)]
                     };
                     let about = format!(
                         "Runs {} update: downloads {}, checks its signature, and puts it in place of this one",

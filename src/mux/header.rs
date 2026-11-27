@@ -15,8 +15,8 @@
 //! row is narrow, what Claude is doing and
 //! how full its context is (`ctx 62%`, as its statusline last told the
 //! server);
-//! while the tab's history shows a past moment, which ("viewing 1:41 PM, 51
-//! minutes ago") in place of where M-a goes next;
+//! while the tab's history shows a past moment, which ("viewing 1:41 PM, 51m
+//! ago") in place of where M-a goes next;
 //! under a blank row, the keys of what the tab can show in Claude's place
 //! (M-c Claude, M-d its diff, M-v its PR, M-i its ticket, M-e its note), the
 //! one it shows now highlighted, then M-h for the tab's history (src/history),

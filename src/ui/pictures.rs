@@ -839,10 +839,6 @@ mod tests {
         }
     }
 
-    fn plain(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     /// Three pictures with the menu on, two fitting, drawn beside a pane.
     fn chooseable() -> (Pictures, Rect) {
         let names = ["a.png", "b.png", "c.png"];
@@ -872,7 +868,7 @@ mod tests {
         assert_eq!(p.chosen_file(), Some(Path::new("/tmp/b.png")));
         assert!(!p.lets_through(), "the pictures have the keys");
         assert_eq!(
-            p.key(plain(KeyCode::Char('x')), &look),
+            p.key(Key::plain(KeyCode::Char('x')), &look),
             Step::Through,
             "on to the workspace's bindings, which hold it from the pane"
         );
@@ -898,18 +894,18 @@ mod tests {
         let look = Look::default();
         let first = card_of(&p, 0);
         p.mouse(press(MouseButton::Left, first.x + 5, first.y + 3), &look);
-        assert_eq!(p.key(plain(KeyCode::Char('j')), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::Char('j')), &look), Step::Redraw);
         assert_eq!(p.chosen_file(), Some(Path::new("/tmp/b.png")));
-        assert_eq!(p.key(plain(KeyCode::Char('j')), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::Char('j')), &look), Step::Redraw);
         assert_eq!(p.chosen_file(), Some(Path::new("/tmp/c.png")));
         let frame = drawn(&mut p, area);
         assert!(row(&frame, 29).contains("2–3/3"), "{}", row(&frame, 29));
         assert_eq!(
-            p.key(plain(KeyCode::Char('j')), &look),
+            p.key(Key::plain(KeyCode::Char('j')), &look),
             Step::Same,
             "the last stays chosen"
         );
-        assert_eq!(p.key(plain(KeyCode::Tab), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::Tab), &look), Step::Redraw);
         assert_eq!(p.chosen_file(), Some(Path::new("/tmp/a.png")), "Tab wraps");
     }
 
@@ -920,7 +916,7 @@ mod tests {
         let first = card_of(&p, 0);
         p.mouse(press(MouseButton::Left, first.x + 5, first.y + 3), &look);
         assert_eq!(p.take_asked(), None);
-        assert_eq!(p.key(plain(KeyCode::Enter), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         assert_eq!(
             p.take_asked(),
             Some((PathBuf::from("/tmp/a.png"), "a.png".to_string()))
@@ -956,10 +952,10 @@ mod tests {
             Step::Same,
             "not into the greyed pane"
         );
-        assert_eq!(p.key(plain(KeyCode::Esc), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::Esc), &look), Step::Redraw);
         assert_eq!(p.paste("typed", &look), Step::Through);
         assert!(p.lets_through());
-        assert_eq!(p.key(plain(KeyCode::Char('j')), &look), Step::Through);
+        assert_eq!(p.key(Key::plain(KeyCode::Char('j')), &look), Step::Through);
         let frame = drawn(&mut p, area);
         assert_eq!(frame.images.len(), 2, "still shown");
         assert_eq!(

@@ -497,7 +497,7 @@ fn ticket_lines(item: &Item, w: usize, m: &Mission, roomy: bool) -> Vec<Drawn> {
                         .and_then(ms_of)
                         .map(|ms| ms / 1000),
                     now_ms / 1000,
-                    Said::Short,
+                    Said::Ago,
                 );
                 let mut head = initial(&name);
                 head.extend([
@@ -505,7 +505,7 @@ fn ticket_lines(item: &Item, w: usize, m: &Mission, roomy: bool) -> Vec<Drawn> {
                     Span::styled(name.clone(), Tone::Text.bold(theme)),
                 ]);
                 if !ago.is_empty() {
-                    head.push(Span::styled(format!("  {ago} ago"), dim));
+                    head.push(Span::styled(format!("  {ago}"), dim));
                 }
                 if is_new {
                     head.push(Span::raw("  "));
@@ -617,11 +617,11 @@ fn from_your_work(
 /// file it touches only on a roomy screen.
 fn commit_line(c: &Commit, w: usize, m: &Mission, roomy: bool) -> Vec<Span<'static>> {
     let theme = &m.snap.theme;
-    let ago = when::ago(Some(c.at), m.snap.now_secs, Said::Short);
+    let ago = when::ago(Some(c.at), m.snap.now_secs, Said::Ago);
     let landed = if ago.is_empty() {
         " landed".to_string()
     } else {
-        format!(" landed {ago} ago")
+        format!(" landed {ago}")
     };
     let touches = match (roomy, c.files.as_slice()) {
         (true, [one]) => format!("touches {}", file_name(one)),

@@ -508,11 +508,11 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
         .filter(|at| *at > 1)
         .map(|at| {
             format!(
-                "looked {} ago ",
+                "looked {} ",
                 when::ago(
                     Some(at.div_euclid(1000)),
                     look.now_ms.div_euclid(1000),
-                    Ago::Short
+                    Ago::Ago
                 )
             )
         })
