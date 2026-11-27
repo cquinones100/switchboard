@@ -1263,8 +1263,10 @@ impl Pager {
         if !self.box_keys {
             return None;
         }
-        if self.has_cursor() {
-            return self.box_at(self.cursor);
+        if self.has_cursor()
+            && let Some(at) = self.box_at(self.cursor)
+        {
+            return Some(at);
         }
         let bottom = (self.top + self.body()).min(self.doc.lines.len());
         let chosen = self.chosen_box.as_ref().and_then(|key| {
@@ -1279,6 +1281,15 @@ impl Pager {
                 .find(|i| board::is_fold(&self.doc.lines[*i]))
                 .and_then(|i| self.box_at(i))
         })
+    }
+
+    /// A board's footer keys, leaving out the boxes' Tab and Enter while
+    /// `view_box_keys` is off.
+    fn footer_keys(&self, keys: &[(String, String)]) -> Vec<(String, String)> {
+        keys.iter()
+            .filter(|(k, _)| self.box_keys || !matches!(k.as_str(), "Tab" | "Enter"))
+            .cloned()
+            .collect()
     }
 
     /// The box line `line` is in.
@@ -1354,7 +1365,7 @@ impl Pager {
         let Content::Board(b) = &self.content else {
             return false;
         };
-        let mut keys = b.keys.clone();
+        let mut keys = self.footer_keys(&b.keys);
         if self.has_cursor() && self.full_at(self.cursor).is_some() {
             keys.insert(0, ("Enter".to_string(), "full size".to_string()));
         }
@@ -1903,7 +1914,7 @@ impl Pager {
         }
         let full = self.has_cursor() && self.full_at(self.cursor).is_some();
         if let Content::Board(b) = &self.content {
-            let mut keys = b.keys.clone();
+            let mut keys = self.footer_keys(&b.keys);
             if full {
                 keys.insert(0, ("Enter".to_string(), "full size".to_string()));
             }

@@ -1193,6 +1193,16 @@ mod tests {
         pager.key(key(KeyCode::Tab));
         pager.key(key(KeyCode::Enter));
         assert!(!pager.menu_open());
+        assert!(
+            !pager.frame().contains("next box"),
+            "its footer leaves Tab out"
+        );
+        // With the cursor outside every box, Enter opens the menu of the
+        // folded box on the screen, as its fold row says.
+        let mut pager =
+            pager::Pager::new(Content::Board(board(&pr, now)), 130, 80).with_cursor(true);
+        pager.key(key(KeyCode::Enter));
+        assert!(pager.frame_with_menu().contains("Show all of it"));
     }
 
     #[test]
