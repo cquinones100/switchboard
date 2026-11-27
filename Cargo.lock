@@ -3070,7 +3070,6 @@ dependencies = [
  "jiff",
  "libc",
  "notify",
- "nucleo-matcher",
  "portable-pty",
  "ratatui",
  "regex",

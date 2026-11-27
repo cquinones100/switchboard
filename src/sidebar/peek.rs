@@ -206,8 +206,9 @@ impl Overlay for Peek {
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
         // Tab puts the focus on easy mode's ×, and Enter or Space presses it.
-        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && look.close {
-            self.close_focus = !self.close_focus;
+        if let Some(by) = crate::ui::form::tab_by(&key).filter(|_| look.close) {
+            // Round the text (false) and the × (true).
+            self.close_focus = crate::ui::form::step(&[false, true], self.close_focus, by);
             return Step::Redraw;
         }
         let pressed = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));

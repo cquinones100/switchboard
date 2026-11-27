@@ -104,7 +104,7 @@ impl Overlay for Confirm {
         let mut lines = vec![BoxLine::text(format!(" {} [Y/n]", self.text), question).wraps()];
         if !self.list.is_empty() {
             lines.push(BoxLine::blank());
-            let room = buf.area.width.saturating_sub(12) as usize;
+            let room = (buf.area.width.saturating_sub(12) as usize).min(draw::WRAP - 2);
             for item in &self.list {
                 lines.push(BoxLine::text(
                     format!("   {}", draw::cut(item, room)),
@@ -298,8 +298,8 @@ mod tests {
     fn a_long_question_wraps_at_72_columns_with_its_answer_shown() {
         let look = Look::default();
         let question = "Remove the worktree and its branch, which has commits no other branch has, and close its tab?";
-        let mut c = Confirm::new(question);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 20));
+        let mut c = Confirm::new(question).list(vec!["x".repeat(150)]);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 200, 20));
         c.draw(&mut buf, &look);
         let s = screen(&buf);
         let d = c.drawn.clone().unwrap();

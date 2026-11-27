@@ -216,11 +216,13 @@ impl BoxLine {
     /// a word where it can't, two columns to spare, each row indented as
     /// its first.
     fn rows(&self, inner: usize) -> Vec<BoxLine> {
-        if !self.wraps || self.width() <= inner {
+        let indent = self.indent();
+        // `WRAP` columns after its indent at most, however wide the box.
+        let cols = inner.saturating_sub(2).min(indent + WRAP);
+        if !self.wraps || self.width() <= inner.min(indent + WRAP) {
             return vec![self.clone()];
         }
-        let indent = self.indent();
-        let room = inner.saturating_sub(indent + 2).max(1);
+        let room = cols.saturating_sub(indent).max(1);
         // Its graphemes after the indent, each with its style.
         let mut cells: Vec<(String, Style)> = Vec::new();
         let mut skip = indent;
