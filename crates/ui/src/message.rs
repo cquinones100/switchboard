@@ -1,7 +1,7 @@
 //! A message in a small box in the middle of the screen (tmux/say.sh), in
 //! place of tmux's message on the status line, which is easy to miss and
-//! gone in a moment: as wide as its text, wrapped to 72 columns, and as tall
-//! as it; any key closes it, and the key goes no further; a click closes it
+//! gone in a moment: as wide as its text, which the box wraps to 72
+//! columns as every box's (`draw::WRAP`), and as tall as it; any key closes it, and the key goes no further; a click closes it
 //! too; left alone, it closes itself after a few seconds. One may carry a
 //! list under its text (`Message::with_list`: the commits a restart brought
 //! in, a short hash dim and a subject each), which stays up until a key
@@ -20,8 +20,8 @@ use crate::overlay::{Outcome, Overlay, Step};
 
 /// How long a message stays up (say.sh's `-t`).
 pub const SECONDS: u64 = 5;
-/// The widest a message's text runs before it wraps.
-const WRAP: usize = 72;
+/// The widest a row of its list runs.
+const WRAP: usize = draw::WRAP;
 
 /// One row of a message's list: a short hash, drawn dim, and its words;
 /// a row with no hash (`and 3 more`) is all dim.
@@ -33,12 +33,13 @@ pub struct ListRow {
 
 pub struct Message {
     text: String,
-    lines: Vec<String>,
     list: Vec<ListRow>,
     /// The first of the box's rows shown, while it is taller than the screen.
     top: usize,
-    /// How many of its rows the screen had room for, as last drawn.
+    /// How many of its rows the screen had room for, and how many it has
+    /// as the box wraps them, as last drawn.
     room: usize,
+    count: usize,
     /// None while it has a list, which waits for a key.
     until: Option<Instant>,
     close_lit: bool,
@@ -49,10 +50,10 @@ impl Message {
     pub fn new(text: &str, seconds: u64) -> Message {
         Message {
             text: text.trim_end().to_string(),
-            lines: draw::wrap(text.trim_end(), WRAP),
             list: Vec::new(),
             top: 0,
             room: usize::MAX,
+            count: 0,
             until: Some(Instant::now() + Duration::from_secs(seconds)),
             close_lit: false,
             drawn: None,
@@ -79,8 +80,8 @@ impl Message {
     fn rows(&self, look: &Look) -> Vec<BoxLine> {
         let mut rows: Vec<BoxLine> = std::iter::once(BoxLine::blank())
             .chain(
-                self.lines
-                    .iter()
+                self.text
+                    .split('\n')
                     .map(|l| BoxLine::text(format!("  {l}"), look.text())),
             )
             .collect();
@@ -102,19 +103,9 @@ impl Message {
         rows
     }
 
-    /// How many rows `rows` gives.
-    fn row_count(&self) -> usize {
-        let list = if self.list.is_empty() {
-            0
-        } else {
-            1 + self.list.len()
-        };
-        1 + self.lines.len() + list
-    }
-
     /// Moves the rows shown by `by`, while there are more than fit.
     fn scroll(&mut self, by: isize) -> Step {
-        let last = self.row_count().saturating_sub(self.room);
+        let last = self.count.saturating_sub(self.room);
         let to = self.top.saturating_add_signed(by).min(last);
         if to == self.top {
             Step::Same
@@ -126,7 +117,7 @@ impl Message {
 
     /// Whether the box is taller than the screen, so `j` and `k` scroll it.
     fn scrolls(&self) -> bool {
-        self.row_count() > self.room
+        self.count > self.room
     }
 
     /// The text, as given.
@@ -134,9 +125,12 @@ impl Message {
         &self.text
     }
 
-    /// The text, as wrapped.
-    pub fn lines(&self) -> &[String] {
-        &self.lines
+    /// Its box: no title, at least 30 columns wide.
+    fn spec<'a>(&self, rows: &'a [BoxLine]) -> BoxSpec<'a> {
+        let mut spec = BoxSpec::new("", rows);
+        spec.width = 28;
+        spec.close_lit = self.close_lit;
+        spec
     }
 }
 
@@ -157,6 +151,8 @@ impl Overlay for Message {
         // A blank row above the text, which is indented two columns, as
         // say.sh printed it; at least 30 columns wide.
         let rows = self.rows(look);
+        let rows = draw::wrapped(&self.spec(&rows), buf.area.width, look);
+        self.count = rows.len();
         // A row clear above and below, as draw_box keeps, and the keys'
         // two while it scrolls.
         let fits = (buf.area.height as usize).saturating_sub(4).max(1);
@@ -167,9 +163,7 @@ impl Overlay for Message {
         };
         self.top = self.top.min(rows.len().saturating_sub(self.room));
         let shown = &rows[self.top..];
-        let mut spec = BoxSpec::new("", shown);
-        spec.width = 28;
-        spec.close_lit = self.close_lit;
+        let mut spec = self.spec(shown);
         if self.scrolls() {
             spec.keys = Some("j k scroll   any other key closes");
         }
@@ -240,8 +234,13 @@ mod tests {
     fn long_text_wraps_and_a_click_closes_it() {
         let text = "word ".repeat(30);
         let mut m = Message::new(&text, SECONDS);
-        assert!(m.lines().len() > 1);
-        assert!(m.lines().iter().all(|l| l.len() <= 72));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 24));
+        m.draw(&mut buf, &Look::default());
+        let d = m.drawn.clone().unwrap();
+        assert_eq!(d.rows.len(), 4, "a blank row and three of text");
+        // Its longest row, 14 words of 72 columns at most, its indent and
+        // margins.
+        assert_eq!(d.outer.width, 75);
         let click = Mouse {
             kind: MouseKind::Press,
             button: MouseButton::Left,

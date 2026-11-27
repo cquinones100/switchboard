@@ -31,9 +31,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::form::{self, Form};
 use crate::ui::kit::{self, Col, Surface, Tone};
-use crate::ui::pointer::Pointer;
-use crate::ui::{Look, Outcome, Overlay, Picked, Step};
+use crate::ui::{Look, Outcome, Overlay, Step};
 
 /// Its inside, while the screen leaves room around it.
 const WIDTH: usize = 78;
@@ -120,11 +120,7 @@ pub enum Part {
 pub struct WorkItemBox {
     ctx: Context,
     target: String,
-    focus: Part,
-    hover: Option<Part>,
-    drawn: Option<Drawn>,
-    /// Each part's line in the box.
-    parts: Vec<(usize, Part)>,
+    form: Form<Part>,
     /// The first repository shown, when they don't all fit.
     repo_top: usize,
     /// The focus the window last followed, so the wheel moves it until the
@@ -144,10 +140,7 @@ impl WorkItemBox {
         WorkItemBox {
             ctx,
             target,
-            focus,
-            hover: None,
-            drawn: None,
-            parts: Vec::new(),
+            form: Form::new(focus, Part::Close),
             repo_top: 0,
             followed: None,
         }
@@ -155,11 +148,11 @@ impl WorkItemBox {
 
     /// The box reopened on another repository, `focus` on its row.
     pub fn with_focus(mut self, focus: Part) -> WorkItemBox {
-        self.focus = focus;
+        self.form.focus = focus;
         self
     }
 
-    fn stops(&self, look: &Look) -> Vec<Part> {
+    fn stops(&self) -> Vec<Part> {
         let mut out = Vec::new();
         if self.ctx.linked.is_some() {
             out.push(Part::GoTo);
@@ -172,16 +165,7 @@ impl WorkItemBox {
                 out.push(Part::Next);
             }
         }
-        if look.close {
-            out.push(Part::Close);
-        }
         out
-    }
-
-    fn step_focus(&mut self, by: isize, look: &Look) {
-        let stops = self.stops(look);
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
     }
 
     fn close(&self, index: usize, repo: usize) -> Step {
@@ -189,24 +173,20 @@ impl WorkItemBox {
             repo,
             target: self.target.trim().to_string(),
         };
-        Step::Close(Outcome::Picked(Picked {
-            index,
-            value: serde_json::to_string(&chosen).unwrap_or_default(),
-            query: String::new(),
-        }))
+        form::close_with(index, &chosen)
     }
 
     fn press(&mut self, part: Part) -> Step {
         // A click on the field it is typing in takes the suggestion, as →
         // does.
         if part == Part::Target
-            && self.focus == Part::Target
+            && self.form.focus == Part::Target
             && let Some(rest) = self.suggestion()
         {
             self.target.push_str(&rest);
             return Step::Redraw;
         }
-        self.focus = part;
+        self.form.focus = part;
         match part {
             Part::Repo(i) if i != self.ctx.chosen => self.close(REPO, i),
             Part::Repo(_) | Part::Target => Step::Redraw,
@@ -270,7 +250,7 @@ impl WorkItemBox {
         let mut parts = Vec::new();
         let cols = inner.saturating_sub(1);
         let chosen_fill = Some(Surface::Chosen.color(theme));
-        let lit = |p: Part| self.focus == p || self.hover == Some(p);
+        let lit = |p: Part| self.form.lit(p);
 
         // The item, with its plan's chip.
         let (chip, tone) = match ctx.plan {
@@ -554,7 +534,7 @@ impl WorkItemBox {
     /// it, "→ take the suggestion" at its right while there is one.
     fn field(&self, cols: usize, look: &Look) -> Vec<Span<'static>> {
         let theme = &look.theme;
-        let focused = self.focus == Part::Target;
+        let focused = self.form.focus == Part::Target;
         let mut typed = vec![
             Span::styled(
                 "› ",
@@ -587,7 +567,7 @@ impl WorkItemBox {
         if inner > kit::spans_width(&line) + kit::spans_width(&right) {
             line.extend(right);
         }
-        let bg = if focused || self.hover == Some(Part::Target) {
+        let bg = if focused || self.form.hover == Some(Part::Target) {
             Surface::Chosen.color(theme)
         } else {
             Surface::Panel.color(theme)
@@ -600,14 +580,6 @@ impl WorkItemBox {
         );
         out.push(Span::styled(" ", Style::new().bg(bg)));
         out
-    }
-
-    fn part_at(&self, hit: Hit) -> Option<Part> {
-        match hit {
-            Hit::Close => Some(Part::Close),
-            Hit::Line(line, _) => self.parts.iter().find(|(l, _)| *l == line).map(|p| p.1),
-            _ => None,
-        }
     }
 }
 
@@ -635,14 +607,8 @@ fn cut_start(text: &str, cols: usize) -> String {
 }
 
 impl Overlay for WorkItemBox {
-    fn pointer(&self, col: u16, row: u16, look: &Look) -> Option<Pointer> {
-        let hit = self.drawn.as_ref().map(|d| d.hit(col, row));
-        let pressed = hit.and_then(|h| self.part_at(h)).is_some();
-        Some(if pressed && look.mouse {
-            Pointer::Hand
-        } else {
-            Pointer::Arrow
-        })
+    fn pointer(&self, col: u16, row: u16, look: &Look) -> Option<crate::ui::pointer::Pointer> {
+        self.form.pointer(col, row, look)
     }
 
     fn kind(&self) -> &'static str {
@@ -650,11 +616,11 @@ impl Overlay for WorkItemBox {
     }
 
     fn stands_out(&self) -> Option<Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
+        self.form.outer()
     }
 
     fn drawn(&self) -> Option<&Drawn> {
-        self.drawn.as_ref()
+        self.form.drawn.as_ref()
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
@@ -668,9 +634,9 @@ impl Overlay for WorkItemBox {
         let n = self.ctx.repos.len();
         if lines.len() > fits && n > 1 {
             let room = n.saturating_sub(lines.len() - fits).max(1);
-            let moved = self.followed != Some(self.focus);
-            self.followed = Some(self.focus);
-            if let (true, Part::Repo(i)) = (moved, self.focus) {
+            let moved = self.followed != Some(self.form.focus);
+            self.followed = Some(self.form.focus);
+            if let (true, Part::Repo(i)) = (moved, self.form.focus) {
                 if i < self.repo_top {
                     self.repo_top = i;
                 } else if i >= self.repo_top + room {
@@ -680,12 +646,15 @@ impl Overlay for WorkItemBox {
             self.repo_top = self.repo_top.min(n - room);
             (lines, parts) = self.lines_in(inner, Some((self.repo_top, room)), look);
         }
-        self.parts = parts;
+        self.form.clear();
+        for (line, part) in parts {
+            self.form.line(line, part);
+        }
         let mut spec = BoxSpec::new("Work on this item", &lines);
         spec.keys = Some("↑↓ row  ↵ choose  → take the suggestion  esc cancel");
         spec.width = inner as u16;
-        spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        spec.close_lit = self.form.close_lit();
+        self.form.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
@@ -693,20 +662,17 @@ impl Overlay for WorkItemBox {
         match k.code {
             KeyCode::Esc => return Step::Close(Outcome::Dismissed),
             KeyCode::Char('c') if k.mods == Mods::CTRL => return Step::Close(Outcome::Dismissed),
-            KeyCode::Tab | KeyCode::Down => {
-                self.step_focus(1, look);
+            KeyCode::Tab | KeyCode::Down | KeyCode::BackTab | KeyCode::Up => {
+                let by = form::tab_by(&k).unwrap_or(if k.code == KeyCode::Up { -1 } else { 1 });
+                self.form.step(&self.stops(), by, look);
                 return Step::Redraw;
             }
-            KeyCode::BackTab | KeyCode::Up => {
-                self.step_focus(-1, look);
-                return Step::Redraw;
-            }
-            KeyCode::Enter => return self.press(self.focus),
+            KeyCode::Enter => return self.press(self.form.focus),
             _ => {}
         }
-        if self.focus != Part::Target {
+        if self.form.focus != Part::Target {
             return match k.code {
-                KeyCode::Char(' ') => self.press(self.focus),
+                KeyCode::Char(' ') => self.press(self.form.focus),
                 _ => Step::Same,
             };
         }
@@ -735,11 +701,10 @@ impl Overlay for WorkItemBox {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
+        if self.form.drawn.is_none() {
             return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let part = self.part_at(hit);
+        }
+        let (hit, part) = self.form.hit(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
             Gesture::WheelDown => {
                 self.repo_top += 1;
@@ -754,20 +719,13 @@ impl Overlay for WorkItemBox {
                 None if hit == Hit::Outside => Step::Close(Outcome::Dismissed),
                 None => Step::Same,
             },
-            Gesture::Move if look.hover => {
-                if part == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = part;
-                    Step::Redraw
-                }
-            }
+            Gesture::Move if look.hover => self.form.hover_on(part),
             _ => Step::Same,
         }
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        if self.focus != Part::Target {
+        if self.form.focus != Part::Target {
             return Step::Same;
         }
         self.target.push_str(text.trim());
@@ -853,7 +811,7 @@ mod tests {
         ), "{shown}");
         assert!(shown.contains("▶ Start it"), "{shown}");
         assert!(shown.contains("Next in autopilot's queue"), "{shown}");
-        assert_eq!(b.focus, Part::Start);
+        assert_eq!(b.form.focus, Part::Start);
 
         let mut off = ctx();
         off.autopilot = false;
@@ -880,11 +838,11 @@ mod tests {
         // ↑ to the field, then the second repository, Enter.
         let mut b = WorkItemBox::new(ctx());
         b.key(Key::plain(KeyCode::Up), &look);
-        assert_eq!(b.focus, Part::Target);
+        assert_eq!(b.form.focus, Part::Target);
         b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!(b.target, "main");
         b.key(Key::plain(KeyCode::Up), &look);
-        assert_eq!(b.focus, Part::Other);
+        assert_eq!(b.form.focus, Part::Other);
         b.key(Key::plain(KeyCode::Up), &look);
         let Step::Close(Outcome::Picked(p)) = b.key(Key::plain(KeyCode::Enter), &look) else {
             panic!("Enter on another repository should reopen the box");
@@ -922,7 +880,7 @@ mod tests {
         let look = Look::default();
         let mut b = WorkItemBox::new(ctx());
         assert!(text(&b, WIDTH).contains("Another directory…"));
-        b.focus = Part::Other;
+        b.form.focus = Part::Other;
         let Step::Close(Outcome::Picked(p)) = b.key(Key::plain(KeyCode::Enter), &look) else {
             panic!("Enter should ask for a directory");
         };
@@ -961,14 +919,14 @@ mod tests {
             shown.contains("repo0 ") && !shown.contains("repo39"),
             "{shown}"
         );
-        b.focus = Part::Repo(39);
+        b.form.focus = Part::Repo(39);
         let shown = draw(&mut b);
         assert!(
             shown.contains("repo39") && shown.contains("▶ Start it"),
             "{shown}"
         );
         // With the focus on the first, the wheel still moves the window.
-        b.focus = Part::Repo(0);
+        b.form.focus = Part::Repo(0);
         draw(&mut b);
         b.repo_top = 40;
         let shown = draw(&mut b);
@@ -987,7 +945,7 @@ mod tests {
         );
         assert!(shown.contains("Go to it"));
         assert!(!shown.contains("REPOSITORY"));
-        assert_eq!(b.focus, Part::GoTo);
+        assert_eq!(b.form.focus, Part::GoTo);
     }
 
     #[test]

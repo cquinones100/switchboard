@@ -6,6 +6,12 @@
 //! own. With easy mode's close button (`Look::close`), a ` × ` sits in the
 //! top edge a cell short of the corner, as `closeAt` placed it.
 //!
+//! A box sized by its lines wraps a line of text wider than 72 columns
+//! (`WRAP`) at its spaces, each row indented as the line's first, and is
+//! no wider than that; a row of a list or a menu (one a click means
+//! something on, or one on a highlight) is cut with … instead, as is any
+//! line of a box that fills a share of the screen.
+//!
 //! A box remembers where it drew each line (`Drawn`), as `lastModal` did, so
 //! a click is read against what is on the screen rather than worked out
 //! again.
@@ -26,6 +32,9 @@ pub const EDGE: Color = Color::Indexed(81);
 pub const YELLOW: Color = Color::Indexed(220);
 /// Easy mode's close button (render.js's `CLOSE`), in a box's top edge.
 pub const CLOSE: &str = " × ";
+
+/// The widest a box's line of text runs before it wraps.
+pub const WRAP: usize = 72;
 
 /// The columns a terminal draws `text` in.
 pub fn width(text: &str) -> usize {
@@ -169,6 +178,158 @@ impl BoxLine {
     fn width(&self) -> usize {
         self.spans.iter().map(|s| width(&s.content)).sum()
     }
+
+    /// A line of text, which wraps, rather than a row of a list or a menu,
+    /// which is cut.
+    fn is_text(&self) -> bool {
+        !self.clickable && self.fill.is_none()
+    }
+
+    /// The spaces it starts with.
+    fn indent(&self) -> usize {
+        let mut n = 0;
+        for span in &self.spans {
+            let lead = span.content.len() - span.content.trim_start_matches(' ').len();
+            n += lead;
+            if lead < span.content.len() {
+                break;
+            }
+        }
+        n
+    }
+
+    /// The columns it asks of a box: a line of text `WRAP` at most after
+    /// its indent; and two to spare, as modalBox kept.
+    fn wants(&self) -> usize {
+        let w = self.width();
+        if self.is_text() {
+            w.min(self.indent() + WRAP) + 2
+        } else {
+            w + 2
+        }
+    }
+
+    /// The line in a box `inner` columns wide: one row when it fits there
+    /// or isn't text, else rows broken at spaces where it can be and inside
+    /// a word where it can't, two columns to spare, each row indented as
+    /// its first.
+    fn rows(&self, inner: usize) -> Vec<BoxLine> {
+        if !self.is_text() || self.width() <= inner {
+            return vec![self.clone()];
+        }
+        let indent = self.indent();
+        let room = inner.saturating_sub(indent + 2).max(1);
+        // Its graphemes after the indent, each with its style.
+        let mut cells: Vec<(String, Style)> = Vec::new();
+        let mut skip = indent;
+        for span in &self.spans {
+            for g in span.content.graphemes(true) {
+                if skip > 0 && g == " " {
+                    skip -= 1;
+                    continue;
+                }
+                skip = 0;
+                cells.push((g.to_string(), span.style));
+            }
+        }
+        // Words, each with the spaces after it.
+        let mut words: Vec<&[(String, Style)]> = Vec::new();
+        let mut start = 0;
+        for i in 0..cells.len() {
+            let ends = cells[i].0 == " " && cells.get(i + 1).is_none_or(|c| c.0 != " ");
+            if ends || i + 1 == cells.len() {
+                words.push(&cells[start..=i]);
+                start = i + 1;
+            }
+        }
+        let wide = |cs: &[(String, Style)]| cs.iter().map(|c| width(&c.0)).sum::<usize>();
+        let bare = |cs: &[(String, Style)]| {
+            let end = cs.iter().rposition(|c| c.0 != " ").map_or(0, |i| i + 1);
+            wide(&cs[..end])
+        };
+        let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
+        let mut row: Vec<(String, Style)> = Vec::new();
+        for word in words {
+            if !row.is_empty() && wide(&row) + bare(word) > room {
+                rows.push(std::mem::take(&mut row));
+            }
+            let mut word = word;
+            // A word longer than a row goes over as many as it takes.
+            while bare(word) > room {
+                let mut used = 0;
+                let n = word
+                    .iter()
+                    .take_while(|c| {
+                        used += width(&c.0);
+                        used <= room
+                    })
+                    .count()
+                    .max(1);
+                rows.push(word[..n].to_vec());
+                word = &word[n..];
+            }
+            row.extend_from_slice(word);
+        }
+        rows.push(row);
+        rows.into_iter()
+            .map(|cells| {
+                let end = cells.iter().rposition(|c| c.0 != " ").map_or(0, |i| i + 1);
+                let mut spans = vec![Span::raw(" ".repeat(indent))];
+                for (g, style) in &cells[..end] {
+                    match spans.last_mut() {
+                        Some(last) if last.style == *style => last.content.to_mut().push_str(g),
+                        _ => spans.push(Span::styled(g.clone(), *style)),
+                    }
+                }
+                BoxLine::spans(spans)
+            })
+            .collect()
+    }
+}
+
+/// The rows a box sized by its lines draws them in on a screen `cols`
+/// wide, its text wrapped (`BoxLine::rows`), for a box that scrolls
+/// them itself.
+pub fn wrapped(spec: &BoxSpec<'_>, cols: u16, look: &Look) -> Vec<BoxLine> {
+    let inner = inner_width(spec, cols as usize, look);
+    lay_out(spec.lines, inner)
+        .into_iter()
+        .map(|(_, l)| l)
+        .collect()
+}
+
+/// The width inside a box sized by its lines, on a screen `cols` wide.
+fn inner_width(spec: &BoxSpec<'_>, cols: usize, look: &Look) -> usize {
+    let close_w = if spec.closes && look.close {
+        width(CLOSE)
+    } else {
+        0
+    };
+    let widest = spec
+        .lines
+        .iter()
+        .map(BoxLine::wants)
+        .chain(spec.keys.map(|k| width(k) + 3))
+        .max()
+        .unwrap_or(0);
+    (spec.width as usize)
+        .max(if spec.title.is_empty() {
+            0
+        } else {
+            width(spec.title) + 6 + close_w
+        })
+        .max(widest)
+        .min(cols.saturating_sub(2))
+}
+
+/// A box's lines as it draws them `inner` columns wide (`BoxLine::rows`),
+/// each with the index of the line it came from.
+fn lay_out(lines: &[BoxLine], inner: usize) -> Vec<(usize, BoxLine)> {
+    lines
+        .iter()
+        .enumerate()
+        .flat_map(|(i, l)| l.rows(inner).into_iter().map(move |r| (i, r)))
+        .collect()
 }
 
 /// What a box shows.
@@ -377,24 +538,12 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
             (w, h)
         }
         _ => {
-            let widest = spec
-                .lines
-                .iter()
-                .map(|l| l.width() + 2)
-                .chain(keys_line.as_deref().map(|k| width(k) + 2))
-                .max()
-                .unwrap_or(0);
-            let w = (spec.width as usize)
-                .max(if spec.title.is_empty() {
-                    0
-                } else {
-                    width(spec.title) + 6 + close_w
-                })
-                .max(widest)
-                .min(cols as usize - 2);
-            (w, spec.lines.len().min(room).max(1))
+            let w = inner_width(spec, cols as usize, look);
+            (w, lay_out(spec.lines, w).len().min(room).max(1))
         }
     };
+    // A box filling a share of the screen lays its own lines out to it.
+    let wraps = !matches!(spec.place, Place::Share { .. });
     let outer_w = inner_w as u16 + 2;
     // A box about the tab, beside a narrow lone pane, is a pane there when
     // it fits (`Look::middle`, set only for such a box).
@@ -404,7 +553,7 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
         _ => None,
     };
     if let Some(m) = pane {
-        return draw_pane(buf, spec, look, m, close, keys_line);
+        return draw_pane(buf, spec, look, m, (close, wraps), keys_line);
     }
     let outer_h = (shown + 2 + keys_rows) as u16;
     let outer_h = outer_h.min(rows);
@@ -499,7 +648,7 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
         );
         Rect::new(x, t, close_w as u16, 1)
     });
-    let (rows, clickable) = draw_inside(buf, spec, look, inner, keys_line);
+    let (rows, clickable) = draw_inside(buf, spec, look, (inner, wraps), keys_line);
     Drawn {
         outer,
         inner,
@@ -521,7 +670,7 @@ fn draw_pane(
     spec: &BoxSpec<'_>,
     look: &Look,
     m: Rect,
-    close: bool,
+    (close, wraps): (bool, bool),
     keys_line: Option<String>,
 ) -> Drawn {
     for y in m.top()..m.bottom() {
@@ -569,7 +718,7 @@ fn draw_pane(
         m.width.saturating_sub(2),
         m.height.saturating_sub(2),
     );
-    let (rows, clickable) = draw_inside(buf, spec, look, inner, keys_line);
+    let (rows, clickable) = draw_inside(buf, spec, look, (inner, wraps), keys_line);
     Drawn {
         outer: m,
         inner,
@@ -580,22 +729,28 @@ fn draw_pane(
     }
 }
 
-/// A box's lines from the top of `inner`, and its keys on its last row
-/// with a blank one above; gives the screen row of each line shown and the
-/// rows a click means something on.
+/// A box's lines from the top of `inner` (its text wrapped to it, unless
+/// it fills a share of the screen), and its keys on its last row with a
+/// blank one above; gives the screen row of each line shown and the rows a
+/// click means something on.
 fn draw_inside(
     buf: &mut Buffer,
     spec: &BoxSpec<'_>,
     look: &Look,
-    inner: Rect,
+    (inner, wraps): (Rect, bool),
     keys_line: Option<String>,
 ) -> (Vec<(u16, usize)>, Vec<u16>) {
     let keys_rows = if keys_line.is_some() { 2 } else { 0 };
     let mut drawn_rows = Vec::new();
     let mut clickable = Vec::new();
     let line_rows = inner.height.saturating_sub(keys_rows as u16);
-    for (i, line) in spec.lines.iter().take(line_rows as usize).enumerate() {
-        let y = inner.y + i as u16;
+    let lines = if wraps {
+        lay_out(spec.lines, inner.width as usize)
+    } else {
+        spec.lines.iter().cloned().enumerate().collect()
+    };
+    for (row, (i, line)) in lines.iter().take(line_rows as usize).enumerate() {
+        let (i, y) = (*i, inner.y + row as u16);
         if let Some(fill) = line.fill {
             buf.set_style(Rect::new(inner.x, y, inner.width, 1), Style::new().bg(fill));
         }

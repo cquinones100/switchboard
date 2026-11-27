@@ -870,13 +870,10 @@ impl Server {
             client,
             Box::new(boxed),
             Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Picked(p) = outcome else {
+                let Some((index, fields)) = crate::ui::form::read::<Fields>(&outcome) else {
                     return;
                 };
-                let Ok(fields) = serde_json::from_str::<Fields>(&p.value) else {
-                    return;
-                };
-                match p.index {
+                match index {
                     settings_box::SAVE => server.autopilot_box_save(client, fields, was),
                     settings_box::PAUSE => server
                         .autopilot_change(client, if paused { Act::Resume } else { Act::Pause }),

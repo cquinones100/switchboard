@@ -505,8 +505,7 @@ impl SearchBox {
 
     fn step_focus(&mut self, by: isize, look: &Look) -> Step {
         let stops = self.stops(look);
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus_on(stops[(at + by).rem_euclid(stops.len() as isize) as usize]);
+        self.focus_on(crate::ui::form::step(&stops, self.focus, by));
         Step::Redraw
     }
 
@@ -521,8 +520,7 @@ impl SearchBox {
     fn step_chip(&mut self, by: isize) -> Step {
         let mut chips = vec![Part::All];
         chips.extend(self.sources.iter().map(|s| Part::Chip(*s)));
-        let at = chips.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus_on(chips[(at + by).rem_euclid(chips.len() as isize) as usize]);
+        self.focus_on(crate::ui::form::step(&chips, self.focus, by));
         Step::Redraw
     }
 

@@ -25,7 +25,8 @@ use ratatui::text::Span;
 use super::grid::{self, Choice, Layout, MOST};
 use super::views::Group;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, width};
+use crate::ui::draw::{self, BoxLine, BoxSpec, Gesture, Hit, width};
+use crate::ui::form::{self, Form};
 use crate::ui::kit::{self, Tone};
 use crate::ui::{Look, Outcome, Overlay, Step, Theme};
 
@@ -74,15 +75,12 @@ pub struct ViewsBox {
     entries: Vec<Entry>,
     picked: Vec<String>,
     layout: Layout,
-    /// The entries, then the layouts' keycaps.
-    cursor: usize,
-    hover: Option<Target>,
+    /// The chosen entry or layout, the one under the mouse, and where each
+    /// was drawn.
+    form: Form<Target>,
     too_many: bool,
     caps: bool,
     out: Picked,
-    drawn: Option<Drawn>,
-    /// Where each target was drawn: its line and its columns inside the box.
-    targets: Vec<(usize, u16, u16, Target)>,
 }
 
 impl ViewsBox {
@@ -106,13 +104,10 @@ impl ViewsBox {
                 entries,
                 picked,
                 layout: choice.layout,
-                cursor,
-                hover: None,
+                form: Form::new(Target::Entry(cursor), Target::Close),
                 too_many: false,
                 caps,
                 out: out.clone(),
-                drawn: None,
-                targets: Vec::new(),
             },
             out,
         )
@@ -128,16 +123,11 @@ impl ViewsBox {
     }
 
     /// The Tab stops: the views, the layouts, and with easy mode the ×.
-    fn stops(&self, close: bool) -> usize {
-        self.entries.len() + Layout::ALL.len() + usize::from(close)
-    }
-
-    fn at_cursor(&self) -> Target {
-        match self.cursor.checked_sub(self.entries.len()) {
-            None => Target::Entry(self.cursor),
-            Some(l) if l < Layout::ALL.len() => Target::Layout(Layout::ALL[l]),
-            Some(_) => Target::Close,
-        }
+    fn stops(&self) -> Vec<Target> {
+        (0..self.entries.len())
+            .map(Target::Entry)
+            .chain(Layout::ALL.iter().map(|l| Target::Layout(*l)))
+            .collect()
     }
 
     /// Space on a view: picked, or unpicked; a fifth refused.
@@ -156,7 +146,7 @@ impl ViewsBox {
 
     /// `J` and `K`: the chosen view a place later or earlier.
     fn move_place(&mut self, by: isize) {
-        let Target::Entry(at) = self.at_cursor() else {
+        let Target::Entry(at) = self.form.focus else {
             return;
         };
         let slug = &self.entries[at].slug;
@@ -217,7 +207,7 @@ impl ViewsBox {
             Span::raw(" ".repeat(gap.max(1))),
             Span::styled(number, Tone::Accent.bold(theme)),
         ];
-        let lit = self.cursor == at || self.hover == Some(Target::Entry(at));
+        let lit = self.form.lit(Target::Entry(at));
         kit::row(spans, COL_W, lit, theme)
     }
 
@@ -258,7 +248,7 @@ impl ViewsBox {
                 // mouse, which a click makes the first.
                 let style = if p == 0 {
                     Tone::Accent.style(theme)
-                } else if self.hover == Some(Target::Cell(p)) {
+                } else if self.form.hover == Some(Target::Cell(p)) {
                     Tone::Text.bold(theme)
                 } else {
                     Tone::Dim.style(theme)
@@ -337,10 +327,8 @@ impl ViewsBox {
         ];
         let mut caps = Vec::new();
         let mut caps_hits = Vec::new();
-        for (i, l) in Layout::ALL.into_iter().enumerate() {
-            let lit = l == self.layout
-                || self.cursor == self.entries.len() + i
-                || self.hover == Some(Target::Layout(l));
+        for l in Layout::ALL {
+            let lit = l == self.layout || self.form.lit(Target::Layout(l));
             let from = caps.iter().map(|s: &Span| width(&s.content)).sum::<usize>();
             caps.extend(kit::keycap(
                 &l.key().to_string(),
@@ -373,7 +361,7 @@ impl ViewsBox {
     /// The box's lines, `room` of them shown: past that the views' columns
     /// scroll to keep the chosen view in sight, the layout's side staying.
     fn lines(&mut self, theme: &Theme, room: usize) -> Vec<BoxLine> {
-        self.targets.clear();
+        self.form.clear();
         let inside = INSIDE as usize;
         let top = if self.too_many {
             Span::styled(TOO_MANY, Tone::Needs.bold(theme))
@@ -386,11 +374,9 @@ impl ViewsBox {
         let right = self.right(theme);
         // The title's two lines and the rule under the columns.
         let body = room.saturating_sub(3).max(1);
-        let chosen_row = [&left, &middle].iter().find_map(|column| {
-            column
-                .iter()
-                .position(|(_, t)| *t == Some(Target::Entry(self.cursor)))
-        });
+        let chosen_row = [&left, &middle]
+            .iter()
+            .find_map(|column| column.iter().position(|(_, t)| *t == Some(self.form.focus)));
         let first = chosen_row.map_or(0, |r| (r + 1).saturating_sub(body));
         let views = left.len().max(middle.len()).saturating_sub(first);
         let rows = views.max(right.len()).min(body.max(right.len()));
@@ -401,8 +387,7 @@ impl ViewsBox {
                 let (cell, target) = column.get(r + first).cloned().unwrap_or_default();
                 kit::place(&mut spans, cell, (x, COL_W));
                 if let Some(t) = target {
-                    self.targets
-                        .push((line, x as u16, (x + COL_W - 1) as u16, t));
+                    self.form.cols(line, x as u16, (x + COL_W) as u16, t);
                 }
             }
             spans.push(Span::raw(" "));
@@ -411,30 +396,23 @@ impl ViewsBox {
             let (cell, hits) = right.get(r).cloned().unwrap_or_default();
             spans.extend(kit::fit(cell, RIGHT_W, Style::new()));
             for (from, to, t) in hits {
-                self.targets.push((
+                self.form.cols(
                     line,
                     (RIGHT_X + from as usize) as u16,
-                    (RIGHT_X + to as usize) as u16,
+                    (RIGHT_X + to as usize + 1) as u16,
                     t,
-                ));
+                );
             }
             out.push(BoxLine::spans(kit::fit(spans, inside, Style::new())).clickable());
         }
         out.push(BoxLine::spans(vec![kit::rule(inside, theme)]));
         out
     }
-
-    fn target_at(&self, line: usize, col: u16) -> Option<Target> {
-        self.targets
-            .iter()
-            .find(|(l, from, to, _)| *l == line && (*from..=*to).contains(&col))
-            .map(|(.., t)| *t)
-    }
 }
 
 impl Overlay for ViewsBox {
     fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
-        self.drawn.as_ref()
+        self.form.drawn.as_ref()
     }
 
     fn kind(&self) -> &'static str {
@@ -442,7 +420,7 @@ impl Overlay for ViewsBox {
     }
 
     fn stands_out(&self) -> Option<Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
+        self.form.outer()
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
@@ -452,8 +430,8 @@ impl Overlay for ViewsBox {
         let mut spec = BoxSpec::new("Views at once", &lines);
         spec.width = INSIDE;
         spec.keys = Some(KEYS);
-        spec.close_lit = self.at_cursor() == Target::Close || self.hover == Some(Target::Close);
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        spec.close_lit = self.form.close_lit();
+        self.form.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
@@ -463,26 +441,27 @@ impl Overlay for ViewsBox {
             return Step::Same;
         }
         let entries = self.entries.len().max(1);
+        let on_entry = match self.form.focus {
+            Target::Entry(i) => i.min(entries - 1),
+            _ => entries - 1,
+        };
         match key.code {
             KeyCode::Esc => return Step::Close(Outcome::Dismissed),
-            KeyCode::Enter | KeyCode::Char(' ') if self.at_cursor() == Target::Close => {
+            KeyCode::Enter | KeyCode::Char(' ') if self.form.focus == Target::Close => {
                 return Step::Close(Outcome::Dismissed);
             }
             KeyCode::Enter => return self.done(),
             KeyCode::Up | KeyCode::Char('k') => {
-                self.cursor = (self.cursor.min(entries - 1) + entries - 1) % entries
+                self.form.focus = Target::Entry(form::step_index(on_entry, entries, -1))
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.cursor = (self.cursor.min(entries - 1) + 1) % entries
-            }
-            KeyCode::Tab if key.mods == Mods::NONE => {
-                self.cursor = (self.cursor + 1) % self.stops(look.close)
+                self.form.focus = Target::Entry(form::step_index(on_entry, entries, 1))
             }
             KeyCode::Tab | KeyCode::BackTab => {
-                let stops = self.stops(look.close);
-                self.cursor = (self.cursor + stops - 1) % stops
+                let stops = self.stops();
+                self.form.tab(&key, &stops, look);
             }
-            KeyCode::Char(' ') => self.act(self.at_cursor()),
+            KeyCode::Char(' ') => self.act(self.form.focus),
             KeyCode::Char('J') => self.move_place(1),
             KeyCode::Char('K') => self.move_place(-1),
             KeyCode::Char(c) => match Layout::of_key(c) {
@@ -495,22 +474,12 @@ impl Overlay for ViewsBox {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(hit) = self.drawn.as_ref().map(|d| d.hit(mouse.col, mouse.row)) else {
+        if self.form.drawn.is_none() {
             return Step::Same;
-        };
-        let target = match hit {
-            Hit::Line(line, col) => self.target_at(line, col),
-            Hit::Close => Some(Target::Close),
-            _ => None,
-        };
+        }
+        let (hit, target) = self.form.hit(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
-            Gesture::Move if look.hover && look.mouse => {
-                if target == self.hover {
-                    return Step::Same;
-                }
-                self.hover = target;
-                Step::Redraw
-            }
+            Gesture::Move if look.hover && look.mouse => self.form.hover_on(target),
             Gesture::Click if look.mouse => match hit {
                 Hit::Close => Step::Close(Outcome::Dismissed),
                 Hit::Outside => Step::Close(Outcome::Dismissed),
@@ -519,8 +488,8 @@ impl Overlay for ViewsBox {
                         return Step::Same;
                     };
                     self.too_many = false;
-                    if let Target::Entry(i) = t {
-                        self.cursor = i;
+                    if let Target::Entry(_) = t {
+                        self.form.focus = t;
                     }
                     self.act(t);
                     Step::Redraw
@@ -595,7 +564,7 @@ mod tests {
         );
         assert!(screen.contains("Kept for next time."), "{screen}");
         // A short screen scrolls the views to the chosen one.
-        b.cursor = entries().len() - 1;
+        b.form.focus = Target::Entry(entries().len() - 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 110, 16));
         b.draw(&mut buf, &Look::default());
         let short = crate::ui::draw::tests::screen(&buf).join("\n");
@@ -616,9 +585,9 @@ mod tests {
             close: true,
             ..Look::default()
         };
-        b.cursor = entries().len() + Layout::ALL.len() - 1;
+        b.form.focus = Target::Layout(Layout::ALL[Layout::ALL.len() - 1]);
         b.key(Key::new(KeyCode::Tab, Mods::NONE), &look);
-        assert_eq!(b.at_cursor(), Target::Close);
+        assert_eq!(b.form.focus, Target::Close);
         assert_eq!(
             b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
             Step::Close(Outcome::Dismissed)
@@ -629,15 +598,15 @@ mod tests {
     fn space_picks_up_to_four_and_j_and_k_move_a_view_s_place() {
         let (mut b, out) = ViewsBox::new(entries(), &Choice::default(), false);
         // The cursor starts on Slack, the first picked.
-        b.cursor = 0;
+        b.form.focus = Target::Entry(0);
         press(&mut b, ' ');
         assert!(b.too_many);
         assert!(drawn(&mut b).join("\n").contains(TOO_MANY));
         assert_eq!(b.picked().len(), 4);
         // Unpick Slack, pick Tabs: it goes last.
-        b.cursor = 5;
+        b.form.focus = Target::Entry(5);
         press(&mut b, ' ');
-        b.cursor = 0;
+        b.form.focus = Target::Entry(0);
         press(&mut b, ' ');
         assert_eq!(b.picked(), ["inbox", "usage", "calendar", "tabs"]);
         press(&mut b, 'K');

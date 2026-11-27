@@ -354,18 +354,13 @@ impl Overlay for AnswerBox {
         }
         match k.code {
             KeyCode::Tab | KeyCode::BackTab if stops > 0 => {
-                let forward = k.code == KeyCode::Tab;
-                self.focus = Some(match self.focus {
-                    None => {
-                        if forward {
-                            0
-                        } else {
-                            stops - 1
-                        }
-                    }
-                    Some(at) if at >= stops => 0,
-                    Some(at) if forward => (at + 1) % stops,
-                    Some(at) => (at + stops - 1) % stops,
+                let by = crate::ui::form::tab_by(&k).unwrap_or(1);
+                // From nowhere, Tab goes to the first and Shift-Tab the last.
+                let from = self.focus.unwrap_or(if by > 0 { stops - 1 } else { 0 });
+                self.focus = Some(if from >= stops {
+                    0
+                } else {
+                    crate::ui::form::step_index(from, stops, by)
                 });
                 Step::Redraw
             }

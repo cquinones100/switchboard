@@ -18,6 +18,7 @@
 //! - `draw`: the box every menu, question and list is drawn in.
 //! - `kit`: UX 2.0's atoms (tones, marks, chips, cards, keys, columns).
 //! - `field`: the text field every box that takes typing shares.
+//! - `form`: a box's parts, its focus ring, hit boxes and what is wrong.
 //! - `theme`: dark and light, the palettes, and which is in use.
 //! - `look`: the settings a box follows (`Look`).
 //! - `input`: the bytes a terminal sends, as keys, mouse and paste.
@@ -38,6 +39,7 @@
 pub mod confirm;
 pub mod draw;
 pub mod field;
+pub mod form;
 pub mod input;
 pub mod kit;
 pub mod look;
