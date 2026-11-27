@@ -420,10 +420,11 @@ pub fn is_fold(line: &Line) -> bool {
     line.anchor.2 == FOLD
 }
 
-/// A fold row's anchor's last part: past the first line it hides, whose
+/// A fold row's anchor's last part, which no Markdown line has (a table's
+/// rows count up from 1): past the first line it hides, whose
 /// block and place it takes, so the layout that shows it whole finds that
 /// line where the fold was.
-const FOLD: usize = 2;
+const FOLD: usize = usize::MAX;
 
 /// How far apart, in blocks, a box's body and each reply under it are.
 const REPLY: usize = 1 << 18;
@@ -597,7 +598,7 @@ fn comment_lines(
         let mut row = vec![Span::new(" ".repeat(MARGIN + at), Style::default())];
         row.extend(side.clone());
         row.extend(from_kit(kit::comment_fold(
-            &format!("{hidden} more lines · Enter shows them"),
+            &format!("{hidden} more lines · Enter: Show all of it"),
             frame.inner,
             theme,
         )));

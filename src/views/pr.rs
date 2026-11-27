@@ -1048,7 +1048,7 @@ mod tests {
         assert!(screen.contains("Line 1."), "{screen}");
         assert!(!screen.contains("Line 20."), "{screen}");
         assert!(
-            screen.contains("▾ 31 more lines · Enter shows them"),
+            screen.contains("▾ 31 more lines · Enter: Show all of it"),
             "{screen}"
         );
         assert!(screen.contains("ci-bot commented · 1h ago") && screen.contains("bot "));
@@ -1185,6 +1185,14 @@ mod tests {
                 .iter()
                 .any(|l| l.plain().contains("Line 20."))
         );
+        // With `view_box_keys` off, nothing folds and Tab and Enter leave
+        // the boxes alone.
+        let mut pager =
+            pager::Pager::new(Content::Board(board(&pr, now)), 130, 80).with_box_keys(false);
+        assert!(!pager.screen().join("\n").contains("more lines"));
+        pager.key(key(KeyCode::Tab));
+        pager.key(key(KeyCode::Enter));
+        assert!(!pager.menu_open());
     }
 
     #[test]

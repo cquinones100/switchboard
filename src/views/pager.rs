@@ -249,6 +249,9 @@ pub struct Pager {
     chosen_box: Option<String>,
     /// The long comments shown whole rather than folded, by their keys.
     whole: std::collections::HashSet<String>,
+    /// Whether Tab, Enter and clicks act on the comments' boxes, and long
+    /// ones fold (Settings' `view_box_keys`).
+    box_keys: bool,
 }
 
 /// The prompt line's words for the menu, which a click opens.
@@ -300,6 +303,7 @@ impl Pager {
             boxes: Vec::new(),
             chosen_box: None,
             whole: std::collections::HashSet::new(),
+            box_keys: true,
         };
         pager.set_content(content);
         pager
@@ -365,6 +369,14 @@ impl Pager {
     }
 
     /// Gives Markdown a cursor, on the first line with something on it.
+    /// Tab, Enter and clicks acting on the comments' boxes, and long
+    /// comments folded, or neither (`view_box_keys`).
+    pub fn with_box_keys(mut self, on: bool) -> Pager {
+        self.box_keys = on;
+        self.lay_out();
+        self
+    }
+
     pub fn with_cursor(mut self, on: bool) -> Pager {
         self.cursor_on = on;
         self.cursor = self.snap(self.top);
@@ -589,6 +601,7 @@ impl Pager {
             for part in &mut parts {
                 if let board::Part::Comment(c) = part {
                     c.whole = self.whole.contains(&c.key);
+                    c.folds &= self.box_keys;
                     c.chosen = self.chosen_box.as_ref() == Some(&c.key);
                 }
             }
@@ -1098,7 +1111,10 @@ impl Pager {
         let page = self.body() as isize;
         let half = (page / 2).max(1);
         let vim_idle = !self.has_cursor() || (self.vim.mode == Mode::Normal && self.vim.no_keys());
-        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && !self.boxes.is_empty() && vim_idle
+        if self.box_keys
+            && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+            && !self.boxes.is_empty()
+            && vim_idle
         {
             let back = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
             return self.next_box(!back);
@@ -1244,14 +1260,25 @@ impl Pager {
     /// The box Enter opens the menu of: the one the cursor is in, else the
     /// one Tab chose while any of it is on the screen.
     fn enter_box(&self) -> Option<usize> {
+        if !self.box_keys {
+            return None;
+        }
         if self.has_cursor() {
             return self.box_at(self.cursor);
         }
-        let key = self.chosen_box.as_ref()?;
-        let bottom = self.top + self.body();
-        self.boxes
-            .iter()
-            .position(|b| &b.comment.key == key && b.to >= self.top && b.from < bottom)
+        let bottom = (self.top + self.body()).min(self.doc.lines.len());
+        let chosen = self.chosen_box.as_ref().and_then(|key| {
+            self.boxes
+                .iter()
+                .position(|b| &b.comment.key == key && b.to >= self.top && b.from < bottom)
+        });
+        // Else the first folded box whose "N more lines" is on the screen,
+        // which says Enter shows them.
+        chosen.or_else(|| {
+            (self.top..bottom)
+                .find(|i| board::is_fold(&self.doc.lines[*i]))
+                .and_then(|i| self.box_at(i))
+        })
     }
 
     /// The box line `line` is in.
@@ -1385,7 +1412,7 @@ impl Pager {
         let vim_key = vim_key_of(key)?;
         // Vim's * and # search for the word under the cursor: what a fold
         // hides of it is shown first, as for a typed search.
-        if idle && !ctrl && matches!(key.code, KeyCode::Char('*' | '#')) {
+        if self.box_keys && idle && !ctrl && matches!(key.code, KeyCode::Char('*' | '#')) {
             let line = self.doc.lines.get(self.cursor).map(|l| l.plain());
             if let Some(word) = line.and_then(|l| word_at(&l, self.vim.col())) {
                 self.query = Some(word);
@@ -1573,7 +1600,8 @@ impl Pager {
             .is_none_or(|(_, at)| (mouse.column as usize) <= *at);
         let on_scroll_bar =
             matches!(self.scroll_bar(), (Some(_), Some(x)) if x == mouse.column as usize);
-        let on_box = (mouse.row as usize) < self.body() && in_column && !on_scroll_bar;
+        let on_box =
+            self.box_keys && (mouse.row as usize) < self.body() && in_column && !on_scroll_bar;
         if on_box && let Some(at) = self.box_at(line) {
             let b = &self.boxes[at];
             let on_bar = line <= b.from + 2 || self.doc.lines.get(line).is_some_and(board::is_fold);
@@ -2087,7 +2115,8 @@ fn run_with(
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let mut pager = Pager::new(content, cols as usize, rows as usize)
         .with_url(url)
-        .with_cursor(crate::settings::is_on("view_cursor"));
+        .with_cursor(crate::settings::is_on("view_cursor"))
+        .with_box_keys(crate::settings::is_on("view_box_keys"));
     if let Some(follow) = &follow {
         pager = pager.following(follow.read_at);
     }
