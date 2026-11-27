@@ -121,7 +121,12 @@ fn ordinal(n: u32) -> String {
 fn flight_words(column: &str, tab: Option<&Tab>, now: i64) -> (&'static str, String) {
     let lasted_for = || {
         tab.and_then(|t| tabs::since_ms(&t.since))
-            .map(|s| format!(" {}", ago(Some(s / 1000), now / 1000, Said::Short)))
+            .map(|s| {
+                format!(
+                    " {}",
+                    ago(Some(s / 1000), now / 1000, Said::Short).replace('<', "&lt;")
+                )
+            })
             .unwrap_or_default()
     };
     match column {

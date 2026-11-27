@@ -532,7 +532,7 @@ pub async fn dashboard_rows(cx: &Cx, quick: bool) -> (Vec<Row>, usize) {
             .unwrap_or_default();
         rows.push(Row {
             lasted: tabs::since_ms(&tab.since)
-                .map(|s| ago(Some(s / 1000), now / 1000, Said::Short))
+                .map(|s| ago(Some(s / 1000), now / 1000, Said::Short).replace('<', "&lt;"))
                 .unwrap_or_default(),
             last: last_at
                 .map(|at| ago(Some(at / 1000), now / 1000, Said::Ago))

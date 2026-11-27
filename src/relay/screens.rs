@@ -144,7 +144,7 @@ pub fn tab_screen(cx: &Relay, tab: &Tab, note: Option<&str>) -> Value {
     if let Some(since) = tabs::since_ms(&tab.since) {
         head.push_str(&format!(
             " for {}",
-            ago(Some(since / 1000), now / 1000, Said::Short)
+            ago(Some(since / 1000), now / 1000, Said::Short).replace('<', "&lt;")
         ));
     }
     if let Some(at) = last_at {
