@@ -773,7 +773,7 @@ function drawerList() {
   return list;
 }
 
-// ── A tab's menu, from a long press on its row (board 175) ──
+// ── A long press on a tab's row, which opens its sheet (board 197), and the menu a channel's ⋯ opens (board 175) ──
 
 const HOLD_MS = 500;
 
@@ -889,9 +889,8 @@ function menuChoices(tab) {
   return choices;
 }
 
-// The kit's box under the row, or, from a channel's ⋯, under its header,
-// where Mission control leads it (board 187), set off by a rule, while the
-// panel is on.
+// The kit's box under a channel's header, from its ⋯, where Mission
+// control leads it (board 187), set off by a rule, while the panel is on.
 function showMenu(tab) {
   const n = number(tab);
   const options = menuChoices(tab).map(([words, tone, act]) => el("button", { class: "menu-option" + tone, role: "menuitem", onclick: act }, words));
@@ -901,7 +900,7 @@ function showMenu(tab) {
   if (!options.length) return closeMenu();
   const box = el("div", { class: "box", role: "menu", "aria-label": "Tab " + tab.index + " " + (tab.name || "") }, boxHead("Tab " + tab.index + " · " + (tab.name || "")), options);
   layer(box);
-  const row = app.querySelector && app.querySelector(state.open ? ".screen:not(.going) .head" : '.row[data-pane="' + n + '"]');
+  const row = app.querySelector && app.querySelector(".screen:not(.going) .head");
   if (row && row.getBoundingClientRect) {
     const r = row.getBoundingClientRect();
     const below = r.bottom + 4;
@@ -989,8 +988,9 @@ function dragDown(top) {
     dragging = false;
     if (!sheetShown) return;
     sheetShown.box.style.transition = "";
+    // Dragged far, it slides out from where the finger left it.
+    if (far) return closeMenu();
     sheetShown.box.style.transform = "";
-    if (far) closeMenu();
   };
   top.addEventListener("pointerup", end);
   top.addEventListener("pointercancel", (e) => end(Object.assign({}, e, { clientY: from })));
@@ -1012,8 +1012,8 @@ async function loadSheet() {
     m.sheet.failed = false;
   } catch (_) {
     if (state.menu !== m || read < (m.sheet.shown || 0)) return;
-    // Read again as the stream next changes the tab, or the app reconnects.
-    m.sheet.failed = m.sheet.messages === null;
+    // Said under what it shows, and read again with the stream's next message.
+    m.sheet.failed = true;
   }
   drawSheet();
 }
@@ -1031,7 +1031,8 @@ function drawSheet() {
   const turn = m.sheet.messages === null
     ? [el("div", { class: "empty" }, m.sheet.failed ? "Couldn't read its last turn. Tap to open the channel." : "Reading its last turn…")]
     : m.sheet.messages.length ? lastTurn(tab, m.sheet.messages) : [el("div", { class: "empty" }, "No turn yet.")];
-  list.replaceChildren(...turn, ...(card ? [card] : []));
+  const failed = m.sheet.failed && m.sheet.messages !== null ? el("div", { class: "empty" }, "Couldn't read its newest turn.") : null;
+  list.replaceChildren(...turn, ...[card, failed].filter(Boolean));
   // The options drawn again only when they change, so the one focused keeps it.
   const choices = menuChoices(tab);
   const words = choices.map(([w]) => w).join("\n");
@@ -1084,6 +1085,9 @@ function lastTurn(tab, messages) {
     const who = m.who === "you" ? "You" : m.who === "tab" ? m.from || "Another tab" : "Claude";
     const speaker = m.who === "tab" ? "tab" : m.who === "you" ? "you" : "claude";
     const when = el("span", { class: "when" }, ago(m.at));
+    const pictures = (m.images || []).length;
+    // Pictures sent are a dim line, as a look's are: the channel shows them.
+    const sent = pictures ? el("div", { class: "tool" }, (m.who === "you" ? "Sent " : "Showed ") + (pictures === 1 ? "a picture" : pictures + " pictures")) : null;
     const body = !m.text ? null : m.who === "claude" && md ? unlinked(markdown(m.text)) : el("div", { class: "body" }, m.text);
     return el(
       "div",
@@ -1091,6 +1095,7 @@ function lastTurn(tab, messages) {
       same ? el("span") : el("span", { class: "avatar " + speaker }, m.who === "tab" ? (m.tab ? String(m.tab) : "↪") : who[0]),
       same ? null : el("div", {}, el("span", { class: "who" }, who), when),
       body,
+      sent,
     );
   });
 }
@@ -3230,7 +3235,8 @@ function listen() {
     drawSheet();
     // Its step too, which changes with each tool call while the turn's own words stay.
     const stepped = (t) => said(t) + JSON.stringify(t.doing || null);
-    if (sheetBefore && sheetAfter && stepped(sheetBefore) !== stepped(sheetAfter)) loadSheet();
+    const sheetFailed = state.menu && state.menu.sheet && state.menu.sheet.failed;
+    if (sheetAfter && (sheetFailed || (sheetBefore && stepped(sheetBefore) !== stepped(sheetAfter)))) loadSheet();
     tabsRead();
   };
   source.onerror = () => {
