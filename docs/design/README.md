@@ -344,6 +344,10 @@ The relay's DM, threads and Home tab.
 - [186. PRs and CI in the phone's right panel: the PR board's columns as groups, CI's runs with what fails first; a failing run's menu leads with Start a CI loop…, and an option ending in … asks first, \[Y/n\], Yes lit at the right](https://cquinones100.github.io/switchboard/design/186.html)
 - [187. Notifications in the phone's right panel, each view's own menu from ⋯ in its head (m's actions over all it shows), Mission control first in a channel's ⋯ menu, which slides the panel in as the swipe does, and the toast that says the first time where the panel is](https://cquinones100.github.io/switchboard/design/187.html)
 
+## Proposal: a tab's sheet on the phone
+
+- [197. A tab's sheet on the phone, from a long press on its row in the drawer: three quarters of the screen high, the tab's last turn as its channel draws it (live while it works, a question it asks ending it) above the options board 175's menu had, fixed at its foot; a tap on the turn opens the channel, Close tab still asks first](https://cquinones100.github.io/switchboard/design/197.html)
+
 ## Proposal: stepping over a prompt's questions on the phone
 
 - [188. A prompt of several questions on the phone: the card's head lists the questions as steps, the one shown lit and each answered one with ✓, Submit last; ‹ and › step back and forward as ← and → do in Claude Code, a tap on a name steps to it; going back shows the answer given, and Submit reviews every answer](https://cquinones100.github.io/switchboard/design/188.html)
