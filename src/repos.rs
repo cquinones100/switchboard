@@ -1122,8 +1122,8 @@ pub fn ask_setup(repo: &str, now: i64) -> Result<Setup, String> {
     let (owner, name) = repo.split_once('/').ok_or("not owner/name")?;
     let source = "settings: how a repository lands";
     let data = wait_for(github::graphql(
-        "query($o: String!, $n: String!, $prs: Int!) { repository(owner: $o, name: $n) { autoMergeAllowed viewerPermission mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } labels(first: 100) { nodes { name } } pullRequests(first: $prs, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { context } } } } } } } } } } }",
-        json!({ "o": owner, "n": name, "prs": RECENT_PRS }),
+        "query($o: String!, $n: String!, $prs: Int!) { repository(owner: $o, name: $n) { autoMergeAllowed viewerPermission mergeQueue { url } defaultBranchRef { name refUpdateRule { viewerCanPush requiredApprovingReviewCount } } object(expression: \"HEAD:.github/workflows\") { ... on Tree { entries { name object { ... on Blob { text } } } } } } }",
+        json!({ "o": owner, "n": name }),
         source,
     ))
     .map_err(|e| e.to_string())?;
@@ -1157,6 +1157,16 @@ pub fn ask_setup(repo: &str, now: i64) -> Result<Setup, String> {
         }
     })?;
     setup.strict |= strict_classic;
+    // A merge service's label and check, asked apart, so a token that
+    // can't read checks leaves them unchecked rather than the rest unknown.
+    setup.names = wait_for(github::graphql_partial(
+        "query($o: String!, $n: String!, $prs: Int!) { repository(owner: $o, name: $n) { labels(first: 100) { nodes { name } } pullRequests(first: $prs, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { context } } } } } } } } } } }",
+        json!({ "o": owner, "n": name, "prs": RECENT_PRS }),
+        source,
+    ))
+    .ok()
+    .filter(|(_, errors)| errors.is_empty())
+    .and_then(|(v, _)| v.get("repository").filter(|r| r.is_object()).map(names_of));
     Ok(setup)
 }
 
@@ -1200,7 +1210,7 @@ pub fn setup_of(
         requires_pr: reviews || !can_push,
         strict: false,
         train_ci: false,
-        names: Some(names_of(repository)),
+        names: None,
     };
     setup.requires_pr |= setup.merge_queue;
     if let Some(b) = branch.as_deref() {
@@ -1237,7 +1247,7 @@ pub fn setup_of(
 }
 
 /// The labels and the checks on the recent PRs in GitHub's answer for a
-/// repository, each check once.
+/// repository (`ask_setup`'s second query), each check once.
 fn names_of(repository: &Value) -> Names {
     let nodes = |v: Option<&Value>| -> Vec<Value> {
         v.and_then(Value::as_array).cloned().unwrap_or_default()
@@ -2215,7 +2225,7 @@ mod tests {
     }
 
     #[test]
-    fn github_s_answer_names_the_labels_and_the_checks_on_recent_prs_and_keeps_them() {
+    fn the_labels_and_the_checks_on_recent_prs_are_read_and_kept() {
         let none = |_: &str| Ok(Value::Array(Vec::new()));
         let mut data = answer(false, false, Value::Null, "");
         data["repository"]["labels"] =
@@ -2226,7 +2236,9 @@ mod tests {
             rollup(json!([{ "context": "legacy/status" }, { "name": "ci" }])),
             { "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] } },
         ] });
-        let s = setup_of(&data, 1, &none).unwrap();
+        let mut s = setup_of(&data, 1, &none).unwrap();
+        assert_eq!(s.names, None, "asked apart");
+        s.names = Some(names_of(&data["repository"]));
         let names = s.names.clone().unwrap();
         assert_eq!(names.labels, vec!["merge-ready", "bug"]);
         assert_eq!(names.checks, vec!["mergebot", "ci", "legacy/status"]);
