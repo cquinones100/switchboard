@@ -19,7 +19,9 @@
 //! words that name Settings' row for it (`not_set_words`), and
 //! queue-and-clean and autopilot stopping there. Settings' Repositories
 //! checks that each way is set up, from what GitHub said when last asked
-//! (`Setup`, kept in the state directory's `repos-setup.json`), and may
+//! (`Setup`, kept in the state directory's `repos-setup.json`, a merge
+//! service's by its label among the repository's and its check on its
+//! recent PRs, `Names`), and may
 //! suggest a way from GitHub's rules, which only you choose. A branch keeps
 //! the way it started landing with (`branch.<branch>.wtnLands`, written by
 //! `switchboard landing --start`), so a change of way applies from the next
@@ -924,7 +926,23 @@ pub struct Setup {
     pub strict: bool,
     /// A workflow of the default branch runs on a push to `ci/train-*`.
     pub train_ci: bool,
+    /// What a merge service's check reads: `None` when asking for it failed
+    /// outright, or in an answer kept by a build from before it was asked.
+    pub names: Option<Names>,
 }
+
+/// The repository's labels and the checks reported on its most recently
+/// updated PRs (`RECENT_PRS`), for a merge service's check, each `None`
+/// when GitHub's answer left it out (a token that can't read checks).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Names {
+    pub labels: Option<Vec<String>>,
+    pub checks: Option<Vec<String>>,
+}
+
+/// How many of a repository's most recently updated PRs a merge service's
+/// check is looked for on.
+pub const RECENT_PRS: usize = 20;
 
 impl Setup {
     fn json(&self) -> Value {
@@ -937,6 +955,7 @@ impl Setup {
             "requiresPr": self.requires_pr,
             "strict": self.strict,
             "trainCi": self.train_ci,
+            "names": self.names.as_ref().map(|n| json!({ "labels": n.labels, "checks": n.checks })),
         })
     }
 
@@ -951,7 +970,29 @@ impl Setup {
             requires_pr: on("requiresPr"),
             strict: on("strict"),
             train_ci: on("trainCi"),
+            names: v.get("names").filter(|n| n.is_object()).map(|n| {
+                let list = |k: &str| {
+                    n.get(k).and_then(Value::as_array).map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                };
+                Names {
+                    labels: list("labels"),
+                    checks: list("checks"),
+                }
+            }),
         })
+    }
+
+    /// Whether this answer holds what `service`'s check reads: its labels
+    /// when it is handed a PR by a label, and the checks on recent PRs.
+    pub fn knows(&self, service: &Service) -> bool {
+        self.names
+            .as_ref()
+            .is_some_and(|n| n.checks.is_some() && (service.label.is_none() || n.labels.is_some()))
     }
 
     /// The way GitHub's rules suggest, which only you choose: GitHub's
@@ -989,8 +1030,25 @@ pub fn setup_in(file: &Path, key: &str) -> Option<Setup> {
 }
 
 /// Keeps what GitHub said of a repository.
+/// A merge service's labels or checks asked for and not answered keep the
+/// ones kept before, each on its own, so one failed look doesn't lose a
+/// good answer.
 pub fn remember_setup(file: &Path, key: &str, setup: &Setup) {
     let mut data = util::read_json_object(file);
+    let mut setup = setup.clone();
+    let kept = data
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .and_then(|(_, v)| Setup::of(v))
+        .and_then(|kept| kept.names)
+        .unwrap_or_default();
+    let names = setup.names.take().unwrap_or_default();
+    let names = Names {
+        labels: names.labels.or(kept.labels),
+        checks: names.checks.or(kept.checks),
+    };
+    setup.names = (names != Names::default()).then_some(names);
+    data.retain(|k, _| !k.eq_ignore_ascii_case(key));
     data.insert(key.to_string(), setup.json());
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -1017,11 +1075,9 @@ pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Che
         ok: Some(false),
         words: w,
     };
-    if way == Way::Service {
-        return match service_of(entry) {
-            Some(s) => yes(format!("{} and {}'s check", s.hand_over(), s.check)),
-            None => no("the label or comment and the check the service uses aren't named".into()),
-        };
+    let service = service_of(entry);
+    if way == Way::Service && service.is_none() {
+        return no("the label or comment and the check the service uses aren't named".into());
     }
     let Some(s) = setup else {
         return Check {
@@ -1051,7 +1107,42 @@ pub fn check(way: Way, setup: Option<&Setup>, entry: &Map<String, Value>) -> Che
             (false, _) => no(format!("you can't push to {branch}")),
             (true, true) => no(format!("a rule asks for a PR on {branch}")),
         },
-        Way::Service => unreachable!("answered above"),
+        Way::Service => {
+            let service = service.expect("answered above");
+            let Some(names) = &s.names else {
+                return Check {
+                    ok: None,
+                    words: "not checked yet: GitHub hasn't answered for its labels and checks"
+                        .into(),
+                };
+            };
+            let unknown = |what: &str| Check {
+                ok: None,
+                words: format!("not checked: GitHub didn't show {what}"),
+            };
+            if let Some(label) = &service.label {
+                let Some(labels) = &names.labels else {
+                    return unknown("the repository's labels");
+                };
+                if !labels.iter().any(|l| l.eq_ignore_ascii_case(label)) {
+                    return no(format!("the repository has no {label} label on GitHub"));
+                }
+            }
+            let Some(checks) = &names.checks else {
+                return unknown("the checks on its PRs");
+            };
+            if !checks.contains(&service.check) {
+                return no(format!(
+                    "{} isn't reported on any of its last {RECENT_PRS} PRs",
+                    service.check
+                ));
+            }
+            yes(format!(
+                "{} and {}'s check, seen on its recent PRs",
+                service.hand_over(),
+                service.check
+            ))
+        }
     }
 }
 
@@ -1102,6 +1193,19 @@ pub fn ask_setup(repo: &str, now: i64) -> Result<Setup, String> {
         }
     })?;
     setup.strict |= strict_classic;
+    // A merge service's label and check, asked apart, so a token that
+    // can't read checks leaves them unchecked rather than the rest unknown.
+    setup.names = wait_for(github::graphql_partial(
+        "query($o: String!, $n: String!, $prs: Int!) { repository(owner: $o, name: $n) { labels(first: 100) { nodes { name } } pullRequests(first: $prs, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { context } } } } } } } } } } }",
+        json!({ "o": owner, "n": name, "prs": RECENT_PRS }),
+        source,
+    ))
+    .ok()
+    .and_then(|(v, errors)| {
+        v.get("repository")
+            .filter(|r| r.is_object())
+            .map(|r| names_of(r, &errors))
+    });
     Ok(setup)
 }
 
@@ -1145,6 +1249,7 @@ pub fn setup_of(
         requires_pr: reviews || !can_push,
         strict: false,
         train_ci: false,
+        names: None,
     };
     setup.requires_pr |= setup.merge_queue;
     if let Some(b) = branch.as_deref() {
@@ -1178,6 +1283,52 @@ pub fn setup_of(
         .filter_map(|e| e.pointer("/object/text").and_then(Value::as_str))
         .any(runs_on_trains);
     Ok(setup)
+}
+
+/// The labels and the checks on the recent PRs in GitHub's answer for a
+/// repository (`ask_setup`'s second query), each check once, leaving out
+/// a list one of GitHub's `errors` names (or any, for an error naming no
+/// field).
+fn names_of(repository: &Value, errors: &[Value]) -> Names {
+    let failed = |field: &str| {
+        errors
+            .iter()
+            .any(|e| match e.get("path").and_then(Value::as_array) {
+                Some(path) => path.iter().any(|p| p == field),
+                None => true,
+            })
+    };
+    let nodes = |v: Option<&Value>| -> Vec<Value> {
+        v.and_then(Value::as_array).cloned().unwrap_or_default()
+    };
+    let labels = nodes(repository.pointer("/labels/nodes"))
+        .iter()
+        .filter_map(|l| l.get("name")?.as_str().map(str::to_string))
+        .collect();
+    let mut checks: Vec<String> = Vec::new();
+    for pr in nodes(repository.pointer("/pullRequests/nodes")) {
+        for commit in nodes(pr.pointer("/commits/nodes")) {
+            let contexts = commit.pointer("/commit/statusCheckRollup/contexts/nodes");
+            for c in nodes(contexts) {
+                let name = c.get("name").or_else(|| c.get("context"));
+                if let Some(name) = name.and_then(Value::as_str)
+                    && !checks.iter().any(|k| k == name)
+                {
+                    checks.push(name.to_string());
+                }
+            }
+        }
+    }
+    let labels_shown = repository
+        .pointer("/labels/nodes")
+        .is_some_and(Value::is_array);
+    let checks_shown = repository
+        .pointer("/pullRequests/nodes")
+        .is_some_and(Value::is_array);
+    Names {
+        labels: (labels_shown && !failed("labels")).then_some(labels),
+        checks: (checks_shown && !failed("pullRequests")).then_some(checks),
+    }
 }
 
 /// Whether a workflow's text runs it on a push to a merge queue train's
@@ -2129,6 +2280,108 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_look_for_a_service_s_names_keeps_the_ones_before() {
+        let scratch = Scratch::new("repos-names");
+        let file = scratch.0.join("repos-setup.json");
+        let names = Names {
+            labels: Some(vec!["merge-ready".into()]),
+            checks: Some(vec!["mergebot".into()]),
+        };
+        let good = Setup {
+            at: 1,
+            names: Some(names.clone()),
+            ..Setup::default()
+        };
+        remember_setup(&file, "acme/svc", &good);
+        let failed = Setup {
+            at: 2,
+            ..Setup::default()
+        };
+        remember_setup(&file, "Acme/Svc", &failed);
+        let kept = setup_in(&file, "acme/svc").unwrap();
+        assert_eq!(kept.at, 2);
+        assert_eq!(kept.names, Some(names.clone()), "the names from before");
+        let partly = Setup {
+            at: 3,
+            names: Some(Names {
+                labels: Some(vec!["shipit".into()]),
+                checks: None,
+            }),
+            ..Setup::default()
+        };
+        remember_setup(&file, "acme/svc", &partly);
+        let merged = setup_in(&file, "acme/svc").unwrap().names.unwrap();
+        assert_eq!(
+            merged.labels,
+            Some(vec!["shipit".to_string()]),
+            "the new labels"
+        );
+        assert_eq!(merged.checks, names.checks, "the checks from before");
+        let service = |label: Option<&str>| Service {
+            label: label.map(str::to_string),
+            comment: Some("/merge".into()),
+            check: "mergebot".into(),
+        };
+        assert!(kept.knows(&service(Some("merge-ready"))));
+        let no_labels = Setup {
+            names: Some(Names {
+                labels: None,
+                checks: Some(vec![]),
+            }),
+            ..Setup::default()
+        };
+        assert!(!no_labels.knows(&service(Some("merge-ready"))));
+        assert!(no_labels.knows(&service(None)), "a comment needs no labels");
+        assert!(!failed.knows(&service(None)));
+    }
+
+    #[test]
+    fn the_labels_and_the_checks_on_recent_prs_are_read_and_kept() {
+        let none = |_: &str| Ok(Value::Array(Vec::new()));
+        let mut data = answer(false, false, Value::Null, "");
+        data["repository"]["labels"] =
+            json!({ "nodes": [{ "name": "merge-ready" }, { "name": "bug" }] });
+        let rollup = |contexts: Value| json!({ "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": { "nodes": contexts } } } }] } });
+        data["repository"]["pullRequests"] = json!({ "nodes": [
+            rollup(json!([{ "name": "mergebot" }, { "name": "ci" }])),
+            rollup(json!([{ "context": "legacy/status" }, { "name": "ci" }])),
+            { "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] } },
+        ] });
+        let mut s = setup_of(&data, 1, &none).unwrap();
+        assert_eq!(s.names, None, "asked apart");
+        s.names = Some(names_of(&data["repository"], &[]));
+        let names = s.names.clone().unwrap();
+        assert_eq!(names.labels.unwrap(), vec!["merge-ready", "bug"]);
+        assert_eq!(
+            names.checks.unwrap(),
+            vec!["mergebot", "ci", "legacy/status"]
+        );
+        let no_checks = names_of(
+            &data["repository"],
+            &[
+                json!({ "message": "no", "path": ["repository", "pullRequests", "nodes", 0, "commits"] }),
+            ],
+        );
+        assert!(
+            no_checks.labels.is_some() && no_checks.checks.is_none(),
+            "labels kept where only the checks couldn't be read"
+        );
+        assert_eq!(
+            names_of(&data["repository"], &[json!({ "message": "no" })]),
+            Names::default(),
+            "an error naming no field leaves both out"
+        );
+        assert_eq!(Setup::of(&s.json()), Some(s.clone()), "kept as it was read");
+        let mut before = s.json();
+        before.as_object_mut().unwrap().remove("names");
+        assert_eq!(
+            Setup::of(&before).unwrap().names,
+            None,
+            "an answer kept before it was asked"
+        );
+    }
+
+    #[test]
     fn github_s_answer_says_which_ways_are_set_up_and_a_404_ruleset_is_none() {
         let none = |_: &str| Ok(Value::Array(Vec::new()));
         let open = setup_of(&answer(false, false, Value::Null, "on: push"), 1, &none).unwrap();
@@ -2192,8 +2445,66 @@ mod tests {
         assert_eq!(missing(Way::Direct).ok, Some(true));
         assert_eq!(missing(Way::Service).ok, Some(false));
         let named = json!({ "serviceLabel": "merge-ready", "serviceCheck": "mergebot" });
-        let set = check(Way::Service, None, named.as_object().unwrap());
-        assert_eq!(set.ok, Some(true), "a service needs nothing of GitHub's");
+        let named = named.as_object().unwrap();
+        assert_eq!(
+            check(Way::Service, None, named).ok,
+            None,
+            "the label and the check not looked for yet"
+        );
+        let kept_before = Setup {
+            names: None,
+            ..s.clone()
+        };
+        assert_eq!(
+            check(Way::Service, Some(&kept_before), named).ok,
+            None,
+            "an answer kept from before they were asked"
+        );
+        let seen = |labels: &[&str], checks: &[&str]| Setup {
+            names: Some(Names {
+                labels: Some(labels.iter().map(|l| l.to_string()).collect()),
+                checks: Some(checks.iter().map(|c| c.to_string()).collect()),
+            }),
+            ..s.clone()
+        };
+        let set = check(
+            Way::Service,
+            Some(&seen(&["Merge-Ready"], &["ci", "mergebot"])),
+            named,
+        );
+        assert_eq!(set.ok, Some(true), "{}", set.words);
+        let unlabeled = check(Way::Service, Some(&seen(&["bug"], &["mergebot"])), named);
+        assert_eq!(unlabeled.ok, Some(false));
+        assert!(
+            unlabeled.words.contains("no merge-ready label"),
+            "{}",
+            unlabeled.words
+        );
+        let unseen = check(Way::Service, Some(&seen(&["merge-ready"], &["ci"])), named);
+        assert_eq!(unseen.ok, Some(false));
+        assert!(
+            unseen.words.contains("mergebot isn't reported"),
+            "{}",
+            unseen.words
+        );
+        let unread = Setup {
+            names: Some(Names::default()),
+            ..s.clone()
+        };
+        let unread = check(Way::Service, Some(&unread), named);
+        assert_eq!(unread.ok, None, "{}", unread.words);
+        assert!(unread.words.contains("didn't show the repository's labels"));
+        let by_comment = json!({ "serviceComment": "/merge", "serviceCheck": "mergebot" });
+        assert_eq!(
+            check(
+                Way::Service,
+                Some(&seen(&[], &["mergebot"])),
+                by_comment.as_object().unwrap()
+            )
+            .ok,
+            Some(true),
+            "a comment needs no label"
+        );
         assert_eq!(
             check(Way::AutoMerge, None, &empty).ok,
             None,

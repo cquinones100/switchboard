@@ -7604,16 +7604,25 @@ impl Server {
         let file = crate::repos::setup_file();
         let now = util::now_ms();
         let mut repos: Vec<String> = self.tab_repos().into_iter().map(|(r, _)| r).collect();
-        for key in crate::repos::read_safely().keys() {
+        let data = crate::repos::read_safely();
+        for key in data.keys() {
             if crate::integrations::github::parse_name_with_owner(key).is_some()
                 && !repos.iter().any(|r| r.eq_ignore_ascii_case(key))
             {
                 repos.push(key.clone());
             }
         }
+        let mut due = Vec::new();
         for repo in repos {
-            let fresh = crate::repos::setup_in(&file, &repo)
-                .is_some_and(|s| now - s.at < crate::repos::DAY_MS);
+            // A merge service's check needs its names, which an answer kept
+            // by an earlier build, or a look for them that failed, lacks.
+            let entry = crate::repos::landing_entry(&data, &repo);
+            let service = (crate::repos::lands_of(&entry) == Some(crate::repos::Way::Service))
+                .then(|| crate::repos::service_of(&entry))
+                .flatten();
+            let fresh = crate::repos::setup_in(&file, &repo).is_some_and(|s| {
+                now - s.at < crate::repos::DAY_MS && service.as_ref().is_none_or(|v| s.knows(v))
+            });
             let asked = self
                 .mission
                 .landing_asked
@@ -7625,12 +7634,21 @@ impl Server {
             self.mission
                 .landing_asked
                 .insert(repo.clone(), Instant::now());
-            let file = file.clone();
-            tokio::task::spawn_blocking(move || match crate::repos::ask_setup(&repo, now) {
-                Ok(setup) => crate::repos::remember_setup(&file, &repo, &setup),
-                Err(e) => eprintln!("settings: how {repo} can land: {e}"),
-            });
+            due.push(repo);
         }
+        if due.is_empty() {
+            return;
+        }
+        // One at a time, since each answer is read into the file and
+        // written back whole.
+        tokio::task::spawn_blocking(move || {
+            for repo in due {
+                match crate::repos::ask_setup(&repo, now) {
+                    Ok(setup) => crate::repos::remember_setup(&file, &repo, &setup),
+                    Err(e) => eprintln!("settings: how {repo} can land: {e}"),
+                }
+            }
+        });
     }
 
     /// Settings' "Your CLAUDE.md": where your rules come from, the local

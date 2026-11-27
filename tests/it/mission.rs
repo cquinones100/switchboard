@@ -592,6 +592,67 @@ fn settings_repositories_lists_each_way_and_its_menu_offers_the_five() {
     }
 }
 
+// A merge service is set up once GitHub has its label and its check shows
+// on the repository's recent PRs: Settings asks as it opens.
+#[test]
+fn settings_checks_a_merge_service_s_label_and_its_check_on_recent_prs() {
+    use common::http::{Fake, Reply};
+    let github = Fake::github("test-token", |request| {
+        if request.path() != "/graphql" {
+            return Some(Reply::json(200, json!([])));
+        }
+        let asked = request.text();
+        // As GitHub does, a query declaring a variable it never uses is refused.
+        if asked.contains("$prs: Int!") && !asked.contains("first: $prs") {
+            return Some(Reply::json(
+                200,
+                json!({ "errors": [{ "message": "Variable $prs is never used" }] }),
+            ));
+        }
+        let check = if asked.contains("\"seen\"") {
+            "mergebot"
+        } else {
+            "ci"
+        };
+        Some(Reply::json(
+            200,
+            json!({ "data": { "repository": {
+                "autoMergeAllowed": false, "mergeQueue": null,
+                "defaultBranchRef": { "name": "main", "refUpdateRule": null, "branchProtectionRule": null },
+                "object": null,
+                "labels": { "nodes": [{ "name": "merge-ready" }] },
+                "pullRequests": { "nodes": [{ "commits": { "nodes": [{ "commit": {
+                    "statusCheckRollup": { "contexts": { "nodes": [{ "name": check }] } } } }] } }] } } } }),
+        ))
+    });
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+        ],
+        &all_settings(json!({ "github": true })).to_string(),
+    );
+    let own = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&own).unwrap();
+    let service =
+        json!({ "lands": "service", "serviceLabel": "merge-ready", "serviceCheck": "mergebot" });
+    std::fs::write(
+        own.join("repos.json"),
+        json!({ "acme/seen": service, "acme/unseen": service }).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(160, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vsett\r");
+    client.wait_text("CATEGORIES");
+    client.type_text("/acme/\r");
+    client.wait_text("REPOSITORIES");
+    client.wait_text("✓ the merge-ready label and mergebot's check");
+    client.wait_text("✗ mergebot isn't reported on any of its last 20 PRs");
+}
+
 #[test]
 fn a_new_build_carries_landing_and_the_queue_setting_over_to_one_way_each_once() {
     use common::http::{Fake, Reply};
