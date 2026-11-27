@@ -9,15 +9,23 @@
 //! box's width and a click putting the cursor; one whose use takes more
 //! than a line (`multi_line`) takes S-Enter and M-Enter as a new line.
 //!
+//! A multi-line ask can be a text box (`text_box`), as Shape a new ticket
+//! is: its question dim, then `mission::text_box`'s field on the panel,
+//! five rows at least, and a button that sends beside Cancel, both reached
+//! by Tab and a click, as the Slack reply box draws them; a line under the
+//! text can say why it came back (`failed`).
+//!
 //! It closes with what was typed as its outcome's value
 //! (`Outcome::Picked`), trimmed.
 
 use ratatui::buffer::Buffer;
 use ratatui::text::Span;
 
+use super::text_box::TextBox;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::field::{Edit, Field};
+use crate::ui::kit::Tone;
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 pub struct Ask {
@@ -29,6 +37,10 @@ pub struct Ask {
     /// Whether Enter on an empty line takes it.
     empty: bool,
     close_focus: bool,
+    /// Its text box, in place of the bare line, once `text_box` makes it one.
+    boxed: Option<TextBox>,
+    /// Why it came back, under the text box.
+    failed: Option<String>,
     drawn: Option<Drawn>,
 }
 
@@ -41,6 +53,8 @@ impl Ask {
             field_line: 0,
             empty: false,
             close_focus: false,
+            boxed: None,
+            failed: None,
             drawn: None,
         }
     }
@@ -48,6 +62,10 @@ impl Ask {
     /// What it starts with, to change rather than type again.
     pub fn text(mut self, text: impl Into<String>) -> Ask {
         let text = text.into();
+        if let Some(boxed) = self.boxed.as_mut() {
+            boxed.field = Field::new().multi_line().with_text(text);
+            return self;
+        }
         // Text of several lines (a shell command kept in a setting) keeps
         // them, and takes S-Enter for another.
         let field = if text.contains(['\n', '\r']) || self.field.is_multi_line() {
@@ -71,9 +89,75 @@ impl Ask {
         self
     }
 
+    /// Drawn as a text box, with `send` the button that takes it beside
+    /// Cancel: a multi-line ask's form.
+    pub fn text_box(mut self, send: &str) -> Ask {
+        let field = std::mem::replace(&mut self.field, Field::new());
+        self.boxed = Some(TextBox::new(field.multi_line(), "", send));
+        self
+    }
+
+    /// The text box saying why it came back, under the text.
+    pub fn failed(mut self, why: impl Into<String>) -> Ask {
+        self.failed = Some(why.into());
+        self
+    }
+
     /// What is typed now.
     pub fn typed(&self) -> &str {
-        self.field.text()
+        match &self.boxed {
+            Some(b) => b.field.text(),
+            None => self.field.text(),
+        }
+    }
+
+    /// The text box's form drawn.
+    fn draw_boxed(&mut self, buf: &mut Buffer, look: &Look) {
+        let Some(boxed) = self.boxed.as_mut() else {
+            return;
+        };
+        let inner = (buf.area.width as usize).saturating_sub(6).min(80);
+        let mut lines: Vec<BoxLine> = draw::wrap(&self.hint, inner.saturating_sub(2))
+            .into_iter()
+            .map(|w| BoxLine::text(format!(" {w}"), look.dim()))
+            .collect();
+        lines.push(BoxLine::blank());
+        let fails: Vec<String> = self
+            .failed
+            .as_deref()
+            .map(|why| draw::wrap(why, inner.saturating_sub(2)))
+            .unwrap_or_default();
+        // The box's border, title and keys, the blank lines and the buttons.
+        let around = lines.len() + fails.len() + 6;
+        let most = TextBox::most_rows(buf.area.height as usize, around);
+        boxed.text_lines(&mut lines, inner, most, look);
+        for line in fails {
+            lines.push(BoxLine::text(
+                format!(" {line}"),
+                Tone::Failed.style(&look.theme),
+            ));
+        }
+        boxed.buttons_line(&mut lines, inner, "", look);
+        let mut spec = BoxSpec::new(&self.title, &lines);
+        spec.keys = Some("↵ done  S-↵ new line  esc cancel");
+        spec.width = inner as u16;
+        spec.close_lit = boxed.close_lit();
+        self.drawn = Some(draw::draw_box(buf, &spec, look));
+    }
+
+    /// What the text box's step means for the ask: what was typed, trimmed.
+    fn taken(step: Step) -> Step {
+        match step {
+            Step::Close(Outcome::Picked(p)) => {
+                let text = p.query.trim().to_string();
+                Step::Close(Outcome::Picked(Picked {
+                    index: 0,
+                    value: text.clone(),
+                    query: text,
+                }))
+            }
+            other => other,
+        }
     }
 }
 
@@ -86,11 +170,40 @@ impl Overlay for Ask {
         "ask"
     }
 
+    /// What is typed, so a box Esc goes back to from the next opens with it.
+    fn kept(&self) -> Option<switchboard_ui::overlay::Kept> {
+        Some(switchboard_ui::overlay::Kept {
+            typed: self.typed().to_string(),
+            chosen: None,
+        })
+    }
+
+    fn restore(&mut self, kept: &switchboard_ui::overlay::Kept) {
+        if kept.typed.is_empty() {
+            return;
+        }
+        match self.boxed.as_mut() {
+            Some(boxed) => boxed.field = Field::new().multi_line().with_text(&kept.typed),
+            None => {
+                let multi = self.field.is_multi_line() || kept.typed.contains('\n');
+                let field = if multi {
+                    Field::new().multi_line()
+                } else {
+                    Field::new()
+                };
+                self.field = field.with_text(&kept.typed);
+            }
+        }
+    }
+
     fn stands_out(&self) -> Option<ratatui::layout::Rect> {
         self.drawn.as_ref().map(|d| d.outer)
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
+        if self.boxed.is_some() {
+            return self.draw_boxed(buf, look);
+        }
         let inner = (buf.area.width as usize).saturating_sub(4).min(90);
         let mut lines: Vec<BoxLine> = draw::wrap(&self.hint, inner.saturating_sub(2))
             .into_iter()
@@ -130,6 +243,9 @@ impl Overlay for Ask {
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
+        if let Some(boxed) = self.boxed.as_mut() {
+            return Self::taken(boxed.key(key, look));
+        }
         let k = key.normalized();
         if matches!(k.code, KeyCode::Tab | KeyCode::BackTab) && look.close {
             self.close_focus = !self.close_focus;
@@ -163,6 +279,9 @@ impl Overlay for Ask {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
+        if let Some(boxed) = self.boxed.as_mut() {
+            return Self::taken(boxed.mouse(mouse, self.drawn.as_ref(), look));
+        }
         let Some(drawn) = &self.drawn else {
             return Step::Same;
         };
@@ -194,6 +313,9 @@ impl Overlay for Ask {
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
+        if let Some(boxed) = self.boxed.as_mut() {
+            return boxed.paste(text);
+        }
         self.field.paste(text);
         Step::Redraw
     }
@@ -272,6 +394,137 @@ mod tests {
             a.key(key(KeyCode::Enter), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "cat <<-EOF\n\tx\n\tEOF"
         ));
+    }
+
+    fn shape_box() -> Ask {
+        Ask::new("Shape a new GitHub issue", "What should it be about?")
+            .multi_line()
+            .text_box("Shape it")
+    }
+
+    #[test]
+    fn the_text_box_draws_five_empty_rows_and_its_buttons() {
+        let mut a = shape_box();
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 70, 30));
+        a.draw(&mut buf, &Look::default());
+        let panel = crate::ui::kit::Surface::Panel.color(&Look::default().theme);
+        // The rows drawn on the panel, at the text's first column.
+        let rows = (0..30)
+            .filter(|y| buf[(10, *y)].bg == panel && buf[(30, *y)].bg == panel)
+            .count();
+        assert_eq!(rows, super::super::text_box::LEAST_ROWS);
+        let s = crate::ui::draw::tests::screen(&buf);
+        assert!(
+            s.iter().any(|l| l.contains("Shape a new GitHub issue")),
+            "{s:#?}"
+        );
+        assert!(
+            s.iter().any(|l| l.contains("What should it be about?")),
+            "{s:#?}"
+        );
+        assert!(
+            s.iter()
+                .any(|l| l.contains("Cancel") && l.contains("Shape it")),
+            "{s:#?}"
+        );
+    }
+
+    #[test]
+    fn text_wraps_inside_the_text_box() {
+        let mut a = shape_box();
+        a.paste(&"word ".repeat(40), &Look::default());
+        let s = screen(&mut a, 60, 30);
+        let rows: Vec<&String> = s.iter().filter(|l| l.contains("word")).collect();
+        assert!(rows.len() > 1, "{s:#?}");
+        // Inside the box's border, which is at the edges of a 60-wide box.
+        assert!(
+            rows.iter().all(|l| draw::width(l.trim_end()) <= 58),
+            "{s:#?}"
+        );
+    }
+
+    #[test]
+    fn tab_reaches_shape_it_and_cancel_and_enter_takes_the_lines() {
+        let look = Look::default();
+        let mut a = shape_box();
+        // Shape it with nothing typed stays.
+        a.key(key(KeyCode::Tab), &look);
+        assert_eq!(a.key(key(KeyCode::Enter), &look), Step::Redraw);
+        a.paste("first", &look);
+        a.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look);
+        a.paste("second  ", &look);
+        assert_eq!(a.typed(), "first\nsecond  ");
+        a.key(key(KeyCode::Tab), &look);
+        assert!(matches!(
+            a.key(key(KeyCode::Enter), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == "first\nsecond"
+        ));
+        let mut a = shape_box();
+        a.paste("kept", &look);
+        a.key(key(KeyCode::Tab), &look);
+        a.key(key(KeyCode::Tab), &look);
+        assert_eq!(
+            a.key(key(KeyCode::Char(' ')), &look),
+            Step::Close(Outcome::Dismissed)
+        );
+        let mut a = shape_box();
+        a.paste("one", &look);
+        assert!(matches!(
+            a.key(key(KeyCode::Enter), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == "one"
+        ));
+    }
+
+    #[test]
+    fn a_click_on_shape_it_takes_it_and_on_cancel_closes() {
+        use crate::mux::input::{MouseButton, MouseKind};
+        let look = Look::default();
+        let find = |a: &mut Ask, word: &str| -> (u16, u16) {
+            let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 70, 30));
+            a.draw(&mut buf, &look);
+            let s = crate::ui::draw::tests::screen(&buf);
+            let y = s.iter().position(|l| l.contains(word)).unwrap();
+            let x = s[y].find(word).unwrap();
+            (draw::width(&s[y][..x]) as u16 + 1, y as u16)
+        };
+        let click = |x: u16, y: u16| Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::Left,
+            col: x,
+            row: y,
+            mods: Mods::NONE,
+        };
+        let mut a = shape_box().text("an idea");
+        let (x, y) = find(&mut a, "Shape it");
+        assert!(matches!(
+            a.mouse(click(x, y), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == "an idea"
+        ));
+        let mut a = shape_box().text("an idea");
+        let (x, y) = find(&mut a, "Cancel");
+        assert_eq!(a.mouse(click(x, y), &look), Step::Close(Outcome::Dismissed));
+    }
+
+    #[test]
+    fn it_comes_back_with_the_text_and_why() {
+        let mut a = shape_box().text("kept").failed("Not in a repository: ~/x");
+        let s = screen(&mut a, 70, 30);
+        assert!(s.iter().any(|l| l.contains("kept")), "{s:#?}");
+        assert!(
+            s.iter().any(|l| l.contains("Not in a repository: ~/x")),
+            "{s:#?}"
+        );
+    }
+
+    #[test]
+    fn what_is_typed_is_kept_for_the_box_esc_goes_back_to() {
+        let look = Look::default();
+        let mut a = shape_box();
+        a.paste("an idea", &look);
+        let kept = a.kept().unwrap();
+        let mut again = shape_box();
+        again.restore(&kept);
+        assert_eq!(again.typed(), "an idea");
     }
 
     #[test]

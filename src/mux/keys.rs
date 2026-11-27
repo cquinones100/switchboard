@@ -132,7 +132,7 @@ pub enum Action {
     /// Shape a note's checklist items as Linear tickets, each in a new tab
     /// (note-shape.sh; src/cmd/shape_note.rs).
     ShapeNote,
-    /// Shape a new Linear ticket from an idea typed in (note-shape.sh's
+    /// Shape a new ticket from an idea typed in (note-shape.sh's
     /// `prompt`).
     ShapeNewTicket,
     /// The branch's PR description as GitHub draws it, as images in place
@@ -512,7 +512,7 @@ impl Action {
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
             Action::ShapeNote => "Shape a note's checklist items as Linear tickets".into(),
             Action::ShapeNewTicket => {
-                "Shape a new Linear ticket from what you type, in a new tab".into()
+                "Shape a new ticket from what you type, in a new tab".into()
             }
             Action::PrImage => {
                 "View the branch's PR description as an image, as GitHub draws it, in place of this pane".into()
@@ -689,7 +689,7 @@ impl Action {
                 "Picks a note, its items and a repository, then opens a background tab running /shape for each item. The items go to Claude only once you choose them.".into()
             }
             Action::ShapeNewTicket => {
-                "The idea typed goes to a background tab running /shape in the repository you pick.".into()
+                "The idea typed goes to a background tab running /shape in the repository you pick, filed where its tickets are kept; Linear ticket IDs typed alone are shaped further in Linear.".into()
             }
             Action::PrImage => {
                 "Chrome draws its HTML with GitHub's stylesheet and Mermaid diagrams, shown a page at a time; j, k and Space page, q closes it.".into()
@@ -812,7 +812,7 @@ impl Action {
             Action::WorkOnIssue => &["github", "issue", "worktree", "new"],
             Action::ContinueShaping => &["linear", "ticket", "shape"],
             Action::ShapeNote => &["notes", "linear", "shape"],
-            Action::ShapeNewTicket => &["linear", "ticket", "shape"],
+            Action::ShapeNewTicket => &["ticket", "shape"],
             Action::PrImage => &["github", "pr", "panes"],
             Action::TicketImage => &["linear", "ticket", "panes"],
             Action::MissionControl => &["sidebar", "overview", "tabs"],

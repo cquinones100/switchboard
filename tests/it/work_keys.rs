@@ -1106,3 +1106,95 @@ fn trying_a_tabs_branch_runs_try_in_a_tab_behind_and_says_so_where_theres_none()
         screen.contains("MERGE_HEAD") && screen.contains("Press Enter to close this tab.")
     });
 }
+
+/// M-p's "Shape a new ticket" in a repository whose `tickets` is `github`:
+/// a text box titled after it, two lines typed and sent, and `shape` run in
+/// a new tab filing where repos.json says.
+#[test]
+fn shape_a_new_ticket_is_a_text_box_titled_after_the_repository_s_tickets() {
+    let (server, repo, mut client) = world();
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        serde_json::json!({ repo.join(".git").to_str().unwrap(): { "tickets": "github" } })
+            .to_string(),
+    )
+    .unwrap();
+    let before = tabs(&server).len();
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("shape a new ticket from what you type");
+    client.wait_text("› Shape a new ticket from what");
+    client.type_text("\r");
+    let screen = client.wait_text("Shape a new GitHub issue");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Cancel") && l.contains("Shape it")),
+        "its buttons: {screen:#?}"
+    );
+    client.type_text("first line");
+    // S-Enter, as a terminal without kitty's keyboard protocol sends it.
+    client.send(b"\x1b\r");
+    client.type_text("second line");
+    client.wait_text("second line");
+    client.send(b"\r");
+    client.wait_text("Open in >");
+    // Esc in the repository question goes back to the box, what was typed
+    // kept.
+    client.send(b"\x1b");
+    client.wait_for("the box again, with the text", |s| {
+        !s.iter().any(|l| l.contains("Open in >"))
+            && s.iter().any(|l| l.contains("Shape a new GitHub issue"))
+            && s.iter().any(|l| l.contains("second line"))
+    });
+    client.send(b"\r");
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    wait("a tab running shape", || tabs(&server).len() == before + 1);
+    wait("Claude to run /shape", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.contains("first line"))
+    });
+    let ran = std::fs::read_to_string(server.home.join("claude-ran")).unwrap();
+    assert!(
+        ran.starts_with(&format!(
+            "{} /shape --github first line\nsecond line",
+            repo.display()
+        )),
+        "{ran}"
+    );
+    assert!(!ran.contains("--linear"), "{ran}");
+}
+
+/// With the repository's `tickets` unset, the box comes back with what was
+/// typed and why, in the first box's place: Esc in it goes back to M-p, as
+/// Esc in the first would, rather than to a copy of the first.
+#[test]
+fn shape_a_new_ticket_comes_back_with_the_text_and_why_in_place_of_the_first() {
+    let (server, _repo, mut client) = world();
+    let before = tabs(&server).len();
+    client.type_text("\x1bp");
+    client.wait_text("╭─ Actions");
+    client.type_text("shape a new ticket from what you type");
+    client.wait_text("› Shape a new ticket from what");
+    client.type_text("\r");
+    client.wait_text("Shape a new ticket");
+    client.type_text("an idea");
+    client.wait_text("an idea");
+    client.send(b"\r");
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    let screen = client.wait_text("ticket source isn't set");
+    assert!(
+        screen.iter().any(|l| l.contains("an idea")),
+        "what was typed kept: {screen:#?}"
+    );
+    client.send(b"\x1b");
+    client.wait_for("M-p again", |s| {
+        s.iter().any(|l| l.contains("╭─ Actions"))
+            && !s.iter().any(|l| l.contains("ticket source isn't set"))
+    });
+    assert_eq!(tabs(&server).len(), before, "no tab opened");
+}

@@ -506,6 +506,20 @@ impl Server {
         }
     }
 
+    /// The next box opened takes the place of the one Esc would go back to
+    /// (a box come back with what was typed in it and why), so Esc in it
+    /// goes back where that one did, never to that one.
+    pub(crate) fn in_place_of_last(&mut self, client: ClientId) {
+        if let Some(coming) = self
+            .clients
+            .get_mut(&client)
+            .and_then(|c| c.overlays.coming.as_mut())
+            && let Some(back) = coming.came.back.take()
+        {
+            coming.came.back = back.before.map(|b| *b);
+        }
+    }
+
     /// A pick acted on the workspace (made a tab, went to another): a box
     /// opened after it, on any client, has nothing to go back to.
     pub(crate) fn forget_coming_everywhere(&mut self) {

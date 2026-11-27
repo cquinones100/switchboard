@@ -1,7 +1,7 @@
 //! The Slack view's reply box (UX 2.0 board 108), opened from a message's
 //! menu with Settings' `slack_reply` on: where the reply goes in its title
 //! and first line, the message it answers quoted, a box to type in, and
-//! Send and Cancel as buttons. What is typed is a multi-line `ui::field`,
+//! Send and Cancel as buttons, drawn by `mission::text_box`. What is typed is a multi-line `ui::field`,
 //! as every box's typing is (the cursor keys, wrapping, undo): Enter on the
 //! text is Send, and S-Enter and M-Enter a new line; Send is a Tab stop
 //! too, pressed with Enter or Space, or a click; Esc cancels. Nothing is
@@ -17,49 +17,33 @@
 use ratatui::buffer::Buffer;
 use ratatui::text::Span;
 
+use super::text_box::TextBox;
 use crate::day::slack_reply::Reply;
-use crate::mux::input::{Key, KeyCode, Mods, Mouse};
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::ui::field::{Edit, Field};
-use crate::ui::kit::{self, Press, Surface, Tone};
-use crate::ui::{Look, Outcome, Overlay, Picked, Step};
+use crate::mux::input::{Key, Mouse};
+use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn};
+use crate::ui::field::Field;
+use crate::ui::kit::{self, Tone};
+use crate::ui::{Look, Overlay, Step};
 
 /// The box's inside, while the screen leaves room around it.
 const WIDTH: usize = 80;
-/// The rows the text takes.
-const TEXT_ROWS: usize = 4;
 /// The lines of the message it answers shown at most.
 const QUOTE_ROWS: usize = 2;
 
 /// The keys on the box's last row.
 const KEYS: &str = "↵ send  S-↵ new line  esc cancel";
 
-/// What Tab's focus or the mouse is on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Part {
-    Text,
-    Send,
-    Cancel,
-    Close,
-}
-
-/// A part on a line: the line's index, its first and last column, the part.
-type Placed = (usize, u16, u16, Part);
-
 pub struct ReplyBox {
     reply: Reply,
     title: String,
-    field: Field,
-    /// The box's lines that hold the field's rows.
-    field_lines: std::ops::Range<usize>,
+    text: TextBox,
+    /// The rows the text may grow to, from the screen's height.
+    most: usize,
     /// Why the last Send didn't send, when it didn't.
     failed: Option<String>,
     /// Send makes a draft in Slack, rather than sending.
     draft: bool,
-    focus: Part,
-    hover: Option<Part>,
     drawn: Option<Drawn>,
-    parts: Vec<Placed>,
     /// Where it opens: the middle, or beside the click that opened it.
     place: draw::Place,
 }
@@ -71,14 +55,15 @@ impl ReplyBox {
         ReplyBox {
             title: reply.title(),
             reply,
-            field: Field::new().multi_line().keep_tabs().with_text(text),
-            field_lines: 0..0,
+            text: TextBox::new(
+                Field::new().multi_line().keep_tabs().with_text(text),
+                "Your reply",
+                "Send",
+            ),
+            most: super::text_box::LEAST_ROWS,
             failed: None,
             draft: false,
-            focus: Part::Text,
-            hover: None,
             drawn: None,
-            parts: Vec::new(),
             place: draw::Place::Center,
         }
     }
@@ -95,44 +80,9 @@ impl ReplyBox {
         self
     }
 
-    fn stops(look: &Look) -> Vec<Part> {
-        let mut out = vec![Part::Text, Part::Send, Part::Cancel];
-        if look.close {
-            out.push(Part::Close);
-        }
-        out
-    }
-
-    fn step_focus(&mut self, by: isize, look: &Look) {
-        let stops = Self::stops(look);
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
-    }
-
-    fn press(&mut self, part: Part) -> Step {
-        match part {
-            Part::Text => {
-                self.focus = Part::Text;
-                Step::Redraw
-            }
-            // Nothing typed, nothing to send: the box stays.
-            Part::Send if self.field.text().trim().is_empty() => {
-                self.focus = Part::Text;
-                Step::Redraw
-            }
-            Part::Send => Step::Close(Outcome::Picked(Picked {
-                index: 0,
-                value: String::new(),
-                query: self.field.text().to_string(),
-            })),
-            Part::Cancel | Part::Close => Step::Close(Outcome::Dismissed),
-        }
-    }
-
-    fn lines(&mut self, inner: usize, look: &Look) -> (Vec<BoxLine>, Vec<Placed>) {
+    fn lines(&mut self, inner: usize, look: &Look) -> Vec<BoxLine> {
         let theme = &look.theme;
         let mut lines: Vec<BoxLine> = Vec::new();
-        let mut parts = Vec::new();
         // Where it goes, the conversation bold.
         let to = self.reply.to_line();
         let place = &self.reply.place;
@@ -175,84 +125,20 @@ impl ReplyBox {
         }
         lines.push(BoxLine::blank());
         // What you type, on the panel, its last rows shown with the cursor.
-        let area = inner.saturating_sub(4);
-        let panel = Surface::Panel.color(theme);
-        let typing = self.focus == Part::Text;
-        let on_panel = |tone: Tone| tone.style(theme).bg(panel);
-        let room = area.saturating_sub(2);
-        let rows = self.field.view(
-            room,
-            TEXT_ROWS,
-            on_panel(Tone::Text),
-            on_panel(Tone::Accent),
-            typing,
-        );
-        let first = lines.len();
-        for i in 0..TEXT_ROWS {
-            let mut spans = vec![Span::raw(" "), Span::styled(" ", on_panel(Tone::Text))];
-            if let Some(row) = rows.get(i) {
-                spans.extend(row.iter().cloned());
-            }
-            if self.field.is_empty() && i == 0 {
-                spans.push(Span::styled("Your reply", on_panel(Tone::Faint)));
-            }
-            let used = kit::spans_width(&spans) - 1;
-            spans.push(Span::styled(
-                " ".repeat(area.saturating_sub(used)),
-                on_panel(Tone::Text),
-            ));
-            parts.push((lines.len(), 1, area as u16, Part::Text));
-            lines.push(BoxLine::spans(spans).clickable());
-        }
-        self.field_lines = first..lines.len();
-        lines.push(BoxLine::blank());
+        self.text.text_lines(&mut lines, inner, self.most, look);
         if let Some(why) = &self.failed {
             for line in draw::wrap(why, inner.saturating_sub(2)) {
                 lines.push(BoxLine::text(format!(" {line}"), Tone::Failed.style(theme)));
             }
         }
         // As whom, then Cancel and Send at the right.
-        let press = |part: Part| {
-            if self.focus == part {
-                Press::Lit
-            } else if self.hover == Some(part) {
-                Press::Hover
-            } else {
-                Press::Rest
-            }
-        };
-        let cancel = kit::button(" Cancel ", None, press(Part::Cancel), false, theme);
-        let send = kit::button(" Send ", None, press(Part::Send), false, theme);
-        let (cw, sw) = (kit::spans_width(&cancel), kit::spans_width(&send));
         let note = if self.draft {
             " as a draft in Slack, for you to send there"
         } else {
             " as you, from your Slack sign-in"
         };
-        let gap = inner.saturating_sub(draw::width(note) + cw + sw + 3);
-        let mut row = vec![
-            Span::styled(note, Tone::Faint.style(theme)),
-            Span::raw(" ".repeat(gap)),
-        ];
-        let cancel_at = kit::spans_width(&row);
-        row.extend(cancel);
-        row.push(Span::raw(" "));
-        let send_at = kit::spans_width(&row);
-        row.extend(send);
-        parts.push((
-            lines.len(),
-            cancel_at as u16,
-            (cancel_at + cw) as u16,
-            Part::Cancel,
-        ));
-        parts.push((
-            lines.len(),
-            send_at as u16,
-            (send_at + sw) as u16,
-            Part::Send,
-        ));
-        lines.push(BoxLine::spans(row).clickable());
-        (lines, parts)
+        self.text.buttons_line(&mut lines, inner, note, look);
+        lines
     }
 }
 
@@ -271,13 +157,16 @@ impl Overlay for ReplyBox {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let inner = (buf.area.width as usize).saturating_sub(6).min(WIDTH);
-        let (lines, parts) = self.lines(inner, look);
-        self.parts = parts;
+        // Its own lines around the text: the head and the quote, the blank
+        // lines, the buttons, and the box's border, title and keys.
+        let around = 4 + QUOTE_ROWS + 6 + usize::from(self.failed.is_some());
+        self.most = TextBox::most_rows(buf.area.height as usize, around);
+        let lines = self.lines(inner, look);
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(KEYS);
         spec.width = inner as u16;
         spec.place = self.place;
-        spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
+        spec.close_lit = self.text.close_lit();
         self.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
@@ -286,82 +175,23 @@ impl Overlay for ReplyBox {
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
-        let k = key.normalized();
-        match k.code {
-            KeyCode::Esc => return Step::Close(Outcome::Dismissed),
-            KeyCode::Char('c') if k.mods == Mods::CTRL => return Step::Close(Outcome::Dismissed),
-            KeyCode::Tab => {
-                self.step_focus(1, look);
-                return Step::Redraw;
-            }
-            KeyCode::BackTab => {
-                self.step_focus(-1, look);
-                return Step::Redraw;
-            }
-            KeyCode::Enter if self.focus != Part::Text => return self.press(self.focus),
-            KeyCode::Char(' ') if self.focus != Part::Text => return self.press(self.focus),
-            _ => {}
-        }
-        // Typing on a button types in the text.
-        self.focus = Part::Text;
-        match self.field.key(k) {
-            // Enter on the text is Send; S-Enter and M-Enter are the field's
-            // new lines.
-            Edit::Not if k.code == KeyCode::Enter => self.press(Part::Send),
-            Edit::Changed | Edit::Moved => Step::Redraw,
-            Edit::Same | Edit::Up | Edit::Down | Edit::Not => Step::Same,
-        }
+        self.text.key(key, look)
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
-            return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let part = match hit {
-            Hit::Close => Some(Part::Close),
-            Hit::Line(line, x) => self
-                .parts
-                .iter()
-                .find(|(l, x0, x1, _)| *l == line && x >= *x0 && x < *x1)
-                .map(|p| p.3),
-            _ => None,
-        };
-        match draw::gesture(&mouse) {
-            // A click outside keeps what was typed rather than losing it.
-            Gesture::Click if look.mouse => match (hit, part) {
-                (Hit::Line(line, x), Some(Part::Text)) if self.field_lines.contains(&line) => {
-                    self.focus = Part::Text;
-                    self.field.click(
-                        line - self.field_lines.start,
-                        (x as usize).saturating_sub(2),
-                    );
-                    Step::Redraw
-                }
-                (_, part) => part.map_or(Step::Same, |p| self.press(p)),
-            },
-            Gesture::Move if look.hover => {
-                if part == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = part;
-                    Step::Redraw
-                }
-            }
-            _ => Step::Same,
-        }
+        self.text.mouse(mouse, self.drawn.as_ref(), look)
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        self.focus = Part::Text;
-        self.field.paste(text);
-        Step::Redraw
+        self.text.paste(text)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mux::input::{KeyCode, Mods};
+    use crate::ui::Outcome;
 
     fn reply() -> Reply {
         Reply {
@@ -382,7 +212,7 @@ mod tests {
     }
 
     fn text_of(b: &mut ReplyBox) -> String {
-        let (lines, _) = b.lines(WIDTH, &Look::default());
+        let lines = b.lines(WIDTH, &Look::default());
         lines
             .iter()
             .map(|l| {
@@ -444,7 +274,7 @@ mod tests {
         assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
         typed(&mut b, &chars("  "));
         assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
-        assert_eq!(b.field.text(), "  ");
+        assert_eq!(b.text.field.text(), "  ");
         let mut b = ReplyBox::new(reply(), "");
         typed(&mut b, &chars("On it"));
         typed(&mut b, &[Key::new(KeyCode::Enter, Mods::SHIFT)]);
@@ -533,9 +363,9 @@ mod tests {
         typed(&mut b, &chars("On it today"));
         typed(&mut b, &[Key::new(KeyCode::Left, Mods::ALT)]);
         typed(&mut b, &chars("later "));
-        assert_eq!(b.field.text(), "On it later today");
+        assert_eq!(b.text.field.text(), "On it later today");
         typed(&mut b, &[Key::new(KeyCode::Char('z'), Mods::CTRL)]);
-        assert_eq!(b.field.text(), "On it today");
+        assert_eq!(b.text.field.text(), "On it today");
         typed(&mut b, &[key(KeyCode::Home)]);
         typed(&mut b, &chars("Yes, "));
         assert_eq!(query(&mut b), "Yes, On it today");
@@ -561,7 +391,7 @@ mod tests {
             "the last row shown, with the cursor: {text}"
         );
         let rows = text.lines().filter(|l| l.contains("word")).count();
-        assert_eq!(rows, TEXT_ROWS, "{text}");
+        assert_eq!(rows, super::super::text_box::LEAST_ROWS, "{text}");
         assert!(
             text.lines().all(|l| draw::width(l) <= WIDTH),
             "nothing past the box: {text}"
