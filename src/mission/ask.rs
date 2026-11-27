@@ -170,6 +170,32 @@ impl Overlay for Ask {
         "ask"
     }
 
+    /// What is typed, so a box Esc goes back to from the next opens with it.
+    fn kept(&self) -> Option<switchboard_ui::overlay::Kept> {
+        Some(switchboard_ui::overlay::Kept {
+            typed: self.typed().to_string(),
+            chosen: None,
+        })
+    }
+
+    fn restore(&mut self, kept: &switchboard_ui::overlay::Kept) {
+        if kept.typed.is_empty() {
+            return;
+        }
+        match self.boxed.as_mut() {
+            Some(boxed) => boxed.field = Field::new().multi_line().with_text(&kept.typed),
+            None => {
+                let multi = self.field.is_multi_line() || kept.typed.contains('\n');
+                let field = if multi {
+                    Field::new().multi_line()
+                } else {
+                    Field::new()
+                };
+                self.field = field.with_text(&kept.typed);
+            }
+        }
+    }
+
     fn stands_out(&self) -> Option<ratatui::layout::Rect> {
         self.drawn.as_ref().map(|d| d.outer)
     }
@@ -488,6 +514,17 @@ mod tests {
             s.iter().any(|l| l.contains("Not in a repository: ~/x")),
             "{s:#?}"
         );
+    }
+
+    #[test]
+    fn what_is_typed_is_kept_for_the_box_esc_goes_back_to() {
+        let look = Look::default();
+        let mut a = shape_box();
+        a.paste("an idea", &look);
+        let kept = a.kept().unwrap();
+        let mut again = shape_box();
+        again.restore(&kept);
+        assert_eq!(again.typed(), "an idea");
     }
 
     #[test]

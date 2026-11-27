@@ -1141,6 +1141,16 @@ fn shape_a_new_ticket_is_a_text_box_titled_after_the_repository_s_tickets() {
     client.wait_text("second line");
     client.send(b"\r");
     client.wait_text("Open in >");
+    // Esc in the repository question goes back to the box, what was typed
+    // kept.
+    client.send(b"\x1b");
+    client.wait_for("the box again, with the text", |s| {
+        !s.iter().any(|l| l.contains("Open in >"))
+            && s.iter().any(|l| l.contains("Shape a new GitHub issue"))
+            && s.iter().any(|l| l.contains("second line"))
+    });
+    client.send(b"\r");
+    client.wait_text("Open in >");
     client.send(b"\r");
     wait("a tab running shape", || tabs(&server).len() == before + 1);
     wait("Claude to run /shape", || {

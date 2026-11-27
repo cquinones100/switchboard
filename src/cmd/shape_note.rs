@@ -538,15 +538,13 @@ impl Server {
                     ),
                 );
             },
-            // Esc, or a directory that isn't there: back to the box, with
-            // what was typed.
+            // A directory that isn't there: back to the box, with what was
+            // typed and why. Esc goes back to the box by itself, which keeps
+            // what was typed (`Ask::kept`).
             move |server, client, why| {
-                let ask = shape_box(kept_here, &back_text);
-                let ask = match why {
-                    Some(why) => ask.failed(why),
-                    None => ask,
-                };
-                server.ask_new_ticket(client, ask);
+                if let Some(why) = why {
+                    server.ask_new_ticket(client, shape_box(kept_here, &back_text).failed(why));
+                }
             },
         );
     }
