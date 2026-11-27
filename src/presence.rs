@@ -18,22 +18,13 @@ use std::time::Instant;
 
 pub use crate::platform::Presence;
 
-/// Milliseconds since the last input, or `None` when it can't be read.
-pub fn read_idle_ms() -> Option<f64> {
-    read_presence().idle_ms
-}
-
-/// Whether the lock screen is up, or `None` when it can't be read.
-pub fn read_locked() -> Option<bool> {
-    read_presence().locked
-}
-
-/// Both at once. Blocking: on a runtime, use `read_presence_async`.
+/// The idle time and the lock screen, read now. Blocking: on a runtime, use
+/// `read_presence_async`.
 pub fn read_presence() -> Presence {
     crate::platform::presence()
 }
 
-/// Both at once, off the runtime's thread.
+/// The same, off the runtime's thread.
 pub async fn read_presence_async() -> Presence {
     tokio::task::spawn_blocking(read_presence)
         .await

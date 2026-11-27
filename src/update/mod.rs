@@ -1,11 +1,6 @@
 //! Keeping Switchboard current: `switchboard update`, and the server's look
 //! for a new release, hourly and as a terminal attaches, offering it in a
-//! box. Ported from tmux/repo-update.sh, which fetched `~/switchboard`'s
-//! origin and fast-forwarded main; with no clone any more, what it offers
-//! is a release (`release`), downloaded, checked and put in place of the
-//! binary (`install`), then `switchboard setup` run for what the new
-//! version brings, as repo-update.sh ran the guided setup.sh after a pull.
-//! The workspace's server goes on with the build it started with, so a
+//! box. The workspace's server goes on with the build it started with, so a
 //! running one is then offered a restart on the new one in place, keeping
 //! every pane (`switchboard upgrade`, src/mux/upgrade.rs), while Settings'
 //! "Offer to restart after an update" (`upgrade_after_update`) is on.

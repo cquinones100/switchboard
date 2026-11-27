@@ -102,8 +102,8 @@ fn write(state: &Path, list: &[Landing]) -> io::Result<()> {
         .map(|l| {
             json!({
                 "hash": l.hash, "item": l.item, "tab": l.tab,
-                "at": util::js_number(l.at as f64),
-                "plan": l.plan, "decided": util::js_number(l.decided as f64),
+                "at": l.at,
+                "plan": l.plan, "decided": l.decided,
                 "notApplied": l.not_applied,
             })
         })

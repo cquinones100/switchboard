@@ -5,25 +5,21 @@
 //! known. Copy the title (or `y`) copies it; Close, Esc or a click off the
 //! options closes it. The sidebar's `i` and a tab's menu in mission control
 //! ("Show its full title") open the same box (the tab_title setting).
-//! Ported from tmux/tab-title.sh.
 //!
 //! It reads what the server holds alone, the branch from git's files and
 //! the PR and the ticket as the tab's name was last worked out, never the
 //! network, so it opens at once.
 //!
-//! A tab opened for a note's item (the palette's wt list, autopilot)
-//! is named with the item's first 50 characters cut back to a word
-//! and ending in … (`short_name`), for the header and the sidebar, and
-//! keeps the item's whole first line as its full title
-//! (`@tab_title`), which this box, the sidebar and mission control show in
-//! its place, its PR number in front, only while the tab's name is still
-//! that item cut short (`cut_of`), so a tab renamed since shows its new
-//! name. A tab opened before falls back to autopilot's
-//! `@autopilot_item`, and this box then to the item its branch is for
-//! (`wtnItem` in git's config, read from its file, the note named by its ID
-//! or, from before notes had IDs, its path). Ported from
-//! wtn-open.zsh's `open_tab`, model.js's `cutOf` and tab-title.sh's
-//! `cut_of`.
+//! A tab opened for a note's item (the palette's wt list, autopilot) is
+//! named with the item's first 50 characters cut back to a word and ending
+//! in … (`short_name`), for the header and the sidebar, and keeps the
+//! item's whole first line as its full title (`@tab_title`), which this
+//! box, the sidebar and mission control show in its place, its PR number in
+//! front, only while the tab's name is still that item cut short
+//! (`cut_of`), so a tab renamed since shows its new name. A tab opened
+//! before falls back to autopilot's `@autopilot_item`, and this box then to
+//! the item its branch is for (`wtnItem` in git's config, read from its
+//! file, the note named by its ID or, from before notes had IDs, its path).
 
 use std::sync::LazyLock;
 

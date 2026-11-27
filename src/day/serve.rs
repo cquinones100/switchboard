@@ -225,14 +225,6 @@ impl Day {
         let saved = self.saved.read(&dirs.state).cloned();
         calendar::read_day(&self.feed, saved.as_ref(), &util::ymd(now))
     }
-
-    /// The feed's last error, when it is set up and failing.
-    pub fn feed_error(&self) -> Option<&str> {
-        self.feed
-            .error
-            .as_deref()
-            .filter(|_| self.feed.configured())
-    }
 }
 
 impl Server {

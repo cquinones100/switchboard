@@ -3,19 +3,19 @@
 //! claude/statusline-command.sh draws it, so the tab and the Claude
 //! statusline agree on a project's color.
 //!
-//! A tab's hue is its own (Settings' `tab_colors_apart`): chosen as the tab
+//! A tab's hue is its own (unless Settings' `tab_colors` says `project_`): chosen as the tab
 //! opens (`apart`), the one farthest from the open tabs' hues, and kept on
 //! the tab (`@tab_hue`, `@tab_step`) with the layout, so it lasts through
 //! restarts and upgrades and never changes while the tab is open. The
 //! directory's hash is only the tie-break among the farthest hues, the hue
-//! of a lone tab, the color with the setting off, and the statusline's
+//! of a lone tab, the color by project, and the statusline's
 //! outside the workspace; the key stays byte for byte, since that hue still
 //! hangs on it.
 //!
 //! A hue is drawn in one of two lightness steps (`Step`): light, as it
 //! always was, or deep, darker, so two tabs whose hues are close still tell
 //! apart. A tab whose free hue is within `NEAR` of an open tab's takes the
-//! other step from that tab's; with the setting off, the step is the next
+//! other step from that tab's; by project, the step is the next
 //! bit of the key's hash after the hue's. A hue whose deep step would read
 //! as red keeps the light one.
 //!
@@ -97,7 +97,7 @@ impl From<Rgb> for ratatui::style::Color {
     }
 }
 
-/// How a project's hue is drawn: Settings' `tab_colors`.
+/// How a project's hue is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Shade {
     /// A pastel, as the UX 2.0 canvas draws its tabs.
@@ -107,23 +107,46 @@ pub enum Shade {
     Vivid,
 }
 
-impl Shade {
-    /// The shade a `tab_colors` value names: soft unless it says vivid.
-    pub fn of(value: Option<&serde_json::Value>) -> Shade {
-        match value.and_then(|v| v.as_str()) {
-            Some("vivid") => Shade::Vivid,
-            _ => Shade::Soft,
-        }
-    }
+/// What Settings' `tab_colors` says: how a hue is drawn (`soft` or
+/// `vivid`), whether each tab takes a hue of its own as it opens or wears
+/// its directory's (`project_soft`, `project_vivid`), and whether tabs
+/// wear colors at all (`gray`). A value it doesn't know reads as `soft`,
+/// the default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabColors {
+    pub shade: Shade,
+    pub apart: bool,
+    pub colored: bool,
+}
 
-    /// The shade the settings file names now.
-    pub fn read() -> Shade {
-        Shade::of(crate::settings::setting("tab_colors").as_ref())
+impl Default for TabColors {
+    fn default() -> TabColors {
+        TabColors::of(None)
     }
 }
 
-/// The one gray every tab wears with the `accent_colors` setting off. Only
-/// the tabs follow the setting; the statusline keeps its colors.
+impl TabColors {
+    pub fn of(value: Option<&serde_json::Value>) -> TabColors {
+        let value = value.and_then(|v| v.as_str()).unwrap_or("soft");
+        TabColors {
+            shade: if value.ends_with("vivid") {
+                Shade::Vivid
+            } else {
+                Shade::Soft
+            },
+            apart: !value.starts_with("project"),
+            colored: value != "gray",
+        }
+    }
+
+    /// What the settings file says now.
+    pub fn read() -> TabColors {
+        TabColors::of(crate::settings::setting("tab_colors").as_ref())
+    }
+}
+
+/// The one gray every tab wears with `tab_colors` `gray`. The statusline
+/// keeps the soft colors then.
 pub const GRAY: Rgb = Rgb::new(0x8a, 0x8a, 0x8a);
 
 /// The last part of a directory's path, as `basename` gives it (`/` for the
@@ -624,9 +647,14 @@ mod tests {
         };
         assert!(Rgb::new(r, g, b).luminance() < 110, "{r} {g} {b}");
         assert_eq!(as_words(Color::Indexed(3), true), Color::Indexed(3));
-        assert_eq!(Shade::of(None), Shade::Soft);
-        assert_eq!(Shade::of(Some(&serde_json::json!("vivid"))), Shade::Vivid);
-        assert_eq!(Shade::of(Some(&serde_json::json!("soft"))), Shade::Soft);
+        let of = |v: &str| TabColors::of(Some(&serde_json::json!(v)));
+        assert_eq!(TabColors::default(), of("soft"));
+        assert_eq!(of("soft").shade, Shade::Soft);
+        assert!(of("soft").apart && of("soft").colored);
+        assert_eq!(of("vivid").shade, Shade::Vivid);
+        assert_eq!(of("project_vivid").shade, Shade::Vivid);
+        assert!(!of("project_soft").apart && of("project_soft").colored);
+        assert!(!of("gray").colored);
     }
 
     #[test]

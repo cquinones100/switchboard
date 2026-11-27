@@ -38,8 +38,7 @@
 //! to end, and starts it again in its tab. The tmux version's daemon
 //! restart, tmux reload, sidebar panes, Neovim plugins, Ghostty config and
 //! lib's packages are gone with what they kept running: the one binary and
-//! its server hold all of it now. Ported from bin/apply-actions and
-//! tmux/apply.sh.
+//! its server hold all of it now.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};

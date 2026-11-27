@@ -1,15 +1,13 @@
 //! `switchboard claude-plugin-dirs`: what `CLAUDE_CODE_PLUGIN_DIRS` holds for
 //! a Claude started now in one of Switchboard's panes, from the variable as
-//! the shell has it (`setup::plugin::value_now`, the rule a new pane gets
-//! it by): Switchboard's plugin added unless Claude Code's managed settings
-//! forbid it (src/setup/blocked.rs) or an earlier version's hooks are
-//! still in `~/.claude/settings.json` (an older build's server still
-//! running, which takes them out as the new one starts), where the plugin
-//! would run each twice; any other folder kept, and an empty
-//! line for none. The `claude` function `wt`'s `init` prints runs it at
-//! each launch, since a shell open from before keeps the value it started
-//! with. Ported from the `claude` function in
-//! bin/worktree-from-ticket, which read tmux's global environment.
+//! the shell has it (`setup::plugin::value_now`, the rule a new pane gets it
+//! by): Switchboard's plugin added unless Claude Code's managed settings
+//! forbid it (src/setup/blocked.rs) or an earlier version's hooks are still
+//! in `~/.claude/settings.json` (an older build's server still running, which
+//! takes them out as the new one starts), where the plugin would run each
+//! twice; any other folder kept, and an empty line for none. The `claude`
+//! function `wt`'s `init` prints runs it at each launch, since a shell open
+//! from before keeps the value it started with.
 
 use std::process::ExitCode;
 

@@ -1,17 +1,15 @@
 //! `switchboard try --sealed`: someone else's code, a fork's PR `wtpr
 //! --untrusted` checked out, tried without any of it running outside a
-//! sandbox. Ported from bin/switchboard-try's `--sealed`, which ran the
-//! PR's setup, tmux server, everything tmux started and every tmux client
-//! under macOS's sandbox; here every process of the try is in it: the build
-//! (the PR's `build.rs` and proc macros run as cargo builds), the build's
-//! own setup, its server and everything the server starts, and every client
-//! of it, the attached terminal's and `--detached`'s prefix, since a
-//! client is the PR's binary too. src/platform/sandbox.rs has the rules:
-//! nothing in it reads your home or your per-user folders, writes beyond
-//! the try's home and `/tmp`, reaches the network, connects to any socket
-//! but its own, signals a process outside it, or asks the Keychain, the
-//! clipboard or Launch Services. Linux has no sandbox without installing
-//! another program, so there `--sealed` refuses, saying so.
+//! sandbox. Every process of the try is in it: the build (the PR's
+//! `build.rs` and proc macros run as cargo builds), the build's own setup,
+//! its server and everything the server starts, and every client of it, the
+//! attached terminal's and `--detached`'s prefix, since a client is the
+//! PR's binary too. src/platform/sandbox.rs has the rules: nothing in it reads your
+//! home or your per-user folders, writes beyond the try's home and `/tmp`,
+//! reaches the network, connects to any socket but its own, signals a
+//! process outside it, or asks the Keychain, the clipboard or Launch
+//! Services. Linux has no sandbox without installing another program, so
+//! there `--sealed` refuses, saying so.
 //!
 //! The home, `/tmp/sb-<hash>` as an open try's, holds nothing of yours: no
 //! link into your home, a `~/.config/switchboard/settings.json` turning off

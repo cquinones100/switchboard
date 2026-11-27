@@ -12,7 +12,9 @@
 //! dropped from the file when the server starts (`migrate`), as the sidebar
 //! daemon's `migrateSettings` did; an on/off setting that became a choice
 //! (`REVALUED`) has its saved on or off read as the choice that means the
-//! same, and written over as that choice then.
+//! same, and written over as that choice then; the settings `tab_colors`
+//! took in (`MERGED`) are read as its choice that means the same, and
+//! written over as it.
 //!
 //! The settings that depend on the computer (`"scope": "computer"`,
 //! `COMPUTER`: whether a service is used here, what runs on one computer
@@ -477,6 +479,7 @@ fn saved() -> Map<String, Value> {
             .collect();
     }
     let synced = util::read_json_object(settings_file());
+    let synced = migrated(&synced).unwrap_or(synced);
     let local = local_settings_file();
     if local == settings_file() {
         return synced;
@@ -652,6 +655,13 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
     }
     let file = file_of(key);
     let mut mine = read_to_change(&file)?;
+    // A choice of `tab_colors` is the one that counts from now, over what
+    // the settings it took in said.
+    if key == "tab_colors" {
+        for old in MERGED {
+            mine.shift_remove(*old);
+        }
+    }
     // A computer setting is kept even at its default, since one left unset
     // is a service not yet seen working here (`turn_on_where_it_works`).
     if value == option.default && !is_computer(key) {
@@ -869,19 +879,59 @@ pub const RENAMED: &[(&str, &str)] = &[
     ("view_closed", "view_reopen"),
 ];
 
+/// The on/off settings `tab_colors` took in: `accent_colors` off is its
+/// `gray`, and `tab_colors_apart` off its `project_` choice of the shade
+/// it names.
+pub const MERGED: &[&str] = &["accent_colors", "tab_colors_apart"];
+
+/// `tab_colors` as your file's `MERGED` settings and `tab_colors` say it
+/// together, when the file sets either of the two.
+fn tab_colors_merged(mine: &Map<String, Value>) -> Option<Value> {
+    if !MERGED.iter().any(|k| mine.contains_key(*k)) {
+        return None;
+    }
+    let off = |key: &str| mine.get(key) == Some(&Value::Bool(false));
+    let shade = match mine.get("tab_colors").and_then(Value::as_str) {
+        Some(v) if v.ends_with("vivid") => "vivid",
+        _ => "soft",
+    };
+    Some(Value::String(if off("accent_colors") {
+        "gray".into()
+    } else if off("tab_colors_apart") {
+        format!("project_{shade}")
+    } else {
+        shade.into()
+    }))
+}
+
 /// Your file with what an earlier version saved read as this one names it:
 /// a renamed key's off kept under its new name (unless that is set already),
-/// the old key dropped. `None` when there is nothing to change.
+/// the old key dropped, and the settings `tab_colors` took in read as it.
+/// `None` when there is nothing to change.
 pub fn migrated(mine: &Map<String, Value>) -> Option<Map<String, Value>> {
     let stale: Vec<&str> = REVALUED
         .iter()
         .map(|(k, _, _)| *k)
         .filter(|k| mine.get(*k).is_some_and(Value::is_boolean))
         .collect();
-    if stale.is_empty() && !RENAMED.iter().any(|(old, _)| mine.contains_key(*old)) {
+    let tab_colors = tab_colors_merged(mine);
+    if stale.is_empty()
+        && tab_colors.is_none()
+        && !RENAMED.iter().any(|(old, _)| mine.contains_key(*old))
+    {
         return None;
     }
     let mut out = mine.clone();
+    if let Some(value) = tab_colors {
+        for key in MERGED {
+            out.shift_remove(*key);
+        }
+        if value == "soft" {
+            out.shift_remove("tab_colors");
+        } else {
+            out.insert("tab_colors".into(), value);
+        }
+    }
     // An on/off saved for a setting that became a choice is written as its
     // choice, the default's dropped.
     for key in stale {
@@ -986,6 +1036,35 @@ mod tests {
             "on, the default, it is only dropped"
         );
         assert_eq!(migrated(&mine(json!({ "tips": false }))), None);
+    }
+
+    #[test]
+    fn the_tab_color_settings_saved_apart_are_read_as_one_choice() {
+        let mine = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(
+            migrated(&mine(
+                json!({ "accent_colors": false, "tab_colors": "vivid" })
+            )),
+            Some(mine(json!({ "tab_colors": "gray" })))
+        );
+        assert_eq!(
+            migrated(&mine(
+                json!({ "tab_colors_apart": false, "tab_colors": "vivid" })
+            )),
+            Some(mine(json!({ "tab_colors": "project_vivid" })))
+        );
+        assert_eq!(
+            migrated(&mine(json!({ "tab_colors_apart": false }))),
+            Some(mine(json!({ "tab_colors": "project_soft" })))
+        );
+        assert_eq!(
+            migrated(&mine(
+                json!({ "accent_colors": true, "tab_colors_apart": true })
+            )),
+            Some(Map::new()),
+            "both on, the default's soft, is dropped"
+        );
+        assert_eq!(migrated(&mine(json!({ "tab_colors": "vivid" }))), None);
     }
 
     #[test]

@@ -929,7 +929,7 @@ pub struct Setup {
 impl Setup {
     fn json(&self) -> Value {
         json!({
-            "at": util::js_number(self.at as f64),
+            "at": self.at,
             "branch": self.branch,
             "mergeQueue": self.merge_queue,
             "autoMerge": self.auto_merge,
@@ -1314,7 +1314,7 @@ pub fn mark_once_landed(
         mark,
         format!(
             "{}\n",
-            json!({ "at": util::js_number(util::now_ms() as f64), "queueWasOn": queue_was_on })
+            json!({ "at": util::now_ms(), "queueWasOn": queue_was_on })
         ),
     );
     Ok(())

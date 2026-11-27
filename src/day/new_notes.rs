@@ -1,12 +1,11 @@
 //! The notes written for you without asking (the meeting notes from Fathom,
 //! the standup note, today's to-do list), for the sidebar's notifications
-//! until you read one. Ported from lib/sidebar/new-notes.js: each is kept in
-//! `new-notes.json` in the state directory as `{ path, title, source, at }`,
-//! its path within the notes directory, and is let go once Notes shows it
-//! (`.notes.json`'s `last`), its file is gone, or its menu dismisses it.
-//! `switchboard new-note` (`main`) is how a routine's Claude adds one, as
-//! the starter routines that write today's todo note and the meeting notes
-//! do (src/routines/starters.rs).
+//! until you read one. Each is kept in `new-notes.json` in the state
+//! directory as `{ path, title, source, at }`, its path within the notes
+//! directory, and is let go once Notes shows it (`.notes.json`'s `last`),
+//! its file is gone, or its menu dismisses it. `switchboard new-note` (`main`) is how a routine's
+//! Claude adds one, as the starter routines that write today's todo note and
+//! the meeting notes do (src/routines/starters.rs).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

@@ -1,7 +1,7 @@
 //! `slack-updates-save`: Keep what is new for you on Slack for mission
 //! control's Slack view, which reads it from `slack.json` in the state
-//! directory. Ported from `claude/skills/slack-updates/scripts/save.js`; the
-//! saving is `day::slack::save`, which the server's own look calls too.
+//! directory. The saving is `day::slack::save`, which the server's own look
+//! calls too.
 //!
 //!   switchboard slack-updates-save --since   prints when to look back to:
 //!                                            ten minutes before the last

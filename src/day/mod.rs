@@ -1,10 +1,7 @@
 //! Your day, as the sidebar daemon kept it: today's calendar and what
 //! changed on it, what is new for you on Slack, the next meeting, and the
 //! notes written for you (the morning's standup), with the notifications
-//! each gives. Ported from lib/sidebar/'s calendar.js, calendar-feed.js,
-//! calendar-changes.js, slack.js, slack-look.js, standup.js and
-//! new-notes.js, and the scripts the /today and /slack-updates skills save
-//! with.
+//! each gives.
 //!
 //! The server keeps a `Day` and calls `Server::day_tick` on every tick:
 //! anything that reaches out (the calendar feed, Slack through Claude's

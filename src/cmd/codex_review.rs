@@ -1,9 +1,8 @@
 //! `codex-review [-C <dir>] [--pr <number|url>] [--ticket <file>] [--base
 //! <ref>] [--notes <file>] [--include-low] [--round <start|next>]
 //! [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]`:
-//! Codex as a
-//! skeptical, read-only static reviewer of the current branch, its findings
-//! printed as JSON on stdout. Ported from `bin/codex-review`.
+//! Codex as a skeptical, read-only static reviewer of the current branch,
+//! its findings printed as JSON on stdout.
 //!
 //! Built to be called from a Claude Code session (claude/skills/review-loop),
 //! which reads the JSON, fixes what it agrees with, commits, and calls this

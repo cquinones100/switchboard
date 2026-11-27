@@ -1,14 +1,12 @@
 //! What the commands that open a worktree for a piece of work share
-//! (`worktree-from-ticket`, `worktree-from-branch`,
-//! `worktree-from-pr`, `worktree-resume`, and those that find one again): the
-//! branch's slug, the main clone, the local settings linked in, the worktree
-//! made or reused, refused while Claude already works in it, git's list of
-//! worktrees, fetching a branch, the arguments every one of them takes
-//! (`--cd-file`, `--no-claude`), the shell function each prints for `init`,
-//! starting Claude in the worktree, and a pull request's details from GitHub.
-//! Ported from lib/worktree.js, and from the helpers each bin/worktree-*
-//! script kept a copy of. Errors are returned, for each command's own `fail`
-//! to print.
+//! (`worktree-from-ticket`, `worktree-from-branch`, `worktree-from-pr`,
+//! `worktree-resume`, and those that find one again): the branch's slug, the
+//! main clone, the local settings linked in, the worktree made or reused,
+//! refused while Claude already works in it, git's list of worktrees,
+//! fetching a branch, the arguments every one of them takes (`--cd-file`,
+//! `--no-claude`), the shell function each prints for `init`, starting Claude
+//! in the worktree, and a pull request's details from GitHub. Errors are
+//! returned, for each command's own `fail` to print.
 
 use std::fs;
 use std::io::{BufRead, Write};

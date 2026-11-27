@@ -1,7 +1,7 @@
 //! `wt-batch <tickets...>`: opens one tab per Linear ticket and runs `wt
 //! <ticket>` in each, so a handful of tickets can be started in one go.
-//! Ported from bin/wt-batch. Tickets are separated by commas, spaces, or
-//! both, and full Linear issue URLs work in place of identifiers.
+//! Tickets are separated by commas, spaces, or both, and full Linear
+//! issue URLs work in place of identifiers.
 //!
 //! ```text
 //! wt-batch ABC-123 ABC-124

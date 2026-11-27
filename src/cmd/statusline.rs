@@ -1,6 +1,5 @@
 //! `switchboard statusline`: Claude Code's statusline, given its JSON on
-//! stdin. Ported from claude/statusline-command.sh, which
-//! `assets/claude-settings.json` now names in its place.
+//! stdin.
 //!
 //! It prints the model in the project's accent color (src/tabs, so the
 //! Claude statusline and the tab agree on a project's color), then, outside
@@ -93,7 +92,7 @@ pub fn main(_args: Vec<String>) -> ExitCode {
         &payload,
         in_workspace,
         hide_context,
-        Shade::read(),
+        tabs::color::TabColors::read().shade,
         light,
         tint,
     );
@@ -125,7 +124,7 @@ fn tell_server(payload: &Value) {
 
 /// The tint of this pane's tab (`show @tab_tint`, its `@tab_hue` and
 /// `@tab_step` in one answer), asked of the server, which answers only
-/// while each tab has a hue of its own (`tab_colors_apart`); none outside
+/// while each tab has a hue of its own (`tab_colors` not by project); none outside
 /// Switchboard or when no answer comes within 100 ms, when the line hashes
 /// the directory as before.
 fn tab_tint() -> Option<tabs::color::Tint> {

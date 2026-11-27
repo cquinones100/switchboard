@@ -392,7 +392,7 @@ impl Mode {
                     .collect(),
             ),
         );
-        map.insert("spendLimit".into(), util::js_number(self.spend_limit));
+        map.insert("spendLimit".into(), self.spend_limit.into());
         map.insert("weeklyLimit".into(), self.weekly_limit.into());
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
         map.insert("handsFree".into(), self.hands_free.into());
@@ -406,7 +406,7 @@ impl Mode {
                     .map(|c| {
                         serde_json::json!({
                             "id": c.id, "item": c.item, "hash": c.hash,
-                            "at": util::js_number(c.at as f64),
+                            "at": c.at,
                         })
                     })
                     .collect(),
@@ -420,7 +420,7 @@ impl Mode {
                     .map(|l| {
                         serde_json::json!({
                             "id": l.id, "item": l.item, "note": l.note, "hash": l.hash,
-                            "at": util::js_number(l.at as f64),
+                            "at": l.at,
                         })
                     })
                     .collect(),
@@ -701,7 +701,7 @@ mod tests {
         assert!(mode.on);
         let written = util::read_json(Mode::file(&dir)).unwrap();
         assert_eq!(written["later"], 1);
-        assert_eq!(written["spendLimit"], 20);
+        assert_eq!(written["spendLimit"], 20.0);
         assert_eq!(written["weeklyLimit"], 85);
         assert_eq!(Mode::read(&dir).weekly_limit, 85);
         assert_eq!(written["readyOnly"], false);

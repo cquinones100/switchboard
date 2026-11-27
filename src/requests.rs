@@ -207,12 +207,6 @@ pub fn tally_week(now: &jiff::Zoned) -> Tally {
     counting.done()
 }
 
-/// The name of the file today's requests are counted in, for the view to
-/// say where they come from.
-pub fn file_name_today() -> String {
-    format!("{}.tsv", util::ymd(&util::local_now()))
-}
-
 /// Days past `KEEP_DAYS` go.
 pub fn prune() {
     prune_at(&util::local_now());

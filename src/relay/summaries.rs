@@ -191,7 +191,7 @@ fn count_haiku(cx: &Relay, cost: f64) {
     let text = util::json_compact(&json!({
         "day": usage.day,
         "calls": usage.calls,
-        "cost": util::js_number(usage.cost),
+        "cost": usage.cost,
     }));
     if let Err(e) = std::fs::create_dir_all(&cx.paths.state_dir)
         .and_then(|_| util::write_private(cx.paths.usage_file(), text, false))

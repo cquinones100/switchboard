@@ -3,8 +3,7 @@
 //! for the branch's PR, and `pr-image --ticket <ID>` for a Linear ticket,
 //! each opened by M-p in place of the pane it is asked from, as M-d's diff
 //! is (src/diff/in_place.rs), its pane alone allowed to send the terminal
-//! pictures (`@allow_passthrough`). Ported from tmux/pr-image.js and
-//! pane-in-place.sh's `pr-image` and `ticket-image`.
+//! pictures (`@allow_passthrough`).
 //!
 //! - `page`: the page, from the PR's HTML or the ticket's Markdown.
 //! - `render`: Chrome drawing it, and the pages cut from its picture.

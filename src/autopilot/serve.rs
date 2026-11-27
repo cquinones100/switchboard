@@ -3091,12 +3091,6 @@ impl Server {
         self.autopilot_notices(&mode);
     }
 
-    /// The tab a landing without asking was made in, while it is open.
-    pub fn autopilot_landed_tab(&self, item: &crate::items::Item) -> Option<TabId> {
-        let tab: TabId = item.data.get("tab")?.as_str()?.parse().ok()?;
-        self.tabs.contains_key(&tab).then_some(tab)
-    }
-
     /// Mission control drawn again wherever it is open, for its line.
     fn autopilot_redraw(&mut self) {
         for c in self.clients.values_mut() {

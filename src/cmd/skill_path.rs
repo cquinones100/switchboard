@@ -1,8 +1,8 @@
 //! `skill-path <name> [<dir>]`: the SKILL.md to follow for the skill `<name>`
 //! in the repository at `<dir>` (the current directory when none is given).
-//! Ported from `bin/skill-path`. `skill-path --own <name>` prints the text of
-//! Switchboard's own copy, which the binary carries, where the Node version's
-//! skills read it from `~/switchboard/claude/skills`.
+//! `skill-path --own <name>` prints the text of Switchboard's own copy, which
+//! the binary carries, where the Node version's skills read it from
+//! `~/switchboard/claude/skills`.
 //!
 //! The worktree's own `.claude/skills/<name>/SKILL.md` comes first, then its
 //! main clone's (a branch cut before the repository added the skill has none

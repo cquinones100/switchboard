@@ -10,8 +10,7 @@
 //! tickets, and filed where the chosen repository's `tickets` says (Linear
 //! ticket IDs alone each shaped further as a ticket of their own): while
 //! that is unset, its source is off, or the directory chosen isn't in a
-//! repository, the box comes back with what was typed and why. Ported from
-//! tmux/note-shape.sh.
+//! repository, the box comes back with what was typed and why.
 //!
 //! The notes are the notes app's: Markdown in `$NOTES_DIR` or `~/Notes`,
 //! the one open in the app first, then the rest, newest first. An item is

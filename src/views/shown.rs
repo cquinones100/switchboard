@@ -3,9 +3,7 @@
 //! address; the links of the note the notes pane shows, top to bottom,
 //! since Notes draws a link as its text alone; and the images and videos it
 //! shows, files and links; and the tabs it names by number ("tab 15"),
-//! which a tab keeps while it is open. Ported from tmux/link-view.sh's `links_of` and
-//! `media_of`, which read `capture-pane`'s text (with `-e` for the
-//! hyperlinks) through perl; here the pane gives its text and its
+//! which a tab keeps while it is open. The pane gives its text and its
 //! hyperlinks' places in it (`Pane::text_and_links`).
 
 use std::ops::Range;

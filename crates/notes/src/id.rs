@@ -94,15 +94,6 @@ pub fn is_line(line: &str) -> bool {
     LINE.is_match(line)
 }
 
-/// The ID in a note's lines, from the last line holding one, and its row.
-pub fn in_lines<S: AsRef<str>>(lines: &[S]) -> Option<(String, usize)> {
-    lines
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(i, l)| of_line(l.as_ref()).map(|id| (id.to_string(), i)))
-}
-
 /// The ID in a note's text.
 pub fn in_text(text: &str) -> Option<String> {
     text.split('\n')

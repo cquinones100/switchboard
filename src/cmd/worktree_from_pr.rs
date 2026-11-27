@@ -1,6 +1,6 @@
 //! `worktree-from-pr [path] <pr-number-or-url>`: a git worktree on the head
 //! branch of a GitHub pull request, with Claude opened in it, told to say
-//! where the PR stands before touching it. Ported from `bin/worktree-from-pr`.
+//! where the PR stands before touching it.
 //!
 //! A fork's PR is set up as `gh pr checkout` sets it up: the fork becomes a
 //! remote named after its owner, and the worktree's branch,

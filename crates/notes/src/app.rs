@@ -955,11 +955,6 @@ impl App {
         self.geo.text
     }
 
-    /// The palette's picks kept here rather than in the state directory.
-    pub fn keep_recent_in(&mut self, file: PathBuf) {
-        self.recent_file = file;
-    }
-
     pub fn say(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), Instant::now()));
     }

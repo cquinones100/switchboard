@@ -1203,17 +1203,10 @@
     "default": true
   },
   {
-    "key": "accent_colors",
-    "category": "Tabs and header",
-    "label": "Project colors",
-    "description": "A color of its own for each project's tab, made from its directory; off, every tab is gray",
-    "default": true
-  },
-  {
     "key": "tab_colors",
     "category": "Tabs and header",
     "label": "Tab colors",
-    "description": "The colors tabs take from their project, in the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each tab keeps its own hue either way",
+    "description": "The colors tabs wear, in the sidebar, the header and Claude's statusline. soft and vivid give each tab the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart: soft as pastels, as the UX 2.0 canvas draws them, vivid as the stronger colors from before. The project choices give a tab its directory's color instead, the same for every tab of one checkout. gray makes every tab gray, the statusline keeping the soft colors",
     "choices": [
       {
         "value": "soft",
@@ -1222,16 +1215,21 @@
       {
         "value": "vivid",
         "label": "vivid"
+      },
+      {
+        "value": "project_soft",
+        "label": "soft, by project"
+      },
+      {
+        "value": "project_vivid",
+        "label": "vivid, by project"
+      },
+      {
+        "value": "gray",
+        "label": "gray"
       }
     ],
     "default": "soft"
-  },
-  {
-    "key": "tab_colors_apart",
-    "category": "Tabs and header",
-    "label": "A color a tab",
-    "description": "Each tab gets the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart. Off, a tab wears its directory's color, the same for every tab of one checkout",
-    "default": true
   },
   {
     "key": "new_tab_home",

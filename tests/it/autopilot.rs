@@ -834,7 +834,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     client.type_text("\x1b\r");
     client.wait_text("Autopilot: spend limit $20 a day");
     let now = mode(&server);
-    assert_eq!(now["spendLimit"], 20);
+    assert_eq!(now["spendLimit"], 20.0);
     assert_eq!(now["said"], "", "what it said of the limit passed goes");
 
     // The weekly limit's stepper: off, then 50 and up by fives.

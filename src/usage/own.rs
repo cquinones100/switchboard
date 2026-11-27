@@ -3,8 +3,7 @@
 //! Settings view (`own_items`), under a category named after its file: a
 //! word, a number, a list or a map is typed in there, and anything bigger
 //! (the on-call channels, a file of your own) opens in an editor. A new file
-//! there, or a new setting in one, gets an entry in `OWN_FILES`. Ported from
-//! lib/sidebar/own-config.js.
+//! there, or a new setting in one, gets an entry in `OWN_FILES`.
 //!
 //! The rows for the dotfiles' own overrides (tmux.conf, nvim.lua, Ghostty,
 //! lazygit.yml) are gone with those dotfiles; keys.json, which changes the
@@ -568,7 +567,7 @@ pub fn write_own(
 
 /// Where your CLAUDE.md's rules come from, as claude.json says: its kind
 /// ("repository", "a file" or "local file", as the Settings row shows it)
-/// and the words that name it. Ported from views.js's `claudeMdSource`.
+/// and the words that name it.
 pub fn rules_source(dir: &Path, data: &Map<String, Value>) -> (&'static str, String) {
     let text = |k: &str| {
         data.get(k)

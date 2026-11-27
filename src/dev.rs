@@ -5,16 +5,14 @@
 //! settings and the restart for a build made from its source) is kept to
 //! its clone, so a user working on their own repositories never meets it.
 //!
-//! A directory is Switchboard's clone when it is the top of a checkout
-//! (the main clone or any of its worktrees) holding Switchboard's sources,
-//! a `Cargo.toml` naming the `switchboard` package with `assets/skills`
-//! and `src/mux` beside it, and its `origin` is a GitHub repository named
+//! A directory is Switchboard's clone when it is the top of a checkout (the
+//! main clone or any of its worktrees) holding Switchboard's sources, a
+//! `Cargo.toml` naming the `switchboard` package with `assets/skills` and
+//! `src/mux` beside it, and its `origin` is a GitHub repository named
 //! `switchboard` (any owner, so a fork counts; or `editor-configs`, its old
-//! name, in any case), read from git's own config
-//! file with no git run, since the running build's answer is asked on the
-//! drawing path (the palette, Settings). Ported from the two checks
-//! `cmd::apply_actions::is_switchboard` (the real path `~/switchboard`) and
-//! `cmd::try_::is_switchboard` (the sources alone) kept apart.
+//! name, in any case), read from git's own config file with no git run,
+//! since the running build's answer is asked on the drawing path (the
+//! palette, Settings).
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

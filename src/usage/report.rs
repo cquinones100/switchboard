@@ -1,10 +1,9 @@
 //! How you use Switchboard, from what the habits setting has counted, as
 //! M-p's "How you use Switchboard" shows it: the keys pressed this week and
 //! month, the commands picked in M-p, mission control's views opened, and
-//! the suggestions waiting now. Ported from lib/habits-report.js's
-//! `reportLines`, which built the lines from the counts alone, so its test
-//! needs no server or terminal; whatever shows them draws each piece in its
-//! tone.
+//! the suggestions waiting now. The lines are built from the counts alone,
+//! so its test needs no server or terminal; whatever shows them draws each
+//! piece in its tone.
 
 use indexmap::IndexMap;
 use serde_json::Value;
