@@ -251,6 +251,38 @@ impl Key {
         Key { code, mods }
     }
 
+    /// A key a program in a pane read with crossterm, as the workspace
+    /// names it; None for one it has no use for.
+    pub fn of_crossterm(key: &crossterm::event::KeyEvent) -> Option<Key> {
+        use crossterm::event::{KeyCode as C, KeyModifiers as M};
+        let code = match key.code {
+            C::Char(c) => KeyCode::Char(c),
+            C::Enter => KeyCode::Enter,
+            C::Tab => KeyCode::Tab,
+            C::BackTab => KeyCode::BackTab,
+            C::Backspace => KeyCode::Backspace,
+            C::Esc => KeyCode::Esc,
+            C::Left => KeyCode::Left,
+            C::Right => KeyCode::Right,
+            C::Up => KeyCode::Up,
+            C::Down => KeyCode::Down,
+            C::Home => KeyCode::Home,
+            C::End => KeyCode::End,
+            C::PageUp => KeyCode::PageUp,
+            C::PageDown => KeyCode::PageDown,
+            C::Insert => KeyCode::Insert,
+            C::Delete => KeyCode::Delete,
+            C::F(n) => KeyCode::F(n),
+            _ => return None,
+        };
+        let mods = Mods {
+            shift: key.modifiers.contains(M::SHIFT),
+            alt: key.modifiers.contains(M::ALT),
+            ctrl: key.modifiers.contains(M::CONTROL),
+        };
+        Some(Key::new(code, mods))
+    }
+
     /// `code` with no modifier held, as the tests press a key.
     pub fn plain(code: KeyCode) -> Key {
         Key::new(code, Mods::NONE)
@@ -479,6 +511,42 @@ pub struct Mouse {
     pub col: u16,
     pub row: u16,
     pub mods: Mods,
+}
+
+impl Mouse {
+    /// The mouse as a program in a pane read it with crossterm, as the
+    /// workspace names it.
+    pub fn of_crossterm(mouse: &crossterm::event::MouseEvent) -> Mouse {
+        use crossterm::event::{KeyModifiers as M, MouseButton as B, MouseEventKind as E};
+        let button = |b: B| match b {
+            B::Left => MouseButton::Left,
+            B::Middle => MouseButton::Middle,
+            B::Right => MouseButton::Right,
+        };
+        let (kind, button) = match mouse.kind {
+            E::Down(b) => (MouseKind::Press, button(b)),
+            E::Up(b) => (MouseKind::Release, button(b)),
+            E::Drag(b) => (MouseKind::Drag, button(b)),
+            E::Moved => (MouseKind::Move, MouseButton::None),
+            E::ScrollDown => (MouseKind::Press, MouseButton::WheelDown),
+            E::ScrollUp => (MouseKind::Press, MouseButton::WheelUp),
+            E::ScrollLeft => (MouseKind::Press, MouseButton::WheelLeft),
+            E::ScrollRight => (MouseKind::Press, MouseButton::WheelRight),
+        };
+        let m = mouse.modifiers;
+        let mods = Mods {
+            shift: m.contains(M::SHIFT),
+            alt: m.contains(M::ALT),
+            ctrl: m.contains(M::CONTROL),
+        };
+        Mouse {
+            kind,
+            button,
+            col: mouse.column,
+            row: mouse.row,
+            mods,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

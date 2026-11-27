@@ -41,8 +41,9 @@ use crate::mux::{PaneId, TabId};
 
 pub use switchboard_ui::text;
 
+pub use crate::ui::menu::Filter;
 pub use model::{Rules, Stage, TabModel, TabState};
-pub use render::{Filter, Owner};
+pub use render::Owner;
 pub use serve::{KEYS, filed_state};
 
 /// What the server's timers tell the sidebar.

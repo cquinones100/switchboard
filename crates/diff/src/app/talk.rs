@@ -40,7 +40,7 @@ use ratatui::text::{Line as Spans, Span};
 
 use super::reading::{self, Does, HunkLine, Mode, PROSE, counted};
 use super::select::Pane;
-use super::{Act, App, Focus, Hit};
+use super::{Act, App, Focus, Hit, Move};
 use crate::story::{self, Kind, Story};
 use switchboard_ui::Theme;
 use switchboard_ui::draw::{cut, put_line, width, wrap};
@@ -771,18 +771,18 @@ impl App {
             }
             KeyCode::Char('h') if !ctrl => self.slide_step(-1),
             KeyCode::Char('l') if !ctrl => self.slide_step(1),
-            KeyCode::Char('j') | KeyCode::Down if !ctrl && zoom == Zoom::Flow => self.list_step(1),
-            KeyCode::Char('k') | KeyCode::Up if !ctrl && zoom == Zoom::Flow => self.list_step(-1),
-            KeyCode::Char('j') | KeyCode::Down if !ctrl => self.talk_scroll(1),
-            KeyCode::Char('k') | KeyCode::Up if !ctrl => self.talk_scroll(-1),
+            _ if zoom == Zoom::Flow
+                && let Some(by) = super::nav(&key).and_then(Move::rows) =>
+            {
+                self.list_step(by as i32)
+            }
+            _ if let Some(by) = super::nav(&key).and_then(|m| m.along(1)) => self.talk_scroll(by),
             KeyCode::Char('J') => self.talk_scroll(3),
             KeyCode::Char('K') => self.talk_scroll(-3),
             KeyCode::Char('d') if ctrl => self.talk_scroll(h / 2),
             KeyCode::Char('u') if ctrl => self.talk_scroll(-(h / 2)),
             KeyCode::PageDown => self.talk_scroll(h),
             KeyCode::PageUp => self.talk_scroll(-h),
-            KeyCode::Char('G') | KeyCode::End => self.talk_scroll(isize::MAX / 2),
-            KeyCode::Home => self.talk_scroll(isize::MIN / 2),
             KeyCode::Char('n') if !ctrl && zoom == Zoom::Steps => {
                 self.talker.notes = !self.talker.notes;
             }

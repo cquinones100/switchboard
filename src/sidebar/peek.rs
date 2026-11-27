@@ -17,6 +17,7 @@ use super::claude::Turn;
 use super::text;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
+use crate::ui::kit::nav::{self, Move};
 use crate::ui::{Look, Outcome, Overlay, Step};
 
 /// How much of a pane's scrollback a peek at its screen holds, above the
@@ -221,12 +222,13 @@ impl Overlay for Peek {
             KeyCode::Char('d') if ctrl => self.scroll_to(self.at() + half),
             KeyCode::Char('u') if ctrl => self.scroll_to(self.at().saturating_sub(half)),
             KeyCode::Char('c') if ctrl => Step::Close(Outcome::Dismissed),
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_to(self.at() + 1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_to(self.at().saturating_sub(1)),
+            _ if let Some(by) = nav::step(key).and_then(Move::rows) => {
+                self.scroll_to(self.at().saturating_add_signed(by))
+            }
+            _ if nav::step(key) == Some(Move::Top) => self.scroll_to(0),
+            _ if nav::step(key) == Some(Move::Bottom) => self.scroll_to(self.most),
             KeyCode::PageDown => self.scroll_to(self.at() + half),
             KeyCode::PageUp => self.scroll_to(self.at().saturating_sub(half)),
-            KeyCode::Char('g') | KeyCode::Home => self.scroll_to(0),
-            KeyCode::Char('G') | KeyCode::End => self.scroll_to(self.most),
             KeyCode::Char('s') => {
                 self.mode = match self.mode {
                     Mode::Turn => Mode::Screen,

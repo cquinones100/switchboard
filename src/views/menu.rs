@@ -11,16 +11,16 @@
 //! ratatui's cells, so the menu is drawn into a buffer the pane's size and
 //! its box's cells written over the pager's frame (`ansi`); the pager's
 //! crossterm keys and clicks are handed to it as the workspace's
-//! (`key_of`, `mouse_of`).
+//! (`Key::of_crossterm`, `Mouse::of_crossterm`).
 
-use crossterm::event::{KeyCode as CKey, KeyEvent, KeyModifiers, MouseButton as CButton};
-use crossterm::event::{MouseEvent, MouseEventKind};
+use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
 use super::board::Do;
-use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
+use crate::mux::input::{Key, Mouse};
 use crate::ui::{Look, Menu, MenuOption, Outcome, Overlay, Step};
 
 /// The option that reads the view again, as r does.
@@ -96,7 +96,7 @@ impl Open {
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Came {
-        match key_of(key) {
+        match Key::of_crossterm(&key) {
             Some(key) => {
                 let step = self.menu.key(key, &self.look);
                 self.came(step)
@@ -106,13 +106,8 @@ impl Open {
     }
 
     pub fn mouse(&mut self, mouse: MouseEvent) -> Came {
-        match mouse_of(mouse) {
-            Some(mouse) => {
-                let step = self.menu.mouse(mouse, &self.look);
-                self.came(step)
-            }
-            None => Came::Up(false),
-        }
+        let step = self.menu.mouse(Mouse::of_crossterm(&mouse), &self.look);
+        self.came(step)
     }
 
     /// The bytes that draw it over a pane `cols` by `rows`.
@@ -122,68 +117,6 @@ impl Open {
         let area = self.menu.stands_out().unwrap_or(buf.area);
         ansi(&buf, area.intersection(buf.area))
     }
-}
-
-/// A crossterm key as the workspace's, for the menu.
-pub fn key_of(key: KeyEvent) -> Option<Key> {
-    let m = key.modifiers;
-    let mods = Mods {
-        shift: m.contains(KeyModifiers::SHIFT),
-        alt: m.contains(KeyModifiers::ALT),
-        ctrl: m.contains(KeyModifiers::CONTROL),
-    };
-    let code = match key.code {
-        CKey::Char(c) => KeyCode::Char(c),
-        CKey::Enter => KeyCode::Enter,
-        CKey::Tab => KeyCode::Tab,
-        CKey::BackTab => KeyCode::BackTab,
-        CKey::Backspace => KeyCode::Backspace,
-        CKey::Esc => KeyCode::Esc,
-        CKey::Left => KeyCode::Left,
-        CKey::Right => KeyCode::Right,
-        CKey::Up => KeyCode::Up,
-        CKey::Down => KeyCode::Down,
-        CKey::Home => KeyCode::Home,
-        CKey::End => KeyCode::End,
-        CKey::PageUp => KeyCode::PageUp,
-        CKey::PageDown => KeyCode::PageDown,
-        CKey::Insert => KeyCode::Insert,
-        CKey::Delete => KeyCode::Delete,
-        CKey::F(n) => KeyCode::F(n),
-        _ => return None,
-    };
-    Some(Key { code, mods })
-}
-
-/// A crossterm mouse event as the workspace's, for the menu.
-pub fn mouse_of(mouse: MouseEvent) -> Option<Mouse> {
-    let button = |b: CButton| match b {
-        CButton::Left => MouseButton::Left,
-        CButton::Middle => MouseButton::Middle,
-        CButton::Right => MouseButton::Right,
-    };
-    let (kind, button) = match mouse.kind {
-        MouseEventKind::Down(b) => (MouseKind::Press, button(b)),
-        MouseEventKind::Up(b) => (MouseKind::Release, button(b)),
-        MouseEventKind::Drag(b) => (MouseKind::Drag, button(b)),
-        MouseEventKind::Moved => (MouseKind::Move, MouseButton::None),
-        MouseEventKind::ScrollDown => (MouseKind::Press, MouseButton::WheelDown),
-        MouseEventKind::ScrollUp => (MouseKind::Press, MouseButton::WheelUp),
-        MouseEventKind::ScrollLeft => (MouseKind::Press, MouseButton::WheelLeft),
-        MouseEventKind::ScrollRight => (MouseKind::Press, MouseButton::WheelRight),
-    };
-    let m = mouse.modifiers;
-    Some(Mouse {
-        kind,
-        button,
-        col: mouse.column,
-        row: mouse.row,
-        mods: Mods {
-            shift: m.contains(KeyModifiers::SHIFT),
-            alt: m.contains(KeyModifiers::ALT),
-            ctrl: m.contains(KeyModifiers::CONTROL),
-        },
-    })
 }
 
 /// SGR's parameters for a color, `base` 30 for the text and 40 for the

@@ -24,8 +24,8 @@ use ratatui::text::{Line as Spans, Span};
 use serde_json::Value;
 use switchboard_plugin_api::{Scope, Setting};
 use switchboard_ui::draw::{cut, put_line, width, wrap};
-use switchboard_ui::input::{self, Key, Mods, Mouse, MouseKind};
-use switchboard_ui::kit::{self, Surface, Tone};
+use switchboard_ui::input::{Key, Mouse};
+use switchboard_ui::kit::{self, Surface, Tone, nav};
 use switchboard_ui::when::{self, Said};
 use switchboard_ui::{Menu, MenuOption, Outcome, Overlay, Step};
 
@@ -100,63 +100,6 @@ fn needs_off(key: &str) -> Option<&'static str> {
         }
         _ => None,
     }
-}
-
-/// A key as the boxes of `switchboard-ui` take one.
-fn ui_key(key: &KeyEvent) -> Option<Key> {
-    let code = match key.code {
-        KeyCode::Char(c) => input::KeyCode::Char(c),
-        KeyCode::Enter => input::KeyCode::Enter,
-        KeyCode::Tab => input::KeyCode::Tab,
-        KeyCode::BackTab => input::KeyCode::BackTab,
-        KeyCode::Backspace => input::KeyCode::Backspace,
-        KeyCode::Esc => input::KeyCode::Esc,
-        KeyCode::Left => input::KeyCode::Left,
-        KeyCode::Right => input::KeyCode::Right,
-        KeyCode::Up => input::KeyCode::Up,
-        KeyCode::Down => input::KeyCode::Down,
-        KeyCode::Home => input::KeyCode::Home,
-        KeyCode::End => input::KeyCode::End,
-        KeyCode::PageUp => input::KeyCode::PageUp,
-        KeyCode::PageDown => input::KeyCode::PageDown,
-        KeyCode::Delete => input::KeyCode::Delete,
-        _ => return None,
-    };
-    Some(Key {
-        code,
-        mods: Mods {
-            // A capital letter comes as itself, with Shift already in it.
-            shift: key.modifiers.contains(KeyModifiers::SHIFT)
-                && !matches!(key.code, KeyCode::Char(_)),
-            alt: key.modifiers.contains(KeyModifiers::ALT),
-            ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-        },
-    })
-}
-
-/// A mouse event as the boxes of `switchboard-ui` take one.
-fn ui_mouse(m: &MouseEvent) -> Option<Mouse> {
-    let button = |b: MouseButton| match b {
-        MouseButton::Left => input::MouseButton::Left,
-        MouseButton::Right => input::MouseButton::Right,
-        MouseButton::Middle => input::MouseButton::Middle,
-    };
-    let (kind, button) = match m.kind {
-        MouseEventKind::Down(b) => (MouseKind::Press, button(b)),
-        MouseEventKind::Up(b) => (MouseKind::Release, button(b)),
-        MouseEventKind::Drag(b) => (MouseKind::Drag, button(b)),
-        MouseEventKind::Moved => (MouseKind::Move, input::MouseButton::None),
-        MouseEventKind::ScrollUp => (MouseKind::Press, input::MouseButton::WheelUp),
-        MouseEventKind::ScrollDown => (MouseKind::Press, input::MouseButton::WheelDown),
-        _ => return None,
-    };
-    Some(Mouse {
-        kind,
-        button,
-        col: m.column,
-        row: m.row,
-        mods: Mods::NONE,
-    })
 }
 
 impl App {
@@ -340,13 +283,15 @@ impl App {
                 self.settings = None;
                 return Act::Redraw;
             }
-            KeyCode::Char('j') | KeyCode::Down => (view.at + 1).min(last),
+            _ if let Some(by) = Key::of_crossterm(&key)
+                .and_then(nav::step)
+                .and_then(|m| m.along(1)) =>
+            {
+                view.at.saturating_add_signed(by).min(last)
+            }
             // Tab and Shift-Tab reach each row in turn, coming round.
             KeyCode::Tab => (view.at + 1) % (last + 1),
             KeyCode::BackTab => (view.at + last) % (last + 1),
-            KeyCode::Char('k') | KeyCode::Up => view.at.saturating_sub(1),
-            KeyCode::Char('g') | KeyCode::Home => 0,
-            KeyCode::Char('G') | KeyCode::End => last,
             KeyCode::Enter | KeyCode::Char(' ') => {
                 self.take_setting(view.at);
                 return Act::Redraw;
@@ -901,7 +846,8 @@ impl App {
     }
 
     pub(super) fn menu_key(&mut self, key: KeyEvent) -> Act {
-        let (Some(Open { menu, look, .. }), Some(key)) = (&mut self.menu, ui_key(&key)) else {
+        let (Some(Open { menu, look, .. }), Some(key)) = (&mut self.menu, Key::of_crossterm(&key))
+        else {
             return Act::Same;
         };
         let step = menu.key(key, look);
@@ -926,10 +872,10 @@ impl App {
     }
 
     pub(super) fn menu_mouse(&mut self, m: MouseEvent) -> Act {
-        let (Some(Open { menu, look, .. }), Some(mouse)) = (&mut self.menu, ui_mouse(&m)) else {
+        let Some(Open { menu, look, .. }) = &mut self.menu else {
             return Act::Same;
         };
-        let step = menu.mouse(mouse, look);
+        let step = menu.mouse(Mouse::of_crossterm(&m), look);
         self.menu_step(step)
     }
 

@@ -24,6 +24,8 @@ path = "src/lib.rs"
 [dependencies]
 switchboard-plugin-api = { path = "../plugin-api", features = ["release"] }
 switchboard-ui = { path = "../ui" }
+# Vim's keys over the file's sides, read-only, as the code viewer reads.
+switchboard-vim = { path = "../vim" }
 # Syntax colors, shared with the code viewer (`switchboard code`).
 switchboard-highlight = { path = "../highlight" }
 anyhow = "1"

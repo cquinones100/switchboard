@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use super::model::{self, MergeState, Rules, Stage, TabLoop, TabModel, TabState};
 use super::peek::Peek;
-use super::render::{self, Filter, Notice, Owner, View};
+use super::render::{self, Notice, Owner, View};
 use super::walk::{Next, Place, Stop, Why};
 use super::{Drawn, PaneRead, SidebarEvent, claude, config, notices, text};
 use crate::agent::State;
@@ -35,6 +35,8 @@ use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Server, Session, place_usable};
 use crate::mux::{PaneId, TabId};
 use crate::repos::Way;
+use crate::ui::kit::nav::{self, Move};
+use crate::ui::menu::{Filter, Filtered};
 use crate::ui::{Outcome, PickItem, Picker, Theme};
 use crate::{paths, settings, util};
 
@@ -1276,7 +1278,7 @@ impl Server {
             .get(session)
             .filter(|s| s.focused)
             .and_then(|s| s.filter.as_ref())
-            .map(|f| f.text.trim().to_lowercase())
+            .map(|f| f.typed().trim().to_lowercase())
             .unwrap_or_default();
         let mut tabs = self.sidebar_marked(session);
         if !settings::is_on("sidebar_reminders") {
@@ -1946,8 +1948,8 @@ impl Server {
             return false;
         }
         let side = self.sidebar.side(&session);
-        if let Some(f) = side.filter.as_mut().filter(|f| f.typing) {
-            f.text.push_str(&pasted.replace(['\n', '\r'], " "));
+        if let Some(f) = side.filter.as_mut().filter(|f| f.is_open()) {
+            f.paste(pasted);
             self.sidebar_refilter(&session);
         }
         true
@@ -1977,7 +1979,7 @@ impl Server {
             .sides
             .get(session)
             .and_then(|s| s.filter.as_ref())
-            .is_some_and(|f| f.typing);
+            .is_some_and(|f| f.is_open());
         if to >= stops.len() as isize && !notices.is_empty() && !typing {
             let i = ((to - stops.len() as isize) as usize).min(notices.len() - 1);
             self.sidebar.side(session).cursor = Some(notices[i].clone());
@@ -2175,12 +2177,11 @@ impl Server {
         // Typing a / filter: letters go into it and the cursor to the first
         // tab it leaves; the arrows move, Enter goes to the chosen tab, and
         // Esc clears it.
-        if side.filter.as_ref().is_some_and(|f| f.typing) {
+        if side.filter.as_ref().is_some_and(|f| f.is_open()) {
             match k.code {
-                KeyCode::Up if none => self.sidebar_step(session, at, -1, stops),
-                KeyCode::Down if none => self.sidebar_step(session, at, 1, stops),
-                KeyCode::Char('p') if ctrl => self.sidebar_step(session, at, -1, stops),
-                KeyCode::Char('n') if ctrl => self.sidebar_step(session, at, 1, stops),
+                _ if let Some(by) = nav::typing_rows(k) => {
+                    self.sidebar_step(session, at, by, stops)
+                }
                 KeyCode::Tab | KeyCode::BackTab if tab_focus && stops > 0 => {
                     let n = stops as isize;
                     let by = if k.code == KeyCode::Tab { 1 } else { -1 };
@@ -2190,7 +2191,7 @@ impl Server {
                 // select mode's keys, the tabs still selected.
                 KeyCode::Enter if side.select.is_some() && settings::is_on("sidebar_select") => {
                     if let Some(f) = self.sidebar.side(session).filter.as_mut() {
-                        f.typing = false;
+                        f.keep();
                     }
                     self.dirty_session(session);
                 }
@@ -2207,27 +2208,23 @@ impl Server {
                         self.sidebar_refilter(session);
                     }
                 }
-                KeyCode::Esc => {
-                    self.sidebar.side(session).filter = None;
-                    self.sidebar_refilter(session);
-                }
                 KeyCode::Char('c') if ctrl => {
                     self.sidebar.side(session).filter = None;
                     self.sidebar_refilter(session);
                 }
-                KeyCode::Backspace => {
-                    if let Some(f) = self.sidebar.side(session).filter.as_mut() {
-                        f.text.pop();
+                // The rest type into it, as every box's text is typed.
+                _ => {
+                    let side = self.sidebar.side(session);
+                    match side.filter.as_mut().map(|f| f.key(k)) {
+                        Some(Filtered::Changed) => self.sidebar_refilter(session),
+                        Some(Filtered::Closed) => {
+                            side.filter = Filter::after_close(k);
+                            self.sidebar_refilter(session);
+                        }
+                        Some(Filtered::Moved) => self.dirty_session(session),
+                        _ => {}
                     }
-                    self.sidebar_refilter(session);
                 }
-                KeyCode::Char(c) if none => {
-                    if let Some(f) = self.sidebar.side(session).filter.as_mut() {
-                        f.text.push(c);
-                    }
-                    self.sidebar_refilter(session);
-                }
-                _ => {}
             }
             return;
         }
@@ -2271,14 +2268,7 @@ impl Server {
             }
         }
 
-        let up_down = match k.code {
-            KeyCode::Char('j') | KeyCode::Down if none => Some(1),
-            KeyCode::Char('n') if ctrl => Some(1),
-            KeyCode::Char('k') | KeyCode::Up if none => Some(-1),
-            KeyCode::Char('p') if ctrl => Some(-1),
-            _ => None,
-        };
-        if let Some(by) = up_down {
+        if let Some(by) = nav::step(k).and_then(Move::rows) {
             self.sidebar_step_rows(session, stops, on_notice, at, by);
             return;
         }
@@ -2298,8 +2288,8 @@ impl Server {
             return;
         }
         match k.code {
-            KeyCode::Char('g') | KeyCode::Home if none => self.sidebar_move(session, 0),
-            KeyCode::Char('G') | KeyCode::End if none => {
+            _ if nav::step(k) == Some(Move::Top) => self.sidebar_move(session, 0),
+            _ if nav::step(k) == Some(Move::Bottom) => {
                 self.sidebar_move(session, stops as isize - 1)
             }
             // z folds the chosen tab's group to one line, or the
@@ -2339,8 +2329,11 @@ impl Server {
                 }
             }
             KeyCode::Char('/') if none => {
-                let text = side.filter.map(|f| f.text).unwrap_or_default();
-                self.sidebar.side(session).filter = Some(Filter { text, typing: true });
+                self.sidebar
+                    .side(session)
+                    .filter
+                    .get_or_insert_default()
+                    .open();
                 self.sidebar_refilter(session);
             }
             KeyCode::Esc if none && side.filter.is_some() => {
@@ -2516,7 +2509,7 @@ impl Server {
         // A / filter being typed is kept but no longer typed, so select
         // mode's keys reach it.
         if let Some(f) = side.filter.as_mut() {
-            f.typing = false;
+            f.keep();
         }
         let picked = side.select.get_or_insert_default();
         if !picked.remove(&tab) {
@@ -2931,7 +2924,7 @@ impl Server {
             .sides
             .get(session)
             .and_then(|s| s.filter.as_ref())
-            .is_some_and(|f| !f.text.trim().is_empty());
+            .is_some_and(|f| !f.typed().trim().is_empty());
         let filtered = self.sidebar_repo(session).is_some() || !searching;
         let cursor = self.sidebar.side(session).cursor.clone();
         let folded_over = cursor

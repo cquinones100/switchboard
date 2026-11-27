@@ -189,7 +189,7 @@ fn it_names_itself_and_its_usage() {
 }
 
 #[test]
-fn of_the_workspace_s_crates_it_depends_on_the_api_the_drawing_and_the_highlighting_alone() {
+fn of_the_workspace_s_crates_it_depends_on_the_api_the_drawing_the_highlighting_and_vim_alone() {
     let manifest =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
     let mut by_path: Vec<&str> = manifest
@@ -203,7 +203,8 @@ fn of_the_workspace_s_crates_it_depends_on_the_api_the_drawing_and_the_highlight
         [
             "switchboard-highlight",
             "switchboard-plugin-api",
-            "switchboard-ui"
+            "switchboard-ui",
+            "switchboard-vim"
         ]
     );
     assert!(

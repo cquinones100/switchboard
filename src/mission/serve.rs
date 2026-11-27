@@ -47,8 +47,9 @@ use crate::mux::input::{self, Input, Key, KeyCode, Mods, Mouse, MouseButton, Mou
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{self, Rules};
-use crate::sidebar::render::Filter;
 use crate::sidebar::text::SPINNER_MS;
+use crate::ui::kit::nav::{self, Move};
+use crate::ui::menu::{Filter, Filtered};
 use crate::ui::{Confirm, Menu, MenuOption, Outcome, PickItem, Picker, Theme};
 use crate::usage::ViewKind;
 use crate::{paths, settings, util};
@@ -202,14 +203,9 @@ enum ViewAct {
     Pilot(crate::autopilot::Act),
     /// The Reopen view's rows narrowed to tabs, to sessions, or both.
     ReopenKind(crate::usage::reopen::Kind),
-    /// The Reopen view's chosen row's pane shown over the list, or put
-    /// away, as `i` does.
-    ReopenPane,
-    /// The same for the Inbox board's ticket, the Routines board's
-    /// routine, and the Reminders month's lists under it.
-    InboxPane,
-    RoutinesPane,
-    RemindersLists,
+    /// The view's pane beside shown in the list's place, or put away, as
+    /// `i` does.
+    Alone,
     /// A day of the Notifications history unfolded.
     Unfold(String),
     /// A source of the Notifications view folded to its heading, or
@@ -429,7 +425,7 @@ fn notice_words(item: &Item) -> String {
 /// filter, a view's name after v) ends, a filter's text kept.
 fn take_keys(m: &mut Mission) {
     if let Some(f) = m.filter.as_mut() {
-        f.typing = false;
+        f.keep();
     }
     // (One matching no view is let go, so the list of views is there.)
     super::nav::end_typing(m);
@@ -574,10 +570,7 @@ impl Server {
         if let Opening::Picker(scope) = how {
             m.scope = Some(scope);
             m.picker = true;
-            m.filter = Some(Filter {
-                text: String::new(),
-                typing: true,
-            });
+            m.filter = Some(Filter::of("", true));
         }
         self.put_mission(client, m);
         self.mission_prepare(client);
@@ -1010,7 +1003,7 @@ impl Server {
             // cell without the focus, among views shown at once, has no
             // message chosen.
             self.slack_pane_shows(None);
-            m.slack_thread_open = false;
+            m.alone.remove(&ViewId::Slack);
             m.snap.slack_emoji = self.slack_emoji(emoji_names);
             return;
         };
@@ -1026,7 +1019,8 @@ impl Server {
         // Its thread beside the list, or in its place: opened once it has
         // shown a moment.
         let pane_shown = settings::is_on("slack_threads")
-            && (super::slack_board::beside(m.laid().0 as usize) || m.slack_thread_open);
+            && (super::slack_board::beside(m.laid().0 as usize)
+                || m.alone.contains(&ViewId::Slack));
         self.slack_pane_shows(m.chosen_item().filter(|_| pane_shown));
         let extras = self.slack_extras(m.chosen_item());
         let (thread, pictures) = (extras.thread, extras.pictures);
@@ -1304,7 +1298,7 @@ impl Server {
         let text = m
             .filter
             .as_ref()
-            .map(|f| f.text.trim().to_lowercase())
+            .map(|f| f.typed().trim().to_lowercase())
             .unwrap_or_default();
         let all_tabs = self.sidebar_all_tabs();
         // The Tabs view follows the session's sidebar's repository filter.
@@ -1468,7 +1462,7 @@ impl Server {
         // row coming in moves them: the cursor follows the chosen one. So
         // does the Slack board, whose conversations move up as new messages
         // come and which shows only the chosen one's section.
-        let typing_filter = m.filter.as_ref().is_some_and(|f| f.typing);
+        let typing_filter = m.filter.as_ref().is_some_and(|f| f.is_open());
         let follows = |id: &ViewId| {
             matches!(
                 id,
@@ -2780,13 +2774,13 @@ impl Server {
             Input::Paste(text) => {
                 let text = text.replace(['\n', '\r'], " ");
                 if let Some(m) = self.mission_mut(client) {
-                    if let Some(f) = m.filter.as_mut().filter(|f| f.typing) {
-                        f.text.push_str(&text);
+                    if let Some(f) = m.filter.as_mut().filter(|f| f.is_open()) {
+                        f.paste(&text);
                         m.cursor = 0;
                         // From the top again, as a typed edit leaves it.
                         m.at_top = true;
-                    } else if let Some(f) = m.nav_filter.as_mut().filter(|f| f.typing) {
-                        f.text.push_str(&text);
+                    } else if let Some(f) = m.nav_filter.as_mut().filter(|f| f.is_open()) {
+                        f.paste(&text);
                         nav_focus_listed(m);
                     } else if let Some(j) = m.jump.as_mut() {
                         j.text.push_str(&text);
@@ -2815,7 +2809,7 @@ impl Server {
         let looked = m.current().is_some_and(|v| v.id == ViewId::Calendar)
             && m.grid.is_none()
             && m.calendar_day.is_none()
-            && m.filter.as_ref().is_none_or(|f| f.text.is_empty())
+            && m.filter.as_ref().is_none_or(|f| f.typed().is_empty())
             && settings::is_on("calendar_changes")
             && self.notices.contains_key("calendar");
         if looked {
@@ -2937,7 +2931,7 @@ impl Server {
                 // words kept, so the keys after a pick act on what it shows.
                 m.jump = None;
                 if let Some(f) = m.filter.as_mut() {
-                    f.typing = false;
+                    f.keep();
                 }
                 super::nav::end_typing(m);
                 self.open_palette(client);
@@ -2949,13 +2943,13 @@ impl Server {
         let tabbing = matches!(k.code, KeyCode::Tab | KeyCode::BackTab);
         if m.grid.is_some()
             && tabbing
-            && let Some(f) = m.filter.as_mut().filter(|f| f.typing)
+            && let Some(f) = m.filter.as_mut().filter(|f| f.is_open())
         {
-            f.typing = false;
+            f.keep();
             m.next_cell(if k.code == KeyCode::Tab { 1 } else { -1 });
             return;
         }
-        if m.filter.as_ref().is_some_and(|f| f.typing) {
+        if m.filter.as_ref().is_some_and(|f| f.is_open()) {
             self.filter_key(client, m, k);
             return;
         }
@@ -2980,7 +2974,7 @@ impl Server {
         }
         // The list of views' filter being typed takes the keys, as the
         // view's own does.
-        if m.nav_filter.as_ref().is_some_and(|f| f.typing) && nav_key(m, k) {
+        if m.nav_filter.as_ref().is_some_and(|f| f.is_open()) && nav_key(m, k) {
             return;
         }
         // What the last action did stays in the footer until the next key.
@@ -3086,6 +3080,9 @@ impl Server {
             self.view_menu(client, m);
             return;
         }
+        if alone_key(m, k) {
+            return;
+        }
         if self.reminders_key(client, m, k) || self.routines_key(client, m, k) || ci_key(m, k) {
             return;
         }
@@ -3099,7 +3096,7 @@ impl Server {
             self.calendar_day_step(client, m, by);
             return;
         }
-        if landing_key(m, k) || reopen_key(m, k) {
+        if landing_key(m, k) {
             return;
         }
         let count = match m.current() {
@@ -3120,31 +3117,16 @@ impl Server {
                 _ => {}
             }
         }
+        if let Some(step) = nav::step(k) {
+            let to = match step {
+                Move::Left | Move::Right => side_step(m, step.cols().unwrap_or(0)),
+                Move::Down | Move::Up => row_step(m, step.rows().unwrap_or(0)),
+                Move::Top => 0,
+                Move::Bottom => count - 1,
+            };
+            return move_to(m, to, count);
+        }
         match k.code {
-            KeyCode::Char('h') | KeyCode::Left if none => {
-                let to = side_step(m, -1);
-                move_to(m, to, count)
-            }
-            KeyCode::Char('l') | KeyCode::Right if none => {
-                let to = side_step(m, 1);
-                move_to(m, to, count)
-            }
-            KeyCode::Char('j') | KeyCode::Down if none => {
-                let to = row_step(m, 1);
-                move_to(m, to, count)
-            }
-            KeyCode::Char('k') | KeyCode::Up if none => {
-                let to = row_step(m, -1);
-                move_to(m, to, count)
-            }
-            KeyCode::Char('n') if ctrl => {
-                let to = row_step(m, 1);
-                move_to(m, to, count)
-            }
-            KeyCode::Char('p') if ctrl => {
-                let to = row_step(m, -1);
-                move_to(m, to, count)
-            }
             KeyCode::Char('J') if none => {
                 if let Some(last) = m.side_last() {
                     m.scroll_side(1, last);
@@ -3155,8 +3137,6 @@ impl Server {
                     m.scroll_side(-1, last);
                 }
             }
-            KeyCode::Char('g') | KeyCode::Home if none => move_to(m, 0, count),
-            KeyCode::Char('G') | KeyCode::End => move_to(m, count - 1, count),
             KeyCode::Tab if tab_focus => move_focus(m, 1),
             KeyCode::BackTab if tab_focus => move_focus(m, -1),
             KeyCode::Tab => switch_view(m, 1, false),
@@ -3184,8 +3164,7 @@ impl Server {
             KeyCode::Char(' ') if k.mods == Mods::ALT => self.mission_close_from(client, m),
             KeyCode::Char('/') if none => {
                 if m.current().and_then(View::columns).is_none() {
-                    let text = m.filter.take().map(|f| f.text).unwrap_or_default();
-                    m.filter = Some(Filter { text, typing: true });
+                    m.filter.get_or_insert_default().open();
                     // What the filter finds is the list's, which takes the focus.
                     m.pane = None;
                     m.cursor = 0;
@@ -3222,9 +3201,8 @@ impl Server {
         }
     }
 
-    /// The Inbox board's own keys: Enter its menu, marking it read; on a
-    /// screen too narrow for the ticket beside, `i` showing it in the
-    /// list's place, and `i` or Esc back. True when it took the key.
+    /// The Inbox board's own key: Enter its menu, marking it read. True
+    /// when it took the key.
     fn inbox_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
         if !m.current().is_some_and(inbox_board::shown) {
             return false;
@@ -3232,16 +3210,10 @@ impl Server {
         let Some(item) = m.chosen_item().cloned() else {
             return false;
         };
-        let narrow = !inbox_board::beside(m.laid().0 as usize);
-        match k.code {
-            KeyCode::Enter => self.inbox_enter(client, item),
-            KeyCode::Char('i') if plain(&k) && narrow => {
-                m.inbox_pane = !m.inbox_pane;
-                m.side = None;
-            }
-            KeyCode::Esc if narrow && m.inbox_pane => m.inbox_pane = false,
-            _ => return false,
+        if k.code != KeyCode::Enter {
+            return false;
         }
+        self.inbox_enter(client, item);
         true
     }
 
@@ -3259,9 +3231,8 @@ impl Server {
     /// key.
     fn slack_board_key(m: &mut Mission, k: Key) -> bool {
         let shown = m.current().is_some_and(super::render::slack_board_shown);
-        // C-n and C-p move as j and k do.
-        let ctrl_step = k.mods == Mods::CTRL && matches!(k.code, KeyCode::Char('n' | 'p'));
-        if !shown || !(plain(&k) || k.code == KeyCode::Enter || ctrl_step) {
+        let step = nav::step(k);
+        if !shown || !(plain(&k) || k.code == KeyCode::Enter || step.is_some()) {
             return false;
         }
         // With the sections folded into a line, or no panes to move
@@ -3269,12 +3240,7 @@ impl Server {
         // section.
         let folded =
             !super::slack_board::column(m.laid().0 as usize) || !m.panes().contains(&Pane::Panel);
-        let by = match k.code {
-            KeyCode::Char('h') | KeyCode::Left => Some(-1),
-            KeyCode::Char('l') | KeyCode::Right => Some(1),
-            _ => None,
-        };
-        if let Some(by) = by {
+        if let Some(by) = step.and_then(Move::cols) {
             if folded {
                 if let Some(v) = m.current() {
                     m.cursor = super::slack_board::section_step(&v.data.items, m.cursor, by);
@@ -3291,14 +3257,7 @@ impl Server {
             }
             return true;
         }
-        let step = match k.code {
-            KeyCode::Char('n') if ctrl_step => Some(1),
-            KeyCode::Char('p') if ctrl_step => Some(-1),
-            KeyCode::Char('j') | KeyCode::Down => Some(1),
-            KeyCode::Char('k') | KeyCode::Up => Some(-1),
-            _ => None,
-        };
-        if let Some(by) = step
+        if let Some(by) = step.and_then(Move::rows)
             && m.pane_now() == Pane::List
         {
             if let Some(v) = m.current() {
@@ -3309,18 +3268,7 @@ impl Server {
             }
             return true;
         }
-        match k.code {
-            KeyCode::Char('i') if !super::slack_board::beside(m.laid().0 as usize) => {
-                m.slack_thread_open = !m.slack_thread_open;
-                m.side = None;
-                true
-            }
-            KeyCode::Esc if m.slack_thread_open && m.filter.is_none() => {
-                m.slack_thread_open = false;
-                true
-            }
-            _ => false,
-        }
+        false
     }
 
     /// The chosen Slack message's video played or picture shown with Quick
@@ -3615,25 +3563,14 @@ impl Server {
         // Tab and Shift-Tab leave the filter, kept, for the next or last stop.
         if tabbing {
             if let Some(f) = m.filter.as_mut() {
-                f.typing = false;
+                f.keep();
             }
             m.focus = Some(Focus::Filter);
             self.mission_key_in(client, m, k);
             return;
         }
-        let Some(f) = m.filter.as_mut() else {
+        if !type_into(&mut m.filter, k) {
             return;
-        };
-        match k.code {
-            KeyCode::Enter => f.typing = false,
-            KeyCode::Esc => m.filter = None,
-            KeyCode::Char('c') if k.mods == Mods::CTRL => m.filter = None,
-            KeyCode::Backspace => {
-                f.text.pop();
-            }
-            KeyCode::Char('u') if k.mods == Mods::CTRL => f.text.clear(),
-            KeyCode::Char(c) if !k.mods.ctrl && !k.mods.alt => f.text.push(c),
-            _ => return,
         }
         m.cursor = 0;
         // From the top again, as a view just shown: the Notifications view
@@ -3645,11 +3582,11 @@ impl Server {
     /// typing on after it.
     fn picker_key(&mut self, client: ClientId, m: &mut Mission, k: Key) {
         if let Some(f) = m.filter.as_mut() {
-            f.typing = false;
+            f.keep();
         }
         self.mission_key_in(client, m, k);
         if let Some(f) = m.filter.as_mut() {
-            f.typing = true;
+            f.open();
         }
     }
 
@@ -3775,23 +3712,23 @@ impl Server {
                 let typing = self
                     .mission_mut(client)
                     .and_then(|m| m.filter.as_mut())
-                    .map(|f| std::mem::replace(&mut f.typing, false))
+                    .map(Filter::keep)
                     .unwrap_or(false);
                 // So does the list of views' filter.
                 let nav_typing = self
                     .mission_mut(client)
                     .and_then(|m| m.nav_filter.as_mut())
-                    .map(|f| std::mem::replace(&mut f.typing, false))
+                    .map(Filter::keep)
                     .unwrap_or(false);
                 self.mission_key(client, key);
                 if typing && let Some(f) = self.mission_mut(client).and_then(|m| m.filter.as_mut())
                 {
-                    f.typing = true;
+                    f.open();
                 }
                 if nav_typing
                     && let Some(f) = self.mission_mut(client).and_then(|m| m.nav_filter.as_mut())
                 {
-                    f.typing = true;
+                    f.open();
                 }
             }
             Then::Enter => self.mission_key(client, Key::new(KeyCode::Enter, Mods::NONE)),
@@ -3838,7 +3775,7 @@ impl Server {
             m.focus = None;
             m.jump = None;
             if let Some(f) = m.filter.as_mut() {
-                f.typing = false;
+                f.keep();
             }
             super::nav::end_typing(m);
         }
@@ -3861,8 +3798,7 @@ impl Server {
                     return;
                 }
                 Some(Spot::Filter) => {
-                    let text = m.nav_filter.take().map(|f| f.text).unwrap_or_default();
-                    m.nav_filter = Some(Filter { text, typing: true });
+                    m.nav_filter.get_or_insert_default().open();
                     self.mission_dirty(client);
                     return;
                 }
@@ -4413,47 +4349,9 @@ impl Server {
                     ViewAct::RemindOn(day),
                 );
                 add("Go to today", ViewAct::RemindToday);
-                // What `i` does on a screen too narrow for the lists beside.
-                if (m.laid().0 as usize) < super::reminders::BESIDE_AT {
-                    add(
-                        if m.reminders_lists {
-                            "Back to the chosen day"
-                        } else {
-                            "Show this month and later"
-                        },
-                        ViewAct::RemindersLists,
-                    );
-                }
             }
             Some(ViewId::Routines) => {
                 add("New routine…", ViewAct::NewRoutine);
-                // What `i` does on a screen too narrow for the pane.
-                let narrow = (m.laid().0 as usize) < crate::routines::view::BESIDE_AT;
-                if narrow && (m.chosen_item().is_some() || m.routines_pane) {
-                    add(
-                        if m.routines_pane {
-                            "Back to the list"
-                        } else {
-                            "Show the chosen routine"
-                        },
-                        ViewAct::RoutinesPane,
-                    );
-                }
-            }
-            Some(ViewId::Inbox) => {
-                // What `i` does on a screen too narrow for the ticket beside.
-                let narrow = !inbox_board::beside(m.laid().0 as usize);
-                let shown = view.as_ref().is_some_and(inbox_board::shown);
-                if shown && narrow && (m.chosen_item().is_some() || m.inbox_pane) {
-                    add(
-                        if m.inbox_pane {
-                            "Back to the list"
-                        } else {
-                            "Show its ticket"
-                        },
-                        ViewAct::InboxPane,
-                    );
-                }
             }
             Some(ViewId::Reopen) => {
                 use crate::usage::reopen::Kind;
@@ -4466,24 +4364,13 @@ impl Server {
                         add(label, ViewAct::ReopenKind(kind));
                     }
                 }
-                // What `i` does on a screen too narrow for the pane.
-                let narrow = (m.laid().0 as usize) < super::reopen_board::PANE_AT;
-                let on_a_row = m
-                    .chosen_item()
-                    .is_some_and(|i| crate::usage::reopen::of(i).is_some());
-                if narrow && (on_a_row || m.reopen_pane) {
-                    add(
-                        if m.reopen_pane {
-                            "Back to the list"
-                        } else {
-                            "Show what reopening it brings back"
-                        },
-                        ViewAct::ReopenPane,
-                    );
-                }
             }
             Some(ViewId::Plugin(name)) => add("Ask it again", ViewAct::AskAgain(name.clone())),
             _ => {}
+        }
+        // What `i` does on a screen too narrow for the pane beside.
+        if let Some(label) = alone_label(m) {
+            add(label, ViewAct::Alone);
         }
         add("Several views at once…", ViewAct::ViewsAtOnce);
         let title = view.as_ref().map_or("Tabs", views::bar_title).to_string();
@@ -4757,13 +4644,7 @@ impl Server {
                 m.reopen_kind = kind;
                 m.cursor = 0;
             }
-            ViewAct::ReopenPane => m.reopen_pane = !m.reopen_pane,
-            ViewAct::InboxPane => {
-                m.inbox_pane = !m.inbox_pane;
-                m.side = None;
-            }
-            ViewAct::RoutinesPane => m.routines_pane = !m.routines_pane,
-            ViewAct::RemindersLists => m.reminders_lists = !m.reminders_lists,
+            ViewAct::Alone => toggle_alone(&mut m),
             ViewAct::Day(by) => self.calendar_day_step(client, &mut m, by),
             ViewAct::Today => {
                 m.calendar_day = None;
@@ -4804,10 +4685,7 @@ impl Server {
                 if let Some(at) = m.place_of("settings") {
                     m.grid = None;
                     show_view(&mut m, at);
-                    m.filter = Some(Filter {
-                        text: title,
-                        typing: false,
-                    });
+                    m.filter = Some(Filter::of(&title, false));
                     m.cursor = 0;
                     settle(&mut m);
                 }
@@ -6706,14 +6584,6 @@ impl Server {
             self.routine_new(client);
             return true;
         }
-        if k.code == KeyCode::Char('i') {
-            m.routines_pane = !m.routines_pane;
-            return true;
-        }
-        if k.code == KeyCode::Esc && m.routines_pane {
-            m.routines_pane = false;
-            return true;
-        }
         let chosen = crate::routines::view::chosen(m, &view);
         let Some(id) = chosen
             .and_then(|i| crate::routines::view::id_of(&view.data.items[i]))
@@ -6763,14 +6633,14 @@ impl Server {
         };
         use super::reminders::{chosen_day, step};
         let day = chosen_day(m);
+        let moved = nav::step(k);
+        let days = moved
+            .and_then(Move::cols)
+            .or(moved.and_then(Move::rows).map(|r| 7 * r));
         let to = match k.code {
-            KeyCode::Char('h') | KeyCode::Left => Some(step(day, -1, 0)),
-            KeyCode::Char('l') | KeyCode::Right => Some(step(day, 1, 0)),
-            KeyCode::Char('j') | KeyCode::Down => Some(step(day, 7, 0)),
-            KeyCode::Char('k') | KeyCode::Up => Some(step(day, -7, 0)),
             KeyCode::Char('H') => Some(step(day, 0, -1)),
             KeyCode::Char('L') => Some(step(day, 0, 1)),
-            _ => None,
+            _ => days.map(|d| step(day, d as i64, 0)),
         };
         if let Some(to) = to {
             choose_day(m, to);
@@ -6790,7 +6660,6 @@ impl Server {
             m.cursor = i as isize;
         }
         match (k.code, tab) {
-            (KeyCode::Char('i'), _) => m.reminders_lists = !m.reminders_lists,
             (KeyCode::Enter, Some(_)) => {
                 m.cursor = chosen.unwrap_or(0) as isize;
                 self.mission_enter(client, m);
@@ -8031,7 +7900,7 @@ fn nav_resize_key(bindings: &crate::mux::keys::Bindings, m: &Mission, key: Key) 
     if !alt_letter && !matches!(key.code, KeyCode::F(_)) {
         return None;
     }
-    let typing = m.nav_filter.as_ref().is_some_and(|f| f.typing);
+    let typing = m.nav_filter.as_ref().is_some_and(|f| f.is_open());
     let list_has_the_keys = typing || matches!(m.focus, Some(Focus::View(_) | Focus::Group(_)));
     if !m.nav_in_sidebar() || !list_has_the_keys || !settings::is_on("sidebar_resize") {
         return None;
@@ -8096,7 +7965,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             }
         }
         (MouseKind::Press, MouseButton::WheelUp | MouseButton::WheelDown) => {
-            if m.filter.as_ref().is_some_and(|f| f.typing) && !m.picker {
+            if m.filter.as_ref().is_some_and(|f| f.is_open()) && !m.picker {
                 return Then::Nothing;
             }
             let up = mouse.button == MouseButton::WheelUp;
@@ -8194,13 +8063,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 // typed is kept, done typing, rather than given the key; the
                 // filter's own footer (the arrows move, Enter keeps it, esc
                 // clears it) takes its key as typed, the filter typing on.
-                let filters_own = m.filter.as_ref().is_some_and(|f| f.typing)
+                let filters_own = m.filter.as_ref().is_some_and(|f| f.is_open())
                     && matches!(
                         key.code,
                         KeyCode::Enter | KeyCode::Esc | KeyCode::Up | KeyCode::Down
                     );
                 if !filters_own && let Some(f) = m.filter.as_mut() {
-                    f.typing = false;
+                    f.keep();
                 }
                 return Then::Press(key);
             }
@@ -8229,14 +8098,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 if pane != Pane::List
                     && let Some(f) = m.filter.as_mut()
                 {
-                    f.typing = false;
+                    f.keep();
                 }
             }
             match spot {
                 Spot::Close => Then::Close,
                 Spot::Filter => {
-                    let text = m.filter.take().map(|f| f.text).unwrap_or_default();
-                    m.filter = Some(Filter { text, typing: true });
+                    m.filter.get_or_insert_default().open();
                     // What the filter finds is the list's, which takes the focus.
                     m.pane = None;
                     Then::Prepare
@@ -8273,14 +8141,14 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 // ending first so Enter reaches the row.
                 Spot::Menu(i) => {
                     if let Some(f) = m.filter.as_mut() {
-                        f.typing = false;
+                        f.keep();
                     }
                     m.cursor = i;
                     Then::Enter
                 }
                 Spot::Part(i, n) => {
                     if let Some(f) = m.filter.as_mut() {
-                        f.typing = false;
+                        f.keep();
                     }
                     m.cursor = i;
                     Then::Part(n)
@@ -8328,7 +8196,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 // typed ending first.
                 Spot::Picture(n) => {
                     if let Some(f) = m.filter.as_mut() {
-                        f.typing = false;
+                        f.keep();
                     }
                     m.slack_clicked = Some(n);
                     Then::SlackPlay
@@ -8388,7 +8256,7 @@ fn right_press(m: &mut Mission, mouse: Mouse, hit: Option<Spot>) -> Then {
     m.hover = None;
     m.jump = None;
     if let Some(f) = m.filter.as_mut() {
-        f.typing = false;
+        f.keep();
     }
     if chosen {
         Then::Enter
@@ -8401,7 +8269,7 @@ fn right_press(m: &mut Mission, mouse: Mouse, hit: Option<Spot>) -> Then {
 /// chosen section's, or with the thread in the list's place on a narrow
 /// screen, the chosen message alone.
 fn slack_shown(m: &Mission, view: &View) -> Vec<usize> {
-    let thread_alone = m.slack_thread_open
+    let thread_alone = m.alone.contains(&ViewId::Slack)
         && settings::is_on("slack_threads")
         && !super::slack_board::beside(m.laid().0 as usize);
     if thread_alone {
@@ -8438,11 +8306,10 @@ fn keys_board_key(m: &mut Mission, k: Key) -> bool {
         return false;
     }
     let items = &view.data.items;
-    let to = match k.code {
-        KeyCode::Char('h') | KeyCode::Left => super::keys_board::group_step(items, m.cursor, -1),
-        KeyCode::Char('l') | KeyCode::Right => super::keys_board::group_step(items, m.cursor, 1),
-        KeyCode::Char('j') | KeyCode::Down => super::keys_board::row_step(items, m.cursor, 1),
-        KeyCode::Char('k') | KeyCode::Up => super::keys_board::row_step(items, m.cursor, -1),
+    let moved = nav::step(k);
+    let to = match (moved.and_then(Move::cols), moved.and_then(Move::rows)) {
+        (Some(by), _) => super::keys_board::group_step(items, m.cursor, by),
+        (_, Some(by)) => super::keys_board::row_step(items, m.cursor, by),
         _ => return false,
     };
     if let Some(to) = to {
@@ -8509,7 +8376,7 @@ fn on_routines(m: &Mission) -> bool {
 fn context_menu_key(m: &mut Mission) -> Key {
     m.jump = None;
     if let Some(f) = m.filter.as_mut() {
-        f.typing = false;
+        f.keep();
     }
     super::nav::end_typing(m);
     // On a row of the list of views, that view's menu, as a right click on
@@ -8651,27 +8518,73 @@ fn remove_one_worktree(dir: &Path) -> String {
     }
 }
 
-/// UX 2.0's Reopen view's own key: `i` shows the chosen row's pane (what
-/// reopening brings back, its last screen) over the list on a screen too
-/// narrow to show it under the rows, until `i` or Esc. True when it took
-/// the key.
-fn reopen_key(m: &mut Mission, k: Key) -> bool {
-    if !m.current().is_some_and(|v| v.id == ViewId::Reopen) {
-        return false;
-    }
-    if m.reopen_pane && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
-        m.reopen_pane = false;
-        return true;
-    }
-    let narrow = (m.laid().0 as usize) < super::reopen_board::PANE_AT;
-    let on_a_row = m
-        .chosen_item()
-        .is_some_and(|i| crate::usage::reopen::of(i).is_some());
-    if k.code == KeyCode::Char('i') && plain(&k) && narrow && on_a_row {
-        m.reopen_pane = true;
+/// The one pane-beside toggle of mission control's views: on a screen too
+/// narrow for the pane beside the list, `i` shows it in the list's place,
+/// and `i` or Esc goes back. True when it took the key.
+fn alone_key(m: &mut Mission, k: Key) -> bool {
+    let i = k.code == KeyCode::Char('i') && plain(&k);
+    let alone = m.current().is_some_and(|v| m.alone.contains(&v.id));
+    let back = alone && k.code == KeyCode::Esc && m.filter.is_none();
+    if (i && alone_label(m).is_some()) || back {
+        toggle_alone(m);
         return true;
     }
     false
+}
+
+/// The view in front's pane put in the list's place, or back beside it.
+fn toggle_alone(m: &mut Mission) {
+    let Some(id) = m.current().map(|v| v.id.clone()) else {
+        return;
+    };
+    if !m.alone.remove(&id) {
+        m.alone.insert(id);
+    }
+    m.side = None;
+}
+
+/// What `i` does in the view in front, in its menu's words: back while the
+/// pane is in the list's place, else, too narrow for it beside the list,
+/// show it there; None when it does nothing.
+fn alone_label(m: &Mission) -> Option<&'static str> {
+    let v = m.current()?;
+    if m.alone.contains(&v.id) {
+        let day = v.id == ViewId::Reminders;
+        return Some(if day {
+            "Back to the chosen day"
+        } else {
+            "Back to the list"
+        });
+    }
+    let cols = m.laid().0 as usize;
+    let chosen = m.chosen_item();
+    match v.id {
+        ViewId::Inbox
+            if inbox_board::shown(v) && !inbox_board::beside(cols) && chosen.is_some() =>
+        {
+            Some("Show its ticket")
+        }
+        ViewId::Slack
+            if super::render::slack_board_shown(v) && !super::slack_board::beside(cols) =>
+        {
+            Some("Show the chosen thread")
+        }
+        ViewId::Reminders if on_reminders(m) && cols < super::reminders::BESIDE_AT => {
+            Some("Show this month and later")
+        }
+        ViewId::Routines
+            if on_routines(m) && cols < crate::routines::view::BESIDE_AT && chosen.is_some() =>
+        {
+            Some("Show the chosen routine")
+        }
+        ViewId::Reopen
+            if cols < super::reopen_board::PANE_AT
+                && chosen.is_some_and(|i| crate::usage::reopen::of(i).is_some()) =>
+        {
+            Some("Show what reopening it brings back")
+        }
+        _ => None,
+    }
 }
 
 /// The Calendar's own keys, with its day drawn: `h` and `l` move a day
@@ -8706,11 +8619,8 @@ fn ci_key(m: &mut Mission, k: Key) -> bool {
     };
     let checks: Vec<Value> = views::ci_checks(&item).into_iter().cloned().collect();
     let check = m.chosen_check();
-    let none = plain(&k);
-    let down = matches!(k.code, KeyCode::Char('j') | KeyCode::Down) && none
-        || (k.code == KeyCode::Char('n') && k.mods == Mods::CTRL);
-    let up = matches!(k.code, KeyCode::Char('k') | KeyCode::Up) && none
-        || (k.code == KeyCode::Char('p') && k.mods == Mods::CTRL);
+    let down = nav::step(k) == Some(Move::Down);
+    let up = nav::step(k) == Some(Move::Up);
     if (down || up) && m.focus.is_some() {
         // Moving takes the focus Tab gave a name or the filter back to the
         // items, as moving between rows does.
@@ -8788,7 +8698,7 @@ fn fit_cursor(m: &mut Mission) {
 /// which press what the focus is on.
 fn only_moves(m: &Mission, key: Key) -> bool {
     let k = key.normalized();
-    if m.filter.as_ref().is_some_and(|f| f.typing) || m.jump.is_some() {
+    if m.filter.as_ref().is_some_and(|f| f.is_open()) || m.jump.is_some() {
         return false;
     }
     // The Calendar's chosen event brings its photos and notes, and h and
@@ -8808,13 +8718,11 @@ fn only_moves(m: &Mission, key: Key) -> bool {
     {
         return false;
     }
+    if nav::step(k).is_some() {
+        return true;
+    }
     let none = plain(&k);
-    let ctrl = k.mods == Mods::CTRL;
     match k.code {
-        KeyCode::Char('h' | 'j' | 'k' | 'l' | 'g') => none,
-        KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Home => none,
-        KeyCode::Char('n' | 'p') => ctrl,
-        KeyCode::Char('G') | KeyCode::End => true,
         KeyCode::Tab | KeyCode::BackTab => m.snap.tab_focus,
         KeyCode::Char('1'..='9') => none && m.view == 0,
         _ => false,
@@ -9050,16 +8958,13 @@ fn section_step(m: &mut Mission, by: isize) -> bool {
 /// and `k` scroll it a line, `g` and `G` to its top and end. False for
 /// any other key, which the view takes as it would.
 fn pane_key(m: &mut Mission, k: Key) -> bool {
-    let down = matches!(k.code, KeyCode::Char('j') | KeyCode::Down) && plain(&k)
-        || k.code == KeyCode::Char('n') && k.mods == Mods::CTRL;
-    let up = matches!(k.code, KeyCode::Char('k') | KeyCode::Up) && plain(&k)
-        || k.code == KeyCode::Char('p') && k.mods == Mods::CTRL;
+    let moved = nav::step(k);
+    let rows = moved.and_then(Move::rows);
     match m.pane_now() {
         Pane::List => false,
         Pane::Panel => {
             let by = match k.code {
-                _ if down => 1,
-                _ if up => -1,
+                _ if let Some(by) = rows => by,
                 KeyCode::Enter => {
                     m.pane = None;
                     return true;
@@ -9083,12 +8988,13 @@ fn pane_key(m: &mut Mission, k: Key) -> bool {
             let Some(last) = m.side_last() else {
                 return false;
             };
-            let lines = match k.code {
-                _ if down => 1,
-                _ if up => -1,
-                KeyCode::Char('g') | KeyCode::Home if plain(&k) => -(last as isize),
-                KeyCode::Char('G') | KeyCode::End => last as isize,
-                _ => return false,
+            let lines = match moved {
+                Some(Move::Top) => -(last as isize),
+                Some(Move::Bottom) => last as isize,
+                _ => match rows {
+                    Some(by) => by,
+                    None => return false,
+                },
             };
             m.scroll_side(lines, last);
             true
@@ -9274,6 +9180,25 @@ fn nav_key(m: &mut Mission, k: Key) -> bool {
     taken
 }
 
+/// A key typed into a list's filter, as every box's text is typed
+/// (`ui::field`): Enter keeps it, Esc and C-c clear it. True when what it
+/// holds, or whether it is kept, changed, so the list is filtered again.
+fn type_into(filter: &mut Option<Filter>, k: Key) -> bool {
+    let Some(f) = filter.as_mut() else {
+        return false;
+    };
+    match k.code {
+        KeyCode::Enter => _ = f.keep(),
+        KeyCode::Char('c') if k.mods == Mods::CTRL => *filter = None,
+        _ => match f.key(k) {
+            Filtered::Changed => {}
+            Filtered::Closed => *filter = Filter::after_close(k),
+            Filtered::Moved | Filtered::Not => return false,
+        },
+    }
+    true
+}
+
 /// The focus on the first view the list's filter leaves, for Enter,
 /// unless it is on one it leaves already; on none when it leaves none.
 fn nav_focus_listed(m: &mut Mission) {
@@ -9286,22 +9211,14 @@ fn nav_focus_listed(m: &mut Mission) {
 }
 
 fn nav_key_in(m: &mut Mission, k: Key) -> bool {
-    if let Some(f) = m.nav_filter.as_mut().filter(|f| f.typing) {
-        match k.code {
-            KeyCode::Enter => f.typing = false,
-            KeyCode::Esc => m.nav_filter = None,
-            KeyCode::Char('c') if k.mods == Mods::CTRL => m.nav_filter = None,
-            KeyCode::Backspace => {
-                f.text.pop();
-            }
-            KeyCode::Char('u') if k.mods == Mods::CTRL => f.text.clear(),
-            KeyCode::Char(c) if !k.mods.ctrl && !k.mods.alt => f.text.push(c),
-            _ => return true,
+    if m.nav_filter.as_ref().is_some_and(|f| f.is_open()) {
+        if !type_into(&mut m.nav_filter, k) {
+            return true;
         }
         // A filter left with no view isn't kept once typed: the whole list
         // comes back, the focus on the view in front, so the keys still
         // reach the list.
-        if !m.nav_filter.as_ref().is_some_and(|f| f.typing) && super::nav::order(m).is_empty() {
+        if !m.nav_filter.as_ref().is_some_and(|f| f.is_open()) && super::nav::order(m).is_empty() {
             m.nav_filter = None;
             m.focus = Some(Focus::View(m.view));
             return true;
@@ -9312,15 +9229,13 @@ fn nav_key_in(m: &mut Mission, k: Key) -> bool {
     let Some(Focus::View(at)) = m.focus else {
         return false;
     };
-    if !plain(&k) && !matches!(k.code, KeyCode::Up | KeyCode::Down) {
+    if !plain(&k) && nav::step(k).is_none() {
         return false;
     }
     let by: isize = match k.code {
-        KeyCode::Char('j') | KeyCode::Down => 1,
-        KeyCode::Char('k') | KeyCode::Up => -1,
+        _ if let Some(by) = nav::step(k).and_then(Move::rows) => by,
         KeyCode::Char('/') => {
-            let text = m.nav_filter.take().map(|f| f.text).unwrap_or_default();
-            m.nav_filter = Some(Filter { text, typing: true });
+            m.nav_filter.get_or_insert_default().open();
             return true;
         }
         KeyCode::Esc if m.nav_filter.is_some() => {
@@ -9508,7 +9423,10 @@ fn move_focus(m: &mut Mission, by: isize) {
     // cursor names, so the list's stop is where the cursor is.
     // While a filter searches Settings, every category with a match shows,
     // as sections; the Slack board still shows the section chosen.
-    let searching = m.filter.as_ref().is_some_and(|f| !f.text.trim().is_empty());
+    let searching = m
+        .filter
+        .as_ref()
+        .is_some_and(|f| !f.typed().trim().is_empty());
     let panel_chooses = m.current().is_some_and(|v| {
         v.id == ViewId::Settings && super::render::settings_board_shown(m) && !searching
             || super::render::slack_board_shown(v)
@@ -10084,10 +10002,7 @@ mod tests {
         m.view = 1;
         assert!(!only_moves(&m, key("3")));
         // Typed into a filter, j is text.
-        m.filter = Some(Filter {
-            text: String::new(),
-            typing: true,
-        });
+        m.filter = Some(Filter::of("", true));
         assert!(!only_moves(&m, key("j")));
         m.filter = None;
         m.jump = Some(Jump::default());
@@ -10258,10 +10173,7 @@ mod tests {
         move_focus(&mut m, -1);
         assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 3));
         // A filter shows every category with a match: Tab goes through them.
-        m.filter = Some(Filter {
-            text: "o".into(),
-            typing: false,
-        });
+        m.filter = Some(Filter::of("o", false));
         m.cursor = 1;
         move_focus(&mut m, 1);
         assert_eq!(
@@ -10568,10 +10480,7 @@ mod tests {
         assert!(m.nav_held.is_none());
         // With the list's filter hiding the view in front, Shift-Tab comes
         // back to the first row it leaves, which Enter opens.
-        m.nav_filter = Some(Filter {
-            text: "settings".into(),
-            typing: false,
-        });
+        m.nav_filter = Some(Filter::of("settings", false));
         m.focus = Some(Focus::Filter);
         move_focus(&mut m, -1);
         assert_eq!(m.focus, Some(Focus::View(3)));
@@ -10900,10 +10809,7 @@ mod tests {
     fn a_click_on_a_switch_while_a_filter_is_typed_ends_it_and_flips_the_row() {
         let mut m = mission(0, vec![list("Closed", 3)]);
         m.view = 1;
-        m.filter = Some(Filter {
-            text: "x".into(),
-            typing: true,
-        });
+        m.filter = Some(Filter::of("x", true));
         m.hits = vec![crate::mission::HitBox {
             y: 3,
             x0: 10,
@@ -10919,7 +10825,7 @@ mod tests {
         };
         assert_eq!(mouse_in(&mut m, click, true), Then::Enter);
         assert_eq!(m.cursor, 2);
-        assert!(m.filter.as_ref().is_some_and(|f| !f.typing));
+        assert!(m.filter.as_ref().is_some_and(|f| !f.is_open()));
     }
 
     /// The Tickets board on a screen 160 wide, its one ticket
@@ -11015,10 +10921,7 @@ mod tests {
         let mut m = mission(1, vec![list("Reopen", 1)]);
         m.view = 1;
         m.size = (120, 20);
-        m.filter = Some(Filter {
-            text: "x".into(),
-            typing: true,
-        });
+        m.filter = Some(Filter::of("x", true));
         m.hits = vec![crate::mission::HitBox {
             y: 5,
             x0: 10,
@@ -11034,7 +10937,10 @@ mod tests {
         };
         assert_eq!(mouse_in(&mut m, click, true), Then::SlackPlay);
         assert_eq!(m.slack_clicked, Some(2));
-        assert!(!m.filter.as_ref().unwrap().typing, "the filter done typing");
+        assert!(
+            !m.filter.as_ref().unwrap().is_open(),
+            "the filter done typing"
+        );
     }
 
     #[test]
@@ -11135,10 +11041,7 @@ mod tests {
     fn c_w_h_to_a_filtered_list_of_views_chooses_a_view_it_shows() {
         let key = |k: &str| Key::parse(k).unwrap();
         let mut m = settings_mission();
-        m.nav_filter = Some(Filter {
-            text: "tabs".into(),
-            typing: false,
-        });
+        m.nav_filter = Some(Filter::of("tabs", false));
         window_key(&mut m, key("h"));
         window_key(&mut m, key("h"));
         assert_eq!(m.focus, Some(Focus::View(0)), "the Settings row is hidden");

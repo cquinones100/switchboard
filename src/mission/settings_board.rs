@@ -446,7 +446,7 @@ pub fn board(
     let searching = m
         .filter
         .as_ref()
-        .map(|f| f.text.trim())
+        .map(|f| f.typed().trim())
         .filter(|t| !t.is_empty());
     // The panel: the categories, then your files.
     let (categories, files) = entries(items);

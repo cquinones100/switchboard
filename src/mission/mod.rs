@@ -120,7 +120,7 @@ use crate::mux::input::{Key, Mouse};
 use crate::mux::server::ClientId;
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{Rules, TabModel};
-use crate::sidebar::render::Filter;
+use crate::ui::menu::Filter;
 use crate::ui::{Look, Overlay, Step, Theme};
 
 pub use serve::Opening;
@@ -435,7 +435,7 @@ pub struct Mission {
     /// sidebar hidden) rather than in the sidebar's place (`nav`).
     pub own_column: bool,
     /// The filter typed into the list of groups and views.
-    pub nav_filter: Option<crate::sidebar::render::Filter>,
+    pub nav_filter: Option<crate::ui::menu::Filter>,
     /// Where each part of that list was last drawn, on the whole screen.
     pub nav_hits: Vec<HitBox>,
     /// What of that list the mouse is over, lit while a click would press it.
@@ -465,9 +465,11 @@ pub struct Mission {
     /// Which rows the Reopen view shows (its menu's "Show only tabs" and
     /// "Show only sessions").
     pub reopen_kind: crate::usage::reopen::Kind,
-    /// The Reopen view's chosen row's pane shown over the list (`i`), on a
-    /// screen too narrow to show it under the rows.
-    pub reopen_pane: bool,
+    /// The views whose pane beside the list shows in the list's place, on a
+    /// screen too narrow for both: `i` shows it and `i` or Esc goes back
+    /// (the Inbox's ticket, the Slack thread, the Reminders' lists, the
+    /// chosen routine, what reopening a row brings back).
+    pub alone: std::collections::HashSet<ViewId>,
     /// How far the pane beside a board is scrolled (`J`, `K`, the wheel
     /// over it): the view and the item it was scrolled on, and its first
     /// line shown. Another view or item shows its pane from the top.
@@ -506,12 +508,6 @@ pub struct Mission {
     /// The day the Calendar view shows (YYYY-MM-DD), `h` and `l` moving
     /// it; `None` is today.
     pub calendar_day: Option<String>,
-    /// On a screen too narrow for the Inbox's ticket beside its list, `i`
-    /// shows it in the list's place until `i` or Esc.
-    pub inbox_pane: bool,
-    /// `i` has the Slack view's thread in the list's place, on a screen
-    /// too narrow for both.
-    pub slack_thread_open: bool,
     /// The Slack thread's picture a click chose, for the `p` it presses.
     pub slack_clicked: Option<usize>,
     /// The Slack file `p` last showed, by the message's item ID and the
@@ -524,12 +520,6 @@ pub struct Mission {
     /// The Reminders view's chosen day, the keys moving it and the month
     /// following; `None` is today.
     pub reminders_day: Option<jiff::civil::Date>,
-    /// With the pane under the month, its This month and Later lists shown
-    /// (`i`).
-    pub reminders_lists: bool,
-    /// Under a narrow Routines view, the chosen routine shown in the
-    /// list's place (`i`).
-    pub routines_pane: bool,
     /// The tab whose card shows its screen (`s`), and the
     /// cursor it was asked at: moving the cursor puts the card back.
     pub card_screen: Option<(TabId, isize)>,
@@ -640,7 +630,7 @@ impl Mission {
             landing_output: false,
             keep_autopilot: false,
             reopen_kind: Default::default(),
-            reopen_pane: false,
+            alone: Default::default(),
             side: None,
             pane_bar_drag: None,
             side_widths: HashMap::new(),
@@ -652,14 +642,10 @@ impl Mission {
             at_top: false,
             resources_sort: resources_board::Sort::default(),
             calendar_day: None,
-            inbox_pane: false,
-            slack_thread_open: false,
             slack_clicked: None,
             slack_shown: None,
             slack_launch: 0,
             reminders_day: None,
-            reminders_lists: false,
-            routines_pane: false,
             card_screen: None,
             shelf_open: false,
             other_repos_open: false,
@@ -1048,7 +1034,7 @@ impl Mission {
                     && !v.data.items.is_empty()
                     // Not while the thread is in the list's place, the
                     // sections hidden with it.
-                    && !(self.slack_thread_open
+                    && !(self.alone.contains(&ViewId::Slack)
                         && crate::settings::is_on("slack_threads")
                         && !slack_board::beside(self.laid().0 as usize))
         });

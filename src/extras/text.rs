@@ -135,8 +135,9 @@ impl Overlay for TextBox {
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_to(self.scroll + 1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_to(self.scroll.saturating_sub(1)),
+            _ if let Some(by) = crate::ui::kit::nav::step(key).and_then(|m| m.rows()) => {
+                self.scroll_to(self.scroll.saturating_add_signed(by))
+            }
             KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_to(self.scroll + self.room),
             KeyCode::PageUp => self.scroll_to(self.scroll.saturating_sub(self.room)),
             _ => Step::Close(Outcome::Dismissed),

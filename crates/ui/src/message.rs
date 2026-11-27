@@ -15,7 +15,7 @@ use ratatui::text::Span;
 
 use crate::Look;
 use crate::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::input::{Key, KeyCode, Mouse};
+use crate::input::{Key, Mouse};
 use crate::overlay::{Outcome, Overlay, Step};
 
 /// How long a message stays up (say.sh's `-t`).
@@ -171,10 +171,8 @@ impl Overlay for Message {
     }
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
-        let plain = key.mods.is_empty();
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if plain && self.scrolls() => self.scroll(1),
-            KeyCode::Char('k') | KeyCode::Up if plain && self.scrolls() => self.scroll(-1),
+        match crate::kit::nav::step(key).and_then(|m| m.rows()) {
+            Some(by) if self.scrolls() => self.scroll(by),
             _ => Step::Close(Outcome::Dismissed),
         }
     }

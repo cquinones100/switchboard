@@ -3702,10 +3702,12 @@ impl App {
         let last = self.list_rows.len().saturating_sub(1);
         // Half the list's height, as Vim's Ctrl-D and Ctrl-U.
         let half = (self.geo.list.height as usize / 2).max(1);
+        let moved = switchboard_ui::kit::nav::step(key).filter(|_| c != Some('g'));
         match key.code {
+            _ if let Some(by) = moved.and_then(|m| m.along(1)) => {
+                self.list_at = self.list_at.saturating_add_signed(by).min(last)
+            }
             KeyCode::Enter => self.activate(),
-            KeyCode::Down => self.list_at = (self.list_at + 1).min(last),
-            KeyCode::Up => self.list_at = self.list_at.saturating_sub(1),
             KeyCode::Tab => self.focus = Focus::Note,
             KeyCode::Char('f') if ctrl => self.finder(),
             KeyCode::Char('b') if ctrl => self.toggle_list(),
@@ -3713,9 +3715,6 @@ impl App {
             KeyCode::Char('d') if ctrl => self.list_at = (self.list_at + half).min(last),
             KeyCode::Char('u') if ctrl => self.list_at = self.list_at.saturating_sub(half),
             _ => match c {
-                Some('j') => self.list_at = (self.list_at + 1).min(last),
-                Some('k') => self.list_at = self.list_at.saturating_sub(1),
-                Some('G') => self.list_at = last,
                 Some('g') | Some('d') => self.list_pending = c,
                 Some('n') => self.new_note(),
                 Some('N') => self.new_folder(),

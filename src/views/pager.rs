@@ -76,7 +76,7 @@ use super::follow::{self, Follow, Update};
 use super::markdown::{Doc, Markdown, Span, Style, expand_tabs};
 use super::pictures::{Got, Pictures};
 use crate::ui::draw::wrap;
-use switchboard_ui::input::{Key, KeyCode as VimCode, Mods};
+use switchboard_ui::input::Key;
 use switchboard_vim::{Effect, Folding, Mode, Note, Text};
 
 /// What the view keeps beside the text Vim reads: its pictures' rows, a
@@ -278,8 +278,7 @@ impl Pager {
             typing: None,
             typing_kind: '/',
             vim: {
-                let mut vim = Editor::new(Text::default());
-                vim.read_only = true;
+                let mut vim = Editor::reader(Text::default());
                 vim.clipboard = true;
                 vim
             },
@@ -1434,7 +1433,7 @@ impl Pager {
                 _ => {}
             }
         }
-        let vim_key = vim_key_of(key)?;
+        let vim_key = Key::of_crossterm(&key)?;
         // Vim's * and # search for the word under the cursor: what a fold
         // hides of it is shown first, as for a typed search.
         if self.box_keys && idle && !ctrl && matches!(key.code, KeyCode::Char('*' | '#')) {
@@ -2038,32 +2037,6 @@ fn word_at(line: &str, at: usize) -> Option<String> {
     let from = rest.find(is_word)?;
     let word: String = rest[from..].chars().take_while(|c| is_word(*c)).collect();
     (!word.is_empty()).then_some(word)
-}
-
-/// A terminal's key as the shared Vim takes it; None for one it has no
-/// use for.
-fn vim_key_of(key: KeyEvent) -> Option<Key> {
-    let code = match key.code {
-        KeyCode::Char(c) => VimCode::Char(c),
-        KeyCode::Enter => VimCode::Enter,
-        KeyCode::Esc => VimCode::Esc,
-        KeyCode::Backspace => VimCode::Backspace,
-        KeyCode::Tab => VimCode::Tab,
-        KeyCode::Left => VimCode::Left,
-        KeyCode::Right => VimCode::Right,
-        KeyCode::Up => VimCode::Up,
-        KeyCode::Down => VimCode::Down,
-        KeyCode::Home => VimCode::Home,
-        KeyCode::End => VimCode::End,
-        KeyCode::PageUp => VimCode::PageUp,
-        KeyCode::PageDown => VimCode::PageDown,
-        _ => return None,
-    };
-    let mut mods = Mods::NONE;
-    mods.ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    mods.alt = key.modifiers.contains(KeyModifiers::ALT);
-    mods.shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    Some(Key::new(code, mods))
 }
 
 /// The columns a line's text takes up to byte `byte`, a byte inside a

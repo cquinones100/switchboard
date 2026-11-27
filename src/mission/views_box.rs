@@ -27,7 +27,7 @@ use super::views::Group;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Gesture, Hit, width};
 use crate::ui::form::{self, Form};
-use crate::ui::kit::{self, Tone};
+use crate::ui::kit::{self, Tone, nav};
 use crate::ui::{Look, Outcome, Overlay, Step, Theme};
 
 /// The box's inside.
@@ -451,11 +451,8 @@ impl Overlay for ViewsBox {
                 return Step::Close(Outcome::Dismissed);
             }
             KeyCode::Enter => return self.done(),
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.form.focus = Target::Entry(form::step_index(on_entry, entries, -1))
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.form.focus = Target::Entry(form::step_index(on_entry, entries, 1))
+            _ if let Some(by) = nav::step(key).and_then(|m| m.rows()) => {
+                self.form.focus = Target::Entry(form::step_index(on_entry, entries, by))
             }
             KeyCode::Tab | KeyCode::BackTab => {
                 let stops = self.stops();

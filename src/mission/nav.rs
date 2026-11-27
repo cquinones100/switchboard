@@ -32,7 +32,7 @@ pub fn listed(m: &Mission) -> Vec<(Group, Vec<usize>)> {
     let text = m
         .nav_filter
         .as_ref()
-        .map(|f| f.text.trim().to_lowercase())
+        .map(|f| f.typed().trim().to_lowercase())
         .unwrap_or_default();
     if text.is_empty() {
         return groups;
@@ -60,7 +60,7 @@ pub fn order(m: &Mission) -> Vec<usize> {
 /// reach of Tab and the keys.
 pub fn end_typing(m: &mut Mission) {
     if let Some(f) = m.nav_filter.as_mut() {
-        f.typing = false;
+        f.keep();
     }
     if m.nav_filter.is_some() && order(m).is_empty() {
         m.nav_filter = None;
@@ -182,16 +182,7 @@ pub fn lines(
         fill,
     };
     let filter: Vec<Span<'static>> = match &m.nav_filter {
-        Some(f) => {
-            let mut out = vec![Span::styled(
-                format!("/{}", f.text),
-                Tone::Needs.style(theme),
-            )];
-            if f.typing {
-                out.push(Span::styled("▏", Tone::Dim.style(theme)));
-            }
-            out
-        }
+        Some(f) => f.spans(Tone::Needs.style(theme), Tone::Dim.style(theme)),
         None => vec![Span::styled("/ filter", Tone::Dim.style(theme))],
     };
     let filter_lit = m.nav_hover == Some(Spot::Filter) && m.nav_filter.is_none();
