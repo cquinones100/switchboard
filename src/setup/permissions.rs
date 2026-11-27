@@ -647,7 +647,7 @@ mod tests {
                const look = {\n\
                  landing: async () => way && { lands: way, defaultBranch: 'main', repo: 'acme/app' },\n\
                  branch: async (_, ref) => ref === 'HEAD' ? branch : branch && 'origin/' + branch,\n\
-                 prBase: async () => base,\n\
+                 prBase: async () => base || null,\n\
                };\n\
                out.push(await landingRefused(command, look));\n\
              }\n\
@@ -798,6 +798,13 @@ mod tests {
                 "main",
                 "x",
                 "gh pr merge https://github.com/acme/other/pull/5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "",
+                "x",
+                "gh pr merge 9 --auto --squash",
                 false,
             ),
             ("direct", "main", "x", "git push origin main", false),

@@ -27,7 +27,7 @@ Arguments: a PR number. Otherwise use the current branch's PR. If it isn't `MERG
 
 - `switchboard-queue`: Switchboard's merge queue squash-merges each PR of a train in order, so the PR's `mergeCommit` is its own squashed commit, with the train's PRs before it already on the base branch.
 - `github-queue`, `auto-merge` and `service`: GitHub, or the merge service through it, merged the PR, and `mergeCommit` is that merge.
-- `direct`: the repository lands straight on its default branch, never through a PR: with no PR number given, reply `deploy-test: approved (not tested: <owner>/<repo> lands straight on its default branch, with no PR to test)`, since queue-and-clean's direct landing has no deploy or test step; a PR given, merged some other way, is tested as below.
+- `direct`: the repository lands straight on its default branch, never through a PR: when no PR number was given and the branch has no PR, reply `deploy-test: approved (not tested: <owner>/<repo> lands straight on its default branch, with no PR to test)`, since queue-and-clean's direct landing has no deploy or test step; a merged PR, given or the branch's, is tested as below.
 - When it fails (no way set), test the PR as below: the way only names which commit reached the base branch, and a merged PR's `mergeCommit` says that whatever merged it.
 
 ## Settling
