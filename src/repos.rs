@@ -53,7 +53,9 @@
 //! Before `lands`, a repository's `landing` (`pr` or `direct`) was guessed
 //! when unset, and Settings' `pr_merge_queue` chose between Switchboard's
 //! merge queue and GitHub's auto-merge for all of them; a new build's
-//! server carries those over once (`migrate_lands`). Ported from
+//! server carries those over once (`migrate_lands`), and a landing that
+//! finds an old `landing` with no `lands` carries it over then
+//! (`carry_over_in`). Ported from
 //! lib/repos.js and bin/apply-actions' `entry`.
 
 use std::path::{Path, PathBuf};
@@ -808,22 +810,43 @@ pub fn lands_by_key(key: &str) -> Option<Way> {
 /// error, naming Settings' row, while neither says. Runs git, so off the
 /// server's task.
 pub fn landing_for(dir: &Path) -> Result<Landing, String> {
-    landing_with(dir, &file())
+    landing_with(dir, &file(), &old_settings)
 }
 
-/// `landing_for` with repos.json at `repos`.
-pub fn landing_with(dir: &Path, repos: &Path) -> Result<Landing, String> {
+/// `landing_for` with repos.json at `repos`, `old` saying how the old
+/// settings stand for a repository whose entry still has `landing` and no
+/// `lands` (`old_settings`), which is carried over then, as the migration
+/// would (`carry_over_in`), so a migration whose change didn't stay in the
+/// file never strands it.
+pub fn landing_with(dir: &Path, repos: &Path, old: &OldSettings) -> Result<Landing, String> {
     let (repo, _, key) =
         repository_at(dir).ok_or_else(|| format!("{} isn't in a git repository", dir.display()))?;
     // A repos.json that can't be read stops it, rather than landing without
     // what it may say.
     let data = read_file(repos)
         .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(repos)))?;
-    let mut entry = landing_entry(&data, &key);
-    if entry.is_empty()
+    let mut name = key.clone();
+    if landing_entry(&data, &key).is_empty()
+        && !entry_of(&data, &key).contains_key("landing")
         && let Some(configured) = configured_at(dir)
     {
-        entry = landing_entry(&data, &configured);
+        name = configured;
+    }
+    let mut entry = landing_entry(&data, &name);
+    let old_landing = entry_of(&data, &name)
+        .get("landing")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if lands_of(&entry).is_none()
+        && let Some(landing) = old_landing
+    {
+        let not_set = not_set_words(repo.as_deref().unwrap_or(&key));
+        let (queue_was_on, setup) = old(&name, &landing).map_err(|e| format!("{not_set} ({e})"))?;
+        carry_over_in(repos, &name, queue_was_on, setup.as_ref())
+            .map_err(|e| format!("{not_set} ({e})"))?;
+        let data = read_file(repos)
+            .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(repos)))?;
+        entry = landing_entry(&data, &name);
     }
     let set = lands_of(&entry);
     let recorded = recorded_at(dir);
@@ -1156,6 +1179,102 @@ pub fn migrated_mark() -> PathBuf {
     paths::state_dir().join("repos-lands-migrated")
 }
 
+/// How the old settings stand for a repository whose entry still has
+/// `landing` (its key, and that `landing`): whether `pr_merge_queue` was
+/// on, and what GitHub says of it (`None` where it isn't needed or GitHub
+/// knows no such repository); an error when GitHub couldn't be asked.
+pub type OldSettings = dyn Fn(&str, &str) -> Result<(bool, Option<Setup>), String>;
+
+/// `OldSettings` on this computer: `pr_merge_queue` as this computer's
+/// settings still have it, else as the migration's mark kept it; GitHub's
+/// answer as last remembered, else asked now with the github setting on.
+/// Asks GitHub, so off the server's task.
+pub fn old_settings(repo: &str, landing: &str) -> Result<(bool, Option<Setup>), String> {
+    let queue_was_on = util::read_json(paths::local_config_dir().join("settings.json"))
+        .and_then(|v| v.get("pr_merge_queue").cloned())
+        .or_else(|| util::read_json(migrated_mark())?.get("queueWasOn").cloned())
+        == Some(Value::Bool(true));
+    if landing == "direct" || github::parse_name_with_owner(repo).is_none() {
+        return Ok((queue_was_on, None));
+    }
+    if let Some(known) = setup_in(&setup_file(), repo) {
+        return Ok((queue_was_on, Some(known)));
+    }
+    if !settings::is_on("github") {
+        return Err("the github setting is off, so how it can land can't be told".into());
+    }
+    match ask_setup(repo, util::now_ms()) {
+        Ok(s) => {
+            remember_setup(&setup_file(), repo, &s);
+            Ok((queue_was_on, Some(s)))
+        }
+        Err(e) if gone(&e) => Ok((queue_was_on, None)),
+        Err(e) => Err(format!("GitHub didn't say how it can land: {e}")),
+    }
+}
+
+/// Carries the old `landing` of the entry under `name` in the repos.json
+/// at `path` over to `lands`, as `lands_migrated` would, leaving every
+/// other entry; the way it set, `None` when the entry needed none.
+pub fn carry_over_in(
+    path: &Path,
+    name: &str,
+    queue_was_on: bool,
+    setup: Option<&Setup>,
+) -> Result<Option<Way>, String> {
+    let mut way = None;
+    change_file(path, |d| {
+        let Some((k, v)) = d
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(k, v)| (k.clone(), v.clone()))
+        else {
+            return;
+        };
+        let one = Map::from_iter([(k.clone(), v)]);
+        if let Some((mut out, set)) = lands_migrated(&one, &[], queue_was_on, &|_| setup.cloned())
+            && let Some(entry) = out.shift_remove(&k)
+        {
+            d.insert(k, entry);
+            way = set.first().map(|(_, w)| *w);
+        }
+    })?;
+    Ok(way)
+}
+
+/// Writes the migration's mark at `mark`, keeping whether
+/// `pr_merge_queue` was on, only once the repos.json at `path`, read
+/// again, has a `lands` for every repository in `said`; the ones it
+/// lacks otherwise, so the next start tries again.
+pub fn mark_once_landed(
+    path: &Path,
+    mark: &Path,
+    said: &[WaySet],
+    queue_was_on: bool,
+) -> Result<(), Vec<String>> {
+    let data =
+        read_file(path).map_err(|_| said.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>())?;
+    let missing: Vec<String> = said
+        .iter()
+        .filter(|(repo, _)| lands_of(&entry_of(&data, repo)).is_none())
+        .map(|(repo, _)| repo.clone())
+        .collect();
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    if let Some(dir) = mark.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = util::write_atomic(
+        mark,
+        format!(
+            "{}\n",
+            json!({ "at": util::js_number(util::now_ms() as f64), "queueWasOn": queue_was_on })
+        ),
+    );
+    Ok(())
+}
+
 /// The way the old settings come to for one repository: `direct` where its
 /// `landing` was `direct`; through a PR otherwise, by Switchboard's merge
 /// queue where `pr_merge_queue` was on and GitHub says its CI runs on
@@ -1371,6 +1490,13 @@ pub fn migrate_lands() -> Option<String> {
         eprintln!("repos.json: can't carry landing over to lands: {e}");
         return None;
     }
+    if let Err(missing) = mark_once_landed(&path, &mark, &said, queue_was_on) {
+        eprintln!(
+            "repos.json: lands didn't stay in the file for {}; trying again next start",
+            missing.join(", ")
+        );
+        return None;
+    }
     let mut dropped = false;
     for f in &setting_files {
         let Some(Value::Object(mut mine)) = util::read_json(f) else {
@@ -1381,10 +1507,6 @@ pub fn migrate_lands() -> Option<String> {
             let _ = util::write_atomic(f, format!("{}\n", util::json_pretty(&Value::Object(mine))));
         }
     }
-    if let Some(dir) = mark.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = util::write_atomic(&mark, format!("{}\n", util::now_ms()));
     let _ = std::fs::remove_file(&guess_file);
     if said.is_empty() {
         return dropped.then(|| {
@@ -1685,6 +1807,22 @@ mod tests {
         direct: PathBuf,
     }
 
+    /// Old settings that no test of a set way should need.
+    fn no_old(repo: &str, _: &str) -> Result<(bool, Option<Setup>), String> {
+        panic!("{repo}'s old settings asked for")
+    }
+
+    /// GitHub's answer for Switchboard's own repository, as the computer
+    /// that met the bug had it.
+    fn trains_setup() -> Setup {
+        Setup {
+            auto_merge: true,
+            requires_pr: true,
+            train_ci: true,
+            ..Setup::default()
+        }
+    }
+
     fn rig(name: &str) -> Option<Rig> {
         let scratch = Scratch::new(name);
         let direct = scratch.0.join("direct");
@@ -1713,7 +1851,7 @@ mod tests {
             r#"{"acme/direct": {"lands": "direct", "test": "npm test", "squash": false}}"#,
         )
         .unwrap();
-        let answer = landing_with(&r.direct, &r.repos).unwrap();
+        let answer = landing_with(&r.direct, &r.repos, &no_old).unwrap();
         assert_eq!(
             (answer.lands, answer.source.as_str()),
             (Way::Direct, "repos.json")
@@ -1735,13 +1873,13 @@ mod tests {
             r#"{"acme/direct": {"lands": "direct", "testIn": "elsewhere"}}"#,
         )
         .unwrap();
-        let answer = landing_with(&r.direct, &r.repos).unwrap();
+        let answer = landing_with(&r.direct, &r.repos, &no_old).unwrap();
         assert_eq!(
             answer.steps.test_in, "here",
             "a place the tests can't run is left out, so they run in the worktree"
         );
         std::fs::write(&r.repos, "{ broken").unwrap();
-        let err = landing_with(&r.direct, &r.repos).unwrap_err();
+        let err = landing_with(&r.direct, &r.repos, &no_old).unwrap_err();
         assert!(err.contains("can't be read"), "{err}");
         let _ = &r.scratch;
     }
@@ -1751,20 +1889,60 @@ mod tests {
         let Some(r) = rig("repos-unset") else {
             return;
         };
-        std::fs::write(
-            &r.repos,
-            r#"{"acme/direct": {"landing": "pr", "tickets": "github"}}"#,
-        )
-        .unwrap();
-        let err = landing_with(&r.direct, &r.repos).unwrap_err();
+        std::fs::write(&r.repos, r#"{"acme/direct": {"tickets": "github"}}"#).unwrap();
+        let err = landing_with(&r.direct, &r.repos, &no_old).unwrap_err();
         assert!(
             err.contains("acme/direct lands nothing yet") && err.contains("Settings' Repositories"),
             "{err}"
         );
         std::fs::remove_file(&r.repos).unwrap();
         assert!(
-            landing_with(&r.direct, &r.repos).is_err(),
+            landing_with(&r.direct, &r.repos, &no_old).is_err(),
             "no file, no way"
+        );
+    }
+
+    #[test]
+    fn an_old_landing_put_back_after_the_mark_is_carried_over_at_the_landing() {
+        let Some(r) = rig("repos-carried") else {
+            return;
+        };
+        std::fs::write(
+            &r.repos,
+            r#"{"acme/direct": {"landing": "pr", "tickets": "github"}, "acme/other": {"landing": "pr"}}"#,
+        )
+        .unwrap();
+        let old = |repo: &str, landing: &str| {
+            assert_eq!((repo, landing), ("acme/direct", "pr"));
+            Ok((true, Some(trains_setup())))
+        };
+        let answer = landing_with(&r.direct, &r.repos, &old).unwrap();
+        assert_eq!(
+            (answer.lands, answer.source.as_str()),
+            (Way::SwitchboardQueue, "repos.json")
+        );
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&r.repos).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            json!({
+                "acme/direct": { "tickets": "github", "lands": "switchboard-queue" },
+                "acme/other": { "landing": "pr" },
+            }),
+            "only the repository landing is carried over"
+        );
+        std::fs::write(&r.repos, r#"{"acme/direct": {"landing": "pr"}}"#).unwrap();
+        let offline = |_: &str, _: &str| Err("offline".to_string());
+        let err = landing_with(&r.direct, &r.repos, &offline).unwrap_err();
+        assert!(
+            err.contains("lands nothing yet") && err.contains("offline"),
+            "{err}"
+        );
+        assert!(
+            std::fs::read_to_string(&r.repos)
+                .unwrap()
+                .contains("\"landing\""),
+            "a failure to ask settles no way"
         );
     }
 
@@ -1778,7 +1956,7 @@ mod tests {
         std::fs::write(&r.repos, r#"{"acme/direct": {"lands": "auto-merge"}}"#).unwrap();
         assert_eq!(record_at(&r.direct, Way::AutoMerge), Ok(Way::AutoMerge));
         std::fs::write(&r.repos, r#"{"acme/direct": {"lands": "github-queue"}}"#).unwrap();
-        let answer = landing_with(&r.direct, &r.repos).unwrap();
+        let answer = landing_with(&r.direct, &r.repos, &no_old).unwrap();
         assert_eq!(answer.lands, Way::AutoMerge, "the old way, for this branch");
         assert_eq!(answer.source, "branch");
         assert_eq!(answer.set, Some(Way::GithubQueue));
@@ -1789,7 +1967,7 @@ mod tests {
         );
         git(&r.direct, &["checkout", "-qb", "next"]);
         assert_eq!(
-            landing_with(&r.direct, &r.repos).unwrap().lands,
+            landing_with(&r.direct, &r.repos, &no_old).unwrap().lands,
             Way::GithubQueue,
             "the next branch lands the new way"
         );
@@ -1961,6 +2139,45 @@ mod tests {
             None,
             "not asked yet"
         );
+    }
+
+    #[test]
+    fn a_pr_landing_with_the_queue_on_and_trains_running_carries_over_to_switchboard_s_queue() {
+        let data = json!({ "acme/switchboard": { "landing": "pr" } });
+        let (out, set) = lands_migrated(data.as_object().unwrap(), &[], true, &|_| {
+            Some(trains_setup())
+        })
+        .unwrap();
+        assert_eq!(
+            out["acme/switchboard"],
+            json!({ "lands": "switchboard-queue" })
+        );
+        assert_eq!(
+            set,
+            vec![("acme/switchboard".to_string(), Way::SwitchboardQueue)]
+        );
+    }
+
+    #[test]
+    fn the_mark_is_written_only_once_the_file_read_again_has_lands() {
+        let dir = Scratch::new("repos-mark");
+        let (path, mark) = (dir.0.join("repos.json"), dir.0.join("state/mark"));
+        let said = vec![("acme/switchboard".to_string(), Way::SwitchboardQueue)];
+        std::fs::write(&path, r#"{"acme/switchboard": {"landing": "pr"}}"#).unwrap();
+        assert_eq!(
+            mark_once_landed(&path, &mark, &said, true),
+            Err(vec!["acme/switchboard".to_string()]),
+            "a file written back from an older copy"
+        );
+        assert!(!mark.exists());
+        std::fs::write(
+            &path,
+            r#"{"acme/switchboard": {"lands": "switchboard-queue"}}"#,
+        )
+        .unwrap();
+        assert_eq!(mark_once_landed(&path, &mark, &said, true), Ok(()));
+        let kept: Value = serde_json::from_str(&std::fs::read_to_string(&mark).unwrap()).unwrap();
+        assert_eq!(kept["queueWasOn"], true, "{kept}");
     }
 
     #[test]
