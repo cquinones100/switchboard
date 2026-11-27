@@ -90,7 +90,7 @@ pub const STEPS: &[Step] = &[
     Step {
         name: "ticket-view",
         keys: &["M-i"],
-        wait: "Status      ",
+        wait: "Cycle 14",
         leave: &["M-c"],
     },
     Step {
