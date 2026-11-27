@@ -145,7 +145,7 @@ pub struct Place {
 pub struct Reply {
     pub who: Option<Who>,
     pub name: String,
-    /// What they did and when ("replied · yesterday").
+    /// What they did and when ("replied · 1d ago").
     pub said: String,
     pub body: String,
 }
