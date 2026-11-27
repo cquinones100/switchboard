@@ -4035,7 +4035,7 @@ fn m_f_finds_this_tab_by_what_was_said_in_its_conversation() {
     let screen = client.wait_for("this tab, found in its conversation", |s| {
         s.iter().any(|l| l.contains("1 home · this tab"))
             && s.iter()
-                .any(|l| l.contains("Said in its Claude's conversation 3h 0m ago"))
+                .any(|l| l.contains("Said in its Claude's conversation 3h ago"))
             && s.iter().any(|l| l.contains("is the zebraword set?"))
     });
     assert!(

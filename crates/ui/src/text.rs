@@ -12,7 +12,8 @@
 //! sidebar writes its cells by this same count (`render::put`), so what is
 //! measured and what is drawn never disagree.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 /// East Asian wide characters and emoji, by code point (text.js's `WIDE`).
 const WIDE: &[(u32, u32)] = &[
@@ -148,6 +149,46 @@ pub fn pad(text: &str, cols: usize) -> String {
     let mut out = cut(text, cols);
     let w = width(&out);
     out.extend(std::iter::repeat_n(' ', cols.saturating_sub(w)));
+    out
+}
+
+/// Spans cut to `cols` columns as `width` counts them and padded in `pad`
+/// to fill them: when they don't all fit, what fits before the last column,
+/// then an ellipsis in the style it cut into, as text.js's `cut` over a
+/// whole line. The sidebar's and mission control's rows.
+pub fn fit_spans(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(|s| width(&s.content)).sum();
+    let (mut out, mut used) = (Vec::new(), 0);
+    if total <= cols {
+        (out, used) = (spans, total);
+    } else if cols > 0 {
+        for span in spans {
+            let w = width(&span.content);
+            if used + w < cols {
+                used += w;
+                out.push(span);
+                continue;
+            }
+            let mut kept = String::new();
+            let mut before = 0;
+            for c in span.content.chars() {
+                let cw = width_after(c, before);
+                if used + cw > cols - 1 {
+                    break;
+                }
+                kept.push(c);
+                used += cw;
+                before = cw;
+            }
+            kept.push('…');
+            used += 1;
+            out.push(Span::styled(kept, span.style));
+            break;
+        }
+    }
+    if used < cols {
+        out.push(Span::styled(" ".repeat(cols - used), pad));
+    }
     out
 }
 

@@ -83,7 +83,7 @@ impl Row {
     /// The spans cut to `cols` (an ellipsis in place of what didn't fit) and
     /// padded with spaces in `pad` to fill them.
     fn fitted(self, cols: usize, pad: Style) -> Vec<Span<'static>> {
-        kit::fit(self.spans, cols, pad)
+        text::fit_spans(self.spans, cols, pad)
     }
 
     fn line(self, cols: usize, fill: Option<Color>) -> Line {
@@ -526,7 +526,7 @@ fn pr_lines(tab: &TabModel, inner: usize, theme: &Theme) -> Vec<Vec<Span<'static
             row.push(Span::styled(format!(" {name}"), Tone::Dim.style(theme)));
         }
         let room = inner.saturating_sub(width(&right) + 1);
-        let mut row = kit::fit(row, room, Style::new());
+        let mut row = text::fit_spans(row, room, Style::new());
         row.push(Span::raw(" "));
         row.push(Span::styled(right, tone.style(theme)));
         lines.push(row);
@@ -1325,7 +1325,7 @@ fn shelf_line(
         }
     }
     Line {
-        spans: kit::fit(spans, cols, Style::new()),
+        spans: text::fit_spans(spans, cols, Style::new()),
         fill: chosen.then(|| kit::Surface::Chosen.color(theme)),
     }
 }
@@ -1516,7 +1516,7 @@ fn cards(
                 }
                 for spans in row_lines {
                     drawn.push(Line {
-                        spans: kit::fit(spans, cols, Style::new()),
+                        spans: text::fit_spans(spans, cols, Style::new()),
                         fill: None,
                     });
                 }
@@ -1608,7 +1608,7 @@ fn board(
         }
         .unwrap_or(theme.text);
         let mut out = vec![
-            kit::fit(
+            text::fit_spans(
                 vec![Span::styled(
                     format!(" {} {}", column.to_uppercase(), items.len()),
                     bold(color),
@@ -1616,7 +1616,7 @@ fn board(
                 col_w,
                 Style::new(),
             ),
-            kit::fit(
+            text::fit_spans(
                 vec![Span::styled(
                     format!(" {}", "─".repeat(col_w.saturating_sub(2))),
                     fg(color),
@@ -1651,7 +1651,7 @@ fn board(
                 fg(theme.text)
             };
             let mark = item_mark(item, theme);
-            let first_line = kit::fit(
+            let first_line = text::fit_spans(
                 vec![
                     Span::styled(" ", with_bg(Style::new())),
                     Span::styled(mark.content.clone(), with_bg(mark.style)),
@@ -1664,7 +1664,7 @@ fn board(
                 col_w.saturating_sub(1),
                 with_bg(Style::new()),
             );
-            let second = kit::fit(
+            let second = text::fit_spans(
                 vec![Span::styled(
                     format!("   {}", text::cut(&item.detail, col_w.saturating_sub(5))),
                     with_bg(fg(theme.dim)),
@@ -1689,7 +1689,7 @@ fn board(
             out.push(b);
         }
         if items.is_empty() {
-            out.push(kit::fit(
+            out.push(text::fit_spans(
                 vec![Span::styled("   none", fg(theme.faint))],
                 col_w,
                 Style::new(),
@@ -1707,7 +1707,7 @@ fn board(
             );
         }
         lines.push(Line {
-            spans: kit::fit(spans, cols, Style::new()),
+            spans: text::fit_spans(spans, cols, Style::new()),
             fill: None,
         });
     }
@@ -1866,14 +1866,14 @@ fn board_cards(
         for line in 0..tall {
             let mut spans = Vec::new();
             for card in &cards {
-                spans.extend(kit::fit(
+                spans.extend(text::fit_spans(
                     card.get(line).cloned().unwrap_or_default(),
                     w,
                     Style::new(),
                 ));
                 spans.push(Span::raw(" "));
             }
-            rows.push(kit::fit(spans, board_w, Style::new()));
+            rows.push(text::fit_spans(spans, board_w, Style::new()));
         }
     }
     let images = ready_diagrams(m);
@@ -1947,9 +1947,9 @@ fn pane_beside(
     let bar = pane_bar((total, top, body), (bar_x, top_row), hits, m);
     let inner = side_w - 2 - usize::from(!bar.is_empty());
     for (i, row) in rows.iter_mut().enumerate() {
-        let mut spans = kit::fit(std::mem::take(row), board_w, Style::new());
+        let mut spans = text::fit_spans(std::mem::take(row), board_w, Style::new());
         spans.push(Span::styled("│ ", edge));
-        spans.extend(kit::fit(
+        spans.extend(text::fit_spans(
             about.lines.get(i).cloned().unwrap_or_default(),
             inner,
             Style::new(),
@@ -1998,7 +1998,7 @@ fn pane_under(
     let bar = pane_bar((total, top, room), (cols.saturating_sub(1), at), hits, m);
     let inner = cols - usize::from(!bar.is_empty());
     for i in 0..room {
-        let mut spans = kit::fit(
+        let mut spans = text::fit_spans(
             about.lines.get(i).cloned().unwrap_or_default(),
             inner,
             Style::new(),
@@ -3879,7 +3879,7 @@ fn landing_detail(
             }
         }
         lines.push(Line {
-            spans: kit::fit(spans, cols, Style::new()),
+            spans: text::fit_spans(spans, cols, Style::new()),
             fill: None,
         });
     }
@@ -4163,7 +4163,7 @@ fn stage_rows(
                 kit::place(&mut heading, vec![Span::styled(right, fg(theme.dim))], col);
             }
             lines.push(Line {
-                spans: kit::fit(heading, cols, Style::new()),
+                spans: text::fit_spans(heading, cols, Style::new()),
                 fill,
             });
             let names = heads_of(item);
@@ -4187,7 +4187,7 @@ fn stage_rows(
                     );
                 }
                 lines.push(Line {
-                    spans: kit::fit(heads, cols, Style::new()),
+                    spans: text::fit_spans(heads, cols, Style::new()),
                     fill: None,
                 });
                 lines.push(Line {
@@ -4247,12 +4247,12 @@ fn stage_rows(
             }
         }
         lines.push(Line {
-            spans: kit::fit(top, cols, Style::new()),
+            spans: text::fit_spans(top, cols, Style::new()),
             fill,
         });
         hit(lines);
         lines.push(Line {
-            spans: kit::fit(under, cols, Style::new()),
+            spans: text::fit_spans(under, cols, Style::new()),
             fill,
         });
     }
@@ -5121,7 +5121,7 @@ fn with_right(
     cols: usize,
 ) -> Vec<Span<'static>> {
     let right_w = kit::spans_width(&right);
-    let mut out = kit::fit(left, cols.saturating_sub(right_w + 1), Style::new());
+    let mut out = text::fit_spans(left, cols.saturating_sub(right_w + 1), Style::new());
     out.extend(right);
     out.push(Span::raw(" "));
     out
@@ -5362,7 +5362,7 @@ fn ci_rows(
         }
     }
     for i in 0..list_h {
-        let mut spans = kit::fit(
+        let mut spans = text::fit_spans(
             shown.get(i).map(|(l, _)| l.clone()).unwrap_or_default(),
             list_w,
             Style::new(),
@@ -5370,7 +5370,7 @@ fn ci_rows(
         if wide {
             spans.push(kit::rule_v(theme));
             spans.push(Span::raw(" "));
-            spans.extend(kit::fit(
+            spans.extend(text::fit_spans(
                 about.get(i).cloned().unwrap_or_default(),
                 pane_inner,
                 Style::new(),
@@ -5386,7 +5386,7 @@ fn ci_rows(
         });
         for i in 0..pane_h {
             let mut spans = vec![Span::raw("  ")];
-            spans.extend(kit::fit(
+            spans.extend(text::fit_spans(
                 about.get(i).cloned().unwrap_or_default(),
                 pane_inner,
                 Style::new(),

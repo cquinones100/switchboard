@@ -552,11 +552,11 @@ pub fn tabs(
                 },
             ),
             (None, Some((pane, hit))) => {
-                let ago = crate::history::timeline::span_words(now - hit.at);
+                let ago = crate::ui::when::ago(Some(hit.at), now, crate::ui::when::Said::Ago);
                 (
                     2,
                     -hit.at,
-                    format!("said {ago} ago: {}", clean(&hit.line)),
+                    format!("said {ago}: {}", clean(&hit.line)),
                     TabAt {
                         tab: t.tab,
                         pane: Some(pane),
@@ -564,7 +564,7 @@ pub fn tabs(
                     },
                     Context {
                         place: format!("{text} › conversation"),
-                        about: format!("Said in its Claude's conversation {ago} ago"),
+                        about: format!("Said in its Claude's conversation {ago}"),
                         line: 0,
                         lines: hit.around.clone(),
                         at: hit.around_at,

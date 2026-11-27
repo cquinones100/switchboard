@@ -255,43 +255,10 @@ impl Row {
     /// The line, cut to `cols` (an ellipsis in place of what didn't fit)
     /// and padded to fill them.
     fn fit(self, cols: usize, fill: Option<Color>) -> Line {
-        let mut spans = Vec::new();
-        let total: usize = self.spans.iter().map(|s| width(&s.content)).sum();
-        let mut used = 0;
-        if total <= cols {
-            spans = self.spans;
-            used = total;
-        } else if cols > 0 {
-            // As text.js's `cut` over the whole line: what fits before the
-            // last column, then the ellipsis, in the style it cut into.
-            for span in self.spans {
-                let w = width(&span.content);
-                if used + w < cols {
-                    used += w;
-                    spans.push(span);
-                    continue;
-                }
-                let mut kept = String::new();
-                let mut before = 0;
-                for c in span.content.chars() {
-                    let cw = text::width_after(c, before);
-                    if used + cw > cols - 1 {
-                        break;
-                    }
-                    kept.push(c);
-                    used += cw;
-                    before = cw;
-                }
-                kept.push('…');
-                used += 1;
-                spans.push(Span::styled(kept, span.style));
-                break;
-            }
+        Line {
+            spans: text::fit_spans(self.spans, cols, Style::new()),
+            fill,
         }
-        if used < cols {
-            spans.push(Span::raw(" ".repeat(cols - used)));
-        }
-        Line { spans, fill }
     }
 }
 

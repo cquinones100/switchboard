@@ -198,7 +198,7 @@ pub struct Header {
     /// client shows the tab's history.
     pub history: bool,
     pub history_open: bool,
-    /// The moment the history shows, as "viewing 1:41 PM, 51 minutes ago".
+    /// The moment the history shows, as "viewing 1:41 PM, 51m ago".
     pub viewing: Option<String>,
     /// How full its Claude's context is, in percent, once its statusline
     /// has said.
@@ -693,15 +693,12 @@ mod tests {
         let mut buf = Buffer::empty(narrow);
         let h = Header {
             opened: "1h12m".into(),
-            viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
+            viewing: Some("viewing 1:41 PM, 51m ago".into()),
             ..header(Shown::Claude)
         };
         draw(&mut buf, narrow, &h, None, &Palette::DARK, false, false);
         let first = text(&buf, 0);
-        assert!(
-            first.ends_with("viewing 1:41 PM, 51 minutes ago"),
-            "{first}"
-        );
+        assert!(first.ends_with("viewing 1:41 PM, 51m ago"), "{first}");
         assert!(!first.contains("opened 1h12m"), "{first}");
     }
 
@@ -1031,7 +1028,7 @@ mod history_tests {
             commands: false,
             history: true,
             history_open: true,
-            viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
+            viewing: Some("viewing 1:41 PM, 51m ago".into()),
             context: None,
             prs: None,
             nav: None,
@@ -1042,7 +1039,7 @@ mod history_tests {
         assert_eq!(keys.last().unwrap().1, Button::History);
         assert_eq!(Button::History.action(), Action::History);
         let first: String = (0..120).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        assert!(first.contains("viewing 1:41 PM, 51 minutes ago"), "{first}");
+        assert!(first.contains("viewing 1:41 PM, 51m ago"), "{first}");
         assert!(!first.contains("M-a next"), "in its place");
     }
 }
@@ -1069,7 +1066,7 @@ mod viewing_tests {
             commands: false,
             history: true,
             history_open: true,
-            viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
+            viewing: Some("viewing 1:41 PM, 51m ago".into()),
             context: None,
             prs: None,
             nav: None,
@@ -1077,9 +1074,7 @@ mod viewing_tests {
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
         let first: String = (0..70).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert!(
-            first
-                .trim_end()
-                .ends_with("viewing 1:41 PM, 51 minutes ago"),
+            first.trim_end().ends_with("viewing 1:41 PM, 51m ago"),
             "{first}"
         );
     }
