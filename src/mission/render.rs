@@ -1448,7 +1448,12 @@ fn cards(
             let count = Some(tabs_in.len());
             let mut label = match stage.mark() {
                 Some(mark) => {
-                    kit::marked_label(mark, snap.frame, stage.title(), count, cols, theme)
+                    // Turning while one of its tabs works, still otherwise.
+                    let turning = tabs_in
+                        .iter()
+                        .any(|&i| kit::spins(model::badge_state(&snap.tabs[i], r)));
+                    let frame = if turning { snap.frame } else { 0 };
+                    kit::marked_label(mark, frame, stage.title(), count, cols, theme)
                 }
                 None => {
                     let tone = Mark::of_badge(stage.color()).look().1;

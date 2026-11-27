@@ -489,7 +489,9 @@ A tab's row starts with a bar in its project's color (thicker on the chosen tab)
 | `✓` green | Claude finished and you haven't looked yet |
 | spinner, blue | working |
 | spinner, slate | working in the background |
-| spinner, violet, teal or orange | a review loop, a CI loop, `/queue-and-clean` |
+| spinner, teal | a CI loop |
+| `◐` turning, violet | a review loop |
+| `△` filling to `▲`, orange | `/queue-and-clean` |
 | spinner, magenta | testing the deploy |
 | `◉` cyan | monitoring |
 | `↻` blue | a loop between its ticks |

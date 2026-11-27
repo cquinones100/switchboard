@@ -649,14 +649,16 @@ pub fn sidebar_lines(
             heading.spans = kit::fit(spans, cols, Style::new());
         } else if let Some(mark) = group.stage.mark() {
             // The review loop's and queue-and-clean's lead with their
-            // tabs' mark, turning while they work (board 130).
-            spins |= group
+            // tabs' mark, turning while one of them works and still at its
+            // first frame otherwise (board 130).
+            let group_spins = group
                 .tabs
                 .iter()
                 .any(|t| kit::spins(model::badge_state(t, r)));
+            spins |= group_spins;
             heading.spans = kit::marked_label(
                 mark,
-                view.frame,
+                if group_spins { view.frame } else { 0 },
                 group.stage.title(),
                 Some(group.tabs.len()),
                 cols,
