@@ -329,7 +329,13 @@ fn choices_up_to(known: &Known, most: usize) -> Vec<(String, Vec<Choice>)> {
     // Each directory counted for its checkout's top level.
     let mut tops: HashMap<PathBuf, (Option<PathBuf>, i64)> = HashMap::new();
     for (dir, at) in latest {
-        if !dir.is_dir() || crate::trust::in_review_dir_of(home, &dir) {
+        // Never someone else's PR, by its folder or by its worktree's mark
+        // (read from its config file, with no git run for each), as
+        // `listed` refuses one.
+        if !dir.is_dir()
+            || crate::trust::in_review_dir_of(home, &dir)
+            || crate::trust::is_untrusted_without_git(&dir)
+        {
             continue;
         }
         let shown = crate::worktree::git_at(

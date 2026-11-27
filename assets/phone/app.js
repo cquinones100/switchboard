@@ -39,7 +39,7 @@ const state = {
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
   newTab: true, // whether New tab is offered (Settings' phone_new_tab), from the stream
-  opening: null, // the pane's number of a tab opened from the phone, its channel opened once the stream lists it
+  opening: null, // { pane, until }: a tab opened from the phone, its channel opened once the stream lists it, given up at `until`
   menu: null, // { pane, asking, sheet, remind }: the tab whose menu or sheet shows, whether Close tab's question or the reminder's sheet does, and the sheet's { messages } (null until read)
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
@@ -1324,19 +1324,31 @@ async function openPlace(place, prompt) {
     buzz();
     toast(r.said || "Started.");
     // Its channel opens once the stream lists it as a Claude tab.
-    state.opening = String(r.pane || "");
+    state.opening = { pane: String(r.pane || ""), until: Date.now() + OPENING_MS };
     openOpened();
   } catch (e) {
     toast(String(e.message || e), true);
   }
 }
 
-// The tab opened from the phone's channel, once the stream lists it.
+// How long the app waits for a tab it opened to be listed before giving up
+// on going to it, so one whose Claude never started isn't jumped to later.
+const OPENING_MS = 60000;
+
+// The tab opened from the phone's channel, once the stream lists it, and
+// only while nothing would be lost by leaving the screen shown: a draft or
+// images in the composer, or a menu, a question or a sheet open.
 function openOpened() {
-  const n = state.opening;
-  if (!n || !state.tabs.some((t) => number(t) === n)) return false;
-  state.opening = null;
-  openTab(n);
+  const o = state.opening;
+  if (!o) return false;
+  if (Date.now() > o.until) {
+    state.opening = null;
+    return false;
+  }
+  const field = app.querySelector(".composer textarea");
+  const drafting = (!!field && field.value.trim() !== "") || state.chosen.length > 0;
+  if (drafting || state.menu || !state.tabs.some((t) => number(t) === o.pane)) return false;
+  openTab(o.pane);
   return true;
 }
 
@@ -1465,6 +1477,9 @@ function drop(i) {
 }
 
 async function openTab(n) {
+  // Gone to a tab, by the user or as one opened from the phone is listed:
+  // nothing to go to after.
+  state.opening = null;
   if (state.menu) closeMenu();
   // A view open over it (a push tapped meanwhile) closes first, its step in
   // the page's history taken back, so the tab is named on the page's own.
