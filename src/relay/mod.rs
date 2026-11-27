@@ -39,7 +39,8 @@
 //! - `homes`: each tab's thread and its header.
 //! - `landing`: a landing in its tab's thread, its steps and push question.
 //! - `dashboard`: the app's Home tab.
-//! - `screens`, `skills`, `places`: a tab's screen and its forms.
+//! - `screens`, `skills`: a tab's screen and its forms, the New tab
+//!   form's places from src/remote/places.rs.
 //! - `autopilot`: autopilot's settings as a form that starts or changes it.
 //! - `autopilot_home`: autopilot's progress on the Home tab.
 //! - `buttons`, `presses`, `quickreplies`: buttons, and acting on a press.
@@ -76,7 +77,6 @@ pub mod milestones;
 pub mod mux;
 pub mod offline;
 pub mod outbox;
-pub mod places;
 pub mod post;
 pub mod presence;
 pub mod presses;

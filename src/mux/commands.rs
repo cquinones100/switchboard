@@ -85,6 +85,9 @@
 //!                                        change, until it hangs up
 //! phone-tab [-t pane] pr|ticket|note    a Claude pane's tab's PR, ticket
 //!                                        or note as JSON (src/phone)
+//! claude-tab -s from -c place [-a] [--] [prompt]
+//!                                        a tab in the background running
+//!                                        Claude in a place (src/remote)
 //! phone-pair <device>                    a box asking for the code the
 //!                                        phone shows, which pairs it
 //! tip <name> | tip seen <name> | tip reset
@@ -146,6 +149,7 @@ pub const NAMES: &[&str] = &[
     "phone-item",
     "phone-view",
     "phone-tab",
+    "claude-tab",
     "ready",
     "tip",
     "press",
@@ -283,6 +287,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "phone-tab",
         "phone-tab [-t pane] <pr|ticket|note>: from switchboard phone, the PR, ticket or note of the tab of a pane running Claude as JSON, read only, from what the workspace holds and the copy its view last read; refused for a pane not running Claude, for one the tab hasn't, while phone_views or phone_tab_views is off, and for the note while phone_tab_note is off",
+    ),
+    (
+        "claude-tab",
+        "claude-tab -s <from> -c <place> [-a] [--] [prompt]: from switchboard phone or the Slack relay, a tab opened in the background running claude with [prompt] in <place>, answered <tab>, <pane> and where, tab-separated; <place> is one the list of places offers (the phone's New tab sheet, the relay's New tab form), or with -a a repository's or worktree's name or any directory, as the relay's new <place>: takes it; refused for a place not listed, a worktree of someone else's PR checked out untrusted, and from the phone while phone_new_tab is off",
     ),
     (
         "phone-pair",
@@ -622,7 +630,7 @@ impl Server {
             // connection.
             "watch" => Err("watch takes nothing".into()),
             // Answered by `Server::handle`, once the option has run.
-            "phone-item" | "phone-view" | "phone-tab" => {
+            "phone-item" | "phone-view" | "phone-tab" | "claude-tab" => {
                 Err(format!("{name} is answered as it runs"))
             }
             "phone-pair" => match rest.first() {

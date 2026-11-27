@@ -30,7 +30,12 @@ use super::state::{Follow, Target};
 use super::summaries::{fleet, progress};
 use super::tabs::{self, Tab, label, state_words, table};
 use super::{Cx, Relay};
+use crate::remote::places::Known;
+use crate::remote::protocol::Refused;
 use crate::util;
+
+/// Who the relay's asks name, for the server's log.
+const FROM: &str = "Slack";
 
 /// What the relay understands, for `help`.
 pub const HELP: &str = "**What I understand**\n\
@@ -91,14 +96,9 @@ pub async fn say(cx: &Cx, to: &Reply, body: &str, buttons: Vec<Button>) -> Resul
     }
 }
 
-/// A word quoted for the shell, its line breaks made spaces and its other
-/// control characters dropped, so nothing in it acts as a key.
-pub fn shell_quote(text: &str) -> String {
-    static BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\n\s*").expect("a regex"));
-    let one_line = BREAK
-        .replace_all(&tabs::typeable(text), " ")
-        .replace('\t', " ");
-    format!("'{}'", one_line.replace('\'', r"'\''"))
+/// What the places to start a Claude in are found from (src/remote/places.rs).
+pub fn known(cx: &Relay) -> Known {
+    Known::of(&cx.paths.home, &cx.mux.windows().unwrap_or_default())
 }
 
 /// The tab an alert was made for, as it is now: its number moves as the
@@ -376,26 +376,25 @@ pub async fn handle(cx: &Cx, message: Message) -> Result<Option<String>> {
 
     // New work has to be asked for by name: a new tab running Claude with
     // the prompt, in the relay's directory, or the place named before the
-    // colon (see places.rs). The reply says where, so a wrong match is
-    // plain. Replies under the confirmation go to that tab.
+    // colon (src/remote/places.rs), which the server works out and opens
+    // (`claude-tab`), as it does the phone's. The reply says where, so a
+    // wrong match is plain. Replies under the confirmation go to that tab.
     static NEW: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?is)^new(?:\s+([^:\n]+?))?\s*:\s*(.+)$").expect("a regex"));
     if let Some(c) = NEW.captures(&text) {
         let place = match c.get(1) {
-            Some(spec) => super::places::resolve_place(cx, spec.as_str().trim()),
-            None => Ok((cx.cwd.clone(), format!("`{}`", cx.paths.short(&cx.cwd)))),
+            Some(spec) => spec.as_str().trim().to_string(),
+            None => cx.cwd.to_string_lossy().into_owned(),
         };
-        let (dir, said) = match place {
-            Ok(p) => p,
-            Err(why) => return say(cx, &here, &why, vec![]).await,
-        };
-        let (window, pane) = cx.mux.new_tab(&dir, None, None)?;
-        // The pane Claude starts in is the tab's, whatever is opened beside
-        // it later.
-        let _ = cx.mux.set_option(&window, tabs::CLAUDE_PANE, Some(&pane));
         let prompt = c.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-        cx.mux
-            .run_in_shell(&pane, &format!("claude {}", shell_quote(prompt)))?;
+        let opened = match cx.mux.open_claude(&place, prompt, FROM, true) {
+            Ok(opened) => opened,
+            Err(e) => match e.downcast_ref::<Refused>() {
+                Some(Refused::No(why)) => return say(cx, &here, why, vec![]).await,
+                _ => return Err(e),
+            },
+        };
+        let (window, said) = (opened.tab, opened.said);
         let opened = cx
             .mux
             .windows()
@@ -407,7 +406,7 @@ pub async fn handle(cx: &Cx, message: Message) -> Result<Option<String>> {
             .as_ref()
             .and_then(|w| w.panes.first())
             .map(|p| p.pid.clone());
-        cx.log(&format!("new: tab {index} in {}", dir.display()));
+        cx.log(&format!("new: tab {index} in {said}"));
         let ts = say(
             cx,
             &here,

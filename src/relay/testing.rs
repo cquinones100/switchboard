@@ -24,6 +24,8 @@ use super::summaries::{Asked, Haiku};
 use super::{Cx, Relay, presence};
 use crate::agent::screen::{self, Press};
 use crate::presence::Presence as Reading;
+use crate::remote::places;
+use crate::remote::protocol::{Opened, Refused};
 use crate::util;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -165,6 +167,8 @@ pub struct FakeMux {
     pub board: RefCell<Option<Value>>,
     /// Every pause (true) and resume (false) asked for.
     pub paused: RefCell<Vec<bool>>,
+    /// The home places are found under, as the server's.
+    pub home: RefCell<PathBuf>,
     next: Cell<u32>,
 }
 
@@ -404,6 +408,28 @@ impl Mux for Rc<FakeMux> {
         Ok((format!("@{t}"), format!("%{p}")))
     }
 
+    /// As the server answers `claude-tab` (src/remote/serve.rs).
+    fn open_claude(
+        &self,
+        place: &str,
+        prompt: &str,
+        _from: &str,
+        anywhere: bool,
+    ) -> Result<Opened> {
+        let windows = self.windows().unwrap_or_default();
+        let known = places::Known::of(&self.home.borrow(), &windows);
+        let found = if anywhere {
+            places::resolve_place(&known, place)
+        } else {
+            places::listed(&known, place)
+        };
+        let (dir, said) = found.map_err(|why| anyhow::Error::new(Refused::No(why)))?;
+        let (tab, pane) = self.new_tab(&dir, None, None)?;
+        self.set_option(&tab, "@claude_pane", Some(&pane))?;
+        self.run_in_shell(&pane, &places::claude_line(prompt))?;
+        Ok(Opened { tab, pane, said })
+    }
+
     fn kill_tab(&self, tab: &str) -> Result<()> {
         self.killed.borrow_mut().push(tab.to_string());
         self.windows.borrow_mut().retain(|(w, _)| w.id != tab);
@@ -530,6 +556,7 @@ impl Rig {
         let slack = Rc::new(FakeSlack::default());
         slack.next_ts.set(util::now_secs());
         let mux = Rc::new(FakeMux::default());
+        *mux.home.borrow_mut() = home.clone();
         let haiku = Rc::new(FakeHaiku::default());
         // Away from the computer, so what the relay says on its own goes out
         // at once; the tests about being at the computer say so.

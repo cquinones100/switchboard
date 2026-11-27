@@ -197,6 +197,9 @@ pub enum Event {
     Sweep(crate::worktree_sweep::serve::SweepEvent),
     /// The phone app's watchers due what changed (src/phone).
     Phone(crate::phone::serve::PhoneEvent),
+    /// Work for a remote front-end's command done off the task
+    /// (src/remote/serve.rs).
+    Remote(crate::remote::serve::RemoteEvent),
     /// A merge queue's step answered (src/merge_queue).
     MergeQueue(crate::merge_queue::serve::MergeQueueEvent),
     Tick,
@@ -1433,6 +1436,14 @@ impl Server {
                     }
                     return;
                 }
+                // Answered once its place is found, off this task
+                // (src/remote/serve.rs).
+                if args.first().is_some_and(|a| a == "claude-tab")
+                    && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
+                {
+                    self.remote_claude_tab_asked(&args[1..], reply);
+                    return;
+                }
                 // Answered once its file is read, off this task.
                 if args.first().is_some_and(|a| a == "restore-layout")
                     && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
@@ -1499,6 +1510,7 @@ impl Server {
             Event::Awake(event) => self.awake_event(event),
             Event::Sweep(event) => self.sweep_event(event),
             Event::Phone(event) => self.phone_event(event),
+            Event::Remote(event) => self.remote_event(event),
             Event::MergeQueue(event) => self.merge_queue_event(event),
             Event::Routines(event) => self.routines_event(event),
             Event::Tick => {

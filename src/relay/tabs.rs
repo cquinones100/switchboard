@@ -40,8 +40,7 @@ use crate::agent::screen::{self, Prompt, PromptOption, draft_in, options_in};
 use crate::agent::transcript::{self, Entry, Kind};
 use crate::util;
 
-/// The option the relay records a tab's Claude pane in.
-pub const CLAUDE_PANE: &str = "@claude_pane";
+pub use crate::remote::protocol::CLAUDE_PANE;
 
 /// One tab running Claude: its id, number and whole name, its Claude
 /// pane's state and since when, whether it is the tab in front of you, its
@@ -846,16 +845,8 @@ pub fn on_screen(cx: &Relay, id: &str, turn: &str) -> String {
     }
 }
 
-/// Text from Slack as it may be typed into a pane: without control
-/// characters but line breaks and tabs, since an Escape in it would end a
-/// paste early or start a key sequence of its own, and a carriage return
-/// would press Enter.
-pub fn typeable(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .chars()
-        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
-        .collect()
-}
+/// Text from Slack as it may be typed into a pane, as the phone's is.
+pub use crate::remote::places::typeable;
 
 /// The screen once it has changed from `before`, after an answer, or as it
 /// is after `wait` if it hasn't: what comes next takes Claude Code a moment

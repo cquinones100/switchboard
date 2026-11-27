@@ -6,7 +6,9 @@
 //! `kill-tab -s` (a Claude tab closed, which the phone asks about first),
 //! `remind` (a Claude tab's reminder set or cleared, as the workspace's
 //! reminder box does), `pin` (a Claude tab pinned or unpinned, as M-f
-//! does) and `stop` (a working Claude's turn stopped with Esc), and the
+//! does), `stop` (a working Claude's turn stopped with Esc) and
+//! `claude-tab` (a tab opened in the background running Claude in a place,
+//! src/remote/places.rs, worked out off the task), and the
 //! server's log's line for what was done from elsewhere, with no
 //! notification, since you know what you did and the tab shows it. Moved
 //! from the phone's src/phone/serve.rs, where `watch`, which streams the
@@ -17,18 +19,79 @@
 //! answer box would. Nothing here reaches a pane that isn't running
 //! Claude: each command refuses one.
 
-use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
+use serde_json::{Value, json};
+use tokio::sync::oneshot;
+
+use super::places::{self, Known};
 use super::protocol::How;
 use crate::agent::screen::{self, Dialog, Prompt};
 use crate::mission::remind;
 use crate::mux::input::{Key, KeyCode, Mods};
-use crate::mux::server::{Reply, Server};
+use crate::mux::server::{Answer, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{settings, util};
 
 /// The longest a message's words run in the log's line.
 const SAID_WIDTH: usize = 80;
+
+/// What the server is told once work for a remote command is done off its
+/// task.
+#[derive(Debug)]
+pub enum RemoteEvent {
+    /// Where `claude-tab` opens a tab, or why it can't, worked out: the
+    /// tab opened there and the asker answered.
+    Placed {
+        found: Result<(PathBuf, String), String>,
+        prompt: String,
+        from: String,
+        reply: oneshot::Sender<Answer>,
+    },
+}
+
+/// `claude-tab`'s arguments: `-s <from>`, `-c <place>`, `-a` (any place,
+/// the relay's) and the prompt after them.
+struct ClaudeTab {
+    from: String,
+    place: String,
+    anywhere: bool,
+    prompt: String,
+}
+
+const CLAUDE_TAB_USAGE: &str = "claude-tab -s <from> -c <place> [-a] [--] [prompt]";
+
+fn claude_tab_args(rest: &[String]) -> Result<ClaudeTab, String> {
+    let mut asked = ClaudeTab {
+        from: String::new(),
+        place: String::new(),
+        anywhere: false,
+        prompt: String::new(),
+    };
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "-s" => asked.from = words.next().cloned().unwrap_or_default(),
+            "-c" => asked.place = words.next().cloned().unwrap_or_default(),
+            "-a" => asked.anywhere = true,
+            "--" => {
+                asked.prompt = words.cloned().collect::<Vec<_>>().join(" ");
+                break;
+            }
+            _ => {
+                asked.prompt = std::iter::once(word.clone())
+                    .chain(words.cloned())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                break;
+            }
+        }
+    }
+    if asked.from.is_empty() || asked.place.trim().is_empty() {
+        return Err(format!("usage: switchboard {CLAUDE_TAB_USAGE}"));
+    }
+    Ok(asked)
+}
 
 /// A prompt as the phone reads it.
 pub fn prompt_json(found: &Prompt) -> Value {
@@ -403,6 +466,106 @@ impl Server {
             .map(|t| t.display_name().to_string())
             .unwrap_or_default();
         Ok(Reply::ok(format!("{did} tab {n} {name}\n")))
+    }
+
+    /// `claude-tab`: a tab opened in the background running Claude with
+    /// the prompt in the place named, for a remote front-end (`-s`), its
+    /// pane marked as the tab's Claude, answered `<tab>\t<pane>\t<where>`.
+    /// Where is found off this task, since it runs git: one the list of
+    /// places offers (`places::listed`), or with `-a` a name or any
+    /// directory, as the relay takes it (`places::resolve_place`); a
+    /// worktree checked out untrusted is refused either way, and anything
+    /// from the phone while Settings' `phone_new_tab` is off.
+    pub(crate) fn remote_claude_tab_asked(
+        &mut self,
+        rest: &[String],
+        reply: oneshot::Sender<Answer>,
+    ) {
+        let asked = match claude_tab_args(rest) {
+            Ok(asked) => asked,
+            Err(why) => {
+                let _ = reply.send(Answer::Reply(Reply::fail(why)));
+                return;
+            }
+        };
+        if asked.from == "phone" && !settings::is_on("phone_new_tab") {
+            let _ = reply.send(Answer::Reply(Reply::fail(
+                "opening tabs from the phone is off in Settings",
+            )));
+            return;
+        }
+        let known = Known {
+            home: crate::paths::home(),
+            pane_dirs: self
+                .panes
+                .keys()
+                .filter_map(|p| self.pane_dir(*p))
+                .collect(),
+        };
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let found = if asked.anywhere {
+                places::resolve_place(&known, asked.place.trim())
+            } else {
+                places::listed(&known, asked.place.trim())
+            };
+            let _ = tx.send(Event::Remote(RemoteEvent::Placed {
+                found,
+                prompt: asked.prompt,
+                from: asked.from,
+                reply,
+            }));
+        });
+    }
+
+    pub(crate) fn remote_event(&mut self, event: RemoteEvent) {
+        match event {
+            RemoteEvent::Placed {
+                found,
+                prompt,
+                from,
+                reply,
+            } => {
+                let answer = found.and_then(|(dir, said)| {
+                    let (tab, pane) = self.remote_open_claude(&dir, &prompt)?;
+                    if let Ok(id) = tab.trim_start_matches('@').parse::<u32>() {
+                        self.remote_did(&from, TabId(id), &format!("opened it in {said}"));
+                    }
+                    Ok(Reply::ok(format!("{tab}\t{pane}\t{said}\n")))
+                });
+                let _ = reply.send(Answer::Reply(answer.unwrap_or_else(Reply::fail)));
+            }
+        }
+    }
+
+    /// A tab opened in the background in `dir`, `claude <prompt>` typed
+    /// into its shell, so the shell stays once Claude exits, and its pane
+    /// marked as the tab's Claude, whatever is opened beside it later.
+    fn remote_open_claude(&mut self, dir: &Path, prompt: &str) -> Result<(String, String), String> {
+        let ask = |server: &mut Server, args: &[&str]| -> Result<String, String> {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            let r = server.command(&args, Path::new("/"), None, None, false);
+            if r.code == 0 {
+                Ok(r.stdout)
+            } else {
+                Err(r.stderr.trim().to_string())
+            }
+        };
+        let dir = dir.to_string_lossy();
+        let out = ask(self, &["new-tab", "-d", "-c", &dir])?;
+        let mut ids = out.split_whitespace();
+        let (Some(tab), Some(pane)) = (ids.next(), ids.next()) else {
+            return Err("the tab didn't open".into());
+        };
+        let (tab, pane) = (tab.to_string(), pane.to_string());
+        ask(
+            self,
+            &["set", "-t", &tab, super::protocol::CLAUDE_PANE, &pane],
+        )?;
+        let line = places::claude_line(prompt);
+        ask(self, &["send-keys", "-l", "-t", &pane, "--", &line])?;
+        ask(self, &["send-keys", "-t", &pane, "Enter"])?;
+        Ok((tab, pane))
     }
 
     /// Something done from elsewhere (`from`, the phone), written in the

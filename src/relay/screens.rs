@@ -374,7 +374,7 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
 /// <prompt>`. Where is a menu of every directory you have run Claude in,
 /// and a field beside it takes anything else `new <place>:` does.
 pub fn new_screen(cx: &Relay) -> Value {
-    let groups: Vec<Value> = super::places::place_choices(cx)
+    let groups: Vec<Value> = crate::remote::places::place_choices(&super::commands::known(cx))
         .into_iter()
         .map(|(group, choices)| {
             json!({

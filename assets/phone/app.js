@@ -38,6 +38,9 @@ const state = {
   turnKeys: [], // the keys of the open tab's turns last drawn, oldest first (`turns`)
   unfolded: new Set(), // the open tab's messages opened with Show all (`messageKey`), and turns' steps opened (`turns`), kept across redraws
   close: true, // whether Close tab is offered (Settings' phone_close_tabs), from the stream
+  newTab: true, // whether New tab is offered (Settings' phone_new_tab), from the stream
+  tabsOpened: 0, // how many times a tab's channel was opened, so Start's answer knows whether you went elsewhere meanwhile
+  opening: null, // { pane, until }: a tab opened from the phone, its channel opened once the stream lists it, given up at `until`
   menu: null, // { pane, asking, sheet, remind }: the tab whose menu or sheet shows, whether Close tab's question or the reminder's sheet does, and the sheet's { messages } (null until read)
   reminders: true, // whether Remind me is offered (Settings' reminders), from the stream
   remindTimes: [], // { label, clock }: the reminder box's times, with the clock time each means now, from the stream
@@ -885,6 +888,7 @@ function menuChoices(tab) {
   choices.push([tab.pinned ? "Unpin it" : "Pin it", "", () => pin(n, !tab.pinned)]);
   if (state.reminders && tab.remind) choices.push(["Clear the reminder", "", () => clearReminder(n)]);
   if (state.reminders) choices.push(["Remind me", "", () => remindSheet(n)]);
+  if (state.newTab && state.open) choices.push(["New tab", "", () => newTabSheet(tab.repo || null)]);
   if (state.close) choices.push(["Close tab", " r", () => ask(n)]);
   return choices;
 }
@@ -1229,6 +1233,129 @@ function remindSheet(n) {
   layer(box);
 }
 
+// The sheet New tab opens at the screen's foot, as Remind me's: Where, the
+// places the computer lists (src/remote/places.rs), grouped by repository,
+// most recently used first, the repository of the tab it was opened from
+// leading; First prompt, optional. Start, at the right as the affirmative
+// choice is, asks first; the computer refuses a place it doesn't list.
+async function newTabSheet(lead) {
+  if (state.menu) closeMenu();
+  state.menu = { pane: null, asking: true };
+  document.addEventListener("keydown", menuKeys);
+  const list = el("div", { class: "places", role: "radiogroup", "aria-label": "Where" }, el("div", { class: "dim" }, "Reading the places…"));
+  const prompt = el("input", { type: "text", class: "field", placeholder: "what Claude starts on", autocomplete: "off", "aria-label": "First prompt" });
+  const refused = el("div", { class: "refused", role: "alert" });
+  let chosen = null; // { label, value }
+  const start = () => {
+    if (!chosen) return refused.replaceChildren(el("span", {}, "Choose a place."));
+    askStart(chosen, prompt.value || "");
+  };
+  prompt.addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
+  const box = el(
+    "div",
+    { class: "box sheet", role: "dialog", "aria-label": "New tab" },
+    boxHead("New tab"),
+    el("div", { class: "label d" }, "Where"),
+    list,
+    refused,
+    el("div", { class: "label d" }, el("span", {}, "First prompt"), el("span", { class: "faint" }, "optional")),
+    el("div", { class: "input" }, el("span", { class: "prompt" }, "›"), prompt),
+    el("div", { class: "answers" }, el("button", { class: "option", onclick: () => closeMenu() }, "Cancel"), el("button", { class: "option lit", onclick: start }, "Start")),
+  );
+  layer(box);
+  let groups;
+  try {
+    groups = (await api("/api/places")).groups || [];
+  } catch (e) {
+    list.replaceChildren();
+    refused.replaceChildren(el("span", {}, String(e.message || e)));
+    return;
+  }
+  if (lead) groups = [...groups.filter((g) => g.name === lead), ...groups.filter((g) => g.name !== lead)];
+  const options = [];
+  const light = (place) => {
+    chosen = place;
+    for (const [o, p] of options) {
+      const on = p === place;
+      o.className = "menu-option place" + (on ? " chosen" : "");
+      o.setAttribute("aria-checked", String(on));
+    }
+    refused.replaceChildren();
+  };
+  const sections = groups.map((g) =>
+    el(
+      "div",
+      { class: "place-group" },
+      el("div", { class: "group-name" }, g.name),
+      g.places.map((p) => {
+        const o = el("button", { class: "menu-option place", role: "radio", "aria-checked": "false", onclick: () => light(p) }, el("span", {}, p.label), el("span", { class: "where" }, LRM + p.value + LRM));
+        options.push([o, p]);
+        return o;
+      }),
+    ),
+  );
+  list.replaceChildren(...(sections.length ? sections : [el("div", { class: "dim" }, "No places yet: run Claude in a repository on the computer first.")]));
+  if (options.length) light(options[0][1]);
+}
+
+// Left-to-right marks around a path drawn right to left, so its `~/` or `/`
+// stays at its start while a long one is cut from the left.
+const LRM = "\u200e";
+
+// The question Start asks first (board 186): No at the left, Start lit at
+// the right; only Start opens the tab.
+function askStart(place, prompt) {
+  const yes = el("button", { class: "option lit", onclick: () => openPlace(place, prompt) }, "Start");
+  const box = el(
+    "div",
+    { class: "box ask", role: "alertdialog", "aria-label": "Start Claude" },
+    boxHead("New tab"),
+    el("div", { class: "question" }, el("b", {}, "Start Claude in " + place.value + "? "), el("span", { class: "dim" }, "[Y/n]")),
+    prompt.trim() ? el("div", { class: "dim" }, "With “" + prompt.trim() + "”") : null,
+    el("div", { class: "answers" }, el("button", { class: "option", onclick: () => closeMenu() }, "No"), yes),
+  );
+  layer(box);
+  if (yes.focus) yes.focus();
+}
+
+async function openPlace(place, prompt) {
+  closeMenu();
+  const opened = state.tabsOpened;
+  try {
+    const r = await api("/api/places", { place: place.value, prompt });
+    buzz();
+    toast(r.said || "Started.");
+    // Its channel opens once the stream lists it as a Claude tab, unless
+    // you went to another tab while it was started.
+    if (state.tabsOpened !== opened) return;
+    state.opening = { pane: String(r.pane || ""), until: Date.now() + OPENING_MS };
+    openOpened();
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
+// How long the app waits for a tab it opened to be listed before giving up
+// on going to it, so one whose Claude never started isn't jumped to later.
+const OPENING_MS = 60000;
+
+// The tab opened from the phone's channel, once the stream lists it, and
+// only while nothing would be lost by leaving the screen shown: a draft or
+// images in the composer, or a menu, a question or a sheet open.
+function openOpened() {
+  const o = state.opening;
+  if (!o) return false;
+  if (Date.now() > o.until) {
+    state.opening = null;
+    return false;
+  }
+  const field = app.querySelector(".composer textarea");
+  const drafting = (!!field && field.value.trim() !== "") || state.chosen.length > 0;
+  if (drafting || state.menu || !state.tabs.some((t) => number(t) === o.pane)) return false;
+  openTab(o.pane);
+  return true;
+}
+
 async function setReminder(n, when, note, refused) {
   if (!when) {
     refused.replaceChildren(el("span", {}, "Choose a time, or type one."));
@@ -1316,7 +1443,10 @@ function drawerScreen({ box, head, offline, list } = drawerParts()) {
 function drawerParts() {
   const box = search();
   box.show();
-  const head = header(el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)));
+  const head = header(
+    el("span", { class: "title" }, "Switchboard ", el("span", { class: "where" }, state.me.computer)),
+    state.newTab ? el("button", { class: "icon new-tab", "aria-label": "New tab", onclick: () => newTabSheet(null) }, "+") : null,
+  );
   const offline = el("div", { class: "offline-slot" }, state.live ? null : el("div", { class: "offline-line" }, reconnecting() ? "Reconnecting…" : "Last heard " + ago(state.lastHeard) + " · trying again"));
   return { box, head, offline, list: drawerList() };
 }
@@ -1351,6 +1481,10 @@ function drop(i) {
 }
 
 async function openTab(n) {
+  // Gone to a tab, by the user or as one opened from the phone is listed:
+  // nothing to go to after.
+  state.opening = null;
+  state.tabsOpened++;
   if (state.menu) closeMenu();
   // A view open over it (a push tapped meanwhile) closes first, its step in
   // the page's history taken back, so the tab is named on the page's own.
@@ -3218,14 +3352,16 @@ function listen() {
     const turned = before && after && said(before) !== said(after);
     if (after && after.prompt) state.answered = null;
     state.close = data.close !== false;
+    state.newTab = data.new_tab !== false;
     state.haptics = data.haptics !== false;
     state.reminders = data.reminders !== false;
     state.remindTimes = data.remind_times || state.remindTimes;
     state.views = data.views || null;
     if (data.build && state.me && data.build !== state.me.build) serverBuildIs(data.build);
     if (state.menu && state.menu.panel) staleMenu();
-    else if (state.menu && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
+    else if (state.menu && state.menu.pane !== null && !state.tabs.some((t) => number(t) === state.menu.pane)) closeMenu();
     if (!state.views) closePanel();
+    if (openOpened()) return tabsRead();
     render();
     drawPanel();
     if (turned) loadTurns();
@@ -3444,6 +3580,7 @@ async function start() {
   state.tabs = (r && r.tabs) || [];
   state.live = !!(r && r.live);
   state.close = !r || r.close !== false;
+  state.newTab = !r || r.new_tab !== false;
   state.haptics = !r || r.haptics !== false;
   state.views = (r && r.views) || null;
   state.lastHeard = Date.now();
