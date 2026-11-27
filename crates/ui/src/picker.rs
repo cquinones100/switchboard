@@ -1268,17 +1268,16 @@ mod tests {
     #[test]
     fn up_on_the_first_row_chooses_the_last_and_down_on_the_last_the_first() {
         let look = Look::default();
-        let key = |code, mods| Key::new(code, mods);
         let mut p = Picker::new("Pick", items());
-        assert_eq!(p.key(key(KeyCode::Up, Mods::NONE), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::Up), &look), Step::Redraw);
         assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
         // PageDown on the last row stays there.
-        assert_eq!(p.key(key(KeyCode::PageDown, Mods::NONE), &look), Step::Same);
-        p.key(key(KeyCode::Down, Mods::NONE), &look);
+        assert_eq!(p.key(Key::plain(KeyCode::PageDown), &look), Step::Same);
+        p.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(p.chosen().unwrap().text, "Split pane to the left");
-        p.key(key(KeyCode::Char('p'), Mods::CTRL), &look);
+        p.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
         assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
-        p.key(key(KeyCode::Char('n'), Mods::CTRL), &look);
+        p.key(Key::new(KeyCode::Char('n'), Mods::CTRL), &look);
         assert_eq!(p.chosen().unwrap().text, "Split pane to the left");
 
         // Filtered, it wraps over the rows that match.
@@ -1286,9 +1285,9 @@ mod tests {
         let shown = p.shown();
         assert_eq!(shown.len(), 3);
         let (first, last) = (shown[0].to_string(), shown[2].to_string());
-        p.key(key(KeyCode::Up, Mods::NONE), &look);
+        p.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(p.chosen().unwrap().text, last);
-        p.key(key(KeyCode::Down, Mods::NONE), &look);
+        p.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(p.chosen().unwrap().text, first);
     }
 
@@ -1468,7 +1467,6 @@ mod tests {
     #[test]
     fn rows_that_are_off_as_headings_are_never_stopped_on() {
         let look = Look::default();
-        let key = |code| Key::new(code, Mods::NONE);
         let mut rows = items();
         rows[0].off = true;
         rows[2].off = true;
@@ -1476,17 +1474,17 @@ mod tests {
         assert_eq!(p.chosen().unwrap().text, "Close the pane");
         // Up under the heading goes round to the last row, and Down there
         // comes back under it.
-        p.key(key(KeyCode::Up), &look);
+        p.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
-        p.key(key(KeyCode::Down), &look);
+        p.key(Key::plain(KeyCode::Down), &look);
         assert_eq!(p.chosen().unwrap().text, "Close the pane");
-        assert_eq!(p.key(key(KeyCode::PageUp), &look), Step::Same);
-        assert_eq!(p.key(key(KeyCode::BackTab), &look), Step::Same);
+        assert_eq!(p.key(Key::plain(KeyCode::PageUp), &look), Step::Same);
+        assert_eq!(p.key(Key::plain(KeyCode::BackTab), &look), Step::Same);
         assert_eq!(p.chosen().unwrap().text, "Close the pane");
         // PageUp from lower down stops under the heading, not short of it.
-        p.key(key(KeyCode::Up), &look);
+        p.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
-        assert_eq!(p.key(key(KeyCode::PageUp), &look), Step::Redraw);
+        assert_eq!(p.key(Key::plain(KeyCode::PageUp), &look), Step::Redraw);
         assert_eq!(p.chosen().unwrap().text, "Close the pane");
     }
 

@@ -22,6 +22,7 @@ use super::closed::Closing;
 use crate::cmd::wt_revive::SessionRow;
 use crate::items::{Item, Target};
 use crate::paths;
+use crate::ui::when::{self, Said};
 
 /// Which rows the view shows (its menu's "Show only tabs", "Show only
 /// sessions" and "Show both").
@@ -106,9 +107,13 @@ fn heading_item(title: &str, count: usize) -> Item {
     Item::new(format!("heading:{title}"), title).data(json!({ "header": true, "count": count }))
 }
 
-/// How long ago, as a plain row says it.
+/// How long ago `ms` was, as a plain row says it.
 fn ago(ms: i64, now_ms: i64) -> String {
-    super::sessions::ago(ms.div_euclid(1000), now_ms.div_euclid(1000))
+    when::ago(
+        Some(ms.div_euclid(1000)),
+        now_ms.div_euclid(1000),
+        Said::Ago,
+    )
 }
 
 /// A plain row's detail: when, what reopening does, where,
@@ -127,7 +132,7 @@ fn tab_row(key: &str, c: &Closing, turns: Option<usize>, now_ms: i64) -> Item {
     let session = c.session.as_deref().filter(|s| *s == key);
     Item::new(key, c.name.clone())
         .detail(detail(&[
-            format!("closed {} ago", ago(c.at, now_ms)),
+            format!("closed {}", ago(c.at, now_ms)),
             if session.is_some() {
                 "resumes its Claude".into()
             } else {
@@ -182,7 +187,7 @@ fn session_row(s: &SessionRow, now_ms: i64) -> Item {
         .unwrap_or_else(|| dir.to_string_lossy().into_owned());
     Item::new(s.id.clone(), name)
         .detail(detail(&[
-            format!("used {} ago", ago(s.when * 1000, now_ms)),
+            format!("used {}", ago(s.when * 1000, now_ms)),
             "a past session".into(),
             paths::tilde(&dir),
         ]))

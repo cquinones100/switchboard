@@ -251,7 +251,8 @@ impl Key {
         Key { code, mods }
     }
 
-    fn plain(code: KeyCode) -> Key {
+    /// `code` with no modifier held, as the tests press a key.
+    pub fn plain(code: KeyCode) -> Key {
         Key::new(code, Mods::NONE)
     }
 

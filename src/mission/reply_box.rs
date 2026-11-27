@@ -207,10 +207,6 @@ mod tests {
         }
     }
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn text_of(b: &mut ReplyBox) -> String {
         let lines = b.lines(WIDTH, &Look::default());
         lines
@@ -271,15 +267,15 @@ mod tests {
         let look = Look::default();
         let mut b = ReplyBox::new(reply(), "");
         // Nothing typed, or only blanks: the box stays, with nothing added.
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         typed(&mut b, &chars("  "));
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         assert_eq!(b.text.field.text(), "  ");
         let mut b = ReplyBox::new(reply(), "");
         typed(&mut b, &chars("On it"));
         typed(&mut b, &[Key::new(KeyCode::Enter, Mods::SHIFT)]);
         typed(&mut b, &chars("before 3:00 "));
-        match b.key(key(KeyCode::Enter), &look) {
+        match b.key(Key::plain(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => assert_eq!(p.query, "On it\nbefore 3:00 "),
             other => panic!("{other:?}"),
         }
@@ -295,23 +291,23 @@ mod tests {
         let look = Look::default();
         let mut b = ReplyBox::new(reply(), "");
         // Send with nothing typed stays.
-        b.key(key(KeyCode::Tab), &look);
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        b.key(Key::plain(KeyCode::Tab), &look);
+        assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         typed(&mut b, &chars("On it"));
-        b.key(key(KeyCode::Tab), &look);
-        match b.key(key(KeyCode::Enter), &look) {
+        b.key(Key::plain(KeyCode::Tab), &look);
+        match b.key(Key::plain(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => assert_eq!(p.query, "On it"),
             other => panic!("{other:?}"),
         }
         let mut b = ReplyBox::new(reply(), "kept");
-        b.key(key(KeyCode::Tab), &look);
-        b.key(key(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
+        b.key(Key::plain(KeyCode::Tab), &look);
         assert_eq!(
-            b.key(key(KeyCode::Enter), &look),
+            b.key(Key::plain(KeyCode::Enter), &look),
             Step::Close(Outcome::Dismissed)
         );
         assert_eq!(
-            ReplyBox::new(reply(), "x").key(key(KeyCode::Esc), &look),
+            ReplyBox::new(reply(), "x").key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
     }
@@ -324,13 +320,13 @@ mod tests {
     }
 
     fn chars(text: &str) -> Vec<Key> {
-        text.chars().map(|c| key(KeyCode::Char(c))).collect()
+        text.chars().map(|c| Key::plain(KeyCode::Char(c))).collect()
     }
 
     fn query(b: &mut ReplyBox) -> String {
         let look = Look::default();
-        b.key(key(KeyCode::Tab), &look);
-        match b.key(key(KeyCode::Enter), &look) {
+        b.key(Key::plain(KeyCode::Tab), &look);
+        match b.key(Key::plain(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => p.query,
             other => panic!("{other:?}"),
         }
@@ -366,7 +362,7 @@ mod tests {
         assert_eq!(b.text.field.text(), "On it later today");
         typed(&mut b, &[Key::new(KeyCode::Char('z'), Mods::CTRL)]);
         assert_eq!(b.text.field.text(), "On it today");
-        typed(&mut b, &[key(KeyCode::Home)]);
+        typed(&mut b, &[Key::plain(KeyCode::Home)]);
         typed(&mut b, &chars("Yes, "));
         assert_eq!(query(&mut b), "Yes, On it today");
     }

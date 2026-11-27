@@ -953,10 +953,6 @@ impl Overlay for RoutineForm {
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     fn now() -> Zoned {
         "2026-11-04T14:30:00[America/New_York]".parse().unwrap()
     }
@@ -977,7 +973,7 @@ mod tests {
 
     fn type_in(f: &mut RoutineForm, text: &str) {
         for c in text.chars() {
-            f.key(key(KeyCode::Char(c)), &Look::default());
+            f.key(Key::plain(KeyCode::Char(c)), &Look::default());
         }
     }
 
@@ -1014,21 +1010,21 @@ mod tests {
         );
 
         type_in(&mut f, "Triage");
-        f.key(key(KeyCode::Enter), &look);
+        f.key(Key::plain(KeyCode::Enter), &look);
         type_in(&mut f, &dir);
-        f.key(key(KeyCode::Tab), &look);
+        f.key(Key::plain(KeyCode::Tab), &look);
         type_in(&mut f, "weekdays at 8:45");
         let text = text_of(&f, WIDTH);
         assert!(text.contains("✓ Monday to Friday at 8:45 AM"), "{text}");
         assert!(text.contains("tomorrow 8:45 AM"), "the next runs: {text}");
         for _ in 0.."8:45".len() {
-            f.key(key(KeyCode::Backspace), &look);
+            f.key(Key::plain(KeyCode::Backspace), &look);
         }
         type_in(&mut f, "xx");
         let text = text_of(&f, WIDTH);
         assert!(text.contains("isn't a schedule I can read"), "{text}");
         for _ in 0..2 {
-            f.key(key(KeyCode::Backspace), &look);
+            f.key(Key::plain(KeyCode::Backspace), &look);
         }
         type_in(&mut f, "8:45");
 
@@ -1038,17 +1034,17 @@ mod tests {
         assert!(text_of(&f, WIDTH).contains("Write the prompt it runs."));
         assert_eq!(f.focus, Part::Prompt);
         type_in(&mut f, "Sort them.");
-        f.key(key(KeyCode::Enter), &look);
+        f.key(Key::plain(KeyCode::Enter), &look);
         type_in(&mut f, "By area.");
         // Grep taken off, Bash added.
         f.focus = Part::Tools;
-        f.key(key(KeyCode::Backspace), &look);
+        f.key(Key::plain(KeyCode::Backspace), &look);
         type_in(&mut f, "Bash(gh pr list:*)");
-        f.key(key(KeyCode::Enter), &look);
+        f.key(Key::plain(KeyCode::Enter), &look);
         assert_eq!(f.focus, Part::Tools, "Enter adds the tool, staying");
         // Skip it when missed.
         f.focus = Part::Pick(Choice::IfMissed);
-        f.key(key(KeyCode::Right), &look);
+        f.key(Key::plain(KeyCode::Right), &look);
         match f.key(alt_enter, &look) {
             Step::Close(Outcome::Picked(p)) => {
                 assert_eq!(p.index, 0);
@@ -1083,9 +1079,9 @@ mod tests {
         assert!(text.contains("+ Add a tool"), "{text}");
         // From When, Tab reaches the first tool's ×, and Enter takes it off.
         f.focus = Part::When;
-        f.key(key(KeyCode::Tab), &look);
+        f.key(Key::plain(KeyCode::Tab), &look);
         assert_eq!(f.focus, Part::RemoveTool(0));
-        f.key(key(KeyCode::Enter), &look);
+        f.key(Key::plain(KeyCode::Enter), &look);
         assert_eq!(f.draft.tools, tools[1..]);
     }
 
@@ -1116,8 +1112,8 @@ mod tests {
         ));
         // Typed again, it is read against now.
         f.focus = Part::When;
-        f.key(key(KeyCode::Backspace), &look);
-        f.key(key(KeyCode::Backspace), &look);
+        f.key(Key::plain(KeyCode::Backspace), &look);
+        f.key(Key::plain(KeyCode::Backspace), &look);
         type_in(&mut f, "AM");
         assert!(text_of(&f, WIDTH).contains("✓ Once, Thursday, November 5 at 9:00 AM"));
     }
@@ -1127,14 +1123,14 @@ mod tests {
         let look = Look::default();
         let mut f = RoutineForm::new(false, Draft::default(), Vec::new(), None).at_time(now());
         assert_eq!(
-            f.key(key(KeyCode::Esc), &look),
+            f.key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
         type_in(&mut f, "x");
-        assert_eq!(f.key(key(KeyCode::Esc), &look), Step::Redraw);
+        assert_eq!(f.key(Key::plain(KeyCode::Esc), &look), Step::Redraw);
         assert!(text_of(&f, WIDTH).contains("Esc again discards"));
         assert_eq!(
-            f.key(key(KeyCode::Esc), &look),
+            f.key(Key::plain(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
         let text = text_of(&f, 60);

@@ -26,6 +26,7 @@ use regex::Regex;
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Server};
 use crate::notes::store::{self, NoteEntry, Store};
+use crate::ui::when::{self, Said};
 use crate::ui::{PickItem, Picker};
 
 /// Words too common to say what a tab is about.
@@ -70,25 +71,6 @@ pub struct Listed {
     pub all: Vec<Row>,
 }
 
-/// How long ago, in its largest unit: `<1m`, `12m`, `2h`, `3d`, `4mo`,
-/// `2y`.
-fn age(seconds: i64) -> String {
-    let s = seconds.max(0);
-    if s < 60 {
-        "<1m".into()
-    } else if s < 3600 {
-        format!("{}m", s / 60)
-    } else if s < 86_400 {
-        format!("{}h", s / 3600)
-    } else if s < 60 * 86_400 {
-        format!("{}d", s / 86_400)
-    } else if s < 730 * 86_400 {
-        format!("{}mo", s / (30 * 86_400))
-    } else {
-        format!("{}y", s / (365 * 86_400))
-    }
-}
-
 /// The notes listed for a tab named `label`, whose last note shown beside
 /// it is `last` and whose repository is named `repo`, their ages as of
 /// `now` (seconds).
@@ -122,7 +104,7 @@ pub fn list(
             .unwrap_or(&note.rel)
             .to_string(),
         rel: note.rel.clone(),
-        age: age(now - note.mtime),
+        age: when::ago(Some(note.mtime), now, Said::Short),
     };
     // (rank, order by age): lower first.
     let mut ranked: Vec<(f32, usize)> = Vec::new();
@@ -388,16 +370,6 @@ mod tests {
         assert!(s[every + 1].contains("Newest") && s[every + 1].contains("1m"));
         assert!(s[every + 2].contains("Other"));
         assert!(s[every + 3].contains("Standup"));
-    }
-
-    #[test]
-    fn an_age_is_its_largest_unit() {
-        let day = 86_400;
-        let ages: Vec<String> = [5, 12 * 60, 2 * 3600 + 59 * 60, 3 * day, 90 * day, 800 * day]
-            .into_iter()
-            .map(age)
-            .collect();
-        assert_eq!(ages, ["<1m", "12m", "2h", "3d", "3mo", "2y"]);
     }
 
     #[test]

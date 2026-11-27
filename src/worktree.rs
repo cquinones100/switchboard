@@ -19,6 +19,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::integrations::github::{self, Repo};
+use crate::ui::when::{Said, ago};
 use crate::{paths, requests, util};
 
 /// Where a new worktree goes, under the main clone, unless a path is given.
@@ -701,7 +702,7 @@ pub fn origin_head(root: &Path) -> Option<String> {
 /// `default_start` fetches it, else main or master), said on stderr with
 /// when a fetch last moved it, which is all the ref's reflog knows (a fetch
 /// finding it unchanged writes nothing): the ref and those words
-/// ("origin/main, last updated 2 hours ago"); none when the clone has none
+/// ("origin/main, last updated 2h ago"); none when the clone has none
 /// of them.
 pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, String)> {
     // A default the landing names is the only branch to start from: another
@@ -734,23 +735,15 @@ pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, Strin
             .ok()
     });
     let when = match at {
-        Some(at) => format!(", last updated {}", ago_words(util::now_secs() - at)),
+        Some(at) => format!(
+            ", last updated {}",
+            ago(Some(at), util::now_secs(), Said::Ago)
+        ),
         None => " as last fetched".to_string(),
     };
     let words = format!("origin/{name}{when}");
     eprintln!("Starting from {words}: couldn't reach origin");
     Some((fetched, words))
-}
-
-/// "12 minutes ago", "3 hours ago", "just now".
-pub fn ago_words(secs: i64) -> String {
-    let (n, unit) = match secs.max(0) {
-        s if s < 60 => return "just now".into(),
-        s if s < 3600 => (s / 60, "minute"),
-        s if s < 86_400 => (s / 3600, "hour"),
-        s => (s / 86_400, "day"),
-    };
-    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
 
 /// The upstream written by hand rather than with `worktree add --track`:

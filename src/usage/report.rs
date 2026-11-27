@@ -9,6 +9,7 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use super::habits::{self, Suggestion, Tally, VIEWS};
+use crate::sidebar::text;
 
 /// How many keys and picks are listed.
 const TOP: usize = 10;
@@ -44,11 +45,6 @@ fn heading(t: &str, after: &str) -> Line {
         (t.to_string(), Tone::Heading),
         (after.to_string(), Tone::Dim),
     ]
-}
-
-/// Padded on the right to `width` columns, as text.js's `pad`.
-fn pad(t: &str, width: usize) -> String {
-    format!("{t:<width$}")
 }
 
 /// What the report is made from: a month's and a week's counts, a setting's
@@ -111,13 +107,12 @@ pub fn report_lines(i: &Inputs) -> Vec<Line> {
             .map(String::as_str)
             .unwrap_or("");
         lines.push(text(format!(
-            "   {}{}{}{}",
-            pad(&key, 10),
-            pad(
+            "   {key:<10}{}{}{}",
+            text::pad(
                 &format!("{:>5}", key_week.get(&key).copied().unwrap_or(0)),
                 7
             ),
-            pad(&format!("{n:>6}"), 8),
+            text::pad(&format!("{n:>6}"), 8),
             habits::untagged(note)
         )));
     }
@@ -134,7 +129,7 @@ pub fn report_lines(i: &Inputs) -> Vec<Line> {
             .or_else(|| i.palette_notes.get(&key))
             .map(|n| habits::untagged(n).to_string())
             .unwrap_or_else(|| key.clone());
-        let mut line = text(format!("   {}{words}", pad(&format!("{n:>5}"), 8)));
+        let mut line = text(format!("   {}{words}", text::pad(&format!("{n:>5}"), 8)));
         if own.is_some() {
             line.push((format!("  · {key} does it"), Tone::Dim));
         }
@@ -150,13 +145,20 @@ pub fn report_lines(i: &Inputs) -> Vec<Line> {
         " · last 30 days",
     ));
     for (title, n) in &opened {
-        lines.push(text(format!("   {}{title}", pad(&format!("{n:>5}"), 8))));
+        lines.push(text(format!(
+            "   {}{title}",
+            text::pad(&format!("{n:>5}"), 8)
+        )));
     }
     for v in VIEWS
         .iter()
         .filter(|v| habits::view_on(v, i.value) && !opened.iter().any(|(t, _)| t == v.title))
     {
-        let mut line = text(format!("   {}{}", pad(&format!("{:>5}", 0), 8), v.title));
+        let mut line = text(format!(
+            "   {}{}",
+            text::pad(&format!("{:>5}", 0), 8),
+            v.title
+        ));
         line.push(("  · not opened".to_string(), Tone::Dim));
         lines.push(line);
     }

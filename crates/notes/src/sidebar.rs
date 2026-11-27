@@ -144,7 +144,8 @@ pub fn when(mtime: i64, now: &jiff::Zoned) -> String {
     format!("{}/{}/{:02}", at.month(), at.day(), at.year() % 100)
 }
 
-fn fit(text: &str, cols: usize) -> String {
+/// `text` on one line, cut to `cols` columns.
+fn flat(text: &str, cols: usize) -> String {
     cut(&text.replace(['\n', '\t'], " "), cols)
 }
 
@@ -152,7 +153,7 @@ fn fit(text: &str, cols: usize) -> String {
 fn counted(name: &str, count: usize, cols: usize) -> String {
     let number = count.to_string();
     let room = cols.saturating_sub(number.len() + 1);
-    let shown = fit(name, room);
+    let shown = flat(name, room);
     format!(
         "{shown}{}{number}",
         " ".repeat(room.saturating_sub(width(&shown)) + 1)
@@ -322,7 +323,7 @@ impl State {
             notes.len(),
             if notes.len() == 1 { "note" } else { "notes" }
         );
-        let title = fit(&self.title(), w.saturating_sub(8));
+        let title = flat(&self.title(), w.saturating_sub(8));
         add(
             &mut rows,
             format!(
@@ -368,7 +369,7 @@ impl State {
             };
             add(
                 &mut rows,
-                fit(&format!("{mark}{}", note.title), w),
+                flat(&format!("{mark}{}", note.title), w),
                 if open { Look::Open } else { Look::Title },
                 item.clone(),
             );
@@ -381,7 +382,7 @@ impl State {
             }
             add(
                 &mut rows,
-                fit(&format!("  {}  {detail}", when(note.mtime, &now)), w),
+                flat(&format!("  {}  {detail}", when(note.mtime, &now)), w),
                 Look::Detail,
                 item,
             );
@@ -397,9 +398,9 @@ impl State {
 /// byte the dim part starts at.
 fn beside(title: &str, folder: &str, marked: bool, cols: usize) -> (String, Option<usize>) {
     let mark = if marked { "✓ " } else { "  " };
-    let shown = format!("{mark}{}", fit(title, 20));
+    let shown = format!("{mark}{}", flat(title, 20));
     let room = cols.saturating_sub(width(&shown) + 2);
-    let place = fit(folder, room);
+    let place = flat(folder, room);
     if place.is_empty() {
         return (shown, None);
     }

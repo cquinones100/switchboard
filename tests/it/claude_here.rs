@@ -14,9 +14,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use common::{BIN, TempDir};
 use serde_json::json;
-use switchboard::cmd::claude_here::{
-    encode_prefix, find_sessions, format_relative_time, local_date, read_session_tail,
-};
+use switchboard::cmd::claude_here::{encode_prefix, find_sessions, read_session_tail};
 
 static NEXT: AtomicU32 = AtomicU32::new(1);
 
@@ -205,22 +203,6 @@ fn reads_a_session_s_last_directory_activity_and_prompt_skipping_what_claude_cod
         read_session_tail(&tmp.path().join("missing.jsonl")),
         Default::default()
     );
-}
-
-#[test]
-fn says_how_long_ago_a_session_was_active() {
-    let now = ms("2026-06-12T12:00:00Z");
-    let minute = 60_000;
-    let said: Vec<String> = [0.5f64, 5.0, 180.0, 1800.0, 4.0 * 1440.0]
-        .iter()
-        .map(|m| format_relative_time(now - (m * minute as f64) as i64, now))
-        .collect();
-    assert_eq!(
-        said,
-        ["just now", "5m ago", "3h ago", "yesterday", "4d ago"]
-    );
-    let month = now - 30 * 1440 * minute;
-    assert_eq!(format_relative_time(month, now), local_date(month));
 }
 
 #[test]

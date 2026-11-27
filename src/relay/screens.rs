@@ -24,18 +24,11 @@ use super::post::{Button, PostOpts, button_element, post};
 use super::skills::{BUILT_IN, MAX_SKILLS, SKILL_NAME, skills_for};
 use super::slack::{Form, Message, Press};
 use super::summaries::progress;
-use super::tabs::{self, Tab, label, lasted, relative};
+use super::tabs::{self, Tab, label};
 use super::{Cx, Relay};
+use crate::sidebar::text;
+use crate::ui::when::{Said, ago};
 use crate::util;
-
-pub fn clip(text: &str, max: usize) -> String {
-    let flat = text.trim();
-    if flat.chars().count() > max {
-        format!("{}…", flat.chars().take(max - 1).collect::<String>())
-    } else {
-        flat.to_string()
-    }
-}
 
 fn running(tab: &Tab) -> bool {
     tab.state == "working" || tab.state == "waiting"
@@ -129,7 +122,7 @@ fn choice_blocks(cx: &Relay, tab: &Tab) -> Vec<Value> {
 fn title(tab: &Tab) -> Value {
     // Slack cuts a modal's title at 24 characters; the full name is under it.
     let name = tab.name.split_whitespace().collect::<Vec<_>>().join(" ");
-    json!({ "type": "plain_text", "text": clip(&format!("{} · {name}", tab.index), 24) })
+    json!({ "type": "plain_text", "text": text::cut(format!("{} · {name}", tab.index).trim(), 24) })
 }
 
 /// The tab's screen, as Block Kit. `note` is a line at the bottom: what a
@@ -143,12 +136,22 @@ pub fn tab_screen(cx: &Relay, tab: &Tab, note: Option<&str>) -> Value {
     let url = home_thread(cx, &tab.id).and_then(|t| thread_url(cx, &t));
     let value = |a: &str| json!({ "a": a, "w": tab.id, "p": tab.pid });
     let now = util::now_ms();
-    let mut head = format!("*{}*\n{}", clip(&tab.name, 150), home_words(&tab.state));
+    let mut head = format!(
+        "*{}*\n{}",
+        text::cut(tab.name.trim(), 150),
+        home_words(&tab.state)
+    );
     if let Some(since) = tabs::since_ms(&tab.since) {
-        head.push_str(&format!(" for {}", lasted(now - since)));
+        head.push_str(&format!(
+            " for {}",
+            ago(Some(since / 1000), now / 1000, Said::Short).replace('<', "&lt;")
+        ));
     }
     if let Some(at) = last_at {
-        head.push_str(&format!(" · last activity {}", relative(now - at)));
+        head.push_str(&format!(
+            " · last activity {}",
+            ago(Some(at / 1000), now / 1000, Said::Ago)
+        ));
     }
     if let Some(c) = &context {
         head.push_str(&format!(
@@ -168,14 +171,14 @@ pub fn tab_screen(cx: &Relay, tab: &Tab, note: Option<&str>) -> Value {
             "text": { "type": "plain_text", "text": format!(
                 "{}: {}",
                 if t.background { "Background task" } else { "You asked" },
-                clip(&t.prompt, 400)
+                text::cut(t.prompt.trim(), 400)
             ) },
         }));
     }
     if let Some(s) = &said {
         blocks.push(json!({
             "type": "section",
-            "text": { "type": "mrkdwn", "text": format!("*Claude said:*\n{}", as_mrkdwn(&clip(s, 1500))) },
+            "text": { "type": "mrkdwn", "text": format!("*Claude said:*\n{}", as_mrkdwn(&text::cut(s.trim(), 1500))) },
         }));
     }
     blocks.extend(choice_blocks(cx, tab));
@@ -201,7 +204,7 @@ pub fn tab_screen(cx: &Relay, tab: &Tab, note: Option<&str>) -> Value {
     if let Some(note) = note {
         blocks.push(json!({ "type": "divider" }));
         blocks.push(
-            json!({ "type": "section", "text": { "type": "mrkdwn", "text": clip(note, 2900) } }),
+            json!({ "type": "section", "text": { "type": "mrkdwn", "text": text::cut(note.trim(), 2900) } }),
         );
     }
     json!({
@@ -244,7 +247,7 @@ pub fn rename_screen(tab: &Tab, current: &str, from: &str) -> Value {
             "type": "input",
             "block_id": "name",
             "optional": true,
-            "label": { "type": "plain_text", "text": clip(&format!("New name for tab {}, {}", tab.index, tab.name), 2000) },
+            "label": { "type": "plain_text", "text": text::cut(format!("New name for tab {}, {}", tab.index, tab.name).trim(), 2000) },
             "hint": { "type": "plain_text", "text": "Leave it empty for the tab's own name (its ticket or directory)." },
             "element": element,
         })],
@@ -260,7 +263,7 @@ pub fn message_screen(tab: &Tab) -> Value {
         vec![json!({
             "type": "input",
             "block_id": "text",
-            "label": { "type": "plain_text", "text": clip(&format!("Message to tab {}, {}", tab.index, tab.name), 2000) },
+            "label": { "type": "plain_text", "text": text::cut(format!("Message to tab {}, {}", tab.index, tab.name).trim(), 2000) },
             "hint": { "type": "plain_text", "text": "Typed into its Claude, as a reply in its thread would be. The answer goes in its thread." },
             "element": { "type": "plain_text_input", "action_id": "text", "multiline": true, "focus_on_load": true },
         })],
@@ -294,10 +297,10 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
     let shown: Vec<_> = skills.iter().take(MAX_SKILLS).collect();
     let cut = skills.len() > shown.len();
     let option = |s: &super::skills::Skill| {
-        let mut o =
-            json!({ "text": { "type": "plain_text", "text": clip(&s.name, 75) }, "value": s.name });
+        let mut o = json!({ "text": { "type": "plain_text", "text": text::cut(s.name.trim(), 75) }, "value": s.name });
         if !s.description.is_empty() {
-            o["description"] = json!({ "type": "plain_text", "text": clip(&s.description, 75) });
+            o["description"] =
+                json!({ "type": "plain_text", "text": text::cut(s.description.trim(), 75) });
         }
         o
     };
@@ -327,13 +330,16 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
         }
         blocks.push(json!({
             "type": "input", "block_id": "skill", "optional": cut, "dispatch_action": true,
-            "label": { "type": "plain_text", "text": clip(&format!("Skill for tab {}, {}", tab.index, tab.name), 2000) },
+            "label": { "type": "plain_text", "text": text::cut(format!("Skill for tab {}, {}", tab.index, tab.name).trim(), 2000) },
             "element": element,
         }));
     }
     if cut || shown.is_empty() {
         let text = if shown.is_empty() {
-            clip(&format!("Skill for tab {}, {}", tab.index, tab.name), 2000)
+            text::cut(
+                format!("Skill for tab {}, {}", tab.index, tab.name).trim(),
+                2000,
+            )
         } else {
             format!(
                 "Or another skill ({} more aren't in the menu)",
@@ -353,8 +359,8 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
     };
     let mut element = json!({
         "type": "plain_text_input", "action_id": "args", "multiline": true,
-        "placeholder": { "type": "plain_text", "text": clip(
-            picked.map(|p| p.hint.as_str()).filter(|h| !h.is_empty()).unwrap_or("ABC-123, or a description"),
+        "placeholder": { "type": "plain_text", "text": text::cut(
+            picked.map(|p| p.hint.as_str()).filter(|h| !h.is_empty()).unwrap_or("ABC-123, or a description").trim(),
             150
         ) },
     });
@@ -364,7 +370,7 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
     blocks.push(json!({
         "type": "input", "block_id": "args", "optional": true,
         "label": { "type": "plain_text", "text": "Arguments" },
-        "hint": { "type": "plain_text", "text": clip(&format!("{takes} Runs as a reply in its thread would; the answer goes there."), 2000) },
+        "hint": { "type": "plain_text", "text": text::cut(format!("{takes} Runs as a reply in its thread would; the answer goes there.").trim(), 2000) },
         "element": element,
     }));
     field_screen(tab, "skill", "Run", blocks, from)
@@ -378,9 +384,9 @@ pub fn new_screen(cx: &Relay) -> Value {
         .into_iter()
         .map(|(group, choices)| {
             json!({
-                "label": { "type": "plain_text", "text": clip(&group, 75) },
+                "label": { "type": "plain_text", "text": text::cut(group.trim(), 75) },
                 "options": choices.iter().map(|c| json!({
-                    "text": { "type": "plain_text", "text": clip(&c.label, 75) },
+                    "text": { "type": "plain_text", "text": text::cut(c.label.trim(), 75) },
                     "value": c.value,
                 })).collect::<Vec<_>>(),
             })

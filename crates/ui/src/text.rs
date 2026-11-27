@@ -12,7 +12,8 @@
 //! sidebar writes its cells by this same count (`render::put`), so what is
 //! measured and what is drawn never disagree.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 /// East Asian wide characters and emoji, by code point (text.js's `WIDE`).
 const WIDE: &[(u32, u32)] = &[
@@ -148,6 +149,81 @@ pub fn pad(text: &str, cols: usize) -> String {
     let mut out = cut(text, cols);
     let w = width(&out);
     out.extend(std::iter::repeat_n(' ', cols.saturating_sub(w)));
+    out
+}
+
+/// The columns spans take, as `width` counts them.
+pub fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| width(&s.content)).sum()
+}
+
+/// Spans cut to `cols` columns as `width` counts them, with no ellipsis,
+/// the cells past them dropped, and padded to fill them: mission control's
+/// row a scroll bar is put beside.
+pub fn clip_spans(spans: Vec<Span<'static>>, cols: usize) -> Vec<Span<'static>> {
+    let (mut out, mut used) = (Vec::new(), 0);
+    for span in spans {
+        let mut kept = String::new();
+        let mut before = 0;
+        for c in span.content.chars() {
+            let w = width_after(c, before);
+            if used + w > cols {
+                break;
+            }
+            kept.push(c);
+            used += w;
+            before = w;
+        }
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, span.style));
+        }
+        if used >= cols {
+            break;
+        }
+    }
+    if used < cols {
+        out.push(Span::raw(" ".repeat(cols - used)));
+    }
+    out
+}
+
+/// Spans cut to `cols` columns as `width` counts them and padded in `pad`
+/// to fill them: when they don't all fit, what fits before the last column,
+/// then an ellipsis in the style it cut into, as text.js's `cut` over a
+/// whole line. The sidebar's and mission control's rows.
+pub fn fit_spans(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'static>> {
+    let total = spans_width(&spans);
+    let (mut out, mut used) = (Vec::new(), 0);
+    if total <= cols {
+        (out, used) = (spans, total);
+    } else if cols > 0 {
+        for span in spans {
+            let w = width(&span.content);
+            if used + w < cols {
+                used += w;
+                out.push(span);
+                continue;
+            }
+            let mut kept = String::new();
+            let mut before = 0;
+            for c in span.content.chars() {
+                let cw = width_after(c, before);
+                if used + cw > cols - 1 {
+                    break;
+                }
+                kept.push(c);
+                used += cw;
+                before = cw;
+            }
+            kept.push('…');
+            used += 1;
+            out.push(Span::styled(kept, span.style));
+            break;
+        }
+    }
+    if used < cols {
+        out.push(Span::styled(" ".repeat(cols - used), pad));
+    }
     out
 }
 
@@ -400,24 +476,6 @@ pub fn plain(text: &str) -> String {
     let text = HEADING.replace_all(&text, "");
     let text = BLANKS.replace_all(&text, "\n\n");
     text.trim().to_string()
-}
-
-/// How long ago a time in seconds was, shortly: `<1m`, `4m`, `2h`, `3d`;
-/// empty for none.
-pub fn ago(seconds: Option<i64>, now_secs: i64) -> String {
-    let Some(at) = seconds.filter(|s| *s != 0) else {
-        return String::new();
-    };
-    let s = (now_secs - at).max(0);
-    if s < 60 {
-        "<1m".into()
-    } else if s < 3600 {
-        format!("{}m", s / 60)
-    } else if s < 86_400 {
-        format!("{}h", s / 3600)
-    } else {
-        format!("{}d", s / 86_400)
-    }
 }
 
 /// How long a stretch of seconds is, in its two largest units with no
@@ -709,11 +767,6 @@ mod tests {
     #[test]
     fn times_read_shortly() {
         let now = 1_000_000;
-        assert_eq!(ago(None, now), "");
-        assert_eq!(ago(Some(now - 10), now), "<1m");
-        assert_eq!(ago(Some(now - 300), now), "5m");
-        assert_eq!(ago(Some(now - 7200), now), "2h");
-        assert_eq!(ago(Some(now - 3 * 86_400), now), "3d");
         assert_eq!(span(-5), "<1m");
         assert_eq!(span(59), "<1m");
         assert_eq!(span(12 * 60 + 30), "12m");

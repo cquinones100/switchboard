@@ -191,15 +191,9 @@ pub fn clock(at: i64) -> String {
         .unwrap_or_default()
 }
 
-/// "viewing 1:41 PM, 51 minutes ago", for the header.
+/// "viewing 1:41 PM, 51m ago", for the header.
 pub fn viewing(at: i64, now: i64) -> String {
-    let minutes = (now - at).max(0) / 60;
-    let ago = match minutes {
-        0 => "under a minute ago".to_string(),
-        1 => "a minute ago".to_string(),
-        m if m < 120 => format!("{m} minutes ago"),
-        m => format!("{} hours ago", m / 60),
-    };
+    let ago = crate::ui::when::ago(Some(at), now, crate::ui::when::Said::Ago);
     format!("viewing {}, {ago}", clock(at))
 }
 

@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::items::{Item, State, Target, ViewData};
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 /// Past the Slack routine's 15 minutes between looks, with time for a look.
@@ -225,35 +226,11 @@ const fn mark(kind: &str) -> &'static str {
     }
 }
 
-/// text.js's `ago`: `<1m`, `4m`, `1h`, `2d`.
-pub fn ago(seconds: i64, now_ms: i64) -> String {
-    if seconds == 0 {
-        return String::new();
-    }
-    let s = (now_ms.div_euclid(1000) - seconds).max(0);
-    if s < 60 {
-        "<1m".into()
-    } else if s < 3600 {
-        format!("{}m", s / 60)
-    } else if s < 86_400 {
-        format!("{}h", s / 3600)
-    } else {
-        format!("{}d", s / 86_400)
-    }
-}
-
 /// What the view shows with nothing to list: when it last looked, so an
 /// empty view reads as current rather than broken.
 pub fn empty_words(checked: i64, now_ms: i64) -> String {
-    let secs = checked.div_euclid(1000);
-    if now_ms / 1000 - secs < 60 {
-        "Nothing new on Slack. Last checked just now.".into()
-    } else {
-        format!(
-            "Nothing new on Slack. Last checked {} ago.",
-            ago(secs, now_ms)
-        )
-    }
+    let when = ago(Some(checked.div_euclid(1000)), now_ms / 1000, Said::Ago);
+    format!("Nothing new on Slack. Last checked {when}.")
 }
 
 /// What the view knows besides the saved look.
@@ -483,8 +460,12 @@ pub fn slack_view(look: &Look) -> ViewData {
     let error = look.down.clone().filter(|_| look.background).or_else(|| {
         stale(saved.as_ref(), look.now).then(|| {
             format!(
-                "Out of date, last looked {} ago: {catching}.",
-                ago(data.checked.div_euclid(1000), look.now)
+                "Out of date, last looked {}: {catching}.",
+                ago(
+                    Some(data.checked.div_euclid(1000)),
+                    look.now / 1000,
+                    Said::Ago
+                )
             )
         })
     });

@@ -1234,15 +1234,6 @@ mod tests {
     }
 
     #[test]
-    fn how_long_ago_reads() {
-        assert_eq!(worktree::ago_words(5), "just now");
-        assert_eq!(worktree::ago_words(60), "1 minute ago");
-        assert_eq!(worktree::ago_words(12 * 60 + 5), "12 minutes ago");
-        assert_eq!(worktree::ago_words(3 * 3600), "3 hours ago");
-        assert_eq!(worktree::ago_words(2 * 86_400), "2 days ago");
-    }
-
-    #[test]
     fn a_hands_free_tab_ticks_an_item_already_done_and_frees_itself_where_another_stops() {
         let hands_free = check_first(true);
         assert!(hands_free.contains("If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1"));

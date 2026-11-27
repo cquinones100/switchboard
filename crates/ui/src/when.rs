@@ -1,3 +1,9 @@
+//! How long ago something was, the one way every row, header and message
+//! says it (`ago`): `4m` in a column, `4m ago` in a sentence, in its
+//! largest unit, from under a minute to years. It took the place of the
+//! eighteen functions that each said it a little differently (text.js's
+//! `ago`, the boards', the relay's, the pickers').
+//!
 //! When something came, written for the end of a row: today's clock time
 //! alone ("9:42 AM"), then "Yesterday 6:05 PM", the weekday within the
 //! week ("Mon 2:10 PM"), the date within the year ("Nov 3, 2:10 PM"), and
@@ -11,6 +17,37 @@
 //! file behind it.
 
 use jiff::Zoned;
+
+/// How a time gone by is said: `Short` for a column (`<1m`, `4m`), `Ago`
+/// in a sentence (`just now`, `4m ago`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Said {
+    Short,
+    Ago,
+}
+
+/// How long ago `at` (seconds since the epoch) was at `now_secs`, in its
+/// largest unit: `<1m`, `4m`, `2h`, `3d`, `4mo`, `2y`, said as `said`
+/// asks; empty for no time (none, or 0).
+pub fn ago(at: Option<i64>, now_secs: i64, said: Said) -> String {
+    let Some(at) = at.filter(|s| *s != 0) else {
+        return String::new();
+    };
+    let s = (now_secs - at).max(0);
+    let short = match s {
+        ..60 if said == Said::Ago => return "just now".into(),
+        ..60 => "<1m".into(),
+        60..3600 => format!("{}m", s / 60),
+        3600..86_400 => format!("{}h", s / 3600),
+        86_400..5_184_000 => format!("{}d", s / 86_400),
+        5_184_000..63_072_000 => format!("{}mo", s / 2_592_000),
+        _ => format!("{}y", s / 31_536_000),
+    };
+    match said {
+        Said::Short => short,
+        Said::Ago => format!("{short} ago"),
+    }
+}
 
 /// `ms` (since the epoch) as the row's end says it, read in `now`'s time
 /// zone; empty for a time that can't be.
@@ -139,7 +176,7 @@ mod tests {
         // write `CLOCK` as it reads; History, Reopen, the Inbox and the
         // menus' words name it. None writes a 24-hour clock.
         // The workspace's other crates too, which hold code that was under src.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut stack = vec![root.join("src"), root.join("crates")];
         let mut found = Vec::new();
         while let Some(dir) = stack.pop() {
@@ -176,6 +213,22 @@ mod tests {
         assert_eq!(widest, "Oct 13 12:10 PM");
         assert_eq!(short(ms(11, 3, 14, 10, 2025), &n), "Nov 3 2025 2:10 PM");
         assert_eq!(short(ms(12, 30, 12, 10, 2025), &n).len(), SHORT_WIDTH);
+    }
+
+    #[test]
+    fn how_long_ago_is_said_in_its_largest_unit() {
+        let now = 1_000_000_000;
+        let said = |secs: i64, said| ago(Some(now - secs), now, said);
+        assert_eq!(ago(None, now, Said::Short), "");
+        assert_eq!(ago(Some(0), now, Said::Ago), "");
+        assert_eq!(said(10, Said::Short), "<1m");
+        assert_eq!(said(10, Said::Ago), "just now");
+        assert_eq!(said(300, Said::Short), "5m");
+        assert_eq!(said(7200, Said::Ago), "2h ago");
+        assert_eq!(said(3 * 86_400, Said::Short), "3d");
+        assert_eq!(said(90 * 86_400, Said::Short), "3mo");
+        assert_eq!(said(800 * 86_400, Said::Ago), "2y ago");
+        assert_eq!(said(-60, Said::Short), "<1m", "a time to come is now");
     }
 
     #[test]

@@ -17,7 +17,8 @@ use super::post::{PostOpts, post, tab_notice};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::summaries::tab_facts;
-use super::tabs::{self, Tab, label, lasted};
+use super::tabs::{self, Tab, label};
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 pub const STUCK_MS: i64 = 10 * 60_000;
@@ -66,7 +67,7 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
         if send == Send::Off {
             continue;
         }
-        let idle = lasted(now - last_at.max(began));
+        let idle = ago(Some(last_at.max(began) / 1000), now / 1000, Said::Short);
         let lastly = if facts.activity.is_empty() {
             String::new()
         } else {

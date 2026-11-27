@@ -823,10 +823,6 @@ mod tests {
             .join("\n")
     }
 
-    fn key(code: KeyCode) -> Key {
-        Key::new(code, Mods::NONE)
-    }
-
     #[test]
     fn the_box_shows_the_item_its_repositories_how_it_lands_and_what_start_opens() {
         let b = WorkItemBox::new(ctx());
@@ -868,7 +864,7 @@ mod tests {
     fn enter_starts_it_and_another_repository_reopens_the_box_on_it() {
         let look = Look::default();
         let mut b = WorkItemBox::new(ctx());
-        let Step::Close(Outcome::Picked(p)) = b.key(key(KeyCode::Enter), &look) else {
+        let Step::Close(Outcome::Picked(p)) = b.key(Key::plain(KeyCode::Enter), &look) else {
             panic!("Enter should start it");
         };
         assert_eq!(p.index, START);
@@ -883,14 +879,14 @@ mod tests {
 
         // ↑ to the field, then the second repository, Enter.
         let mut b = WorkItemBox::new(ctx());
-        b.key(key(KeyCode::Up), &look);
+        b.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(b.focus, Part::Target);
-        b.key(key(KeyCode::Right), &look);
+        b.key(Key::plain(KeyCode::Right), &look);
         assert_eq!(b.target, "main");
-        b.key(key(KeyCode::Up), &look);
+        b.key(Key::plain(KeyCode::Up), &look);
         assert_eq!(b.focus, Part::Other);
-        b.key(key(KeyCode::Up), &look);
-        let Step::Close(Outcome::Picked(p)) = b.key(key(KeyCode::Enter), &look) else {
+        b.key(Key::plain(KeyCode::Up), &look);
+        let Step::Close(Outcome::Picked(p)) = b.key(Key::plain(KeyCode::Enter), &look) else {
             panic!("Enter on another repository should reopen the box");
         };
         assert_eq!(p.index, REPO);
@@ -905,8 +901,8 @@ mod tests {
 
         // ↓ from Start to Next.
         let mut b = WorkItemBox::new(ctx());
-        b.key(key(KeyCode::Down), &look);
-        let Step::Close(Outcome::Picked(p)) = b.key(key(KeyCode::Enter), &look) else {
+        b.key(Key::plain(KeyCode::Down), &look);
+        let Step::Close(Outcome::Picked(p)) = b.key(Key::plain(KeyCode::Enter), &look) else {
             panic!("Enter on Next should close it");
         };
         assert_eq!(p.index, NEXT);
@@ -927,7 +923,7 @@ mod tests {
         let mut b = WorkItemBox::new(ctx());
         assert!(text(&b, WIDTH).contains("Another directory…"));
         b.focus = Part::Other;
-        let Step::Close(Outcome::Picked(p)) = b.key(key(KeyCode::Enter), &look) else {
+        let Step::Close(Outcome::Picked(p)) = b.key(Key::plain(KeyCode::Enter), &look) else {
             panic!("Enter should ask for a directory");
         };
         assert_eq!(p.index, OTHER);

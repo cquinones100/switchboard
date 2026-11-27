@@ -39,6 +39,7 @@ use crate::items::{Item, State, Target};
 use crate::mux::procinfo;
 use crate::mux::{PaneId, TabId};
 use crate::requests::Tally;
+use crate::ui::when::{Said, ago};
 use crate::util;
 
 /// Context this full or more needs you: compact or start over.
@@ -53,24 +54,6 @@ pub fn context_dir(state: &Path) -> PathBuf {
 
 pub fn usage_dir(state: &Path) -> PathBuf {
     state.join("usage")
-}
-
-/// How long ago, in a few characters: `<1m`, `5m`, `2h`, `3d`, as text.js's
-/// `ago`; nothing for no time.
-pub fn ago(seconds: i64, now_secs: i64) -> String {
-    if seconds <= 0 {
-        return String::new();
-    }
-    let s = (now_secs - seconds).max(0);
-    if s < 60 {
-        "<1m".into()
-    } else if s < 3600 {
-        format!("{}m", s / 60)
-    } else if s < 86400 {
-        format!("{}h", s / 3600)
-    } else {
-        format!("{}d", s / 86400)
-    }
 }
 
 // ── Which pane runs which session ───────────────────────────────────────────
@@ -279,10 +262,10 @@ pub fn session_items(
             }];
             facts.extend(model.clone());
             if let Some(s) = started.filter(|s| *s > 0) {
-                facts.push(format!("up {}", ago(s, now)));
+                facts.push(format!("up {}", ago(Some(s), now, Said::Short)));
             }
             if let Some(q) = quiet.filter(|q| *q > 0) {
-                facts.push(format!("idle {}", ago(q, now)));
+                facts.push(format!("idle {}", ago(Some(q), now, Said::Short)));
             }
             let state = if used.is_some_and(|u| u >= FULL) {
                 State::Attention
@@ -814,9 +797,6 @@ mod tests {
 
     #[test]
     fn small_words_for_times_and_numbers() {
-        assert_eq!(ago(0, 100), "");
-        assert_eq!(ago(90, 100), "<1m");
-        assert_eq!(ago(100, 100 + 3 * 3600), "3h");
         assert_eq!(thousands(1234567), "1,234,567");
         assert_eq!(thousands(999), "999");
         assert_eq!(resets(100, 200), "resets now");

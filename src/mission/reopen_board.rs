@@ -25,6 +25,7 @@ use crate::items::Item;
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, width};
 use crate::ui::kit::{self, Col, Tone};
+use crate::ui::when::{self, Said};
 use crate::usage::reopen;
 
 /// Under this many columns the chosen row's pane is behind `i`.
@@ -75,16 +76,6 @@ fn outcome_look(outcome: &str) -> (&'static str, Tone) {
         ("●", Tone::Needs)
     } else {
         ("✕", Tone::Failed)
-    }
-}
-
-/// How long ago, at the right edge.
-fn ago(ms: i64, now_secs: i64) -> String {
-    let a = crate::usage::sessions::ago(ms.div_euclid(1000), now_secs);
-    if a.is_empty() {
-        String::new()
-    } else {
-        format!("{a} ago")
     }
 }
 
@@ -174,7 +165,11 @@ fn worktree_line(
     };
     let mut chips = chip_of("pr", "prTone");
     chips.extend(chip_of("commits", "commitsTone"));
-    let when = ago(item.time.unwrap_or(0), m.snap.now_secs);
+    let when = when::ago(
+        item.time.map(|t| t.div_euclid(1000)),
+        m.snap.now_secs,
+        Said::Ago,
+    );
     let repo = s(r, "repo");
     let at = kit::columns(
         &[
@@ -254,7 +249,11 @@ fn worktree_pane(item: &Item, r: &Value, cols: usize, m: &Mission) -> Vec<Vec<Sp
         }
         return out;
     }
-    let when = ago(item.time.unwrap_or(0), m.snap.now_secs);
+    let when = when::ago(
+        item.time.map(|t| t.div_euclid(1000)),
+        m.snap.now_secs,
+        Said::Ago,
+    );
     let mut facts = vec![s(r, "dir").to_string(), "no tab".to_string()];
     if !when.is_empty() {
         facts.push(format!("last used {when}"));
@@ -328,7 +327,11 @@ fn row_lines(
     } else {
         kit::chip(&outcome_text, tone, caps, theme)
     };
-    let when = ago(item.time.unwrap_or(0), m.snap.now_secs);
+    let when = when::ago(
+        item.time.map(|t| t.div_euclid(1000)),
+        m.snap.now_secs,
+        Said::Ago,
+    );
     let dir = s(r, "dir");
     let at = kit::columns(
         &[
@@ -411,7 +414,7 @@ fn pane_lines(item: &Item, r: &Value, cols: usize, m: &Mission) -> PaneOut {
     let kind = s(r, "kind");
     let mut facts: Vec<String> = Vec::new();
     let closed = r["closed"].as_i64().unwrap_or(0);
-    let when = ago(closed, m.snap.now_secs);
+    let when = when::ago(Some(closed.div_euclid(1000)), m.snap.now_secs, Said::Ago);
     facts.push(if kind == reopen::SESSION {
         format!("last used {when}")
     } else {

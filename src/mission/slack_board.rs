@@ -56,6 +56,7 @@ use crate::sidebar::text::{cut, width, wrap};
 use crate::tickets::Ticket;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Tone};
+use crate::ui::when::{self, Said as Ago};
 
 /// Under this many columns the thread pane goes behind `i`.
 pub const BESIDE_AT: usize = 120;
@@ -507,8 +508,12 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
         .filter(|at| *at > 1)
         .map(|at| {
             format!(
-                "looked {} ago ",
-                crate::sidebar::text::ago(Some(at.div_euclid(1000)), look.now_ms.div_euclid(1000))
+                "looked {} ",
+                when::ago(
+                    Some(at.div_euclid(1000)),
+                    look.now_ms.div_euclid(1000),
+                    Ago::Ago
+                )
             )
         })
         .unwrap_or_default();
@@ -1316,10 +1321,9 @@ fn on_surface(runs: Vec<Run>, w: usize, bg: ratatui::style::Color) -> Vec<Run> {
     runs
 }
 
-/// How long ago a message's ts was: `4m`, `2h`.
-fn ago(ts: &str, now_ms: i64) -> String {
-    let secs = ts.parse::<f64>().unwrap_or(0.0) as i64;
-    crate::sidebar::text::ago(Some(secs), now_ms.div_euclid(1000))
+/// A message's ts in whole seconds.
+fn secs(ts: &str) -> i64 {
+    ts.parse::<f64>().unwrap_or(0.0) as i64
 }
 
 /// The first of the characters a workspace's emoji drawn as a picture
@@ -1425,7 +1429,7 @@ fn body(
 /// When a thread started before the look: its day ("Tue"), or how long
 /// ago when that was today.
 fn started(ts: &str, look: &Look) -> String {
-    let secs = ts.parse::<f64>().unwrap_or(0.0) as i64;
+    let secs = secs(ts);
     let day = |s: i64| {
         jiff::Timestamp::from_second(s)
             .ok()
@@ -1433,7 +1437,7 @@ fn started(ts: &str, look: &Look) -> String {
     };
     match (day(secs), day(look.now_ms.div_euclid(1000))) {
         (Some(then), Some(now)) if then != now => then.strftime("%a").to_string(),
-        _ => format!("{} ago", ago(ts, look.now_ms)),
+        _ => when::ago(Some(secs), look.now_ms / 1000, Ago::Ago),
     }
 }
 
@@ -1573,7 +1577,7 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     }
     let facts = facts.join(" · ");
     let wide = look.cols >= NAMES_AT;
-    let when = ago(get(item, "ts"), look.now_ms);
+    let when = when::ago(Some(secs(get(item, "ts"))), look.now_ms / 1000, Ago::Short);
     // The bar's column, the avatar, who started it, where and when it
     // started, when it last moved.
     let inner = w.saturating_sub(1);
@@ -1892,7 +1896,13 @@ fn thread_lines(
             ),
             Run::Text(Span::raw(" ")),
             Run::Text(Span::styled(cut(from, FROM_CAP), Tone::Text.bold(theme))),
-            Run::Text(Span::styled(format!("  {}", ago(&m.ts, look.now_ms)), dim)),
+            Run::Text(Span::styled(
+                format!(
+                    "  {}",
+                    when::ago(Some(secs(&m.ts)), look.now_ms / 1000, Ago::Short)
+                ),
+                dim,
+            )),
         ];
         if fresh {
             head.push(Run::Text(Span::raw("  ")));
