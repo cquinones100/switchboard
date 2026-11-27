@@ -126,6 +126,9 @@ pub struct Said {
     /// The ticket IDs it names, its links' included.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
+    /// The links it had behind words (`slack_look::linked`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 /// A thread as read: its first message and the replies, oldest first, how
@@ -322,6 +325,7 @@ pub fn thread_from(text: &str, now: i64) -> Option<Thread> {
         // The tickets it names, a link's included, before a link becomes its
         // words.
         said.refs = crate::tickets::linear::ids_in(&raw);
+        said.links = super::slack_look::linked(&raw);
         said.text = super::slack_look::plain(raw.trim());
         if said.ts.parse::<f64>().is_ok() {
             messages.push(said);

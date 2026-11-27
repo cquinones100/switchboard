@@ -635,6 +635,7 @@ pub async fn thread(
                 ts: at.to_string(),
                 files,
                 refs: crate::tickets::linear::ids_in(raw),
+                links: super::slack_look::linked(raw),
             });
         }
         cursor = said

@@ -142,6 +142,20 @@ pub enum Command {
 }
 
 impl Command {
+    /// Whether it reads the mission control view in front, when one is
+    /// (`mission::view_text`), rather than the pane under it.
+    pub fn reads_view_in_front(self) -> bool {
+        matches!(
+            self,
+            Command::ReadLink
+                | Command::OpenLink
+                | Command::CopyLink
+                | Command::GoToMentionedTab
+                | Command::CopyMentionedTab
+                | Command::OpenMedia
+        )
+    }
+
     pub const ALL: [Command; 29] = [
         Command::PrView,
         Command::TicketView,
@@ -302,28 +316,28 @@ impl Command {
                 "Opens M-F's search with this source's prefix typed (tab:, note:, linear:, gh:, slack:), so only it is asked. Prefixes can be typed in M-F too, more than one at a time."
             }
             Command::ReadLink => {
-                "A PR or ticket reads as its view lays it out, a Notion page or Google Doc through Claude's connectors, any other page as its main text. It replaces a link read beside before; Ctrl-O opens it in the browser."
+                "A PR or ticket reads as its view lays it out, a Notion page or Google Doc through Claude's connectors, any other page as its main text; over a mission control view, the list holds the view's links, the chosen row's first. It replaces a link read beside before; Ctrl-O opens it in the browser."
             }
             Command::OpenLinkRead => {
                 "The link view anywhere in the tab counts, so it works from any pane there, opening in the Chrome profile browser.json gives the link's site. With no link being read in the tab, a box says so."
             }
             Command::OpenLink => {
-                "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane. Ctrl-O reads the chosen one beside the pane instead. With no links, a box says so."
+                "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane; over a mission control view, the view's, the chosen row's first. Ctrl-O reads the chosen one beside the pane instead. With no links, a box says so."
             }
             Command::CopyLink => {
-                "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane. It goes to your terminal's clipboard and the computer's; Ctrl-O opens it instead."
+                "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane; over a mission control view, the view's, the chosen row's first. It goes to your terminal's clipboard and the computer's; Ctrl-O opens it instead."
             }
             Command::GoToMentionedTab => {
-                "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out, and goes to the one picked; with one named it goes there at once. Ctrl-O copies its number instead."
+                "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out (over a mission control view, the view's text names), and goes to the one picked; with one named it goes there at once. Ctrl-O copies its number instead."
             }
             Command::CopyMentionedTab => {
-                "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out, and copies the picked one's number. Ctrl-O goes to it instead."
+                "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out (over a mission control view, the view's text names), and copies the picked one's number. Ctrl-O goes to it instead."
             }
             Command::OpenCode => {
                 "The list is the files the pane names that exist, newest first, a path:line opening at that line; typing searches the repository's files too. The file opens read-only in the side panel beside a narrow lone pane, else in the pane's place, with Vim's keys and the diff's colors, following its changes on disk; q closes it. Off in Settings (code_view), it isn't listed."
             }
             Command::OpenMedia => {
-                "The list is the picture and video files the pane names that exist, then its links ending in one, newest first. A link opens in the browser, and Ctrl-O shows a file in its folder. With none, a box says so."
+                "The list is the picture and video files the pane names that exist, then its links ending in one, newest first; over a mission control view, the view's links to one and, on Slack, its threads' files. A link opens in the browser, and Ctrl-O shows a file in its folder. With none, a box says so."
             }
             Command::OpenMergeQueue => {
                 "The queue is the one for the branch's PR's base branch, else for the repository's default branch when the branch has no PR. When it can't be found, a box says why."

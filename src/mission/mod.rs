@@ -104,6 +104,7 @@ pub mod summary;
 pub mod text_box;
 pub mod usage_board;
 pub mod view_acts;
+pub mod view_text;
 pub mod views;
 pub mod views_box;
 

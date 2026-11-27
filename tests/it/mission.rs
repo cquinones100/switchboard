@@ -29,7 +29,7 @@ fn settings(server: &TestServer, extra: Value) {
 }
 
 /// The settings `settings` writes, `extra` over them.
-fn all_settings(extra: Value) -> Value {
+pub(crate) fn all_settings(extra: Value) -> Value {
     let mut all = json!({
         "notifications": false,
         "tips": false,

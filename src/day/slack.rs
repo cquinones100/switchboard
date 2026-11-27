@@ -81,6 +81,10 @@ pub struct Message {
     pub thread: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// The links its text had behind words, which `text` shows only as
+    /// the words (`slack_look::linked`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 impl Message {
@@ -435,9 +439,10 @@ pub fn slack_view(look: &Look) -> ViewData {
                 "ts": m.ts,
                 "thread": m.thread_key(),
                 "answered": answered,
+                "links": m.links,
                 "replies": threads.get(&m.thread_key()).map(|t| t.replies),
                 "root": threads.get(&m.thread_key()).and_then(|t| t.messages.first()).map(|r| json!({
-                    "user": r.user, "from": r.from, "text": r.text, "ts": r.ts,
+                    "user": r.user, "from": r.from, "text": r.text, "ts": r.ts, "links": r.links,
                 })),
                 "people": threads.get(&m.thread_key()).map(|t| people(&t.messages)),
                 // How far it was read, so the board counts replies saved since.
@@ -713,6 +718,23 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
             ts: util::js_string(&i["ts"]),
             thread: i.get("thread").map(util::js_string).filter(|t| is_ts(t)),
             link: https(i.get("link")),
+            // The look's, else those the skill's text has behind words.
+            links: {
+                let kept: Vec<String> = i
+                    .get("links")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .take(50)
+                    .map(|l| l.chars().take(2000).collect())
+                    .collect();
+                if kept.is_empty() {
+                    super::slack_look::linked(&body(i.get("text"), 2000))
+                } else {
+                    kept
+                }
+            },
         })
         .collect();
     let new = items.len();

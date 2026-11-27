@@ -1078,6 +1078,28 @@ impl Server {
         }
     }
 
+    /// The messages of a Slack row's thread as kept, oldest first, each
+    /// with where it was said and who said it, for the commands that read
+    /// the view in front (`mission::view_text`).
+    pub fn slack_thread_texts(&self, item: &Item) -> Vec<crate::mission::view_text::Text> {
+        let get = |k: &str| item.data.get(k).and_then(Value::as_str).unwrap_or("");
+        let Some(thread) = self.day.slack_threads.get(get("thread")) else {
+            return Vec::new();
+        };
+        thread
+            .messages
+            .iter()
+            .map(|m| crate::mission::view_text::Text {
+                from: crate::mission::view_text::slack_from(get("where"), &m.from),
+                text: [m.text.as_str()]
+                    .into_iter()
+                    .chain(m.links.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            })
+            .collect()
+    }
+
     /// What `p` shows for the chosen Slack message, in the order it steps
     /// through them: the message's own pictures and videos (a video first),
     /// then the rest of its thread's, each as kept on this computer (its

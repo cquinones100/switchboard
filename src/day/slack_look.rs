@@ -296,13 +296,32 @@ pub fn page_of(answer: &str) -> (String, Option<String>) {
     (text, cursor)
 }
 
+/// A link Slack writes behind words, `<https://…|words>`.
+static LINKED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<(https?:[^|>]+)\|([^>]+)>").unwrap());
+
+/// The links a message's text has behind words, as Markdown links
+/// (`[words](https://…)`), kept beside its `plain` text, which shows only
+/// the words, so the link commands can list them (src/mission/view_text.rs).
+pub fn linked(text: &str) -> Vec<String> {
+    LINKED
+        .captures_iter(text)
+        .map(|c| {
+            // Written so a Markdown reader takes it whole: no bracket in the
+            // words, no parenthesis in the address, which means the same
+            // percent-encoded.
+            let words = unescape(&c[2]).replace(['[', ']', '\n'], " ");
+            let address = unescape(&c[1]).replace('(', "%28").replace(')', "%29");
+            format!("[{}]({address})", words.trim())
+        })
+        .collect()
+}
+
 /// A message's text as the view shows it: `<@U1|ada>` as `@ada`, a link
 /// `<https://…|words>` as its words, and each standard emoji's code as its
 /// character while Settings' `slack_emoji` is on (`slack_emoji`).
 pub fn plain(text: &str) -> String {
     static MENTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<@\w+\|([^>]+)>").unwrap());
-    static LINKED: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"<(https?:[^|>]+)\|([^>]+)>").unwrap());
     let named = MENTION.replace_all(text, "@$1");
     let shown = LINKED.replace_all(&named, "$2");
     let text = unescape(&shown);
@@ -381,6 +400,10 @@ pub fn sort_look(
             "kind": kind, "channel": m.channel, "where": place, "user": m.user,
             "from": m.from, "text": text, "ts": m.ts,
         });
+        let links = linked(&m.text);
+        if !links.is_empty() {
+            item["links"] = json!(links);
+        }
         if let Some(t) = reply {
             item["thread"] = json!(t);
         }
@@ -739,6 +762,46 @@ mod tests {
         };
         let (items, _) = sort_look(&[dm], "U1", &mut Vec::new(), &[]);
         assert_eq!(items[0]["kind"], "dm");
+    }
+
+    #[test]
+    fn a_link_behind_words_is_kept_beside_the_words_the_view_shows() {
+        let dm = Found {
+            channel: "D1".into(),
+            r#where: "Ada".into(),
+            user: "U2".into(),
+            from: "Ada".into(),
+            ts: "1.0".into(),
+            text: "see <https://docs.example/spec?a=1&amp;b=2|the spec> and https://x.example, <https://w.example/Foo_(bar)|[RFC] auth>".into(),
+            ..Default::default()
+        };
+        let (items, _) = sort_look(&[dm], "U1", &mut Vec::new(), &[]);
+        assert_eq!(
+            items[0]["text"],
+            "see the spec and https://x.example, [RFC] auth"
+        );
+        let links: Vec<String> = items[0]["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap().to_string())
+            .collect();
+        let read: Vec<(String, String)> = links
+            .iter()
+            .flat_map(|l| crate::views::shown::note_links(l))
+            .map(|s| (s.text, s.url))
+            .collect();
+        assert_eq!(
+            read,
+            vec![
+                (
+                    "the spec".into(),
+                    "https://docs.example/spec?a=1&b=2".into()
+                ),
+                ("RFC auth".into(), "https://w.example/Foo_%28bar%29".into()),
+            ],
+            "each read back whole as a Markdown link: {links:?}"
+        );
     }
 
     #[test]

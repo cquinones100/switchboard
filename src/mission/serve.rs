@@ -164,7 +164,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     (
         "M-p",
-        "the palette over it: a view picked shows here, anything else runs in the pane once closed",
+        "the palette over it: a view picked shows here, the link, tab and media commands read the view, anything else runs in the pane once closed",
     ),
     ("?", "these keys"),
 ];
