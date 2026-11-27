@@ -1030,18 +1030,24 @@ pub fn setup_in(file: &Path, key: &str) -> Option<Setup> {
 }
 
 /// Keeps what GitHub said of a repository.
-/// A merge service's names asked for and not answered keep the ones kept
-/// before, so one failed look doesn't lose a good answer.
+/// A merge service's labels or checks asked for and not answered keep the
+/// ones kept before, each on its own, so one failed look doesn't lose a
+/// good answer.
 pub fn remember_setup(file: &Path, key: &str, setup: &Setup) {
     let mut data = util::read_json_object(file);
     let mut setup = setup.clone();
-    if setup.names.is_none() {
-        setup.names = data
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .and_then(|(_, v)| Setup::of(v))
-            .and_then(|kept| kept.names);
-    }
+    let kept = data
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .and_then(|(_, v)| Setup::of(v))
+        .and_then(|kept| kept.names)
+        .unwrap_or_default();
+    let names = setup.names.take().unwrap_or_default();
+    let names = Names {
+        labels: names.labels.or(kept.labels),
+        checks: names.checks.or(kept.checks),
+    };
+    setup.names = (names != Names::default()).then_some(names);
     data.retain(|k, _| !k.eq_ignore_ascii_case(key));
     data.insert(key.to_string(), setup.json());
     if let Some(dir) = file.parent() {
@@ -2297,7 +2303,23 @@ mod tests {
         remember_setup(&file, "Acme/Svc", &failed);
         let kept = setup_in(&file, "acme/svc").unwrap();
         assert_eq!(kept.at, 2);
-        assert_eq!(kept.names, Some(names), "the names from before");
+        assert_eq!(kept.names, Some(names.clone()), "the names from before");
+        let partly = Setup {
+            at: 3,
+            names: Some(Names {
+                labels: Some(vec!["shipit".into()]),
+                checks: None,
+            }),
+            ..Setup::default()
+        };
+        remember_setup(&file, "acme/svc", &partly);
+        let merged = setup_in(&file, "acme/svc").unwrap().names.unwrap();
+        assert_eq!(
+            merged.labels,
+            Some(vec!["shipit".to_string()]),
+            "the new labels"
+        );
+        assert_eq!(merged.checks, names.checks, "the checks from before");
         let service = |label: Option<&str>| Service {
             label: label.map(str::to_string),
             comment: Some("/merge".into()),
