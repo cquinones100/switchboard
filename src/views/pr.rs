@@ -1113,6 +1113,25 @@ mod tests {
         pager.key(key(KeyCode::Enter));
         assert!(!pager.frame().contains("Pattern not found"));
         assert!(pager.screen().iter().any(|l| l.contains("Line 19.")));
+        // With the cursor, too, where the match also shows elsewhere: the
+        // fold opens before Vim looks, so `n` reaches what it hid.
+        let mut both = pr.clone();
+        both["body"] = json!("Line 19. is mentioned here too.");
+        let mut pager =
+            pager::Pager::new(Content::Board(board(&both, now)), 130, 80).with_cursor(true);
+        pager.key(key(KeyCode::Char('/')));
+        for c in "Line 19.".chars() {
+            pager.key(key(KeyCode::Char(c)));
+        }
+        pager.key(key(KeyCode::Enter));
+        pager.key(key(KeyCode::Char('n')));
+        let hits = pager
+            .doc()
+            .lines
+            .iter()
+            .filter(|l| l.plain().contains("Line 19."))
+            .count();
+        assert_eq!(hits, 2, "the folded comment shown whole");
     }
 
     #[test]

@@ -946,18 +946,6 @@ impl Pager {
         if self.query.is_none() {
             return Act::Same;
         }
-        // A folded comment holding a match is shown whole, so what it
-        // folds away is found as the rest is.
-        let unfold: Vec<String> = self
-            .boxes
-            .iter()
-            .filter(|b| b.folded && !self.matches(&b.comment.body).is_empty())
-            .map(|b| b.comment.key.clone())
-            .collect();
-        if !unfold.is_empty() {
-            self.whole.extend(unfold);
-            self.lay_out();
-        }
         let hit = |i: &usize| !self.matches(&self.doc.lines[*i].searchable()).is_empty();
         let found = if forward {
             (from..self.doc.lines.len()).find(hit)
@@ -985,6 +973,30 @@ impl Pager {
         Act::Redraw
     }
 
+    /// Every folded comment holding a match of the search shown whole,
+    /// before a search looks, so what a fold hides is found as the rest is;
+    /// the screen and the cursor kept on what they showed.
+    fn unfold_for_search(&mut self) {
+        let unfold: Vec<String> = self
+            .boxes
+            .iter()
+            .filter(|b| b.folded && !self.matches(&b.comment.body).is_empty())
+            .map(|b| b.comment.key.clone())
+            .collect();
+        if unfold.is_empty() {
+            return;
+        }
+        let top = self.doc.lines.get(self.top).map(|l| l.anchor);
+        let at = self.cursor_anchor();
+        self.whole.extend(unfold);
+        self.lay_out();
+        if let Some(anchor) = top {
+            self.top = self.doc.line_at(anchor);
+        }
+        self.clamp();
+        self.put_cursor_back(at);
+    }
+
     /// A key while a search is typed after `/`.
     fn typing_key(&mut self, key: KeyEvent) -> Act {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1004,6 +1016,7 @@ impl Pager {
                         if !typed.is_empty() {
                             self.query = Some(typed.clone());
                         }
+                        self.unfold_for_search();
                         let from = self.cursor;
                         self.vim.top = self.top;
                         self.vim.search_for(&typed, kind == '/');
@@ -1019,6 +1032,7 @@ impl Pager {
                 if !query.is_empty() {
                     self.query = Some(query);
                 }
+                self.unfold_for_search();
                 // From the top line on: what is at the top counts.
                 return self.find(self.top, true);
             }
@@ -1131,8 +1145,14 @@ impl Pager {
                 Act::Redraw
             }
             // From the cursor's line where there is one, else the top's.
-            KeyCode::Char('n') => self.find(self.place() + 1, true),
-            KeyCode::Char('N') => self.find(self.place(), false),
+            KeyCode::Char('n') => {
+                self.unfold_for_search();
+                self.find(self.place() + 1, true)
+            }
+            KeyCode::Char('N') => {
+                self.unfold_for_search();
+                self.find(self.place(), false)
+            }
             KeyCode::Char('o') => match &self.url {
                 Some(url) => Act::Open(url.clone()),
                 None => Act::Same,
@@ -1354,6 +1374,7 @@ impl Pager {
         let vim_key = vim_key_of(key)?;
         let searching = idle && !ctrl && matches!(key.code, KeyCode::Char('n' | 'N'));
         if searching {
+            self.unfold_for_search();
             let from = self.cursor;
             self.vim.top = self.top;
             self.vim.key(vim_key);
