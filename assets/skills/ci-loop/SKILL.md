@@ -49,7 +49,7 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR.
    - `switchboard-queue`: Switchboard's merge queue tests the PR merged onto the default branch with the PRs ahead of it, so a PR only behind its base is left as it is; one in conflict is rebased, as "Fixing" says.
    - `github-queue` and `auto-merge`: a PR in conflict, or behind a base that requires it to be up to date, is rebased, as "Fixing" says.
    - `service`: the merge service keeps the PR up to date, so it is never rebased: "When queue-and-clean runs this" says what to do instead, run by queue-and-clean or not.
-   - `direct`: the repository lands straight on its default branch, so this PR has no way to land: fix its checks as usual, rebasing as for `auto-merge`, and say in the final line that the PR never lands: close it and land the branch with `/queue-and-clean`, or choose a way through a PR in Settings' Repositories.
+   - `direct`: the repository lands straight on its default branch, so this PR has no way to land: fix its checks as usual, rebasing as for `auto-merge`, and say in the final line that the PR never lands under `direct`: choose a way through a PR in Settings' Repositories to land it, or say how the branch should land instead (closing the PR leaves `/queue-and-clean` stopping on a closed PR).
    - When it fails (no way set), go on as for `auto-merge`.
 
    In every way, never push to the default branch (`defaultBranch`), and never run `gh pr merge`.

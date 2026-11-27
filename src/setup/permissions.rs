@@ -828,6 +828,13 @@ mod tests {
                 "gh pr merge 3 --auto --match-head-commit abc --merge",
                 false,
             ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 1 --body=https://x/y",
+                true,
+            ),
             ("direct", "main", "x", "git push origin main", false),
             ("direct", "main", "x", "gh pr merge 1", true),
             (

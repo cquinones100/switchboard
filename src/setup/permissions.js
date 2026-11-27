@@ -616,7 +616,7 @@ export function landingCalls(command) {
         if (MERGE_VALUES.has(w[k])) {
           if (w[k] === '-R' || w[k] === '--repo') otherRepo = true;
           k++;
-        } else if (/^(--repo=|-R.)/.test(w[k]) || w[k].includes('://')) {
+        } else if (/^(--repo=|-R.)/.test(w[k]) || (!w[k].startsWith('-') && w[k].includes('://'))) {
           // A PR's URL may name any repository.
           otherRepo = true;
         } else if (!w[k].startsWith('-')) {

@@ -21,7 +21,7 @@ Wait for a merged PR to reach the site it deploys to, walk through what it chang
 
 When it is done, the final message is `deploy-test: approved (tested: <video>)`, `deploy-test: approved (not tested: <why>)` or `deploy-test: fail: <reason>`, and nothing else. The questions in "Settling", "Testing in a browser" and "Approval" are still asked, because they pause the work rather than end it.
 
-Arguments: a PR number. Otherwise use the current branch's PR. If it isn't `MERGED`, say so and stop: there is nothing deployed to test yet.
+Arguments: a PR number. Otherwise use the current branch's PR. If it isn't `MERGED`, say so and stop: there is nothing deployed to test yet; a branch with no PR in a repository whose way is `direct` is the one exception, as "By the way it landed" says.
 
 **By the way it landed.** Run `switchboard landing --json` and read its `lands`, which says what reached the base branch and so which commit to wait for:
 
