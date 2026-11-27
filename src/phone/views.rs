@@ -122,21 +122,12 @@ pub const AUTOPILOT_ORDER: [&str; 7] = [
 ];
 
 /// The Autopilot view as the phone's stream carries it (board 200): the
-/// view `view_json` made, its groups in `AUTOPILOT_ORDER` (a group it
-/// doesn't name after them), and `run`, the run itself as
+/// view `view_json` made, its groups already its columns in
+/// `AUTOPILOT_ORDER` (`groups`), with `run`, the run itself as
 /// `Server::autopilot_board` answers it (on, paused, limited, its tabs at
 /// once, its spend and limit, when it should be done), for the card over
 /// them; its Pause or Resume is among the view's own options.
 pub fn autopilot_json(mut view: Value, run: Value) -> Value {
-    if let Some(groups) = view["groups"].as_array_mut() {
-        groups.sort_by_key(|g| {
-            let title = g["title"].as_str().unwrap_or_default();
-            AUTOPILOT_ORDER
-                .iter()
-                .position(|c| *c == title)
-                .unwrap_or(AUTOPILOT_ORDER.len())
-        });
-    }
     view["run"] = run;
     view
 }
@@ -181,12 +172,18 @@ pub struct Group<'a> {
 }
 
 /// A view's items in mission control's groups and order: a board's
-/// columns in its order (the PR board), else each heading and the items
+/// columns in its order (the PR board; Autopilot's in the phone's,
+/// `AUTOPILOT_ORDER`, its headings left out), else each heading and the items
 /// after it, or each run of items naming the same group; a view's summary
 /// (Autopilot's heading) left out, as the phone's list says it.
 pub fn groups(view: &View) -> Vec<Group<'_>> {
     let items = view.data.items.iter().filter(|i| !views::is_summary(i));
-    if let Some(columns) = view.columns() {
+    let columns = if view.id == ViewId::Autopilot {
+        Some(&AUTOPILOT_ORDER[..])
+    } else {
+        view.columns()
+    };
+    if let Some(columns) = columns {
         let rows: Vec<&Item> = items.filter(|i| !views::is_header(i)).collect();
         let mut out: Vec<Group> = columns
             .iter()
@@ -570,13 +567,21 @@ mod tests {
 
     #[test]
     fn the_autopilot_view_lists_what_needs_you_first_under_its_run() {
-        let v = view(
-            ViewId::Autopilot,
-            crate::autopilot::view::COLUMNS
-                .iter()
-                .map(|c| Item::new(*c, *c).group(*c))
-                .collect(),
-        );
+        // As autopilot::view::items lists them: headings, the queue, then
+        // its tabs from the least far along, every column once.
+        let heading = |id: &str| Item::new(id, id).data(json!({ "header": true }));
+        let mut items = vec![heading("header:autopilot:next")];
+        let mut tabs = vec![heading("header:autopilot:tabs")];
+        for c in crate::autopilot::view::COLUMNS {
+            let item = Item::new(c, c).group(c);
+            if c == "Next up" || c == "Blocked" {
+                items.push(item);
+            } else {
+                tabs.push(item);
+            }
+        }
+        items.extend(tabs);
+        let v = view(ViewId::Autopilot, items);
         let made = view_json(&v, &|_| Vec::new(), Vec::new());
         let run = json!({ "on": true, "paused": false, "slots": 3 });
         let out = autopilot_json(made, run.clone());

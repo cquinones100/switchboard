@@ -4562,6 +4562,14 @@ fn the_autopilot_view_carries_its_run_and_pauses_and_resumes_from_the_phone() {
     assert_eq!(run["limited"], false);
     assert!(run["spent"].is_number(), "{run}");
     assert!(run["eta"].is_string(), "{run}");
+    // Its items under its columns, never under the view's headings.
+    let titles: Vec<&str> = a["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Next up"], "{a}");
     let pause = &a["acts"][0];
     assert_eq!(pause["label"], "Pause: open no more tabs for now", "{a}");
     assert_eq!(pause["pilot"], "pause");
