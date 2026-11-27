@@ -48,13 +48,7 @@ In a tab autopilot opened, when the work it was opened for is already started or
 
 # Landing work
 
-Each repository lands its work one way, which I choose in Settings' Repositories: Switchboard's merge queue, GitHub's merge queue, GitHub's auto-merge, a merge service, or straight on the default branch. Before pushing to a repository's default branch or merging a PR (`gh pr merge`), run this in its checkout and follow the way it prints on its first line:
-
-```
-switchboard landing
-```
-
-`direct` lands straight on the default branch, as `/queue-and-clean` does it; every other way lands through a PR, which only that way merges, so never push to the default branch or merge the PR yourself there: `/queue-and-clean` lands it. When it fails because the repository has no way set, Switchboard decides nothing there: follow the repository's own rules, and its `/queue-and-clean` landing stops until a way is chosen. While Settings' `pane_permissions` is on, a `gh pr merge` or a push to the default branch the way forbids is refused, naming the way.
+Before pushing to a repository's default branch or merging a PR (`gh pr merge`), run `switchboard landing` in its checkout and follow the way it prints (set in Settings' Repositories): `direct` lands straight on the default branch; any other way lands through a PR only that way merges, so `/queue-and-clean` lands it, never your own push or merge. When it fails, no way is set: follow the repository's own rules.
 
 # What I see in the workspace
 
