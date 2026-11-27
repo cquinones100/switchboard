@@ -54,7 +54,7 @@ Each repository lands its work one way, which I choose in Settings' Repositories
 switchboard landing
 ```
 
-`direct` lands straight on the default branch, as `/queue-and-clean` does it; every other way lands through a PR, which only that way merges, so never push to the default branch or merge the PR yourself there: `/queue-and-clean` lands it. When it fails, the repository has no way set, so land nothing and say so. While Settings' `pane_permissions` is on, a `gh pr merge` or a push to the default branch the way forbids is refused, naming the way.
+`direct` lands straight on the default branch, as `/queue-and-clean` does it; every other way lands through a PR, which only that way merges, so never push to the default branch or merge the PR yourself there: `/queue-and-clean` lands it. When it fails because the repository has no way set, Switchboard decides nothing there: follow the repository's own rules, and its `/queue-and-clean` landing stops until a way is chosen. While Settings' `pane_permissions` is on, a `gh pr merge` or a push to the default branch the way forbids is refused, naming the way.
 
 # What I see in the workspace
 

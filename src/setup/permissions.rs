@@ -371,6 +371,11 @@ mod tests {
             ("switchboard tabs\nrm x", false),
             ("switchboard show a\\ b", false),
             ("switchboard codex-review", false),
+            ("switchboard landing", true),
+            ("switchboard landing --json", true),
+            ("switchboard landing --start=direct", false),
+            ("switchboard landing --json --start direct", false),
+            ("switchboard landing /tmp/x", false),
             (
                 "switchboard item-done --says 'Make the hook allow it.' --close-issue",
                 true,
@@ -641,7 +646,7 @@ mod tests {
              for (const [way, base, branch, command] of cases) {\n\
                const look = {\n\
                  landing: async () => way && { lands: way, defaultBranch: 'main', repo: 'acme/app' },\n\
-                 branch: async () => branch,\n\
+                 branch: async (_, ref) => ref === 'HEAD' ? branch : branch && 'origin/' + branch,\n\
                  prBase: async () => base,\n\
                };\n\
                out.push(await landingRefused(command, look));\n\
@@ -737,6 +742,56 @@ mod tests {
                 "x",
                 "git status; gh pr merge 1 --squash",
                 true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "git push alice HEAD:main",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push --tags",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push origin --tags",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "main",
+                "git push --follow-tags",
+                true,
+            ),
+            ("switchboard-queue", "main", "x", "git push --all", true),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge -R acme/other 5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge --repo=acme/other 5",
+                false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "GH_REPO=acme/other gh pr merge 5",
+                false,
             ),
             ("direct", "main", "x", "git push origin main", false),
             ("direct", "main", "x", "gh pr merge 1", true),

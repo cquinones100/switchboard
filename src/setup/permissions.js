@@ -121,6 +121,13 @@ const SHAPES = [
     values: ['--says', '--hash', '--already-on', '--merged-pr-head'],
     switches: ['--without-asking', '--close-issue'],
   },
+  // Read alone: `--start`, which keeps a way on the branch, is
+  // queue-and-clean's own.
+  {
+    start: ['switchboard', 'landing'],
+    values: [],
+    switches: ['--json'],
+  },
   {
     start: ['switchboard', 'land-lock', 'open-pr'],
     values: ['--title', '--body-file'],
@@ -552,17 +559,24 @@ const MERGE_VALUES = new Set([
 ]);
 
 // Each `git push` and `gh pr merge` a command runs, as what has to be looked
-// up to judge it: a push's directory (`-C`) and the branches it pushes to
-// (null for a bare push, which goes where `@{push}` says; `*` for every
-// branch; `HEAD` for the current one), a merge's arguments. Read from each
-// command of the line with its quotes taken out and its redirects dropped.
+// up to judge it: a push's directory (`-C`), its remote (null for a bare
+// push) and the branches it pushes to (null for a push with no refspec,
+// which goes where `@{push}` says; none for `--tags` alone; `*` for every
+// branch; `HEAD` for the current one), a merge's arguments, null for one
+// that names another repository (`-R`, `GH_REPO`), whose way this
+// repository's doesn't say. Read from each command of the line with its
+// quotes taken out and its redirects dropped.
 export function landingCalls(command) {
   const text = uncommented(withoutHeredocs(String(command)));
   const found = [];
   for (const [from, to] of commands(text)) {
     const w = plain(text.slice(from, to)).trim().split(/\s+/).filter(Boolean);
     let i = 0;
-    while (i < w.length && (/^\w+=/.test(w[i]) || BEFORE.has(last(w[i])))) i++;
+    let otherRepo = false;
+    while (i < w.length && (/^\w+=/.test(w[i]) || BEFORE.has(last(w[i])))) {
+      if (w[i].startsWith('GH_REPO=')) otherRepo = true;
+      i++;
+    }
     const program = last(w[i] ?? '');
     if (program === 'git') {
       let dir = null;
@@ -574,12 +588,14 @@ export function landingCalls(command) {
       if (w[i] !== 'push') continue;
       const positional = [];
       let all = false;
+      let tags = false;
       for (i++; i < w.length; i++) {
         if (w[i] === '--') {
           positional.push(...w.slice(i + 1));
           break;
         }
         if (PUSH_ALL.has(w[i])) all = true;
+        else if (w[i] === '--tags') tags = true;
         else if (PUSH_VALUES.has(w[i])) i++;
         else if (!w[i].startsWith('-')) positional.push(w[i]);
       }
@@ -588,18 +604,21 @@ export function landingCalls(command) {
         const dest = spec.includes(':') ? spec.slice(spec.indexOf(':') + 1) : spec;
         return dest.replace(/^refs\/heads\//, '');
       });
-      found.push({ kind: 'push', dir, to: all ? ['*'] : branches.length > 0 ? branches : null });
+      const to = all ? ['*'] : branches.length > 0 || tags ? branches : null;
+      found.push({ kind: 'push', dir, remote: positional[0] ?? null, to });
     } else if (program === 'gh' && w[i + 1] === 'pr' && w[i + 2] === 'merge') {
       const args = [];
       for (let k = i + 3; k < w.length; k++) {
         if (MERGE_VALUES.has(w[k])) {
-          if (w[k] === '-R' || w[k] === '--repo') args.push(w[k], w[k + 1] ?? '');
+          if (w[k] === '-R' || w[k] === '--repo') otherRepo = true;
           k++;
-        } else if (/^--repo=/.test(w[k]) || !w[k].startsWith('-')) {
+        } else if (/^(--repo=|-R.)/.test(w[k])) {
+          otherRepo = true;
+        } else if (!w[k].startsWith('-')) {
           args.push(w[k]);
         }
       }
-      found.push({ kind: 'merge', args });
+      found.push({ kind: 'merge', args: otherRepo ? null : args });
     }
   }
   return found;
@@ -608,10 +627,13 @@ export function landingCalls(command) {
 // Why the repository's way refuses a command, or null. `look` answers what
 // the command's words can't: `landing(dir)` (`switchboard landing --json`,
 // null when it fails, as it does with no way set), `branch(dir, ref)` (the
-// branch `HEAD` or `@{push}` names, null when none) and `prBase(args)` (the
-// PR's base branch, null when it can't be read).
+// branch `HEAD` names, or the `<remote>/<branch>` `@{push}` does, null when
+// none) and `prBase(args)` (the PR's base branch, null when it can't be
+// read). A push counts only to origin, whose default branch `landing`
+// names, never to another remote, a fork's `main` among them.
 export async function landingRefused(command, look) {
   for (const call of landingCalls(command)) {
+    if (call.kind === 'merge' && call.args === null) continue;
     const landing = await look.landing(call.kind === 'push' ? call.dir : null);
     const way = landing?.lands;
     const main = landing?.defaultBranch;
@@ -619,7 +641,15 @@ export async function landingRefused(command, look) {
     const name = `${landing.repo ?? 'This repository'} lands by ${WAYS[way] ?? way} (\`${way}\`)`;
     const change = "land it as /queue-and-clean does, or choose another way on the repository's row in Settings' Repositories";
     if (call.kind === 'push' && way !== 'direct') {
-      let to = call.to ?? [await look.branch(call.dir, '@{push}')];
+      let { remote, to } = call;
+      if (to === null) {
+        const push = (await look.branch(call.dir, '@{push}')) ?? '';
+        remote ??= push.slice(0, push.indexOf('/'));
+        to = [push.slice(push.indexOf('/') + 1)];
+      }
+      // `--all` or `--tags` with no remote goes to the default one.
+      remote ??= 'origin';
+      if (remote !== 'origin') continue;
       to = await Promise.all(to.map((t) => (t === 'HEAD' ? look.branch(call.dir, 'HEAD') : t)));
       if (to.some((t) => t === '*' || t === main)) {
         return `Switchboard's permissions in its panes deny this: ${name}, not a push to its default branch, ${main}: ${change}`;
@@ -658,8 +688,7 @@ function lookOn($) {
     branch: async (dir, ref) => {
       const out = await run(['git', 'rev-parse', '--abbrev-ref', ref], dir);
       if (!out || out === 'HEAD') return null;
-      // `@{push}` names the remote's branch, `origin/main`.
-      return ref === 'HEAD' ? out : out.slice(out.indexOf('/') + 1);
+      return out;
     },
     prBase: (args) => run(['gh', 'pr', 'view', ...args, '--json', 'baseRefName', '--jq', '.baseRefName']),
   };
