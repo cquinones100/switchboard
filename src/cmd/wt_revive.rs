@@ -49,8 +49,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::agent::transcript::{self, Entry, Kind};
-use crate::worktree::git_safe;
 use crate::ui::when::{self, Said};
+use crate::worktree::git_safe;
 use crate::{paths, util};
 
 const RECENT_MS: i64 = 14 * 24 * 60 * 60 * 1000;
