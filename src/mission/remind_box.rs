@@ -24,8 +24,9 @@ use ratatui::text::Span;
 
 use super::remind;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::draw::{self, BoxLine, BoxSpec, Gesture, Hit};
 use crate::ui::field::{Edit, Field};
+use crate::ui::form::Form;
 use crate::ui::kit::{self, Surface, Tone};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
@@ -44,9 +45,6 @@ enum Part {
     Close,
 }
 
-/// A part on a line: the line's index, its first and last column, the part.
-type Placed = (usize, u16, u16, Part);
-
 pub struct RemindBox {
     title: String,
     /// The time it reads times against, fixed for a test; `None` reads the
@@ -57,11 +55,7 @@ pub struct RemindBox {
     note: Field,
     /// The reminder set now: its time and note.
     set: Option<(i64, String)>,
-    focus: Part,
-    hover: Option<Part>,
-    drawn: Option<Drawn>,
-    /// Where each part of a line was drawn, by the line's index.
-    parts: Vec<Placed>,
+    form: Form<Part>,
     /// The width inside its edges it was last drawn at.
     inner: usize,
 }
@@ -83,10 +77,7 @@ impl RemindBox {
             typed: Field::new(),
             note: Field::new().with_text(note),
             set,
-            focus: Part::When,
-            hover: None,
-            drawn: None,
-            parts: Vec::new(),
+            form: Form::new(Part::When, Part::Close),
             inner: WIDTH,
         }
     }
@@ -135,15 +126,6 @@ impl RemindBox {
         out
     }
 
-    fn step_focus(&mut self, by: isize, look: &Look) {
-        let mut stops = self.stops();
-        if look.close {
-            stops.push(Part::Close);
-        }
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
-    }
-
     fn set_it(&self) -> Step {
         match self.at() {
             Some(at) => Step::Close(Outcome::Picked(Picked {
@@ -172,11 +154,11 @@ impl RemindBox {
             Part::Time(i) => {
                 self.chosen = i;
                 self.typed = Field::new();
-                self.focus = Part::When;
+                self.form.focus = Part::When;
                 Step::Redraw
             }
             Part::When | Part::WhatFor => {
-                self.focus = part;
+                self.form.focus = part;
                 Step::Redraw
             }
             Part::Set => self.set_it(),
@@ -186,28 +168,29 @@ impl RemindBox {
     }
 
     fn field(&mut self) -> Option<&mut Field> {
-        match self.focus {
+        match self.form.focus {
             Part::WhatFor => Some(&mut self.note),
             Part::When => Some(&mut self.typed),
             _ => None,
         }
     }
 
-    /// The box's lines, and where each part on them is.
-    fn lines(&self, inner: usize, look: &Look) -> (Vec<BoxLine>, Vec<Placed>) {
+    /// The box's lines, each part's place on them kept in the form.
+    fn lines(&mut self, inner: usize, look: &Look) -> Vec<BoxLine> {
         let theme = &look.theme;
         let mut lines: Vec<BoxLine> = Vec::new();
-        let mut parts = Vec::new();
+        // Each part's line and columns.
+        let mut spots: Vec<(usize, u16, u16, Part)> = Vec::new();
         let label = |text: &str, on: bool| {
             let tone = if on { Tone::Accent } else { Tone::Dim };
             BoxLine::spans(kit::label(text, tone, None, inner, theme))
         };
-        lines.push(label("When", self.focus == Part::When));
+        lines.push(label("When", self.form.focus == Part::When));
         let typing = !self.typed.text().trim().is_empty();
         let now = self.now();
         for (i, (text, at)) in self.times().into_iter().enumerate() {
             let chosen = !typing && i == self.chosen;
-            let lit = self.hover == Some(Part::Time(i));
+            let lit = self.form.hover == Some(Part::Time(i));
             let mut spans = kit::option(text, None, 0, chosen, theme);
             let clock = at.map(|a| remind::clock_of(a, &now)).unwrap_or_default();
             let gap = inner.saturating_sub(kit::spans_width(&spans) + draw::width(&clock) + 1);
@@ -221,16 +204,16 @@ impl RemindBox {
             } else {
                 None
             };
-            parts.push((lines.len(), 0, inner as u16, Part::Time(i)));
+            spots.push((lines.len(), 0, inner as u16, Part::Time(i)));
             lines.push(BoxLine::spans(spans).fill(fill).clickable());
         }
         lines.push(BoxLine::text(" or type one", Tone::Dim.style(theme)));
-        parts.push((lines.len(), 0, inner as u16, Part::When));
+        spots.push((lines.len(), 0, inner as u16, Part::When));
         lines.push(BoxLine::spans(field(
             &self.typed,
             "tue 9am, nov 20 3pm",
             inner,
-            self.focus == Part::When,
+            self.form.focus == Part::When,
             look,
         )));
         if typing {
@@ -255,13 +238,13 @@ impl RemindBox {
             Tone::Faint.style(theme),
         ));
         lines.push(BoxLine::blank());
-        lines.push(label("What for", self.focus == Part::WhatFor));
-        parts.push((lines.len(), 0, inner as u16, Part::WhatFor));
+        lines.push(label("What for", self.form.focus == Part::WhatFor));
+        spots.push((lines.len(), 0, inner as u16, Part::WhatFor));
         lines.push(BoxLine::spans(field(
             &self.note,
             "what to pick up",
             inner,
-            self.focus == Part::WhatFor,
+            self.form.focus == Part::WhatFor,
             look,
         )));
         lines.push(BoxLine::text(
@@ -272,14 +255,13 @@ impl RemindBox {
         let mut caps = vec![Span::raw(" ")];
         let mut cap = |key: &str, what: &str, part: Part, caps: &mut Vec<Span<'static>>| {
             let x = kit::spans_width(caps);
-            let lit = self.focus == part || self.hover == Some(part);
-            let spans = kit::keycap(key, what, lit, false, theme);
+            let spans = kit::keycap(key, what, self.form.lit(part), false, theme);
             let w = kit::spans_width(&spans);
             caps.extend(spans);
-            parts.push((
+            spots.push((
                 lines.len(),
                 x as u16,
-                (x + w).saturating_sub(2) as u16,
+                (x + w).saturating_sub(1) as u16,
                 part,
             ));
         };
@@ -299,7 +281,11 @@ impl RemindBox {
                 Tone::Dim.style(theme),
             ));
         }
-        (lines, parts)
+        self.form.clear();
+        for (line, from, to, part) in spots {
+            self.form.cols(line, from, to, part);
+        }
+        lines
     }
 }
 
@@ -337,7 +323,7 @@ fn field(
 
 impl Overlay for RemindBox {
     fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
-        self.drawn.as_ref()
+        self.form.drawn.as_ref()
     }
 
     fn kind(&self) -> &'static str {
@@ -345,19 +331,18 @@ impl Overlay for RemindBox {
     }
 
     fn stands_out(&self) -> Option<ratatui::layout::Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
+        self.form.outer()
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let inner = (buf.area.width as usize).saturating_sub(6).min(WIDTH);
-        let (lines, parts) = self.lines(inner, look);
-        self.parts = parts;
+        let lines = self.lines(inner, look);
         self.inner = inner;
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some("↑↓ a time  type your own  tab what for  ↵ set it  esc cancel");
         spec.width = inner as u16;
-        spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        spec.close_lit = self.form.close_lit();
+        self.form.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
@@ -366,12 +351,9 @@ impl Overlay for RemindBox {
             KeyCode::Esc => return Step::Close(Outcome::Dismissed),
             KeyCode::Char('c') if k.mods == Mods::CTRL => return Step::Close(Outcome::Dismissed),
             KeyCode::Char('x') if k.mods == Mods::ALT => return self.clear_it(),
-            KeyCode::Tab => {
-                self.step_focus(1, look);
-                return Step::Redraw;
-            }
-            KeyCode::BackTab => {
-                self.step_focus(-1, look);
+            KeyCode::Tab | KeyCode::BackTab => {
+                let stops = self.stops();
+                self.form.tab(&k, &stops, look);
                 return Step::Redraw;
             }
             KeyCode::Up | KeyCode::Down => {
@@ -382,30 +364,30 @@ impl Overlay for RemindBox {
                     self.chosen = (self.chosen + by) % n;
                 }
                 self.typed = Field::new();
-                self.focus = Part::When;
+                self.form.focus = Part::When;
                 return Step::Redraw;
             }
             // A one-line field's S-Enter and M-Enter do nothing.
             KeyCode::Enter if !k.mods.is_empty() => return Step::Same,
             KeyCode::Enter => {
-                return match self.focus {
+                return match self.form.focus {
                     Part::When | Part::WhatFor | Part::Time(_) => self.set_it(),
                     part => self.press(part),
                 };
             }
             KeyCode::Char(' ')
                 if matches!(
-                    self.focus,
+                    self.form.focus,
                     Part::Set | Part::Clear | Part::Cancel | Part::Close
                 ) =>
             {
-                return self.press(self.focus);
+                return self.press(self.form.focus);
             }
             _ => {}
         }
         // Typing outside a field types in When.
         if self.field().is_none() {
-            self.focus = Part::When;
+            self.form.focus = Part::When;
         }
         let Some(field) = self.field() else {
             return Step::Same;
@@ -417,24 +399,15 @@ impl Overlay for RemindBox {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
+        if self.form.drawn.is_none() {
             return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let part = match hit {
-            Hit::Close => Some(Part::Close),
-            Hit::Line(line, x) => self
-                .parts
-                .iter()
-                .find(|(l, x0, x1, _)| *l == line && x >= *x0 && x <= *x1)
-                .map(|p| p.3),
-            _ => None,
-        };
+        }
+        let (hit, part) = self.form.hit(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match part {
                 Some(p @ (Part::When | Part::WhatFor)) => {
-                    let had_focus = self.focus == p;
-                    self.focus = p;
+                    let had_focus = self.form.focus == p;
+                    self.form.focus = p;
                     let room = kit::input_field_room("", self.inner.saturating_sub(2), 0);
                     if let (Hit::Line(_, x), Some(field)) = (hit, self.field()) {
                         // Without the focus it showed its text from the start.
@@ -451,21 +424,14 @@ impl Overlay for RemindBox {
                 None if hit == Hit::Outside => Step::Close(Outcome::Dismissed),
                 None => Step::Same,
             },
-            Gesture::Move if look.hover => {
-                if part == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = part;
-                    Step::Redraw
-                }
-            }
+            Gesture::Move if look.hover => self.form.hover_on(part),
             _ => Step::Same,
         }
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
         if self.field().is_none() {
-            self.focus = Part::When;
+            self.form.focus = Part::When;
         }
         if let Some(field) = self.field() {
             field.paste(text);
@@ -482,8 +448,8 @@ mod tests {
         "2026-11-04T14:30:00[America/New_York]".parse().unwrap()
     }
 
-    fn text_of(b: &RemindBox) -> String {
-        let (lines, _) = b.lines(WIDTH, &Look::default());
+    fn text_of(b: &mut RemindBox) -> String {
+        let lines = b.lines(WIDTH, &Look::default());
         lines
             .iter()
             .map(|l| {
@@ -499,7 +465,7 @@ mod tests {
     #[test]
     fn the_times_carry_their_clock_and_a_typed_one_is_read_back() {
         let mut b = RemindBox::new("3 api", None).at_time(now());
-        let text = text_of(&b);
+        let text = text_of(&mut b);
         assert!(text.contains("In 20 minutes"), "{text}");
         assert!(text.contains("2:50"), "{text}");
         assert!(text.contains("Thu 9:00"), "{text}");
@@ -508,13 +474,13 @@ mod tests {
         for c in "tue 9am".chars() {
             b.key(Key::plain(KeyCode::Char(c)), &Look::default());
         }
-        let text = text_of(&b);
+        let text = text_of(&mut b);
         assert!(
             text.contains("✓ Tuesday, November 10 at 9:00 AM · in 5 days 18 hours"),
             "{text}"
         );
         b.key(Key::plain(KeyCode::Char('x')), &Look::default());
-        let text = text_of(&b);
+        let text = text_of(&mut b);
         assert!(text.contains("isn't a time I know"), "{text}");
         assert_eq!(
             b.key(Key::plain(KeyCode::Enter), &Look::default()),
@@ -530,7 +496,7 @@ mod tests {
             Some((n.timestamp().as_second() + 60, "old".into())),
         )
         .at_time(n.clone());
-        let text = text_of(&b);
+        let text = text_of(&mut b);
         assert!(
             text.contains("Change the reminder") || b.title.contains("Change"),
             "{text}"

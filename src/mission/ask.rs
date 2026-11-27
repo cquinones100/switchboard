@@ -25,8 +25,16 @@ use super::text_box::TextBox;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::field::{Edit, Field};
+use crate::ui::form::Form;
 use crate::ui::kit::Tone;
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
+
+/// What Tab's focus or the mouse is on in the bare line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    Line,
+    Close,
+}
 
 pub struct Ask {
     title: String,
@@ -36,7 +44,8 @@ pub struct Ask {
     field_line: usize,
     /// Whether Enter on an empty line takes it.
     empty: bool,
-    close_focus: bool,
+    /// The line, and easy mode's × after it.
+    form: Form<Part>,
     /// Its text box, in place of the bare line, once `text_box` makes it one.
     boxed: Option<TextBox>,
     /// Why it came back, under the text box.
@@ -52,7 +61,7 @@ impl Ask {
             field: Field::new(),
             field_line: 0,
             empty: false,
-            close_focus: false,
+            form: Form::new(Part::Line, Part::Close),
             boxed: None,
             failed: None,
             drawn: None,
@@ -238,7 +247,7 @@ impl Overlay for Ask {
             "type  ↵ done  esc back"
         });
         spec.width = inner as u16;
-        spec.close_lit = self.close_focus;
+        spec.close_lit = self.form.close_lit();
         self.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
@@ -247,14 +256,13 @@ impl Overlay for Ask {
             return Self::taken(boxed.key(key, look));
         }
         let k = key.normalized();
-        if matches!(k.code, KeyCode::Tab | KeyCode::BackTab) && look.close {
-            self.close_focus = !self.close_focus;
+        if look.close && self.form.tab(&k, &[Part::Line], look) {
             return Step::Redraw;
         }
-        if self.close_focus && matches!(k.code, KeyCode::Enter | KeyCode::Char(' ')) {
+        if self.form.focus == Part::Close && matches!(k.code, KeyCode::Enter | KeyCode::Char(' ')) {
             return Step::Close(Outcome::Dismissed);
         }
-        self.close_focus = false;
+        self.form.focus = Part::Line;
         match self.field.key(k) {
             Edit::Changed | Edit::Moved => return Step::Redraw,
             Edit::Same | Edit::Up | Edit::Down => return Step::Same,
@@ -292,22 +300,16 @@ impl Overlay for Ask {
             }
             Gesture::Click if look.mouse => match hit {
                 Hit::Line(i, col) if i >= self.field_line => {
-                    self.close_focus = false;
+                    self.form.focus = Part::Line;
                     self.field
                         .click(i - self.field_line, (col as usize).saturating_sub(3));
                     Step::Redraw
                 }
                 _ => Step::Same,
             },
-            Gesture::Move if look.hover => {
-                let close = hit == Hit::Close;
-                if close == self.close_focus {
-                    Step::Same
-                } else {
-                    self.close_focus = close;
-                    Step::Redraw
-                }
-            }
+            Gesture::Move if look.hover => self
+                .form
+                .hover_on((hit == Hit::Close).then_some(Part::Close)),
             _ => Step::Same,
         }
     }

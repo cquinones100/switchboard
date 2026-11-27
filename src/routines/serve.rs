@@ -22,7 +22,6 @@ use crate::items::{Item, State as ItemState};
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Opened, Server};
 use crate::ui::confirm::Confirm;
-use crate::ui::{Outcome as UiOutcome, Picked};
 use crate::{settings, util, worktree};
 
 /// What a run refused in someone else's PR says.
@@ -774,10 +773,8 @@ impl Server {
             client,
             Box::new(boxed),
             Some(Box::new(move |server: &mut Server, client, outcome| {
-                let UiOutcome::Picked(Picked { index, value, .. }) = outcome else {
-                    return;
-                };
-                let Ok(draft) = serde_json::from_str::<super::form::Draft>(&value) else {
+                let Some((index, draft)) = crate::ui::form::read::<super::form::Draft>(&outcome)
+                else {
                     return;
                 };
                 server.routine_saved(client, id.as_deref(), draft, index == 1);

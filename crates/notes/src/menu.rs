@@ -1,26 +1,26 @@
 //! The Format menu, Ctrl-P in a note: everything a note can do, each with
-//! its key, under its heading (init.lua's `format_items` and `menu`). A
-//! key, Enter or a click on a line picks it; Escape or Q closes it. `/`
-//! searches it as it searches every menu (crates/ui/src/menu.rs's `Filter`): the
-//! items whose label holds what is typed, best first, without their
-//! headings. Opened
+//! its key, under its heading (init.lua's `format_items` and `menu`). It
+//! is `ui::menu`'s menu, its items' keys coming first: a key, Enter or a
+//! click on a line picks it; Escape or Q closes it. `/` searches it as it
+//! searches every menu: the items whose label holds what is typed, best
+//! first, without their headings. Opened
 //! from Visual mode, it acts on the selection. A paragraph or character
 //! style leaves you typing, as `a` would, unless it already has: you pick a
 //! style to write in it. The toolbar's buttons (easy.rs) and the palette
 //! (palette.rs) run the same items.
 //!
-//! It is drawn as every box is (crates/ui/src/draw.rs), and is an overlay of the
-//! ui module's, so the app stacks it with the palette and the questions.
+//! Being an overlay of the ui module's, the app stacks it with the palette
+//! and the questions.
 
 use ratatui::buffer::Buffer;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 
 use super::format::{Character, Paragraph};
 use switchboard_ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use switchboard_ui::input::{Key, KeyCode, Mouse};
-use switchboard_ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
 use switchboard_ui::{Look, Outcome, Overlay, Step};
+use switchboard_ui::{Menu, MenuOption};
 
 /// What an item does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,24 +174,30 @@ pub fn by_label(label: &str) -> Option<Item> {
         .find(|i| i.label == label)
 }
 
-/// The menu: picking gives `Outcome::Chose` with the item's place in
-/// `items()`.
-#[derive(Default)]
-pub struct FormatMenu {
-    /// The search `/` opens.
-    filter: Filter,
-    /// The chosen one of the items shown.
-    cursor: usize,
-    hover: Option<usize>,
-    close_lit: bool,
-    drawn: Option<Drawn>,
-    /// Each line's item, by its place among those shown.
-    rows: Vec<Option<usize>>,
-    /// The first line shown, when the screen is too short for them all.
-    top: usize,
-    /// The note shows its diagrams' code, so the Diagram item reads "Show
-    /// diagrams".
-    diagram_code: bool,
+/// The menu, as every menu is (crates/ui/src/menu.rs), its items' keys
+/// coming before the keys that move it: picking gives `Outcome::Chose`
+/// with the item's place in `items()`. The Diagram item reads "Show
+/// diagrams" while the note shows its diagrams' code (`diagram_code`).
+pub fn format_menu(diagram_code: bool) -> Menu {
+    let sections = SECTIONS
+        .iter()
+        .map(|(heading, items)| {
+            let options = items
+                .iter()
+                .map(|i| {
+                    let option = MenuOption::new(label(i, diagram_code));
+                    match i.key.chars().next() {
+                        Some(c) => option.key(c),
+                        None => option,
+                    }
+                })
+                .collect();
+            (heading.to_string(), options)
+        })
+        .collect();
+    Menu::sections("Format", sections)
+        .keys_first()
+        .named("format-menu")
 }
 
 /// An item's label as the menu shows it: the Diagram item's "Show
@@ -201,275 +207,6 @@ fn label(item: &Item, diagram_code: bool) -> &'static str {
         SHOW_DIAGRAMS
     } else {
         item.label
-    }
-}
-
-impl FormatMenu {
-    pub fn new(diagram_code: bool) -> FormatMenu {
-        FormatMenu {
-            diagram_code,
-            ..FormatMenu::default()
-        }
-    }
-
-    /// The items shown, by their place in `items()`: every one while the
-    /// search is closed.
-    fn shown(&self) -> Vec<usize> {
-        let labels: Vec<&str> = items()
-            .iter()
-            .map(|(_, i)| label(i, self.diagram_code))
-            .collect();
-        self.filter.shown(&labels)
-    }
-}
-
-impl Overlay for FormatMenu {
-    fn drawn(&self) -> Option<&switchboard_ui::draw::Drawn> {
-        self.drawn.as_ref()
-    }
-
-    fn kind(&self) -> &'static str {
-        "format-menu"
-    }
-
-    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
-    }
-
-    fn draw(&mut self, buf: &mut Buffer, look: &Look) {
-        let mut lines = Vec::new();
-        self.rows.clear();
-        let diagram_code = self.diagram_code;
-        let row = |item: &Item, at: usize| {
-            let chosen = at == self.cursor;
-            let fill = if chosen {
-                Some(look.theme.highlight)
-            } else if self.hover == Some(at) {
-                Some(look.theme.panel)
-            } else {
-                None
-            };
-            let mut spans = if chosen {
-                vec![Span::raw(" "), look.pointer(), Span::raw(" ")]
-            } else {
-                vec![Span::raw("   ")]
-            };
-            spans.push(Span::styled(format!("{:<3} ", item.key), look.dim()));
-            spans.push(Span::styled(
-                label(item, diagram_code).to_string(),
-                if chosen {
-                    look.bold_bright()
-                } else {
-                    look.text()
-                },
-            ));
-            BoxLine::spans(spans).fill(fill).clickable()
-        };
-        let searching = self.filter.is_open();
-        // The search's line stays at the top while the matches scroll.
-        let mut head = Vec::new();
-        if searching {
-            let all = items();
-            let shown = self.shown();
-            head.push(self.filter.line(28, shown.len(), all.len(), look));
-            head.push(BoxLine::blank());
-            if shown.is_empty() {
-                lines.push(BoxLine::text(NO_MATCH, look.dim()));
-                self.rows.push(None);
-            }
-            for (at, i) in shown.into_iter().enumerate() {
-                lines.push(row(&all[i].1, at));
-                self.rows.push(Some(at));
-            }
-        } else {
-            let mut n = 0;
-            for (heading, items) in SECTIONS {
-                lines.push(BoxLine::text(
-                    format!(" {heading}"),
-                    look.bold_bright().add_modifier(Modifier::UNDERLINED),
-                ));
-                self.rows.push(None);
-                for item in *items {
-                    lines.push(row(item, n));
-                    self.rows.push(Some(n));
-                    n += 1;
-                }
-            }
-        }
-        // Too many for the screen: the lines around the cursor's, its
-        // heading with it.
-        let room = (buf.area.height as usize)
-            .saturating_sub(6 + head.len())
-            .max(1);
-        let all = lines.len();
-        if lines.len() > room {
-            let at = self
-                .rows
-                .iter()
-                .position(|r| *r == Some(self.cursor))
-                .unwrap_or(0);
-            let heading = at.saturating_sub(usize::from(at > 0 && self.rows[at - 1].is_none()));
-            if heading < self.top {
-                self.top = heading;
-            } else if at >= self.top + room {
-                self.top = at + 1 - room;
-            }
-            self.top = self.top.min(lines.len() - room);
-            lines = lines.split_off(self.top);
-            lines.truncate(room);
-            self.rows = self.rows.split_off(self.top);
-            self.rows.truncate(room);
-        } else {
-            self.top = 0;
-        }
-        let head_len = head.len();
-        self.rows.splice(0..0, head.iter().map(|_| None));
-        head.extend(lines);
-        let lines = head;
-        let mut spec = BoxSpec::new("Format", &lines);
-        spec.keys = Some(if searching {
-            SEARCH_KEYS
-        } else {
-            "a key or ↵ picks  ↑↓ move  / search  esc or Q closes"
-        });
-        spec.width = 30;
-        spec.close_lit = self.close_lit;
-        let drawn = draw::draw_box(buf, &spec, look);
-        // Its window follows the cursor, so its scroll bar only shows where
-        // it is.
-        draw::edge_bar(buf, &drawn, (head_len, room), (all, self.top), look);
-        self.drawn = Some(drawn);
-    }
-
-    fn key(&mut self, key: Key, _look: &Look) -> Step {
-        match self.filter.key(key) {
-            Filtered::Moved => return Step::Redraw,
-            Filtered::Changed | Filtered::Closed => {
-                self.cursor = 0;
-                self.top = 0;
-                self.hover = None;
-                return Step::Redraw;
-            }
-            Filtered::Not => {}
-        }
-        if self.filter.is_open() {
-            let shown = self.shown();
-            let last = shown.len().saturating_sub(1);
-            let to = match key.code {
-                KeyCode::Enter => {
-                    return match shown.get(self.cursor) {
-                        Some(i) => Step::Close(Outcome::Chose(*i)),
-                        None => Step::Same,
-                    };
-                }
-                KeyCode::Down => wrap_step(self.cursor, shown.len(), true),
-                KeyCode::Char('n') if key.mods.ctrl => wrap_step(self.cursor, shown.len(), true),
-                KeyCode::Up => wrap_step(self.cursor, shown.len(), false),
-                KeyCode::Char('p') if key.mods.ctrl => wrap_step(self.cursor, shown.len(), false),
-                KeyCode::Tab => self.cursor + 1,
-                KeyCode::BackTab => self.cursor.saturating_sub(1),
-                _ => return Step::Same,
-            }
-            .min(last);
-            if to == self.cursor {
-                return Step::Same;
-            }
-            self.cursor = to;
-            return Step::Redraw;
-        }
-        let total = items().len();
-        let plain = !key.mods.ctrl && !key.mods.alt;
-        match key.code {
-            KeyCode::Esc => Step::Close(Outcome::Dismissed),
-            KeyCode::Enter => Step::Close(Outcome::Chose(self.cursor)),
-            KeyCode::Down => {
-                self.cursor = wrap_step(self.cursor, total, true);
-                Step::Redraw
-            }
-            KeyCode::Up => {
-                self.cursor = wrap_step(self.cursor, total, false);
-                Step::Redraw
-            }
-            KeyCode::Char('n') if key.mods.ctrl => {
-                self.cursor = wrap_step(self.cursor, total, true);
-                Step::Redraw
-            }
-            KeyCode::Char('p') if key.mods.ctrl => {
-                self.cursor = wrap_step(self.cursor, total, false);
-                Step::Redraw
-            }
-            KeyCode::Char('Q') if plain => Step::Close(Outcome::Dismissed),
-            KeyCode::Char(c) if plain => {
-                let typed = c.to_string();
-                match items().iter().position(|(_, i)| i.key == typed) {
-                    Some(at) => Step::Close(Outcome::Chose(at)),
-                    None if c == 'j' => {
-                        self.cursor = wrap_step(self.cursor, total, true);
-                        Step::Redraw
-                    }
-                    None if c == 'k' => {
-                        self.cursor = wrap_step(self.cursor, total, false);
-                        Step::Redraw
-                    }
-                    None => Step::Same,
-                }
-            }
-            _ => Step::Same,
-        }
-    }
-
-    fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        if self.filter.paste(text) {
-            self.cursor = 0;
-            self.top = 0;
-            Step::Redraw
-        } else {
-            Step::Same
-        }
-    }
-
-    fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
-            return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let row = match hit {
-            Hit::Line(i, _) => self.rows.get(i).copied().flatten(),
-            _ => None,
-        };
-        match draw::gesture(&mouse) {
-            Gesture::Click if look.mouse => match (hit, row) {
-                (Hit::Outside | Hit::Close, _) => Step::Close(Outcome::Dismissed),
-                // The search's line, at the top while it is open.
-                (Hit::Line(0, col), _) if self.filter.is_open() => {
-                    self.filter.click(col as usize);
-                    Step::Redraw
-                }
-                (_, Some(at)) => match self.shown().get(at) {
-                    Some(i) => Step::Close(Outcome::Chose(*i)),
-                    None => Step::Same,
-                },
-                _ => Step::Same,
-            },
-            Gesture::WheelDown => {
-                self.cursor = (self.cursor + 1).min(self.shown().len().saturating_sub(1));
-                Step::Redraw
-            }
-            Gesture::WheelUp => {
-                self.cursor = self.cursor.saturating_sub(1);
-                Step::Redraw
-            }
-            Gesture::Move if look.hover => {
-                let close = hit == Hit::Close;
-                if row == self.hover && close == self.close_lit {
-                    return Step::Same;
-                }
-                self.hover = row;
-                self.close_lit = close;
-                Step::Redraw
-            }
-            _ => Step::Same,
-        }
     }
 }
 
@@ -699,31 +436,72 @@ mod tests {
     }
 
     #[test]
+    fn its_items_keys_come_first_and_headings_show() {
+        use switchboard_ui::input::Mods;
+        let look = Look::default();
+        let mut m = format_menu(false);
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 60));
+        m.draw(&mut buf, &look);
+        let s = switchboard_ui::draw::tests::screen(&buf);
+        assert!(s.iter().any(|l| l.contains("PARAGRAPH")), "{s:#?}");
+        let link = items().iter().position(|(_, i)| i.act == Act::Link);
+        assert_eq!(
+            m.key(Key::new(KeyCode::Char('k'), Mods::NONE), &look),
+            Step::Close(Outcome::Chose(link.unwrap())),
+            "k is Link…, not up"
+        );
+        let mut m = format_menu(false);
+        let quote = items()
+            .iter()
+            .position(|(_, i)| i.act == Act::Paragraph(Paragraph::Quote));
+        assert_eq!(
+            m.key(Key::new(KeyCode::Char('q'), Mods::NONE), &look),
+            Step::Close(Outcome::Chose(quote.unwrap()))
+        );
+        assert_eq!(
+            m.key(Key::new(KeyCode::Char('Q'), Mods::NONE), &look),
+            Step::Close(Outcome::Dismissed)
+        );
+        let underline = items()
+            .iter()
+            .position(|(_, i)| i.act == Act::Character(Character::Underline));
+        assert_eq!(
+            format_menu(false).key(Key::new(KeyCode::Char('U'), Mods::SHIFT), &look),
+            Step::Close(Outcome::Chose(underline.unwrap())),
+            "a capital with Shift held"
+        );
+        assert_eq!(
+            format_menu(false).key(Key::new(KeyCode::Char('Q'), Mods::SHIFT), &look),
+            Step::Close(Outcome::Dismissed)
+        );
+    }
+
+    #[test]
     fn slash_searches_the_items_and_their_keys_type() {
         use switchboard_ui::input::Mods;
         let look = Look::default();
-        let mut m = FormatMenu::default();
+        let mut m = format_menu(false);
         for c in "/check".chars() {
             assert_eq!(
                 m.key(Key::new(KeyCode::Char(c), Mods::NONE), &look),
                 Step::Redraw
             );
         }
-        let labels: Vec<&str> = m.shown().iter().map(|i| items()[*i].1.label).collect();
-        assert_eq!(
-            labels,
-            [
-                "Checklist",
-                "Move checked to bottom",
-                "Delete checked items",
-                "Uncheck all"
-            ]
-        );
         let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
         m.draw(&mut buf, &look);
         let s = switchboard_ui::draw::tests::screen(&buf);
-        assert!(s.iter().any(|l| l.contains("› check▏")), "{s:#?}");
-        assert!(!s.iter().any(|l| l.contains("Paragraph")), "no headings");
+        let shown: Vec<&str> = [
+            "Checklist",
+            "Move checked to bottom",
+            "Delete checked items",
+            "Uncheck all",
+        ]
+        .into_iter()
+        .filter(|l| s.iter().any(|row| row.contains(l)))
+        .collect();
+        assert_eq!(shown.len(), 4, "{s:#?}");
+        assert!(s.iter().any(|l| l.contains("› check")), "{s:#?}");
+        assert!(!s.iter().any(|l| l.contains("PARAGRAPH")), "no headings");
         let mut short = Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 11));
         for _ in 0..3 {
             m.key(Key::new(KeyCode::Down, Mods::NONE), &look);
@@ -734,7 +512,7 @@ mod tests {
             s.iter().any(|l| l.contains("› check▏")),
             "the search stays: {s:#?}"
         );
-        assert!(s.iter().any(|l| l.contains("› u   Uncheck all")), "{s:#?}");
+        assert!(s.iter().any(|l| l.contains("› Uncheck all")), "{s:#?}");
         for _ in 0..3 {
             m.key(Key::new(KeyCode::Up, Mods::NONE), &look);
         }

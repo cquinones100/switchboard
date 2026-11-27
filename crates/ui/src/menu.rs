@@ -4,7 +4,13 @@
 //! colour, and the keys dim at the bottom. j and k (the arrows and the wheel
 //! too) move, Tab and Shift-Tab go round, through easy mode's × after the
 //! options; Enter or Space takes the chosen one, a number the option with
-//! that number, an option's own key that option; Esc or q goes back. A click
+//! that number, an option's own key that option; Esc, q or Q goes back. A
+//! menu whose options' keys are the point of it (Notes' Format menu,
+//! `keys_first`) gives every letter and digit to its options first, so
+//! its `k` and `q` are options and only the keys no option takes move or
+//! close it. Its options may stand under headings (`sections`), each a
+//! label the cursor passes over, kept above the first of its options in
+//! sight, and left out while searching. A click
 //! takes an option, a click outside closes it, and the mouse moving onto an
 //! option moves the cursor there, as mission control's menus do.
 //!
@@ -216,7 +222,12 @@ impl MenuOption {
 }
 
 pub struct Menu {
+    kind: &'static str,
     title: String,
+    /// The heading over an option, by the option's index.
+    headings: Vec<(usize, String)>,
+    /// Its options' keys come before the keys that move and close it.
+    keys_first: bool,
     body: String,
     /// A heading and text under the options and what the chosen one is.
     foot: Option<(String, String)>,
@@ -233,10 +244,11 @@ pub struct Menu {
     drawn: Option<Drawn>,
     /// Where it opens: the middle, or beside the click that opened it.
     place: draw::Place,
-    /// Which of the box's lines is the first option, and the first option
-    /// shown on it.
+    /// Which of the box's lines is the first row of options, and the
+    /// option on each of its lines that holds one, by its place among those
+    /// shown.
     first_line: usize,
-    first_shown: usize,
+    option_lines: Vec<(usize, usize)>,
     /// How wide its inside was drawn with the search closed, which it
     /// keeps while searching.
     closed_width: Option<usize>,
@@ -245,7 +257,10 @@ pub struct Menu {
 impl Menu {
     pub fn new(title: impl Into<String>, options: Vec<MenuOption>) -> Menu {
         Menu {
+            kind: "menu",
             title: title.into(),
+            headings: Vec::new(),
+            keys_first: false,
             body: String::new(),
             foot: None,
             shown: (0..options.len()).collect(),
@@ -257,9 +272,45 @@ impl Menu {
             drawn: None,
             place: draw::Place::Center,
             first_line: 0,
-            first_shown: 0,
+            option_lines: Vec::new(),
             closed_width: None,
         }
+    }
+
+    /// A menu of options under headings, each heading's options in its
+    /// order; `Outcome::Chose` counts the options alone.
+    pub fn sections(title: impl Into<String>, sections: Vec<(String, Vec<MenuOption>)>) -> Menu {
+        let mut headings = Vec::new();
+        let mut options = Vec::new();
+        for (heading, under) in sections {
+            headings.push((options.len(), heading));
+            options.extend(under);
+        }
+        let mut menu = Menu::new(title, options);
+        menu.headings = headings;
+        menu
+    }
+
+    /// Its options' keys come first: every letter and digit an option
+    /// takes is that option's, rather than a key that moves or closes.
+    pub fn keys_first(mut self) -> Menu {
+        self.keys_first = true;
+        self
+    }
+
+    /// What kind of box it is (`Overlay::kind`), for a menu its program
+    /// tells apart from the rest.
+    pub fn named(mut self, kind: &'static str) -> Menu {
+        self.kind = kind;
+        self
+    }
+
+    /// The heading over the option at `i`, when one starts there.
+    fn heading_at(&self, i: usize) -> Option<&str> {
+        self.headings
+            .iter()
+            .find(|(at, _)| *at == i)
+            .map(|(_, h)| h.as_str())
     }
 
     /// A menu of labels alone.
@@ -455,7 +506,7 @@ impl Overlay for Menu {
     }
 
     fn kind(&self) -> &'static str {
-        "menu"
+        self.kind
     }
 
     fn stands_out(&self) -> Option<ratatui::layout::Rect> {
@@ -507,17 +558,36 @@ impl Overlay for Menu {
         } else {
             said
         };
+        // The rows of options: each option, under its heading when the
+        // search is closed.
+        let rows: Vec<Result<usize, String>> = self
+            .shown
+            .iter()
+            .enumerate()
+            .flat_map(|(at, i)| {
+                let heading = self.heading_at(*i).filter(|_| !searching);
+                heading
+                    .map(|h| Err(h.to_string()))
+                    .into_iter()
+                    .chain([Ok(at)])
+            })
+            .collect();
+        let total = rows.len();
         let fits = if searching {
             let taken = shown.len() + usize::from(!shown.is_empty()) + 2;
-            n.min(room.saturating_sub(taken).max(1))
+            total.min(room.saturating_sub(taken).max(1))
         } else {
-            n.min(room)
+            total.min(room)
         };
-        let first = self
-            .cursor
-            .min(n.saturating_sub(1))
-            .saturating_sub(fits / 2)
-            .min(n.saturating_sub(fits));
+        let cursor_row = rows
+            .iter()
+            .position(|r| *r == Ok(self.cursor.min(n.saturating_sub(1))))
+            .unwrap_or(0);
+        // Its heading in sight with it.
+        let lead = usize::from(cursor_row > 0 && rows[cursor_row - 1].is_err());
+        let first = (cursor_row - lead)
+            .saturating_sub(fits.saturating_sub(lead) / 2)
+            .min(total.saturating_sub(fits));
         let mut lines: Vec<BoxLine> = shown
             .iter()
             .map(|l| BoxLine::text(format!(" {l}"), look.text()))
@@ -537,7 +607,7 @@ impl Overlay for Menu {
             }
         }
         self.first_line = lines.len();
-        self.first_shown = first;
+        self.option_lines.clear();
         // A row is `   label` and, two columns past the longest label, its
         // key, inside the box's margin of a column each side.
         let keyed = self.options.iter().any(|o| o.key.is_some() && !o.unshown);
@@ -560,8 +630,23 @@ impl Overlay for Menu {
             .map(|o| draw::cut(&o.label, label_room))
             .collect();
         let key_col = labels.iter().map(|l| draw::width(l)).max().unwrap_or(0) + 5;
-        for (at, i) in self.shown.iter().enumerate().skip(first).take(fits) {
+        for row in rows.iter().skip(first).take(fits) {
+            let at = match row {
+                Ok(at) => *at,
+                Err(heading) => {
+                    lines.push(BoxLine::spans(super::kit::label(
+                        heading,
+                        super::kit::Tone::Dim,
+                        None,
+                        key_col + 2,
+                        &look.theme,
+                    )));
+                    continue;
+                }
+            };
+            let i = &self.shown[at];
             let chosen = at == self.cursor;
+            self.option_lines.push((lines.len(), at));
             let mut spans = super::kit::option(
                 &labels[*i],
                 self.options[*i].key.filter(|_| !self.options[*i].unshown),
@@ -618,7 +703,7 @@ impl Overlay for Menu {
         }
         // Its window follows the cursor, so its scroll bar only shows where
         // it is.
-        draw::edge_bar(buf, &drawn, (self.first_line, fits), (n, first), look);
+        draw::edge_bar(buf, &drawn, (self.first_line, fits), (total, first), look);
         self.drawn = Some(drawn);
     }
 
@@ -659,16 +744,19 @@ impl Overlay for Menu {
             self.cursor = to;
             return Step::Redraw;
         }
-        // An option's own key, but never one the menu moves or closes with.
-        if key.mods == Mods::NONE
+        // An option's own key, but never one the menu moves or closes with
+        // unless its options' keys come first.
+        // A capital may come with Shift held, as a terminal reporting keys
+        // in full sends it: it is the capital alone.
+        let capital = matches!(key.code, KeyCode::Char(c) if c.is_uppercase());
+        let plain = key.mods == Mods::NONE || (key.mods == Mods::SHIFT && capital);
+        if plain
             && let KeyCode::Char(c) = key.code
-            && !"jkgGq /".contains(c)
-            && !c.is_ascii_digit()
+            && (self.keys_first || (!"jkgGqQ /".contains(c) && !c.is_ascii_digit()))
             && let Some(i) = self.options.iter().position(|o| o.key == Some(c))
         {
             return Step::Close(Outcome::Chose(i));
         }
-        let plain = key.mods == Mods::NONE;
         let ctrl = key.mods == Mods::CTRL;
         let moved = |to: usize, cursor: &mut usize| {
             if to == *cursor {
@@ -689,16 +777,13 @@ impl Overlay for Menu {
             KeyCode::Char('p') if ctrl => moved(wrap_step(self.cursor, n, false), &mut self.cursor),
             KeyCode::Char('g') | KeyCode::Home if plain => moved(0, &mut self.cursor),
             KeyCode::Char('G') | KeyCode::End => moved(n - 1, &mut self.cursor),
-            KeyCode::Tab if plain => {
-                let stops = self.stops(look);
-                moved((self.cursor + 1) % stops, &mut self.cursor)
-            }
-            KeyCode::BackTab => {
-                let stops = self.stops(look);
-                moved((self.cursor + stops - 1) % stops, &mut self.cursor)
+            KeyCode::Tab | KeyCode::BackTab => {
+                let by = crate::form::tab_by(&key).unwrap_or(1);
+                let to = crate::form::step_index(self.cursor, self.stops(look), by);
+                moved(to, &mut self.cursor)
             }
             KeyCode::Enter | KeyCode::Char(' ') if plain => self.take(),
-            KeyCode::Char(c @ '1'..='9') if plain => {
+            KeyCode::Char(c @ '1'..='9') if plain && !self.keys_first => {
                 let i = c as usize - '1' as usize;
                 if i < n {
                     Step::Close(Outcome::Chose(i))
@@ -706,7 +791,7 @@ impl Overlay for Menu {
                     Step::Same
                 }
             }
-            KeyCode::Esc | KeyCode::Char('q') if plain => Step::Close(Outcome::Dismissed),
+            KeyCode::Esc | KeyCode::Char('q' | 'Q') if plain => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c') if ctrl => Step::Close(Outcome::Dismissed),
             _ => Step::Same,
         }
@@ -727,9 +812,11 @@ impl Overlay for Menu {
         };
         let hit = drawn.hit(mouse.col, mouse.row);
         let option = match hit {
-            Hit::Line(i, _) if i >= self.first_line => {
-                Some(self.first_shown + i - self.first_line).filter(|o| *o < self.shown.len())
-            }
+            Hit::Line(i, _) => self
+                .option_lines
+                .iter()
+                .find(|(line, _)| *line == i)
+                .map(|(_, at)| *at),
             _ => None,
         };
         let n = self.shown.len();

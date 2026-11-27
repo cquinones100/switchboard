@@ -81,9 +81,7 @@ impl Confirm {
         } else {
             &[Button::Yes, Button::No]
         };
-        let at = stops.iter().position(|b| *b == self.chosen).unwrap_or(0);
-        let n = stops.len();
-        self.chosen = stops[if back { (at + n - 1) % n } else { (at + 1) % n }];
+        self.chosen = crate::form::step(stops, self.chosen, if back { -1 } else { 1 });
         self.tabbed = true;
     }
 }
@@ -103,10 +101,10 @@ impl Overlay for Confirm {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let question = Style::new().fg(draw::YELLOW).add_modifier(Modifier::BOLD);
-        let mut lines = vec![BoxLine::text(format!(" {} [Y/n]", self.text), question)];
+        let mut lines = vec![BoxLine::text(format!(" {} [Y/n]", self.text), question).wraps()];
         if !self.list.is_empty() {
             lines.push(BoxLine::blank());
-            let room = buf.area.width.saturating_sub(12) as usize;
+            let room = (buf.area.width.saturating_sub(12) as usize).min(draw::WRAP - 2);
             for item in &self.list {
                 lines.push(BoxLine::text(
                     format!("   {}", draw::cut(item, room)),
@@ -293,6 +291,27 @@ mod tests {
             c.key(Key::plain(KeyCode::Enter), &easy),
             Step::Close(Outcome::No),
             "the close button is pressed as no"
+        );
+    }
+
+    #[test]
+    fn a_long_question_wraps_at_72_columns_with_its_answer_shown() {
+        let look = Look::default();
+        let question = "Remove the worktree and its branch, which has commits no other branch has, and close its tab?";
+        let mut c = Confirm::new(question).list(vec!["x".repeat(150)]);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 200, 20));
+        c.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let d = c.drawn.clone().unwrap();
+        assert!(
+            d.inner.width as usize <= 1 + draw::WRAP + 2,
+            "no wider than its 72 columns: {s:#?}"
+        );
+        let text: String = s.iter().map(|l| l.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("[Y/n]"), "{s:#?}");
+        assert!(
+            s.iter().any(|l| l.contains("│ Remove the worktree")),
+            "{s:#?}"
         );
     }
 

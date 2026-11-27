@@ -26,7 +26,8 @@ use crate::items::Item;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::mux::keys::{Action, Bindings};
 use crate::sidebar::text::wrap;
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, width};
+use crate::ui::draw::{self, BoxLine, BoxSpec, Gesture, Hit, width};
+use crate::ui::form::{self, Form};
 use crate::ui::kit::{self, Tone};
 use crate::ui::{Look, Outcome, Overlay, Step, Theme};
 
@@ -294,9 +295,11 @@ fn tags_of(action: &Action) -> String {
         .join(" ")
 }
 
-/// Which of the box's keycaps Tab or the mouse is on.
+/// Which of the box's keycaps Tab or the mouse is on: none (`Keys`, every
+/// key looked up), Show or Close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Cap {
+    Keys,
     Show,
     Close,
 }
@@ -308,12 +311,7 @@ pub struct FindKey {
     after_prefix: bool,
     now: Option<Found>,
     before: Option<Found>,
-    focus: Option<Cap>,
-    hover: Option<Cap>,
-    drawn: Option<Drawn>,
-    /// The keycaps' line and the columns each takes inside the box.
-    cap_cols: Vec<(Cap, u16, u16)>,
-    caps_line: usize,
+    form: Form<Cap>,
 }
 
 impl FindKey {
@@ -324,11 +322,7 @@ impl FindKey {
             after_prefix: false,
             now: None,
             before: None,
-            focus: None,
-            hover: None,
-            drawn: None,
-            cap_cols: Vec::new(),
-            caps_line: 0,
+            form: Form::new(Cap::Keys, Cap::Close),
         }
     }
 
@@ -415,18 +409,16 @@ impl FindKey {
             Span::styled("any key", Tone::Accent.style(theme)),
             Span::styled(" look it up  ", dim),
         ];
-        self.cap_cols.clear();
+        self.form.clear();
         for (cap, key, what) in [
             (Cap::Show, "↵", "show it in the list"),
             (Cap::Close, "esc", "close"),
         ] {
-            let lit = self.focus == Some(cap) || self.hover == Some(cap);
             let from = caps_row.iter().map(|s| width(&s.content)).sum::<usize>() as u16;
-            caps_row.extend(kit::keycap(key, what, lit, self.caps, theme));
+            caps_row.extend(kit::keycap(key, what, self.form.lit(cap), self.caps, theme));
             let to = caps_row.iter().map(|s| width(&s.content)).sum::<usize>() as u16;
-            self.cap_cols.push((cap, from, to.saturating_sub(1)));
+            self.form.cols(out.len(), from, to, cap);
         }
-        self.caps_line = out.len();
         out.push(BoxLine::spans(caps_row).clickable());
         out
     }
@@ -499,7 +491,7 @@ fn big_keycap(f: &Found, caps: bool, theme: &Theme, inside: usize) -> Vec<BoxLin
 
 impl Overlay for FindKey {
     fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
-        self.drawn.as_ref()
+        self.form.drawn.as_ref()
     }
 
     fn kind(&self) -> &'static str {
@@ -507,14 +499,14 @@ impl Overlay for FindKey {
     }
 
     fn stands_out(&self) -> Option<Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
+        self.form.outer()
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let lines = self.lines(&look.theme);
         let mut spec = BoxSpec::new("Find a key", &lines);
         spec.width = INSIDE;
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        self.form.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
@@ -522,8 +514,8 @@ impl Overlay for FindKey {
         let alone = key.mods == Mods::NONE && !self.after_prefix;
         match key.code {
             KeyCode::Esc if alone => Step::Close(Outcome::Dismissed),
-            KeyCode::Enter if alone => match self.focus {
-                Some(Cap::Close) => Step::Close(Outcome::Dismissed),
+            KeyCode::Enter if alone => match self.form.focus {
+                Cap::Close => Step::Close(Outcome::Dismissed),
                 _ => self.show(),
             },
             // Tab and Shift-Tab alone are looked up and move the focus
@@ -533,18 +525,14 @@ impl Overlay for FindKey {
                     && !self.after_prefix
                     && (key.mods == Mods::NONE || key.mods == Mods::SHIFT) =>
             {
-                let focus = self.focus;
                 self.look_up(key);
-                let back = key.code == KeyCode::BackTab || key.mods == Mods::SHIFT;
-                self.focus = match (focus, back) {
-                    (None, false) | (Some(Cap::Close), true) => Some(Cap::Show),
-                    (Some(Cap::Show), false) | (None, true) => Some(Cap::Close),
-                    (Some(Cap::Close), false) | (Some(Cap::Show), true) => None,
-                };
+                let by = form::tab_by(&key).unwrap_or(1);
+                self.form.focus =
+                    form::step(&[Cap::Keys, Cap::Show, Cap::Close], self.form.focus, by);
                 Step::Redraw
             }
             _ => {
-                self.focus = None;
+                self.form.focus = Cap::Keys;
                 self.look_up(key);
                 Step::Redraw
             }
@@ -552,26 +540,16 @@ impl Overlay for FindKey {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let hit = self.drawn.as_ref().map(|d| d.hit(mouse.col, mouse.row));
-        let cap = match hit {
-            Some(Hit::Line(line, col)) if line == self.caps_line => self
-                .cap_cols
-                .iter()
-                .find(|(_, from, to)| (*from..=*to).contains(&col))
-                .map(|(c, _, _)| *c),
-            _ => None,
-        };
+        let (hit, cap) = self.form.hit(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match (hit, cap) {
-                (Some(Hit::Outside | Hit::Close), _) => Step::Close(Outcome::Dismissed),
+                (Hit::Outside | Hit::Close, _) => Step::Close(Outcome::Dismissed),
                 (_, Some(Cap::Show)) => self.show(),
                 (_, Some(Cap::Close)) => Step::Close(Outcome::Dismissed),
                 _ => Step::Same,
             },
-            _ if look.hover && cap != self.hover => {
-                self.hover = cap;
-                Step::Redraw
-            }
+            // The keycaps light under the mouse, not the ×.
+            _ if look.hover => self.form.hover_on(cap.filter(|_| hit != Hit::Close)),
             _ => Step::Same,
         }
     }
@@ -730,9 +708,9 @@ mod tests {
         // Tab is looked up and moves the focus to the first keycap.
         f.key(Key::new(KeyCode::Tab, Mods::NONE), &look);
         assert_eq!(f.found().unwrap().key, "Tab");
-        assert_eq!(f.focus, Some(Cap::Show));
+        assert_eq!(f.form.focus, Cap::Show);
         f.key(Key::new(KeyCode::BackTab, Mods::NONE), &look);
-        assert_eq!(f.focus, None, "Shift-Tab goes back");
+        assert_eq!(f.form.focus, Cap::Keys, "Shift-Tab goes back");
         // M-p is the palette's, Notes in front too.
         f.key(key("M-p"), &look);
         assert!(

@@ -73,7 +73,7 @@ use super::format::{self, Selection};
 use super::id;
 use super::images::{self, Images};
 use super::jumps::{Jump, Jumps};
-use super::menu::{self, Act as FormatAct, Ask, FormatMenu, Progress};
+use super::menu::{self, Act as FormatAct, Ask, Progress};
 use super::palette::{self, Act as PaletteAct};
 use super::render::{self, Kind};
 use super::sidebar::{self, Item, Row};
@@ -82,7 +82,7 @@ use super::store::{self, Retitled, Store};
 use super::sync;
 use super::table;
 use super::text::Text;
-use super::{easy, finder::Finder, squash};
+use super::{easy, finder::finder, squash};
 use crate::host::settings;
 use crate::util;
 use switchboard_ui::input::{Input, Key, KeyCode, Mods, Mouse, MouseButton, MouseKind, Parser};
@@ -2530,7 +2530,7 @@ impl App {
 
     fn finder(&mut self) {
         let notes = self.store.notes(None);
-        self.push(Box::new(Finder::new(notes, "Find a note")), Then::Finder);
+        self.push(Box::new(finder(notes, "Find a note")), Then::Finder);
     }
 
     /// Every note opened lately, newest first, in the finder's box.
@@ -2540,7 +2540,7 @@ impl App {
             self.say("notes: no note opened lately");
             return;
         }
-        self.push(Box::new(Finder::new(notes, "Recent notes")), Then::Finder);
+        self.push(Box::new(finder(notes, "Recent notes")), Then::Finder);
     }
 
     /// A Switchboard command for Notes, asked of the workspace's server.
@@ -3033,7 +3033,9 @@ impl App {
         let mut from = self.format_from(typing);
         self.leave_modes_for(&mut from);
         self.push(
-            Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
+            Box::new(menu::format_menu(
+                self.diagram_label() == menu::SHOW_DIAGRAMS,
+            )),
             Then::Format(from),
         );
     }
@@ -5327,7 +5329,9 @@ impl App {
         self.leave_modes_for(&mut from);
         match b.item.and_then(menu::by_label) {
             None => self.push(
-                Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
+                Box::new(menu::format_menu(
+                    self.diagram_label() == menu::SHOW_DIAGRAMS,
+                )),
                 Then::Format(from),
             ),
             Some(item) => self.run_format(item.act, from),

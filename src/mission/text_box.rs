@@ -15,6 +15,7 @@ use ratatui::text::Span;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, Drawn, Gesture, Hit};
 use crate::ui::field::{Edit, Field};
+use crate::ui::form::Form;
 use crate::ui::kit::{self, Press, Surface, Tone};
 use crate::ui::{Look, Outcome, Picked, Step};
 
@@ -30,20 +31,15 @@ pub enum Part {
     Close,
 }
 
-/// A part on a line: the line's index, its first and last column, the part.
-type Placed = (usize, u16, u16, Part);
-
 pub struct TextBox {
     pub field: Field,
     /// What the empty text shows, faint.
     placeholder: String,
     /// The button that sends.
     send: String,
-    focus: Part,
-    hover: Option<Part>,
+    form: Form<Part>,
     /// The box's lines that hold the field's rows.
     field_lines: std::ops::Range<usize>,
-    parts: Vec<Placed>,
 }
 
 impl TextBox {
@@ -54,16 +50,14 @@ impl TextBox {
             field,
             placeholder: placeholder.to_string(),
             send: send.to_string(),
-            focus: Part::Text,
-            hover: None,
+            form: Form::new(Part::Text, Part::Close),
             field_lines: 0..0,
-            parts: Vec::new(),
         }
     }
 
     /// Whether easy mode's × is lit.
     pub fn close_lit(&self) -> bool {
-        self.focus == Part::Close || self.hover == Some(Part::Close)
+        self.form.close_lit()
     }
 
     /// The rows the text gets in a box whose screen is `height` rows tall
@@ -78,11 +72,11 @@ impl TextBox {
     /// The text's rows, added to `lines`, `inner` wide, `most` rows at
     /// most, then a blank line.
     pub fn text_lines(&mut self, lines: &mut Vec<BoxLine>, inner: usize, most: usize, look: &Look) {
-        self.parts.clear();
+        self.form.clear();
         let theme = &look.theme;
         let area = inner.saturating_sub(4);
         let panel = Surface::Panel.color(theme);
-        let typing = self.focus == Part::Text;
+        let typing = self.form.focus == Part::Text;
         let on_panel = |tone: Tone| tone.style(theme).bg(panel);
         let room = area.saturating_sub(2);
         let taken = self.field.rows(room).len();
@@ -111,7 +105,7 @@ impl TextBox {
                 " ".repeat(area.saturating_sub(used)),
                 on_panel(Tone::Text),
             ));
-            self.parts.push((lines.len(), 1, area as u16, Part::Text));
+            self.form.cols(lines.len(), 1, area as u16, Part::Text);
             lines.push(BoxLine::spans(spans).clickable());
         }
         self.field_lines = first..lines.len();
@@ -129,9 +123,9 @@ impl TextBox {
     ) {
         let theme = &look.theme;
         let press = |part: Part| {
-            if self.focus == part {
+            if self.form.focus == part {
                 Press::Lit
-            } else if self.hover == Some(part) {
+            } else if self.form.hover == Some(part) {
                 Press::Hover
             } else {
                 Press::Rest
@@ -156,46 +150,32 @@ impl TextBox {
         row.push(Span::raw(" "));
         let send_at = kit::spans_width(&row);
         row.extend(send);
-        self.parts.push((
-            lines.len(),
+        let line = lines.len();
+        self.form.cols(
+            line,
             cancel_at as u16,
             (cancel_at + cw) as u16,
             Part::Cancel,
-        ));
-        self.parts.push((
-            lines.len(),
-            send_at as u16,
-            (send_at + sw) as u16,
-            Part::Send,
-        ));
+        );
+        self.form
+            .cols(line, send_at as u16, (send_at + sw) as u16, Part::Send);
         lines.push(BoxLine::spans(row).clickable());
     }
 
-    fn stops(look: &Look) -> Vec<Part> {
-        let mut out = vec![Part::Text, Part::Send, Part::Cancel];
-        if look.close {
-            out.push(Part::Close);
-        }
-        out
-    }
-
-    fn step_focus(&mut self, by: isize, look: &Look) {
-        let stops = Self::stops(look);
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
-    }
+    /// The Tab stops, easy mode's × after them.
+    const STOPS: [Part; 3] = [Part::Text, Part::Send, Part::Cancel];
 
     /// A part pressed: the button sends what is typed (`Outcome::Picked`,
     /// its query the text as typed), unless nothing is.
     fn press(&mut self, part: Part) -> Step {
         match part {
             Part::Text => {
-                self.focus = Part::Text;
+                self.form.focus = Part::Text;
                 Step::Redraw
             }
             // Nothing typed, nothing to send: the box stays.
             Part::Send if self.field.text().trim().is_empty() => {
-                self.focus = Part::Text;
+                self.form.focus = Part::Text;
                 Step::Redraw
             }
             Part::Send => Step::Close(Outcome::Picked(Picked {
@@ -209,23 +189,18 @@ impl TextBox {
 
     pub fn key(&mut self, key: Key, look: &Look) -> Step {
         let k = key.normalized();
+        if self.form.tab(&k, &Self::STOPS, look) {
+            return Step::Redraw;
+        }
+        let on_button = self.form.focus != Part::Text;
         match k.code {
             KeyCode::Esc => return Step::Close(Outcome::Dismissed),
             KeyCode::Char('c') if k.mods == Mods::CTRL => return Step::Close(Outcome::Dismissed),
-            KeyCode::Tab => {
-                self.step_focus(1, look);
-                return Step::Redraw;
-            }
-            KeyCode::BackTab => {
-                self.step_focus(-1, look);
-                return Step::Redraw;
-            }
-            KeyCode::Enter if self.focus != Part::Text => return self.press(self.focus),
-            KeyCode::Char(' ') if self.focus != Part::Text => return self.press(self.focus),
+            KeyCode::Enter | KeyCode::Char(' ') if on_button => return self.press(self.form.focus),
             _ => {}
         }
         // Typing on a button types in the text.
-        self.focus = Part::Text;
+        self.form.focus = Part::Text;
         match self.field.key(k) {
             // Enter on the text sends; S-Enter and M-Enter are the field's
             // new lines.
@@ -242,18 +217,14 @@ impl TextBox {
         let hit = drawn.hit(mouse.col, mouse.row);
         let part = match hit {
             Hit::Close => Some(Part::Close),
-            Hit::Line(line, x) => self
-                .parts
-                .iter()
-                .find(|(l, x0, x1, _)| *l == line && x >= *x0 && x < *x1)
-                .map(|p| p.3),
+            Hit::Line(line, x) => self.form.at_line(line, x),
             _ => None,
         };
         match draw::gesture(&mouse) {
             // A click outside keeps what was typed rather than losing it.
             Gesture::Click if look.mouse => match (hit, part) {
                 (Hit::Line(line, x), Some(Part::Text)) if self.field_lines.contains(&line) => {
-                    self.focus = Part::Text;
+                    self.form.focus = Part::Text;
                     self.field.click(
                         line - self.field_lines.start,
                         (x as usize).saturating_sub(2),
@@ -262,20 +233,13 @@ impl TextBox {
                 }
                 (_, part) => part.map_or(Step::Same, |p| self.press(p)),
             },
-            Gesture::Move if look.hover => {
-                if part == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = part;
-                    Step::Redraw
-                }
-            }
+            Gesture::Move if look.hover => self.form.hover_on(part),
             _ => Step::Same,
         }
     }
 
     pub fn paste(&mut self, text: &str) -> Step {
-        self.focus = Part::Text;
+        self.form.focus = Part::Text;
         self.field.paste(text);
         Step::Redraw
     }

@@ -30,9 +30,10 @@ use super::schedule::{EXAMPLES, Schedule};
 use super::view::when_words;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::sidebar::text::{cut, width, wrap};
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::draw::{self, BoxLine, BoxSpec, Gesture, Hit};
+use crate::ui::form::{self, Form};
 use crate::ui::kit::{self, Col, Surface, Tone};
-use crate::ui::{Look, Outcome, Overlay, Picked, Step};
+use crate::ui::{Look, Outcome, Overlay, Step};
 
 /// The box's inside, while the screen leaves room around it.
 const WIDTH: usize = 100;
@@ -126,7 +127,8 @@ enum Part {
     Close,
 }
 
-/// A part on a line: the line's index, its first and last column, the part.
+/// A part on a line: the line's index, its first and last column (both
+/// taken by a click), the part.
 type Placed = (usize, u16, u16, Part);
 
 /// A part on a line being built: its first and last column, the part.
@@ -144,16 +146,13 @@ pub struct RoutineForm {
     /// The time When is read against, fixed for a test; `None` reads the
     /// clock.
     fixed: Option<Zoned>,
-    focus: Part,
-    hover: Option<Part>,
-    /// What saving found wrong, under the field it is about.
-    wrong: Option<(Part, String)>,
+    /// Its parts, and what saving found wrong, under the field it is
+    /// about.
+    form: Form<Part>,
     /// The tool being typed in Allowed tools.
     adding: String,
     /// Esc pressed once with something typed.
     leaving: bool,
-    drawn: Option<Drawn>,
-    parts: Vec<Placed>,
 }
 
 impl RoutineForm {
@@ -178,13 +177,9 @@ impl RoutineForm {
             places,
             kept,
             fixed: None,
-            focus: Part::Name,
-            hover: None,
-            wrong: None,
+            form: Form::new(Part::Name, Part::Close),
             adding: String::new(),
             leaving: false,
-            drawn: None,
-            parts: Vec::new(),
         }
     }
 
@@ -200,7 +195,7 @@ impl RoutineForm {
 
     /// The Tab stops: each field, each tool's × (Enter or Space takes it
     /// off), the options and the keycaps.
-    fn stops(&self, look: &Look) -> Vec<Part> {
+    fn stops(&self) -> Vec<Part> {
         let mut out = vec![Part::Name, Part::Dir, Part::When];
         out.extend((0..self.draft.tools.len()).map(Part::RemoveTool));
         out.extend([
@@ -212,20 +207,16 @@ impl RoutineForm {
             Part::SaveRun,
             Part::Cancel,
         ]);
-        if look.close {
-            out.push(Part::Close);
-        }
         out
     }
 
     fn step_focus(&mut self, by: isize, look: &Look) {
-        let stops = self.stops(look);
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
+        let stops = self.stops();
+        self.form.step(&stops, by, look);
     }
 
     fn field(&mut self) -> Option<&mut String> {
-        match self.focus {
+        match self.form.focus {
             Part::Name => Some(&mut self.draft.name),
             Part::Dir => Some(&mut self.draft.dir),
             Part::When => Some(&mut self.draft.when),
@@ -324,15 +315,10 @@ impl RoutineForm {
         // A tool typed and not yet added counts.
         self.add_tool();
         if let Some((part, why)) = self.check() {
-            self.focus = part;
-            self.wrong = Some((part, why));
+            self.form.wrong_at(part, why);
             return Step::Redraw;
         }
-        Step::Close(Outcome::Picked(Picked {
-            index: usize::from(run_now),
-            value: serde_json::to_string(&self.draft).unwrap_or_default(),
-            query: String::new(),
-        }))
+        form::close_with(usize::from(run_now), &self.draft)
     }
 
     fn cancel(&mut self) -> Step {
@@ -348,26 +334,26 @@ impl RoutineForm {
         match part {
             Part::Option(c, i) => {
                 self.choose(c, i);
-                self.focus = Part::Pick(c);
+                self.form.focus = Part::Pick(c);
                 Step::Redraw
             }
             Part::RemoveTool(i) => {
                 if i < self.draft.tools.len() {
                     self.draft.tools.remove(i);
                 }
-                self.focus = Part::Tools;
+                self.form.focus = Part::Tools;
                 Step::Redraw
             }
             Part::AddTool => {
                 self.add_tool();
-                self.focus = Part::Tools;
+                self.form.focus = Part::Tools;
                 Step::Redraw
             }
             Part::Save => self.save(false),
             Part::SaveRun => self.save(true),
             Part::Cancel | Part::Close => Step::Close(Outcome::Dismissed),
             part => {
-                self.focus = part;
+                self.form.focus = part;
                 Step::Redraw
             }
         }
@@ -416,17 +402,15 @@ impl RoutineForm {
             line
         };
         let wrong_under = |part: Part, lines: &mut Vec<BoxLine>| {
-            if let Some((p, why)) = &self.wrong
-                && *p == part
-            {
+            if let Some(why) = self.form.wrong_of(part) {
                 lines.push(BoxLine::spans(under(vec![Span::styled(
-                    why.clone(),
+                    why.to_string(),
                     Tone::Failed.style(theme),
                 )])));
             }
         };
         let text_field = |text: &str, placeholder: &str, part: Part, right: Vec<Span<'static>>| {
-            let focused = self.focus == part;
+            let focused = self.form.focus == part;
             input(text, placeholder, fw, focused, right, look)
         };
 
@@ -434,7 +418,7 @@ impl RoutineForm {
         parts.push((lines.len(), 0, inner as u16, Part::Name));
         lines.push(BoxLine::spans(at_field(
             "Name",
-            self.focus == Part::Name,
+            self.form.focus == Part::Name,
             text_field(&self.draft.name, "Morning triage", Part::Name, Vec::new()),
         )));
         wrong_under(Part::Name, &mut lines);
@@ -443,7 +427,7 @@ impl RoutineForm {
         let suggestion = self
             .suggestion()
             .map(|s| crate::paths::tilde(Path::new(s)))
-            .filter(|_| self.focus == Part::Dir);
+            .filter(|_| self.form.focus == Part::Dir);
         let right = match &suggestion {
             Some(_) => kit::hints(&[("→", "takes it")], theme),
             None => Vec::new(),
@@ -473,7 +457,7 @@ impl RoutineForm {
         }
         lines.push(BoxLine::spans(at_field(
             "Directory",
-            self.focus == Part::Dir,
+            self.form.focus == Part::Dir,
             dir_line,
         )));
         wrong_under(Part::Dir, &mut lines);
@@ -482,7 +466,7 @@ impl RoutineForm {
         parts.push((lines.len(), 0, inner as u16, Part::When));
         lines.push(BoxLine::spans(at_field(
             "When",
-            self.focus == Part::When,
+            self.form.focus == Part::When,
             text_field(&self.draft.when, "weekdays at 8:45", Part::When, Vec::new()),
         )));
         let now = self.now();
@@ -504,7 +488,7 @@ impl RoutineForm {
                     }
                     lines.push(BoxLine::spans(under(chips)));
                 }
-                Err(e) if self.wrong.as_ref().is_none_or(|(p, _)| *p != Part::When) => {
+                Err(e) if self.form.wrong_of(Part::When).is_none() => {
                     lines.push(BoxLine::spans(under(vec![Span::styled(
                         e,
                         Tone::Needs.style(theme),
@@ -525,11 +509,11 @@ impl RoutineForm {
 
         // Allowed tools: a chip each with its ×, then what is being typed
         // and "+ Add a tool", on as many lines as they take.
-        let on = self.focus == Part::Tools;
+        let on = self.form.focus == Part::Tools;
         let mut pieces: Vec<(Vec<Span<'static>>, Option<Part>)> = Vec::new();
         for (i, tool) in self.draft.tools.iter().enumerate() {
             let part = Part::RemoveTool(i);
-            let lit = self.hover == Some(part) || self.focus == part;
+            let lit = self.form.hover == Some(part) || self.form.focus == part;
             let tone = if lit { Tone::Failed } else { Tone::Dim };
             pieces.push((
                 kit::chip(&format!("{tool} ×"), tone, false, theme),
@@ -543,7 +527,7 @@ impl RoutineForm {
             }
             pieces.push((typed, None));
         }
-        let lit = on || self.hover == Some(Part::AddTool);
+        let lit = on || self.form.hover == Some(Part::AddTool);
         let add = kit::chip(
             "+ Add a tool",
             if lit { Tone::Accent } else { Tone::Dim },
@@ -586,13 +570,13 @@ impl RoutineForm {
 
         // The options.
         for c in [Choice::IfMissed] {
-            let on = self.focus == Part::Pick(c);
+            let on = self.form.focus == Part::Pick(c);
             let chosen = self.chosen(c);
             let mut spans = Vec::new();
             let mut hits = Vec::new();
             for (i, words) in c.options().iter().enumerate() {
                 let x = fx + kit::spans_width(&spans);
-                let lit = self.hover == Some(Part::Option(c, i));
+                let lit = self.form.hover == Some(Part::Option(c, i));
                 let (dot, style) = if i == chosen {
                     (
                         "● ",
@@ -621,7 +605,7 @@ impl RoutineForm {
             if kit::spans_width(&spans) > fw {
                 for (i, words) in c.options().iter().enumerate() {
                     let dot = if i == chosen { "● " } else { "○ " };
-                    let lit = self.hover == Some(Part::Option(c, i));
+                    let lit = self.form.hover == Some(Part::Option(c, i));
                     let tone = if i == chosen || lit {
                         Tone::Text
                     } else {
@@ -650,7 +634,7 @@ impl RoutineForm {
 
         // The prompt, several lines on the panel.
         let panel = Surface::Panel.color(theme);
-        let focused = self.focus == Part::Prompt;
+        let focused = self.form.focus == Part::Prompt;
         let text_w = fw.saturating_sub(4);
         let mut shown: Vec<String> = Vec::new();
         for l in self.draft.prompt.split('\n') {
@@ -708,7 +692,7 @@ impl RoutineForm {
         parts.push((lines.len(), 0, inner as u16, Part::Model));
         lines.push(BoxLine::spans(at_field(
             "Model",
-            self.focus == Part::Model,
+            self.form.focus == Part::Model,
             text_field(
                 &self.draft.model,
                 "the default for routines (opus, sonnet, haiku)",
@@ -722,8 +706,7 @@ impl RoutineForm {
         let mut caps = vec![Span::raw(" ")];
         let mut cap = |key: &str, what: &str, part: Part, caps: &mut Vec<Span<'static>>| {
             let x = kit::spans_width(caps);
-            let lit = self.focus == part || self.hover == Some(part);
-            let spans = kit::keycap(key, what, lit, false, theme);
+            let spans = kit::keycap(key, what, self.form.lit(part), false, theme);
             let w = kit::spans_width(&spans);
             caps.extend(spans);
             parts.push((
@@ -775,7 +758,7 @@ fn input(
 
 impl Overlay for RoutineForm {
     fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
-        self.drawn.as_ref()
+        self.form.drawn.as_ref()
     }
 
     fn kind(&self) -> &'static str {
@@ -783,20 +766,23 @@ impl Overlay for RoutineForm {
     }
 
     fn stands_out(&self) -> Option<ratatui::layout::Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
+        self.form.outer()
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let inner = (buf.area.width as usize).saturating_sub(6).min(WIDTH);
         let (lines, parts) = self.lines(inner, look);
-        self.parts = parts;
+        self.form.clear();
+        for (line, from, to, part) in parts {
+            self.form.cols(line, from, to.saturating_add(1), part);
+        }
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(
             "tab next field  ←→ an option  ↵ next (a line in Prompt, a tool in Allowed tools)  M-↵ save  M-r save and run  esc cancel",
         );
         spec.width = inner as u16;
-        spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        spec.close_lit = self.form.close_lit();
+        self.form.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {
@@ -809,19 +795,16 @@ impl Overlay for RoutineForm {
             KeyCode::Char('c') if k.mods == Mods::CTRL => return Step::Close(Outcome::Dismissed),
             KeyCode::Enter if k.mods.alt => return self.save(false),
             KeyCode::Char('r') if k.mods == Mods::ALT => return self.save(true),
-            KeyCode::Tab => {
-                self.step_focus(1, look);
-                return Step::Redraw;
-            }
-            KeyCode::BackTab => {
-                self.step_focus(-1, look);
+            KeyCode::Tab | KeyCode::BackTab => {
+                let stops = self.stops();
+                self.form.tab(&k, &stops, look);
                 return Step::Redraw;
             }
             KeyCode::Enter => {
-                if self.focus == Part::Tools && self.add_tool() {
+                if self.form.focus == Part::Tools && self.add_tool() {
                     return Step::Redraw;
                 }
-                return match self.focus {
+                return match self.form.focus {
                     Part::Prompt => {
                         self.draft.prompt.push('\n');
                         Step::Redraw
@@ -830,7 +813,7 @@ impl Overlay for RoutineForm {
                     | Part::SaveRun
                     | Part::Cancel
                     | Part::Close
-                    | Part::RemoveTool(_) => self.press(self.focus),
+                    | Part::RemoveTool(_) => self.press(self.form.focus),
                     _ => {
                         self.step_focus(1, look);
                         Step::Redraw
@@ -839,7 +822,7 @@ impl Overlay for RoutineForm {
             }
             _ => {}
         }
-        if let Part::Pick(c) = self.focus {
+        if let Part::Pick(c) = self.form.focus {
             return match k.code {
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('1') => {
                     self.choose(c, 0);
@@ -857,21 +840,22 @@ impl Overlay for RoutineForm {
             };
         }
         if matches!(
-            self.focus,
+            self.form.focus,
             Part::Save | Part::SaveRun | Part::Cancel | Part::Close | Part::RemoveTool(_)
         ) {
             return match k.code {
-                KeyCode::Char(' ') => self.press(self.focus),
+                KeyCode::Char(' ') => self.press(self.form.focus),
                 _ => Step::Same,
             };
         }
-        if self.focus == Part::Tools && k.code == KeyCode::Backspace && self.adding.is_empty() {
+        if self.form.focus == Part::Tools && k.code == KeyCode::Backspace && self.adding.is_empty()
+        {
             return match self.draft.tools.pop() {
                 Some(_) => Step::Redraw,
                 None => Step::Same,
             };
         }
-        if self.focus == Part::Dir && k.code == KeyCode::Right && self.take_suggestion() {
+        if self.form.focus == Part::Dir && k.code == KeyCode::Right && self.take_suggestion() {
             return Step::Redraw;
         }
         let Some(text) = self.field() else {
@@ -895,48 +879,28 @@ impl Overlay for RoutineForm {
         if !changed {
             return Step::Same;
         }
-        if self.wrong.as_ref().is_some_and(|(p, _)| *p == self.focus) {
-            self.wrong = None;
-        }
+        self.form.typed_in();
         Step::Redraw
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
+        if self.form.drawn.is_none() {
             return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let part = match hit {
-            Hit::Close => Some(Part::Close),
-            Hit::Line(line, x) => self
-                .parts
-                .iter()
-                .filter(|(l, x0, x1, _)| *l == line && x >= *x0 && x <= *x1)
-                // The narrowest: an option over its field's line.
-                .min_by_key(|(_, x0, x1, _)| x1 - x0)
-                .map(|p| p.3),
-            _ => None,
-        };
+        }
+        let (hit, part) = self.form.hit(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match part {
                 Some(p) => self.press(p),
                 None if hit == Hit::Outside => self.cancel(),
                 None => Step::Same,
             },
-            Gesture::Move if look.hover => {
-                if part == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = part;
-                    Step::Redraw
-                }
-            }
+            Gesture::Move if look.hover => self.form.hover_on(part),
             _ => Step::Same,
         }
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        let multi = self.focus == Part::Prompt;
+        let multi = self.form.focus == Part::Prompt;
         let Some(field) = self.field() else {
             return Step::Same;
         };
@@ -1032,18 +996,18 @@ mod tests {
         let alt_enter = Key::new(KeyCode::Enter, Mods::ALT);
         assert_eq!(f.key(alt_enter, &look), Step::Redraw);
         assert!(text_of(&f, WIDTH).contains("Write the prompt it runs."));
-        assert_eq!(f.focus, Part::Prompt);
+        assert_eq!(f.form.focus, Part::Prompt);
         type_in(&mut f, "Sort them.");
         f.key(Key::plain(KeyCode::Enter), &look);
         type_in(&mut f, "By area.");
         // Grep taken off, Bash added.
-        f.focus = Part::Tools;
+        f.form.focus = Part::Tools;
         f.key(Key::plain(KeyCode::Backspace), &look);
         type_in(&mut f, "Bash(gh pr list:*)");
         f.key(Key::plain(KeyCode::Enter), &look);
-        assert_eq!(f.focus, Part::Tools, "Enter adds the tool, staying");
+        assert_eq!(f.form.focus, Part::Tools, "Enter adds the tool, staying");
         // Skip it when missed.
-        f.focus = Part::Pick(Choice::IfMissed);
+        f.form.focus = Part::Pick(Choice::IfMissed);
         f.key(Key::plain(KeyCode::Right), &look);
         match f.key(alt_enter, &look) {
             Step::Close(Outcome::Picked(p)) => {
@@ -1078,9 +1042,9 @@ mod tests {
         }
         assert!(text.contains("+ Add a tool"), "{text}");
         // From When, Tab reaches the first tool's ×, and Enter takes it off.
-        f.focus = Part::When;
+        f.form.focus = Part::When;
         f.key(Key::plain(KeyCode::Tab), &look);
-        assert_eq!(f.focus, Part::RemoveTool(0));
+        assert_eq!(f.form.focus, Part::RemoveTool(0));
         f.key(Key::plain(KeyCode::Enter), &look);
         assert_eq!(f.draft.tools, tools[1..]);
     }
@@ -1111,7 +1075,7 @@ mod tests {
             Step::Close(Outcome::Picked(_))
         ));
         // Typed again, it is read against now.
-        f.focus = Part::When;
+        f.form.focus = Part::When;
         f.key(Key::plain(KeyCode::Backspace), &look);
         f.key(Key::plain(KeyCode::Backspace), &look);
         type_in(&mut f, "AM");

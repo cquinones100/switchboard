@@ -39,11 +39,12 @@ use serde::{Deserialize, Serialize};
 
 use super::mode::{Mode, note_title};
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::draw::{self, BoxLine, BoxSpec, Gesture, Hit};
+use crate::ui::form::{self, Form};
 use crate::ui::images::{self, Tones};
 use crate::ui::kit::{self, Col, Mark, Surface, Tone};
 use crate::ui::pointer::Pointer;
-use crate::ui::{Look, Outcome, Overlay, Picked, Step};
+use crate::ui::{Look, Outcome, Overlay, Step};
 
 /// Its inside, while the screen leaves room around it.
 const WIDTH: usize = 92;
@@ -318,7 +319,8 @@ pub enum Field {
     Weekly,
 }
 
-/// A part on a line: the line's index, its first and last column, the part.
+/// A part on a line: the line's index, its first and last column (both
+/// taken by a click), the part.
 type Placed = (usize, u16, u16, Part);
 
 /// An image to place once the box is drawn: its line, its column, its
@@ -337,8 +339,7 @@ pub struct SettingsBox {
     /// The fields as it opened, to tell whether anything changed.
     was: Fields,
     ctx: Context,
-    focus: Part,
-    hover: Option<Part>,
+    form: Form<Part>,
     /// Esc pressed with changes: asking whether to leave them.
     leaving: Option<Step>,
     /// Where the focus goes back to once the question says stay.
@@ -347,8 +348,6 @@ pub struct SettingsBox {
     unfolded: bool,
     /// The screen was 160 columns or more when it was last drawn.
     screen_wide: bool,
-    drawn: Option<Drawn>,
-    parts: Vec<Placed>,
     pictures: Vec<Pictured>,
 }
 
@@ -360,14 +359,11 @@ impl SettingsBox {
             fields,
             was,
             ctx,
-            focus,
-            hover: None,
+            form: Form::new(focus, Part::Close),
             leaving: None,
             back_to: focus,
             unfolded: false,
             screen_wide: true,
-            drawn: None,
-            parts: Vec::new(),
             pictures: Vec::new(),
         }
     }
@@ -388,7 +384,7 @@ impl SettingsBox {
         self.fields != self.was
     }
 
-    fn stops(&self, look: &Look, wide: bool) -> Vec<Part> {
+    fn stops(&self, wide: bool) -> Vec<Part> {
         let mut out = vec![Part::Note, Part::Repo, Part::Target];
         out.extend([
             Part::Slots,
@@ -414,9 +410,6 @@ impl SettingsBox {
             out.extend([Part::Pause, Part::Stop, Part::Menu]);
         }
         out.push(Part::Cancel);
-        if look.close {
-            out.push(Part::Close);
-        }
         out
     }
 
@@ -425,17 +418,12 @@ impl SettingsBox {
     }
 
     fn step_focus(&mut self, by: isize, look: &Look) {
-        let stops = self.stops(look, self.screen_wide);
-        let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
+        let stops = self.stops(self.screen_wide);
+        self.form.step(&stops, by, look);
     }
 
     fn close(&self, index: usize) -> Step {
-        Step::Close(Outcome::Picked(Picked {
-            index,
-            value: serde_json::to_string(&self.fields).unwrap_or_default(),
-            query: String::new(),
-        }))
+        form::close_with(index, &self.fields)
     }
 
     fn step(&mut self, field: Field, by: i64) -> Step {
@@ -492,20 +480,20 @@ impl SettingsBox {
         match part {
             Part::Note => self.close(NOTE),
             Part::Repo | Part::Target | Part::Limit | Part::Slots | Part::Cap | Part::Weekly => {
-                self.focus = part;
+                self.form.focus = part;
                 Step::Redraw
             }
             Part::Planned | Part::Land | Part::HandsFree => {
-                self.focus = part;
+                self.form.focus = part;
                 self.flip(part)
             }
             Part::Skipped(_) => {
-                self.focus = part;
+                self.form.focus = part;
                 Step::Redraw
             }
             Part::Folded => {
                 self.unfolded = true;
-                self.focus = Part::Skipped(0);
+                self.form.focus = Part::Skipped(0);
                 Step::Redraw
             }
             Part::Less(f) => self.step(f, -1),
@@ -522,7 +510,7 @@ impl SettingsBox {
             Part::TakeBack(i) => self.unskip(i),
             Part::Stay => {
                 self.leaving = None;
-                self.focus = self.back_to;
+                self.form.focus = self.back_to;
                 Step::Redraw
             }
             _ => Step::Same,
@@ -538,8 +526,8 @@ impl SettingsBox {
     fn leave(&mut self, then: Step) -> Step {
         if self.changed() {
             self.leaving = Some(then);
-            self.back_to = self.focus;
-            self.focus = Part::Leave;
+            self.back_to = self.form.focus;
+            self.form.focus = Part::Leave;
             Step::Redraw
         } else {
             then
@@ -553,7 +541,7 @@ impl SettingsBox {
         let text = self.fields.skipped.remove(i);
         self.fields.taken_back.push(text);
         let n = self.fields.skipped.len() + self.ctx.needs_choice.len();
-        self.focus = if n == 0 {
+        self.form.focus = if n == 0 {
             Part::Save
         } else {
             Part::Skipped(i.min(n - 1))
@@ -562,7 +550,7 @@ impl SettingsBox {
     }
 
     fn text_field(&mut self) -> Option<&mut String> {
-        match self.focus {
+        match self.form.focus {
             Part::Repo => Some(&mut self.fields.repo),
             Part::Target => Some(&mut self.fields.target),
             Part::Limit => Some(&mut self.fields.limit),
@@ -588,7 +576,7 @@ impl SettingsBox {
     }
 
     fn take_suggestion(&mut self) -> Step {
-        let Some(rest) = self.suggestion(self.focus) else {
+        let Some(rest) = self.suggestion(self.form.focus) else {
             return Step::Same;
         };
         if let Some(text) = self.text_field() {
@@ -662,7 +650,7 @@ impl SettingsBox {
             cap: 20,
         };
         let name = |text: &str, part: Part| -> Vec<Span<'static>> {
-            let on = self.focus == part;
+            let on = self.form.focus == part;
             let style = if on {
                 Tone::Accent.bold(theme)
             } else {
@@ -849,7 +837,7 @@ impl SettingsBox {
         ] {
             let at = stepper_cols[1].unwrap_or((0, 9));
             let x = (at.0 + 1) as u16;
-            let lit = |p: Part| self.hover == Some(p);
+            let lit = |p: Part| self.form.hover == Some(p);
             let cap_style = |p: Part| {
                 let s = Tone::Accent.bold(theme);
                 let bg = if lit(p) {
@@ -859,7 +847,7 @@ impl SettingsBox {
                 };
                 s.bg(bg)
             };
-            let number = if self.focus == part {
+            let number = if self.form.focus == part {
                 Style::new().fg(theme.bright).add_modifier(Modifier::BOLD)
             } else {
                 Tone::Text.bold(theme)
@@ -988,14 +976,14 @@ impl SettingsBox {
             let at = weekly_cols[1].unwrap_or((0, 9));
             let x = (at.0 + 1) as u16;
             let cap_style = |p: Part| {
-                let bg = if self.hover == Some(p) {
+                let bg = if self.form.hover == Some(p) {
                     Surface::Chosen.color(theme)
                 } else {
                     Surface::Panel.color(theme)
                 };
                 Tone::Accent.bold(theme).bg(bg)
             };
-            let number = if self.focus == Part::Weekly {
+            let number = if self.form.focus == Part::Weekly {
                 Style::new().fg(theme.bright).add_modifier(Modifier::BOLD)
             } else {
                 Tone::Text.bold(theme)
@@ -1100,7 +1088,7 @@ impl SettingsBox {
             let words_at = switch_cols[2].unwrap_or((0, 8));
             let (text, color) = images::switch_text(on, &tones);
             let mut style = Style::new().fg(color);
-            if self.focus == part || self.hover == Some(part) {
+            if self.form.lit(part) {
                 style = style.bg(Surface::Chosen.color(theme));
             }
             let wrapped = draw::wrap(what, words_at.1);
@@ -1145,11 +1133,12 @@ impl SettingsBox {
         let n = f.skipped.len() + ctx.needs_choice.len();
         if n > 0 {
             lines.push(BoxLine::blank());
-            let tone = if self.focus == Part::Folded || matches!(self.focus, Part::Skipped(_)) {
-                Tone::Accent
-            } else {
-                Tone::Dim
-            };
+            let tone =
+                if self.form.focus == Part::Folded || matches!(self.form.focus, Part::Skipped(_)) {
+                    Tone::Accent
+                } else {
+                    Tone::Dim
+                };
             if self.folded(wide) {
                 let mut label = kit::label("Skipped", tone, None, inner, theme);
                 label.truncate(2);
@@ -1158,7 +1147,7 @@ impl SettingsBox {
                     Tone::Dim.style(theme),
                 ));
                 parts.push((lines.len(), 0, inner as u16, Part::Folded));
-                let fill = (self.focus == Part::Folded).then(|| Surface::Chosen.color(theme));
+                let fill = (self.form.focus == Part::Folded).then(|| Surface::Chosen.color(theme));
                 lines.push(BoxLine::spans(label).fill(fill).clickable());
             } else {
                 lines.push(BoxLine::spans(kit::label(
@@ -1188,7 +1177,7 @@ impl SettingsBox {
                     )
                 };
                 let room = room.unwrap_or(n).clamp(1, n);
-                let start = match self.focus {
+                let start = match self.form.focus {
                     Part::Skipped(i) if i >= room => i + 1 - room,
                     _ => 0,
                 };
@@ -1197,14 +1186,19 @@ impl SettingsBox {
                     if !shown.contains(&i) {
                         continue;
                     }
-                    let chosen = self.focus == Part::Skipped(i);
-                    let lit = self.hover == Some(Part::Skipped(i));
+                    let chosen = self.form.focus == Part::Skipped(i);
+                    let lit = self.form.hover == Some(Part::Skipped(i));
                     // What it is, then a keycap a click or u takes it back with.
                     let said = "skipped by you ";
                     let mut words = vec![Span::styled(said, Tone::Dim.style(theme))];
                     let back = Part::TakeBack(i);
-                    let cap =
-                        kit::keycap("u", "Take it back", self.hover == Some(back), false, theme);
+                    let cap = kit::keycap(
+                        "u",
+                        "Take it back",
+                        self.form.hover == Some(back),
+                        false,
+                        theme,
+                    );
                     let cap_w = kit::spans_width(&cap);
                     words.extend(cap);
                     let at = item_cols(kit::spans_width(&words));
@@ -1239,7 +1233,7 @@ impl SettingsBox {
                     if !shown.contains(&at) {
                         continue;
                     }
-                    let chosen = self.focus == Part::Skipped(at);
+                    let chosen = self.form.focus == Part::Skipped(at);
                     let mut chip = kit::chip("needs a choice", Tone::Needs, false, theme);
                     chip.pop();
                     let line = row(
@@ -1251,7 +1245,7 @@ impl SettingsBox {
                     );
                     let fill = if chosen {
                         Some(Surface::Chosen.color(theme))
-                    } else if self.hover == Some(Part::Skipped(at)) {
+                    } else if self.form.hover == Some(Part::Skipped(at)) {
                         Some(Surface::Panel.color(theme))
                     } else {
                         None
@@ -1282,7 +1276,7 @@ impl SettingsBox {
             ];
             for (key, what, part) in [("↵", "Yes", Part::Leave), ("n", "No", Part::Stay)] {
                 let x = kit::spans_width(&line);
-                let lit = self.focus == part || self.hover == Some(part);
+                let lit = self.form.lit(part);
                 let spans = kit::keycap(key, what, lit, false, theme);
                 let w = kit::spans_width(&spans);
                 line.extend(spans);
@@ -1302,7 +1296,7 @@ impl SettingsBox {
         // `m` still work.
         let mut cap = |key: Option<&str>, what: &str, part: Part, caps: &mut Vec<Span<'static>>| {
             let x = kit::spans_width(caps);
-            let lit = self.focus == part || self.hover == Some(part);
+            let lit = self.form.lit(part);
             let spans = match key {
                 Some(key) => kit::keycap(key, what, lit, false, theme),
                 None => {
@@ -1363,8 +1357,8 @@ impl SettingsBox {
         look: &Look,
     ) -> Vec<Span<'static>> {
         let theme = &look.theme;
-        let focused = self.focus == part;
-        let lit = self.hover == Some(part);
+        let focused = self.form.focus == part;
+        let lit = self.form.hover == Some(part);
         let mut typed = vec![
             Span::styled(
                 "› ",
@@ -1429,17 +1423,10 @@ fn stepper_of(part: Part) -> Field {
 impl SettingsBox {
     /// The part a click on a cell of the box presses: while the question
     /// before leaving is up, only Leave and Stay.
-    fn part_at(&self, hit: Hit) -> Option<Part> {
-        let part = match hit {
-            Hit::Close => Some(Part::Close),
-            Hit::Line(line, x) => self
-                .parts
-                .iter()
-                .find(|(l, x0, x1, _)| *l == line && x >= *x0 && x <= *x1)
-                .map(|p| p.3),
-            _ => None,
-        };
-        part.filter(|p| self.leaving.is_none() || matches!(p, Part::Leave | Part::Stay))
+    fn part_at(&self, col: u16, row: u16) -> (Hit, Option<Part>) {
+        let (hit, part) = self.form.hit(col, row);
+        let part = part.filter(|p| self.leaving.is_none() || matches!(p, Part::Leave | Part::Stay));
+        (hit, part)
     }
 }
 
@@ -1447,8 +1434,7 @@ impl Overlay for SettingsBox {
     /// A hand over a part a click presses (only Leave and Stay while the
     /// question before leaving is up), the arrow elsewhere.
     fn pointer(&self, col: u16, row: u16, look: &Look) -> Option<Pointer> {
-        let hit = self.drawn.as_ref().map(|d| d.hit(col, row));
-        let pressed = hit.and_then(|h| self.part_at(h)).is_some();
+        let pressed = self.part_at(col, row).1.is_some();
         Some(if pressed && look.mouse {
             Pointer::Hand
         } else {
@@ -1461,7 +1447,7 @@ impl Overlay for SettingsBox {
     }
 
     fn stands_out(&self) -> Option<Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
+        self.form.outer()
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
@@ -1489,7 +1475,7 @@ impl Overlay for SettingsBox {
             let room = fits - 2;
             let focus_at = parts
                 .iter()
-                .find(|p| p.3 == self.focus)
+                .find(|p| p.3 == self.form.focus)
                 .map_or(0, |p| p.0)
                 .min(body.saturating_sub(1));
             let top = (focus_at + 1).saturating_sub(room).min(body - room);
@@ -1513,15 +1499,18 @@ impl Overlay for SettingsBox {
                 .filter_map(|(l, a, b, p)| moved(l).map(|l| (l, a, b, p)))
                 .collect();
         }
-        self.parts = parts;
+        self.form.clear();
+        for (line, from, to, part) in parts {
+            self.form.cols(line, from, to.saturating_add(1), part);
+        }
         self.pictures = pictures;
         let title = self.title();
         let mut spec = BoxSpec::new(&title, &lines);
         spec.keys =
             Some("Tab ⇧Tab field  − + or ← → a count  Space a switch  M-↵ save  esc cancel");
         spec.width = inner as u16;
-        spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        spec.close_lit = self.form.close_lit();
+        self.form.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
     fn draw_frame(&mut self, canvas: &mut dyn crate::ui::Canvas, look: &Look) {
@@ -1529,7 +1518,7 @@ impl Overlay for SettingsBox {
         let Some(frame) = crate::mux::compose::Frame::of(canvas) else {
             return;
         };
-        let Some(drawn) = &self.drawn else {
+        let Some(drawn) = &self.form.drawn else {
             return;
         };
         for (i, (line, x, w, picture)) in self.pictures.iter().enumerate() {
@@ -1553,14 +1542,14 @@ impl Overlay for SettingsBox {
             // Tab moves between Yes and No; Enter takes the one chosen.
             return match k.code {
                 KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
-                    self.focus = if self.focus == Part::Leave {
+                    self.form.focus = if self.form.focus == Part::Leave {
                         Part::Stay
                     } else {
                         Part::Leave
                     };
                     Step::Redraw
                 }
-                KeyCode::Enter if self.focus == Part::Stay => self.press(Part::Stay),
+                KeyCode::Enter if self.form.focus == Part::Stay => self.press(Part::Stay),
                 KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => self.press(Part::Leave),
                 _ => self.press(Part::Stay),
             };
@@ -1571,12 +1560,9 @@ impl Overlay for SettingsBox {
             KeyCode::Char('c') if k.mods == Mods::CTRL => return Step::Close(Outcome::Dismissed),
             KeyCode::Enter if k.mods.alt => return self.close(SAVE),
             KeyCode::Char('s') if k.mods == Mods::ALT => return self.close(SAVE),
-            KeyCode::Tab => {
-                self.step_focus(1, look);
-                return Step::Redraw;
-            }
-            KeyCode::BackTab => {
-                self.step_focus(-1, look);
+            KeyCode::Tab | KeyCode::BackTab => {
+                let stops = self.stops(self.screen_wide);
+                self.form.tab(&k, &stops, look);
                 return Step::Redraw;
             }
             KeyCode::Down => {
@@ -1589,18 +1575,18 @@ impl Overlay for SettingsBox {
             }
             _ => {}
         }
-        match (self.focus, k.code) {
+        match (self.form.focus, k.code) {
             (
                 Part::Slots | Part::Cap | Part::Weekly,
                 KeyCode::Left | KeyCode::Char('-') | KeyCode::Char('−'),
-            ) => return self.step(stepper_of(self.focus), -1),
+            ) => return self.step(stepper_of(self.form.focus), -1),
             (
                 Part::Slots | Part::Cap | Part::Weekly,
                 KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('='),
-            ) => return self.step(stepper_of(self.focus), 1),
+            ) => return self.step(stepper_of(self.form.focus), 1),
             (Part::Repo | Part::Target, KeyCode::Right) => return self.take_suggestion(),
             (Part::Planned | Part::Land | Part::HandsFree, KeyCode::Char(' ') | KeyCode::Enter) => {
-                return self.flip(self.focus);
+                return self.flip(self.form.focus);
             }
             (Part::Skipped(i), KeyCode::Char('u')) => return self.unskip(i),
             (Part::Note, KeyCode::Enter | KeyCode::Char(' ')) => return self.close(NOTE),
@@ -1608,7 +1594,7 @@ impl Overlay for SettingsBox {
             (
                 Part::Save | Part::Pause | Part::Stop | Part::Menu | Part::Cancel | Part::Close,
                 KeyCode::Enter | KeyCode::Char(' '),
-            ) => return self.press(self.focus),
+            ) => return self.press(self.form.focus),
             // Enter in a field goes on to the next.
             (_, KeyCode::Enter) => {
                 self.step_focus(1, look);
@@ -1640,11 +1626,10 @@ impl Overlay for SettingsBox {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
+        if self.form.drawn.is_none() {
             return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let part = self.part_at(hit);
+        }
+        let (hit, part) = self.part_at(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse && self.leaving.is_some() => match part {
                 Some(p) => self.press(p),
@@ -1655,14 +1640,7 @@ impl Overlay for SettingsBox {
                 None if hit == Hit::Outside => self.cancel(),
                 None => Step::Same,
             },
-            Gesture::Move if look.hover => {
-                if part == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = part;
-                    Step::Redraw
-                }
-            }
+            Gesture::Move if look.hover => self.form.hover_on(part),
             _ => Step::Same,
         }
     }
@@ -2019,17 +1997,17 @@ mod tests {
         );
         assert!(first.contains("… 38 more"), "{first}");
         assert!(first.contains("M-↵  Save"), "{first}");
-        b.focus = Part::Skipped(20);
+        b.form.focus = Part::Skipped(20);
         let later = text(&b);
         assert!(
             later.contains("Item 20") && !later.contains("Item 15 "),
             "{later}"
         );
         // Tab reaches the items needing a choice at the end of the list.
-        b.focus = Part::Skipped(39);
+        b.form.focus = Part::Skipped(39);
         b.key(Key::plain(KeyCode::Tab), &Look::default());
         b.key(Key::plain(KeyCode::Tab), &Look::default());
-        assert_eq!(b.focus, Part::Skipped(41));
+        assert_eq!(b.form.focus, Part::Skipped(41));
         assert!(text(&b).contains("Choice 1"));
         assert_eq!(
             b.key(Key::plain(KeyCode::Char('u')), &Look::default()),
@@ -2069,20 +2047,20 @@ mod tests {
         let shown = screen(&mut b);
         assert!(shown.contains("Cancel"), "{shown}");
         // The focus low in the box scrolls it into sight.
-        b.focus = Part::HandsFree;
+        b.form.focus = Part::HandsFree;
         let shown = screen(&mut b);
         assert!(
             shown.contains("Hands-free") && shown.contains("Cancel"),
             "{shown}"
         );
-        assert!(b.parts.iter().any(|p| p.3 == Part::HandsFree));
-        b.focus = Part::Limit;
+        assert!(b.form.line_of(Part::HandsFree).is_some());
+        b.form.focus = Part::Limit;
         b.key(Key::plain(KeyCode::Char('5')), &look);
         b.key(Key::plain(KeyCode::Esc), &look);
         let shown = screen(&mut b);
         assert!(shown.contains("Leave without saving"), "{shown}");
         assert!(
-            b.parts.iter().any(|p| p.3 == Part::Leave),
+            b.form.line_of(Part::Leave).is_some(),
             "its Yes takes a click"
         );
     }
@@ -2106,10 +2084,10 @@ mod tests {
         b.key(Key::plain(KeyCode::Tab), &look);
         b.key(Key::plain(KeyCode::Left), &look);
         assert_eq!((b.fields.slots, b.fields.cap), (4, 4), "the slots follow");
-        b.focus = Part::Planned;
+        b.form.focus = Part::Planned;
         b.key(Key::plain(KeyCode::Char(' ')), &look);
         assert!(b.fields.ready_only);
-        b.focus = Part::Skipped(0);
+        b.form.focus = Part::Skipped(0);
         b.key(Key::plain(KeyCode::Char('u')), &look);
         assert_eq!(b.fields.skipped, ["Rename the flag"]);
         // Its keycap takes a click too.
@@ -2119,7 +2097,7 @@ mod tests {
         assert!(b.fields.skipped.is_empty());
         assert_eq!(b.fields.taken_back, ["Tidy the logs", "Rename the flag"]);
         // Typing in the repository, its suggestion taken with →.
-        b.focus = Part::Repo;
+        b.form.focus = Part::Repo;
         b.key(Key::plain(KeyCode::Char('u')), &look);
         assert_eq!(b.fields.repo, "/src/appu", "u types in a field");
         for _ in 0..5 {
@@ -2131,10 +2109,10 @@ mod tests {
         assert_eq!(b.key(Key::plain(KeyCode::Esc), &look), Step::Redraw);
         assert!(text_of(&b, WIDTH, true).contains("Leave without saving your changes? [Y/n]"));
         assert_eq!(b.key(Key::plain(KeyCode::Char('n')), &look), Step::Redraw);
-        assert_eq!(b.focus, Part::Repo, "the focus back where it was");
+        assert_eq!(b.form.focus, Part::Repo, "the focus back where it was");
         b.key(Key::plain(KeyCode::Esc), &look);
         b.key(Key::plain(KeyCode::Tab), &look);
-        assert_eq!(b.focus, Part::Stay);
+        assert_eq!(b.form.focus, Part::Stay);
         assert_eq!(b.key(Key::plain(KeyCode::Enter), &look), Step::Redraw);
         b.key(Key::plain(KeyCode::Esc), &look);
         assert_eq!(

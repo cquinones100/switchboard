@@ -17,12 +17,13 @@
 //!
 //! The trait an overlay is (`Overlay`), what comes of a key given to one
 //! and the boxes with nothing of the server in them (`draw`, `field`,
-//! `kit`, `message`, `confirm`, `menu`, `picker`, `pointer`) are
+//! `form`, `kit`, `message`, `confirm`, `menu`, `picker`, `pointer`) are
 //! `switchboard-ui`'s (crates/ui), given here at the paths they had, so an
 //! app that draws its own screen (Notes) asks in the same boxes.
 //!
 //! - `draw`: text measured in columns, and the box everything is drawn in.
 //! - `field`: the text field every box that takes typing shares.
+//! - `form`: a box's parts, its focus ring, hit boxes and what is wrong.
 //! - `images`: the image atoms (avatar, picture, meter, series, shadow)
 //!   drawn with kitty graphics, or as text where the terminal can't.
 //! - `kit`: UX 2.0's atoms (tones, marks, chips, cards, keys), which every
@@ -80,8 +81,8 @@ pub mod tip;
 
 pub use switchboard_ui::{
     AsAny, Canvas, Confirm, Kept, Look, Menu, MenuOption, Message, Outcome, PickItem, Picked,
-    Picker, Step, Theme, confirm, dim_behind, draw, field, kit, menu, message, picker, pointer,
-    when,
+    Picker, Step, Theme, confirm, dim_behind, draw, field, form, kit, menu, message, picker,
+    pointer, when,
 };
 
 pub use serve::Handed;

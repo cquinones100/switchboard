@@ -14,6 +14,8 @@ path = "src/lib.rs"
 [dependencies]
 libc = "0.2"
 regex = "1"
+# What a box closes with, as JSON (`form::close_with`).
+serde = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"

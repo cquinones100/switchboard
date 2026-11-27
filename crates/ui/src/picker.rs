@@ -35,7 +35,9 @@
 //!
 //! A list may show the chosen row whole below the rows (`previews`, as
 //! fzf's `--preview` window at the bottom showed wtn-open.zsh's item), when
-//! a row is cut to one line of something longer.
+//! a row is cut to one line of something longer, or beside them
+//! (`beside`, as Notes' finder shows the note chosen), the box then taking
+//! more of the screen.
 //! A list may do a second thing with a row (`also`), as fzf's `--expect
 //! ctrl-o` let link-view.sh open a link it would otherwise read: Ctrl-O
 //! takes the row for that, and the keys row names both.
@@ -56,8 +58,9 @@ use std::time::{Duration, Instant};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Look;
@@ -159,6 +162,8 @@ pub struct Picker {
     /// Each item's text whole, by its place in `items`, shown under the
     /// rows for the chosen one; none when empty.
     previews: Vec<String>,
+    /// The previews go beside the rows rather than under them.
+    beside: bool,
     /// Lines said under the count, dimmed, as fzf's `--header`.
     header: Vec<String>,
     /// Only each row's text matched, not its tags or key (fzf's `--nth`).
@@ -204,6 +209,7 @@ impl Picker {
             dragging: None,
             room: 10,
             previews: Vec::new(),
+            beside: false,
             header: Vec::new(),
             text_only: false,
             multi: false,
@@ -359,6 +365,19 @@ impl Picker {
     pub fn previews(mut self, previews: Vec<String>) -> Picker {
         self.previews = previews;
         self
+    }
+
+    /// `previews` beside the rows, in a box of 85% of the screen's width
+    /// and 80% of its height, the rows taking 55% of it.
+    pub fn beside(mut self, previews: Vec<String>) -> Picker {
+        self.previews = previews;
+        self.beside = true;
+        self
+    }
+
+    /// The share of the screen its box takes.
+    fn share(&self) -> (u16, u16) {
+        if self.beside { (85, 80) } else { (60, 60) }
     }
 
     /// Drawn with UX 2.0's atoms (crates/ui/src/kit.rs), as board 15 draws the
@@ -826,6 +845,42 @@ fn lit(
     spans
 }
 
+impl Picker {
+    /// The chosen row's preview beside the rows, `list_w` columns in, a
+    /// faint line between them.
+    fn draw_beside(&self, buf: &mut Buffer, drawn: &Drawn, list_w: usize, look: &Look) {
+        let first = drawn.inner.y + self.first_row() as u16;
+        let at = Rect::new(
+            drawn.inner.x + list_w as u16 + 1,
+            first,
+            drawn.inner.width.saturating_sub(list_w as u16 + 2),
+            drawn.inner.bottom().saturating_sub(first + 2),
+        );
+        if at.width <= 10 {
+            return;
+        }
+        for y in at.top()..at.bottom() {
+            buf[(at.x - 1, y)].set_symbol("│").set_style(look.faint());
+            for x in at.left()..at.right() {
+                buf[(x, y)].reset();
+            }
+        }
+        let whole = self
+            .shown
+            .get(self.cursor)
+            .and_then(|(i, _)| self.previews.get(*i))
+            .map(String::as_str)
+            .unwrap_or("");
+        let rows = whole
+            .lines()
+            .flat_map(|l| draw::wrap(l, at.width as usize))
+            .take(at.height as usize);
+        for (y, row) in (at.y..).zip(rows) {
+            draw::put_line(buf, at.x, y, at.width, &Line::styled(row, look.text()));
+        }
+    }
+}
+
 impl Overlay for Picker {
     fn kept(&self) -> Option<crate::overlay::Kept> {
         Some(crate::overlay::Kept {
@@ -868,23 +923,30 @@ impl Overlay for Picker {
         // blank line and keys at the bottom.
         // As a pane beside a narrow lone pane, the columns there whole.
         let area = buf.area;
+        let (cols_pct, rows_pct) = self.share();
         let (outer_w, outer_h) = match draw::pane_beside(area, look) {
             Some(pane) => (pane.width as usize, pane.height as usize),
             None => (
-                (area.width as usize * 60 / 100)
+                (area.width as usize * cols_pct as usize / 100)
                     .max(40)
                     .min(area.width as usize),
-                (area.height as usize * 60 / 100)
+                (area.height as usize * rows_pct as usize / 100)
                     .max(10)
                     .min(area.height as usize),
             ),
         };
         let inner = outer_w.saturating_sub(2);
+        // Beside the previews the rows take 55% of the box.
+        let list_w = if self.beside {
+            (inner * 55 / 100).max(20)
+        } else {
+            inner
+        };
         let rows = outer_h.saturating_sub(2 + self.first_row() + 2).max(1);
         // With previews, the lower half shows the chosen one, under a rule;
         // drawn with the kit, as many rows as the longest needs, at most
         // that half.
-        let preview_rows = if self.previews.is_empty() {
+        let preview_rows = if self.previews.is_empty() || self.beside {
             0
         } else if self.kit.is_some() {
             let longest = self
@@ -901,7 +963,7 @@ impl Overlay for Picker {
         if self.cursor >= self.top + self.room {
             self.top = self.cursor + 1 - self.room;
         }
-        let widths = self.columns(inner);
+        let widths = self.columns(list_w);
         let none_taken = !self.items.is_empty() && self.items.iter().all(|i| i.off);
         let total = self.total();
         let count = if none_taken {
@@ -1009,13 +1071,13 @@ impl Overlay for Picker {
         };
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(&keys);
-        spec.place = Place::Share {
-            cols_pct: 60,
-            rows_pct: 60,
-        };
+        spec.place = Place::Share { cols_pct, rows_pct };
         // fzf's lists kept Esc alone, with no close button of their own.
         spec.closes = false;
         let drawn = draw::draw_box(buf, &spec, look);
+        if self.beside {
+            self.draw_beside(buf, &drawn, list_w, look);
+        }
         draw::edge_bar(
             buf,
             &drawn,

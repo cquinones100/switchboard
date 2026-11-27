@@ -1636,13 +1636,11 @@ impl Server {
                         client,
                         Box::new(boxed),
                         Some(Box::new(move |server: &mut Server, client, outcome| {
-                            let Outcome::Picked(p) = outcome else {
+                            let Some((index, picked)) = crate::ui::form::read::<Chosen>(&outcome)
+                            else {
                                 return;
                             };
-                            let Ok(picked) = serde_json::from_str::<Chosen>(&p.value) else {
-                                return;
-                            };
-                            server.work_item_chosen(client, open, p.index, picked, default);
+                            server.work_item_chosen(client, open, index, picked, default);
                         })),
                     )
                 });
