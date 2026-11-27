@@ -532,11 +532,13 @@ export function denied(tool, input) {
 // What a repository's way to land forbids: `gh pr merge` where the way
 // doesn't merge PRs through GitHub, and a push to the default branch where
 // the way isn't straight on it (`switchboard landing`'s `lands`, src/repos.rs's
-// `Way`). A branch that lands on another branch (`landing`'s `target`) has
-// its PR onto that branch, stacked, which GitHub's auto-merge merges
+// `Way`). A PR stacked on another branch is merged by GitHub's auto-merge
 // whatever the way but a merge service, as queue-and-clean's "GitHub's
-// auto-merge" says, which it asks with `--auto`; read from what `landing` knows of the branch, not
-// asked of GitHub, which only `src/integrations` reaches, counted. A repository with no way set,
+// auto-merge" says, which turns it on with `--auto --match-head-commit`:
+// that form is let through but under a merge service, the PR's base never
+// asked of GitHub, which only `src/integrations` reaches, counted, so an
+// immediate merge, or one without the head it checked, is what's refused.
+// A repository with no way set,
 // or a push whose branch can't be read from its words (`git push origin
 // "$b"`), is left to the rules above: this keeps a Claude from landing
 // another way by mistake, and reads the directory a `-C` names, else the
@@ -623,7 +625,8 @@ export function landingCalls(command) {
       }
       // `--disable-auto` stops a merge rather than making one.
       if (!w.includes('--disable-auto')) {
-        found.push({ kind: 'merge', args: otherRepo ? null : args, auto: w.includes('--auto') });
+        const auto = w.includes('--auto') && w.some((x) => x === '--match-head-commit');
+        found.push({ kind: 'merge', args: otherRepo ? null : args, auto });
       }
     }
   }
@@ -660,9 +663,7 @@ export async function landingRefused(command, look) {
         return `Switchboard's permissions in its panes deny this: ${name}, not a push to its default branch, ${main}: ${change}`;
       }
     } else if (call.kind === 'merge' && !MERGES.has(way)) {
-      // Only auto-merge, as queue-and-clean asks it for the stacked PR: a
-      // merge at once from the branch is never the stacked PR's way.
-      if (way === 'service' || !landing.target || !call.auto) {
+      if (way === 'service' || !call.auto) {
         return `Switchboard's permissions in its panes deny this: ${name}, not \`gh pr merge\`: ${change}`;
       }
     }

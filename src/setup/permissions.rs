@@ -636,8 +636,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sb-landing-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("permissions.mjs"), module()).unwrap();
-        // Each case: the way, the branch it lands on (`main` for no
-        // target), the branch checked out (and
+        // Each case: the way, the PR's base (read by nothing: the hook asks
+        // GitHub nothing), the branch checked out (and
         // pushed to by a bare push), the command.
         fs::write(
             dir.join("ask.mjs"),
@@ -646,8 +646,7 @@ mod tests {
              const out = [];\n\
              for (const [way, base, branch, command] of cases) {\n\
                const look = {\n\
-                 landing: async () => way && { lands: way, defaultBranch: 'main', repo: 'acme/app',\n\
-                   target: base === 'main' ? null : { branch: base } },\n\
+                 landing: async () => way && { lands: way, defaultBranch: 'main', repo: 'acme/app' },\n\
                  branch: async (_, ref) => ref === 'HEAD' ? branch : branch && 'origin/' + branch,\n\
                };\n\
                out.push(await landingRefused(command, look));\n\
@@ -734,8 +733,22 @@ mod tests {
                 "switchboard-queue",
                 "feat/base",
                 "x",
-                "gh pr merge 2 --auto --squash",
+                "gh pr merge 2 --auto --match-head-commit abc --squash",
                 false,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 2 --auto --squash",
+                true,
+            ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge 2 --squash",
+                true,
             ),
             (
                 "switchboard-queue",
@@ -812,7 +825,7 @@ mod tests {
                 "direct",
                 "feat/base",
                 "x",
-                "gh pr merge --auto --squash",
+                "gh pr merge 3 --auto --match-head-commit abc --merge",
                 false,
             ),
             ("direct", "main", "x", "git push origin main", false),
