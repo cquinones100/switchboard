@@ -157,7 +157,7 @@ pub struct Place {
 /// The checkout a directory belongs to: its repository's main checkout,
 /// unless it is a bare repository, which has none of its own.
 fn main_checkout(dir: &Path) -> Option<PathBuf> {
-    let common = crate::worktree::git_at(
+    let common = crate::worktree::git(
         dir,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )
@@ -186,8 +186,8 @@ pub fn places(known: &Known) -> Vec<Place> {
     }
     let mut out = Vec::new();
     for repo in roots {
-        let listed = crate::worktree::git_at(&repo, &["worktree", "list", "--porcelain"])
-            .unwrap_or_default();
+        let listed =
+            crate::worktree::git(&repo, &["worktree", "list", "--porcelain"]).unwrap_or_default();
         let name = repo
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -332,7 +332,7 @@ fn choices_up_to(known: &Known, most: usize) -> Vec<(String, Vec<Choice>)> {
         if !dir.is_dir() || crate::trust::in_review_dir_of(home, &dir) {
             continue;
         }
-        let shown = crate::worktree::git_at(
+        let shown = crate::worktree::git(
             &dir,
             &[
                 "rev-parse",
