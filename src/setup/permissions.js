@@ -563,7 +563,7 @@ const MERGE_VALUES = new Set([
 // push) and the branches it pushes to (null for a push with no refspec,
 // which goes where `@{push}` says; none for `--tags` alone; `*` for every
 // branch; `HEAD` for the current one), a merge's arguments, null for one
-// that names another repository (`-R`, `GH_REPO`), whose way this
+// that names another repository (`-R`, `GH_REPO`, a PR's URL), whose way this
 // repository's doesn't say. Read from each command of the line with its
 // quotes taken out and its redirects dropped.
 export function landingCalls(command) {
@@ -612,7 +612,8 @@ export function landingCalls(command) {
         if (MERGE_VALUES.has(w[k])) {
           if (w[k] === '-R' || w[k] === '--repo') otherRepo = true;
           k++;
-        } else if (/^(--repo=|-R.)/.test(w[k])) {
+        } else if (/^(--repo=|-R.)/.test(w[k]) || w[k].includes('://')) {
+          // A PR's URL may name any repository.
           otherRepo = true;
         } else if (!w[k].startsWith('-')) {
           args.push(w[k]);

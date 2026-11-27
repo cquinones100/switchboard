@@ -793,6 +793,13 @@ mod tests {
                 "GH_REPO=acme/other gh pr merge 5",
                 false,
             ),
+            (
+                "switchboard-queue",
+                "main",
+                "x",
+                "gh pr merge https://github.com/acme/other/pull/5",
+                false,
+            ),
             ("direct", "main", "x", "git push origin main", false),
             ("direct", "main", "x", "gh pr merge 1", true),
             (

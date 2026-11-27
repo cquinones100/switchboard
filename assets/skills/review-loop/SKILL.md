@@ -36,7 +36,7 @@ Before the first round, run `switchboard landing` and read the way its first lin
 
 - `switchboard-queue`, `github-queue`, `auto-merge` or `service`: the work lands through a PR, which every one of those ways reviews with this loop before the branch's first push, so the PR opens on a reviewed change. The push at the end pushes the branch to its own remote copy, never to the default branch, and nothing here merges the PR: that way does, through `/queue-and-clean`.
 - `direct`: the work lands straight on the default branch, and the review is a step of that landing, run by `/queue-and-clean` before it pushes (when the repository's `review` is `review-loop`), not before a branch's first push: no branch is pushed for a PR. Run on its own, the loop reviews the same commits, and the push at the end is the landing's: recommend landing with `/queue-and-clean`, which takes the landing lock and runs the repository's tests, over a push of your own to the default branch, which only the user's explicit yes makes.
-- When it fails (no way set), review as usual, and ask only whether to push the branch, never to the default branch.
+- When it fails (no way set), Switchboard decides nothing there: review and ask whether to push as the rest of this file says, the default branch's commits too when working straight on it.
 
 ## Only this repository
 
