@@ -996,8 +996,11 @@ async function loadSheet() {
     const r = await api("/api/tabs/" + m.pane + "/turns");
     if (state.menu !== m) return;
     m.sheet.messages = r.messages || [];
+    m.sheet.failed = false;
   } catch (_) {
-    return;
+    if (state.menu !== m) return;
+    // Read again as the stream next changes the tab, or the app reconnects.
+    m.sheet.failed = m.sheet.messages === null;
   }
   drawSheet();
 }
@@ -1015,7 +1018,7 @@ function drawSheet() {
   s.head = head;
   const card = tab.prompt ? askedCard(tab.prompt) : null;
   const turn = m.sheet.messages === null
-    ? [el("div", { class: "empty" }, "Reading its last turn…")]
+    ? [el("div", { class: "empty" }, m.sheet.failed ? "Couldn't read its last turn. Tap to open the channel." : "Reading its last turn…")]
     : m.sheet.messages.length ? lastTurn(tab, m.sheet.messages) : [el("div", { class: "empty" }, "No turn yet.")];
   list.replaceChildren(...turn, ...(card ? [card] : []));
   // The options drawn again only when they change, so the one focused keeps it.
@@ -3206,7 +3209,9 @@ function listen() {
     // turn read again as the channel's is.
     const sheetAfter = sheetTab();
     drawSheet();
-    if (sheetBefore && sheetAfter && said(sheetBefore) !== said(sheetAfter)) loadSheet();
+    // Its step too, which changes with each tool call while the turn's own words stay.
+    const stepped = (t) => said(t) + JSON.stringify(t.doing || null);
+    if (sheetBefore && sheetAfter && stepped(sheetBefore) !== stepped(sheetAfter)) loadSheet();
     tabsRead();
   };
   source.onerror = () => {
@@ -3239,6 +3244,7 @@ async function reconnect(posted) {
     if (state.live) state.lastHeard = Date.now();
     render();
     if (state.open) loadTurns();
+    if (sheetTab()) loadSheet();
     tabsRead();
   } catch (_) {
     // The stream says when the computer is back, and brings the tabs.

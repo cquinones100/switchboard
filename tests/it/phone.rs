@@ -2710,7 +2710,8 @@ const out = [];
 /// made of plain objects: a long press on a finished tab's row shows its
 /// last turn, read from the channel's route, above its options; on a
 /// working tab a new step reaches the open sheet, read again as the
-/// stream's `turn` changes, the working mark on it; on a tab that asks the
+/// stream's step (`doing`) changes with the turn's words the same, the
+/// working mark on it; on a tab that asks the
 /// turn ends with its question, read only; a tap on the turn, and Enter on
 /// it, open the tab's channel; skipped without Node.
 #[test]
@@ -2752,7 +2753,7 @@ const tabs = (step) => [
   { index: 4, pane: "%4", name: "full titles", state: "done", needs: true, stage: "needs", group: "Needs you", mark: "✓", tone: "passed", words: "finished", turn: { prompt: "Show the full title", at: now } },
   { index: 6, pane: "%6", name: "review PR 41", state: "waiting", needs: true, stage: "needs", group: "Needs you", mark: "●", tone: "needs", words: "asks", turn: { prompt: "Review PR 41", at: now },
     prompt: { id: "p", question: "Which fixture should it time?", options: [{ n: 1, label: "notes-400" }, { n: 2, label: "notes-big" }, { n: 3, label: "Type something" }], free: 3 } },
-  { index: 1, pane: "%1", name: "planning", state: "working", stage: "working", group: "Working", spins: true, tone: "working", words: "working", turn: { prompt: "Plan the parity check", at: 1, step } },
+  { index: 1, pane: "%1", name: "planning", state: "working", stage: "working", group: "Working", spins: true, tone: "working", words: "working", turn: { prompt: "Plan the parity check", at: 1 }, doing: step === 1 ? { tool: "Read", arg: "fork.rs" } : { tool: "Bash", arg: "switchboard watch-note" } },
 ];
 ctx.tabsNow = tabs(1);
 vm.runInContext(`
