@@ -466,7 +466,11 @@ impl Server {
                 // is an idea, filed in the repository's own source, named so
                 // a leading word shaped like an ID stays part of it.
                 let items = shape_batch::items_of(std::slice::from_ref(&text));
-                let only_ids = items.iter().all(|i| worktree::looks_like_ticket(i));
+                // As `items_from` splits them: every word an ID or a link.
+                let only_ids = text
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|w| !w.is_empty())
+                    .all(worktree::looks_like_ticket);
                 let source = if only_ids {
                     if !settings::is_on("linear") {
                         let why = "Linear is off in Settings, so the Linear tickets typed can't be shaped.".to_string();
