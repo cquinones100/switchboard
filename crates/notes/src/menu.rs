@@ -462,6 +462,14 @@ mod tests {
             m.key(Key::new(KeyCode::Char('Q'), Mods::NONE), &look),
             Step::Close(Outcome::Dismissed)
         );
+        let underline = items()
+            .iter()
+            .position(|(_, i)| i.act == Act::Character(Character::Underline));
+        assert_eq!(
+            format_menu(false).key(Key::new(KeyCode::Char('U'), Mods::SHIFT), &look),
+            Step::Close(Outcome::Chose(underline.unwrap())),
+            "a capital with Shift held"
+        );
     }
 
     #[test]

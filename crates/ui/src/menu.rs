@@ -746,7 +746,10 @@ impl Overlay for Menu {
         }
         // An option's own key, but never one the menu moves or closes with
         // unless its options' keys come first.
-        if key.mods == Mods::NONE
+        // A capital may come with Shift held, as a terminal reporting keys
+        // in full sends it.
+        let typed = key.mods == Mods::NONE || (key.mods == Mods::SHIFT && self.keys_first);
+        if typed
             && let KeyCode::Char(c) = key.code
             && (self.keys_first || (!"jkgGqQ /".contains(c) && !c.is_ascii_digit()))
             && let Some(i) = self.options.iter().position(|o| o.key == Some(c))
