@@ -602,6 +602,13 @@ fn settings_checks_a_merge_service_s_label_and_its_check_on_recent_prs() {
             return Some(Reply::json(200, json!([])));
         }
         let asked = request.text();
+        // As GitHub does, a query declaring a variable it never uses is refused.
+        if asked.contains("$prs: Int!") && !asked.contains("first: $prs") {
+            return Some(Reply::json(
+                200,
+                json!({ "errors": [{ "message": "Variable $prs is never used" }] }),
+            ));
+        }
         let check = if asked.contains("\"seen\"") {
             "mergebot"
         } else {

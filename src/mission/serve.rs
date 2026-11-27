@@ -7604,7 +7604,8 @@ impl Server {
         let file = crate::repos::setup_file();
         let now = util::now_ms();
         let mut repos: Vec<String> = self.tab_repos().into_iter().map(|(r, _)| r).collect();
-        for key in crate::repos::read_safely().keys() {
+        let data = crate::repos::read_safely();
+        for key in data.keys() {
             if crate::integrations::github::parse_name_with_owner(key).is_some()
                 && !repos.iter().any(|r| r.eq_ignore_ascii_case(key))
             {
@@ -7613,8 +7614,13 @@ impl Server {
         }
         let mut due = Vec::new();
         for repo in repos {
-            let fresh = crate::repos::setup_in(&file, &repo)
-                .is_some_and(|s| now - s.at < crate::repos::DAY_MS && s.names.is_some());
+            // A merge service's check needs its names, which an answer kept
+            // by an earlier build, or a look for them that failed, lacks.
+            let service = crate::repos::lands_of(&crate::repos::landing_entry(&data, &repo))
+                == Some(crate::repos::Way::Service);
+            let fresh = crate::repos::setup_in(&file, &repo).is_some_and(|s| {
+                now - s.at < crate::repos::DAY_MS && (s.names.is_some() || !service)
+            });
             let asked = self
                 .mission
                 .landing_asked
