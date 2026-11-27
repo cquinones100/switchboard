@@ -1,10 +1,6 @@
 //! The diff: a branch's changes as GitHub's "Files changed" shows them,
-//! side by side in a terminal, told as a story. Ported from diffview.nvim
-//! as M-d set it up (nvim/lua/plugins/diffview.lua, nvim/lua/diffstory.lua,
-//! nvim/diff.lua) and the scripts around it
-//! (tmux/diff-base.sh, tmux/diff-story-ahead.sh), and taken out of the
-//! `switchboard` crate (src/diff) to be an app of its own and the first
-//! plugin on Switchboard's plugin API.
+//! side by side in a terminal, told as a story. It is the first plugin on
+//! Switchboard's plugin API.
 //!
 //! It runs two ways, the same program in both:
 //!

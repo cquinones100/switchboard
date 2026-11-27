@@ -132,16 +132,6 @@ fn read_files(dir: &Path) -> Vec<SessionFile> {
         .collect()
 }
 
-/// The interactive sessions' files (a headless `claude -p`'s are left out,
-/// since a tab's session is its own Claude's), by pid.
-pub fn session_files(dir: &Path) -> Vec<Claude> {
-    read_files(dir)
-        .into_iter()
-        .filter(|f| !f.headless && f.claude.pid != 0)
-        .map(|f| f.claude)
-        .collect()
-}
-
 /// The conversation a session file's pane shows: its own, or, once it has
 /// moved the conversation into the background, the job carrying it on
 /// (the job's `jobId` is its `parkedJobId`, and a job may park one in

@@ -165,19 +165,6 @@ pub fn append_quietly(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
 
 // ── JSON as JavaScript writes it ────────────────────────────────────────────
 
-/// A number as JavaScript would write it: a whole number with no `.0`, so
-/// files written here read as they did when Node wrote them.
-pub fn js_number(n: f64) -> Value {
-    if n.is_finite() && n.fract() == 0.0 && n.abs() < 9.007_199_254_740_992e15 {
-        Value::from(n as i64)
-    } else if n.is_finite() {
-        Value::from(n)
-    } else {
-        // JSON.stringify writes NaN and Infinity as null.
-        Value::Null
-    }
-}
-
 /// Whether a JSON value is truthy as JavaScript sees it.
 pub fn truthy(value: &Value) -> bool {
     match value {
@@ -313,13 +300,6 @@ mod tests {
         assert_eq!(unbase64(b"Zm8").as_deref(), Some(&b"fo"[..]));
         assert_eq!(unbase64(b"Zm9v!"), None, "not the alphabet");
         assert_eq!(unbase64(b"Zm9vY"), None, "no encoding is that long");
-    }
-
-    #[test]
-    fn js_numbers_drop_their_point() {
-        assert_eq!(js_number(3.0).to_string(), "3");
-        assert_eq!(js_number(1.5).to_string(), "1.5");
-        assert_eq!(js_number(f64::NAN), Value::Null);
     }
 
     #[test]

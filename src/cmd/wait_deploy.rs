@@ -1,5 +1,5 @@
 //! `wait-deploy`: waits until a merged PR's commit has been deployed, and
-//! prints one line. Ported from claude/skills/deploy-test/scripts/wait-deploy.js.
+//! prints one line.
 //!
 //! ```text
 //! deployed <sha> <url>   a deploy that includes the commit succeeded (url may be "-")

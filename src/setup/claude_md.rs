@@ -1,6 +1,5 @@
 //! The `claude-md` part: your `~/.claude/CLAUDE.md`, importing your own
-//! rules. Ported from setup.sh's `claude_md`, `claude_md_now`,
-//! `claude_md_pull` and `claude_md_gh_helper`.
+//! rules.
 //!
 //! Your rules come from where `~/.config/switchboard/claude.json` says: a
 //! git repository (`{"repo": "<url>", "file": "CLAUDE.md"}`, cloned into

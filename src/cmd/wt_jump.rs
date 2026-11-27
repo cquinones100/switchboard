@@ -1,7 +1,7 @@
 //! `wt-jump`: goes to the tab whose worktree matches a Linear ticket, a
 //! GitHub pull request, or part of a branch name: the way back to a tab you
 //! already have open, when cycling through them with M-{ and M-} stops
-//! scaling. Ported from `bin/wt-jump`.
+//! scaling.
 //!
 //! ```text
 //! wt-jump ABC-123      the ticket's tab

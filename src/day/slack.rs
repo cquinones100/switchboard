@@ -1,12 +1,9 @@
 //! Mission control's Slack view: what is new for you on Slack in the last
 //! day, newest first, as the server's own look (`slack_look`, the
 //! slack_background setting) or the /slack-updates skill in the Slack
-//! routine's tab last
-//! saved it (`slack.json` in the state directory): direct messages and
-//! mentions marked as needing you, then replies in your threads and the
-//! channels you chose. Ported from lib/sidebar/slack.js, and the saving from
-//! the skill's scripts/save.js, which `switchboard slack-updates-save` runs
-//! and the look calls directly. The relay's own messages are never in it.
+//! routine's tab last saved it (`slack.json` in the state directory): direct
+//! messages and mentions marked as needing you, then replies in your threads
+//! and the channels you chose. The relay's own messages are never in it.
 //!
 //! Slack's connector can't say what you have read, so the view remembers
 //! what you have seen in it: leaving the view marks everything the look on
@@ -167,7 +164,7 @@ pub fn mark_item_seen(state: &Path, channel: &str, ts: &str, now: i64) {
     // Never back: a thread read through a later look stays read through it.
     let key = format!("{channel}:{ts}");
     let was = kept.get(&key).and_then(Value::as_i64).unwrap_or(0);
-    kept.insert(key, json!(now.max(was)));
+    kept.insert(key, now.max(was).into());
     let _ = util::write_atomic(
         seen_items_file(state),
         util::json_compact(&Value::Object(kept)),
@@ -204,7 +201,7 @@ pub fn dismiss(state: &Path, messages: &[Ref], now: i64) {
         .thread_key();
         let ts: f64 = m.ts.parse().unwrap_or(0.0);
         let was = all.get(&key).and_then(Value::as_f64).unwrap_or(0.0);
-        all.insert(key, util::js_number(was.max(ts)));
+        all.insert(key, was.max(ts).into());
     }
     let cutoff = (now - DISMISS_KEEP_MS) as f64 / 1000.0;
     all.retain(|_, ts| ts.as_f64().unwrap_or(0.0) >= cutoff);

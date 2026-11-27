@@ -1,7 +1,7 @@
 //! Plugins bring in things from outside the workspace, from any service with
 //! an API: a plugin fetches a list of items, which mission control shows as
 //! a view of its own and the sidebar, if the plugin asks, as a short list
-//! under the tabs. Ported from lib/sidebar/plugins.js.
+//! under the tabs.
 //!
 //! A plugin was a CommonJS module the daemon loaded; with no Node, it is now
 //! an executable, `~/.config/switchboard/sidebar-plugins/<name>`, in any

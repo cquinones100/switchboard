@@ -61,7 +61,7 @@ Shared by every part:
 | Module | What it is |
 |---|---|
 | `paths` | Where things are, all through `~` (`$HOME`), so a test or a try can give a run a home of its own |
-| `util` | Time, files written whole (`write_atomic`), JSON as JavaScript wrote it (`js_number`), commands with their output, a runtime for short async work |
+| `util` | Time, files written whole (`write_atomic`), commands with their output, a runtime for short async work |
 | `settings` | The workspace's options: the schema in `assets/settings.json`, what you changed in `~/.config/switchboard/settings.json`; the ones marked `"scope": "computer"` (`COMPUTER`) only in this computer's own file, never the synced one, carried over once (`carry_over`), a service's turned on once it works here (`turn_on_where_it_works`) |
 | `requests` | The request audit: every request to a service outside the computer counted as it is made |
 | `net` | HTTPS through one client per runtime (reqwest on rustls), each request counted |
@@ -146,16 +146,16 @@ A version bump on main is a release: when `Cargo.toml`'s version there has no re
 
 ## Conventions
 
-- Each module opens with a comment saying what it is and why it works as it does; a part ported from a Node, shell or Lua file names that file, so its history can be followed.
+- Each module opens with a comment saying what it is and why it works as it does, naming the file it was ported from only where that explains the code (a format kept byte for byte, as the tab color's key); git's history has the rest.
 - Behavior matches the tmux version unless that depended on tmux or macOS; where it changes, the comment says so.
 - No tmux, no Node, no external program but Claude Code and git (and the platform's own tools in `src/platform/`). Desktop differences go through `src/platform/`.
-- Files written whole go through `util::write_atomic`; JSON numbers through `util::js_number`, so files read as they did. The folders it (and `append_quietly`) makes are their owner's alone (`util::make_dirs`, 0700), and the server makes the config, state and cache folders so as it starts, tightening those an earlier build left open (`util::make_private`).
+- Files written whole go through `util::write_atomic`. The folders it (and `append_quietly`) makes are their owner's alone (`util::make_dirs`, 0700), and the server makes the config, state and cache folders so as it starts, tightening those an earlier build left open (`util::make_private`).
 - Server state is touched only by the server task; anything slow runs elsewhere and reports back with an `Event`.
 - Tests: unit tests beside the code; integration tests in `tests/` with a temporary home and a server of their own, never the real one.
 
 ## History
 
-Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts, a Node daemon for the sidebar and mission control, Node programs in `bin/`, a Neovim config with the diff viewer and the notes app as plugins, and `setup.sh` linking dotfiles for tmux, Neovim, lazygit, Ghostty and Karabiner. The rewrite ported each part in turn and then removed them; each module's opening comment names the files it came from, which git's history still has.
+Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts, a Node daemon for the sidebar and mission control, Node programs in `bin/`, a Neovim config with the diff viewer and the notes app as plugins, and `setup.sh` linking dotfiles for tmux, Neovim, lazygit, Ghostty and Karabiner. The rewrite ported each part in turn and then removed them; git's history still has those files.
 
 | Before | After |
 | --- | --- |

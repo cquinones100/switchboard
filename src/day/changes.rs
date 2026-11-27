@@ -1,10 +1,10 @@
 //! What changed on today's calendar since you last looked: an event added,
 //! moved, renamed or gone, for the sidebar's notifications (the
-//! calendar_changes setting). Ported from lib/sidebar/calendar-changes.js.
-//! Today's events as you last saw them are kept in `calendar-seen.json` in
-//! the state directory, and looking at the Calendar view or dismissing the
-//! notification takes the day as it is now. A new day, or the first look,
-//! starts from the day as it is, with nothing to say.
+//! calendar_changes setting). Today's events as you last saw them are kept
+//! in `calendar-seen.json` in the state directory, and looking at the
+//! Calendar view or dismissing the notification takes the day as it is
+//! now. A new day, or the first look, starts from the day as it is, with
+//! nothing to say.
 //!
 //! An event is known by its Google ID from the calendar feed, which a moved
 //! occurrence keeps; a day /today saved has none, so there it is its title

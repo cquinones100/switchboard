@@ -116,12 +116,12 @@ fn branches_in(file: &Path, common: &Path) -> Vec<String> {
 /// `list` with `value` first at `at`, every other entry `keep` says yes to
 /// after it, the most recent first, at most `MAX`.
 fn put_first(list: &Value, key: &str, value: &str, at: i64, keep: impl Fn(&str) -> bool) -> Value {
-    let mut out = vec![json!({ key: value, "at": util::js_number(at as f64) })];
+    let mut out = vec![json!({ key: value, "at": at })];
     out.extend(
         entries(list, key)
             .into_iter()
             .filter(|(v, _)| *v != value && keep(v))
-            .map(|(v, t)| json!({ key: v, "at": util::js_number(t as f64) })),
+            .map(|(v, t)| json!({ key: v, "at": t })),
     );
     out.truncate(MAX);
     Value::Array(out)

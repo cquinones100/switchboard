@@ -132,13 +132,6 @@ pub fn in_branch(branch: &str) -> Option<Ticket> {
     }
 }
 
-/// The Linear project a name gives (`Shaping P-ABC-4: ...`), in capitals.
-pub fn project_in_name(name: &str) -> Option<String> {
-    PROJECT_IN_NAME
-        .captures(name)
-        .map(|c| c[1].to_ascii_uppercase())
-}
-
 /// The ticket or project a name gives, whichever comes first.
 pub fn in_name(name: &str) -> Option<Ticket> {
     let project = PROJECT_IN_NAME

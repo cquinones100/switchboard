@@ -3,56 +3,52 @@
 //! (`lands`: `switchboard-queue`, `github-queue`, `auto-merge`, `direct` or
 //! `service`, src/repos.rs's `Way`) on the first line, then, on the second,
 //! the rest as JSON: `direct`, a direct landing's steps (`test`, `testIn`,
-//! `squash`, `review`, `beforePush`, `afterRebase`), null for any other
-//! way; `service`, a merge service's `label`, `comment` (either null, not
-//! both) and `check`, null for any other way or one not named; `steps`, the
-//! steps the way goes through, in order; where the way came from
-//! (`source`: `repos.json`, or `branch` for the way the branch started
-//! landing with, which it finishes), why, the way repos.json sets now
-//! (`set`), and the repository. `--json` prints both as one object.
-//! `--start` keeps the way on the branch (`--start=<way>`
-//! the one named, the way the landing read as it began) as the one it
-//! started landing with (`branch.<branch>.wtnLands`), unless it keeps one
-//! already, which queue-and-clean runs as a landing begins, so a change of
-//! way in Settings applies from the next landing. It fails (exit 1) when
-//! repos.json can't be read, and when the repository's `lands` isn't set,
-//! saying so and naming Settings' row that sets it, since nothing guesses
-//! how a repository lands. queue-and-clean asks it which way to land a
-//! branch, and how.
-//! `target` is the branch a direct landing goes onto when it isn't the
-//! default branch: the one autopilot cut the branch from, which `wt
-//! --target` recorded as `branch.<branch>.wtnTarget`, with the remote branch
-//! it tracks (`remote` and `remoteBranch`, null when it tracks none, and
-//! then the landing only moves the local branch); null for the default
-//! branch. `started` is when `wt` started the branch's item, in seconds
-//! (`branch.<branch>.wtnStarted`), and `took` how long from then until
-//! now (`1h12m`), for queue-and-clean's Done line; both null for a branch
-//! `wt` didn't start.
-//! `defaultBranch` is the repository's default branch as GitHub has it
-//! now, else (the github setting off, or GitHub not answering) origin's
-//! `HEAD` in the clone, else `main` or `master`, whichever origin has
-//! been fetched for; null when none is known. `note` is the path of the
+//! `squash`, `review`, `beforePush`, `afterRebase`), null for any other way;
+//! `service`, a merge service's `label`, `comment` (either null, not both)
+//! and `check`, null for any other way or one not named; `steps`, the steps
+//! the way goes through, in order; where the way came from (`source`:
+//! `repos.json`, or `branch` for the way the branch started landing with,
+//! which it finishes), why, the way repos.json sets now (`set`), and the
+//! repository. `--json` prints both as one object. `--start` keeps the way
+//! on the branch (`--start=<way>` the one named, the way the landing read as
+//! it began) as the one it started landing with
+//! (`branch.<branch>.wtnLands`), unless it keeps one already, which
+//! queue-and-clean runs as a landing begins, so a change of way in Settings
+//! applies from the next landing. It fails (exit 1) when repos.json can't be
+//! read, and when the repository's `lands` isn't set, saying so and naming
+//! Settings' row that sets it, since nothing guesses how a repository lands.
+//! queue-and-clean asks it which way to land a branch, and how. `target` is
+//! the branch a direct landing goes onto when it isn't the default branch:
+//! the one autopilot cut the branch from, which `wt --target` recorded as
+//! `branch.<branch>.wtnTarget`, with the remote branch it tracks (`remote`
+//! and `remoteBranch`, null when it tracks none, and then the landing only
+//! moves the local branch); null for the default branch. `started` is when
+//! `wt` started the branch's item, in seconds
+//! (`branch.<branch>.wtnStarted`), and `took` how long from then until now
+//! (`1h12m`), for queue-and-clean's Done line; both null for a branch `wt`
+//! didn't start. `defaultBranch` is the repository's default branch as
+//! GitHub has it now, else (the github setting off, or GitHub not answering)
+//! origin's `HEAD` in the clone, else `main` or `master`, whichever origin
+//! has been fetched for; null when none is known. `note` is the path of the
 //! note holding the item `wt` started the branch for (its ID in
-//! `branch.<branch>.wtnItem`, found in the notes directory), and `item`
-//! that item's first line; both null for a branch `wt` didn't start, and
-//! `note` when no note has the ID. `ciBranch` is the branch a landing
-//! whose tests run in CI pushes its commit to, `ci/land-<id>`, `<id>` the
-//! first 12 hex digits of git's blob hash of the branch's name and a
-//! newline, so the name, a note item's words, is never published.
-//! `alreadyLanded` says whether the branch's commits are already on what
-//! it lands on, as fetched last (the target's remote branch, else the
-//! local target, else `origin/<defaultBranch>`): `HEAD` an ancestor of
-//! it, or merging `HEAD` into it changing nothing, with no merge driver
-//! that could have kept its side; null when that ref isn't there.
-//! `issue` is the number of the GitHub issue `wt --issue` started the
-//! branch for (`branch.<branch>.wtnIssue`) when it is an issue of origin's
-//! repository, for queue-and-clean's `Closes #<number>` in the PR it
-//! opens; null otherwise. `issueWork` is whether the branch is work on a
-//! GitHub issue at all: `branch.<branch>.wtnIssue` set (whatever its
-//! repository), or the branch named `issue/<number>-<slug>` (as `wtb` may
-//! make one), for which queue-and-clean asks for no note, the issue being
-//! the work's record.
-//! The answer is src/repos.rs's. Ported from bin/landing.
+//! `branch.<branch>.wtnItem`, found in the notes directory), and `item` that
+//! item's first line; both null for a branch `wt` didn't start, and `note`
+//! when no note has the ID. `ciBranch` is the branch a landing whose tests
+//! run in CI pushes its commit to, `ci/land-<id>`, `<id>` the first 12 hex
+//! digits of git's blob hash of the branch's name and a newline, so the
+//! name, a note item's words, is never published. `alreadyLanded` says
+//! whether the branch's commits are already on what it lands on, as fetched
+//! last (the target's remote branch, else the local target, else
+//! `origin/<defaultBranch>`): `HEAD` an ancestor of it, or merging `HEAD`
+//! into it changing nothing, with no merge driver that could have kept its
+//! side; null when that ref isn't there. `issue` is the number of the GitHub
+//! issue `wt --issue` started the branch for (`branch.<branch>.wtnIssue`)
+//! when it is an issue of origin's repository, for queue-and-clean's `Closes
+//! #<number>` in the PR it opens; null otherwise. `issueWork` is whether the
+//! branch is work on a GitHub issue at all: `branch.<branch>.wtnIssue` set
+//! (whatever its repository), or the branch named `issue/<number>-<slug>`
+//! (as `wtb` may make one), for which queue-and-clean asks for no note, the
+//! issue being the work's record. The answer is src/repos.rs's.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

@@ -370,7 +370,7 @@ fn record_in(dir: &Path, words: &[&str], now: i64) -> Result<(), RecordError> {
     let object = |text: &str| -> Result<Value, RecordError> {
         match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(mut map)) => {
-                map.insert("at".into(), util::js_number(now as f64));
+                map.insert("at".into(), now.into());
                 Ok(Value::Object(map))
             }
             _ => Err(RecordError::Usage),
@@ -390,7 +390,7 @@ fn record_in(dir: &Path, words: &[&str], now: i64) -> Result<(), RecordError> {
             match data.get_mut("found").and_then(Value::as_array_mut) {
                 Some(list) => list.push(found),
                 None => {
-                    data.insert("found".into(), json!([found]));
+                    data.insert("found".into(), [found].into());
                 }
             }
         }
@@ -411,7 +411,7 @@ fn record_in(dir: &Path, words: &[&str], now: i64) -> Result<(), RecordError> {
             let tail = &lines[lines.len().saturating_sub(OUTPUT_TAIL)..];
             data.insert(
                 "output".into(),
-                json!({ "of": of, "tail": tail, "lines": lines.len(), "at": util::js_number(now as f64) }),
+                json!({ "of": of, "tail": tail, "lines": lines.len(), "at": now }),
             );
         }
         _ => return Err(RecordError::Usage),
@@ -1103,7 +1103,7 @@ pub fn branch_of_suffix(suffix: &str) -> String {
 pub(crate) fn new_entry(path: &str, pid: Option<u32>) -> Value {
     let mut entry = json!({
         "path": path,
-        "since": util::js_number(util::now_ms() as f64),
+        "since": util::now_ms(),
     });
     let mut named = vec![("pane", "SWITCHBOARD_PANE")];
     match pid {

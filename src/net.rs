@@ -496,17 +496,6 @@ pub async fn get_file_following(
     get_file(url, headers, timeout, audit).await
 }
 
-/// `get_file`'s status and bytes alone.
-pub async fn get_bytes(
-    url: &str,
-    headers: &[(&str, &str)],
-    timeout: Duration,
-    audit: Audit<'_>,
-) -> Result<(u16, Vec<u8>)> {
-    let file = get_file(url, headers, timeout, audit).await?;
-    Ok((file.status, file.bytes))
-}
-
 /// A body as JSON, else its text as a JSON string, else `null` when empty.
 pub fn parse_body(bytes: &[u8]) -> Value {
     if bytes.iter().all(u8::is_ascii_whitespace) {

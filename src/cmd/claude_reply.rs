@@ -1,8 +1,6 @@
 //! `claude-reply`: prints the last reply Claude gave in a tab, the final
 //! text of its last turn, as the Slack relay reads it from the session's
-//! transcript. Ported from `bin/claude-reply` and the parts of
-//! `lib/slack-relay/tabs.js` it used (`paneFor`, `transcriptFor`,
-//! `lastPrompt`, `lastSaid`).
+//! transcript.
 //!
 //! ```text
 //! claude-reply <tab>          the reply, to stdout

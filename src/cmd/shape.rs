@@ -1,5 +1,4 @@
 //! `shape`: starts a Claude session that shapes a Linear ticket with you.
-//! Ported from bin/shape.
 //!
 //! ```text
 //! shape <what the ticket is about>

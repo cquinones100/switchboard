@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde_json::Value;
 
-use super::views::{self, ViewId};
+use super::views::ViewId;
 use crate::day::calendar::{self, CalEvent, Rsvp};
 use crate::items::{Item, Target};
 use crate::mux::{PaneId, TabId};
@@ -1968,15 +1968,6 @@ pub fn led_to_words(
         _ => format!("you chose \"{label}\""),
     };
     Some(words)
-}
-
-/// Whether Enter on an item does something of its own rather than open a
-/// menu: a heading, a setting, a plugin's item.
-pub fn is_plain(view: &ViewId, item: &Item) -> bool {
-    views::is_header(item)
-        || item.data.get("setting").is_some()
-        || item.data.get("own").is_some()
-        || matches!(view, ViewId::Plugin(_))
 }
 
 #[cfg(test)]

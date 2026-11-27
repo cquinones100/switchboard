@@ -1,7 +1,6 @@
 //! The `terminal` part: Option acting as Alt, which every `M-` key needs on
 //! a Mac, where Option otherwise types a character (`˙`, `∆`) into the
-//! pane. Ported from setup.sh's `part_terminal`, `terminal_app_option`,
-//! `iterm_option` and `terminal_hint`.
+//! pane.
 //!
 //! What it can change, it changes: a Ghostty config of your own gets
 //! `macos-option-as-alt = true` unless it already says how Option acts (and

@@ -83,7 +83,7 @@ fn tabs(home: &Path) -> Vec<Tab> {
         .map(|((i, (name, dir, _)), weight)| Tab {
             index: i + 2,
             name,
-            color: accent_color_of(&dir, Shade::of(None)).hex(),
+            color: accent_color_of(&dir, Shade::Soft).hex(),
             weight,
         })
         .collect();

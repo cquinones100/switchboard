@@ -1,7 +1,6 @@
 //! `switchboard try [--print | --detached] [dir]` and `switchboard try
 //! --clean [dir]` / `--clean-all`: a worktree's Switchboard tried without
-//! touching yours. Ported from bin/switchboard-try, which tried a worktree's
-//! setup in a tmux of its own; the binary is what is tried now.
+//! touching yours.
 //!
 //! It builds the worktree's binary with cargo (which does nothing when it is
 //! up to date), then runs it under a home of its own, `/tmp/sb-<hash of the

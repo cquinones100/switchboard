@@ -573,12 +573,6 @@ fn help() {
     println!("  {}", crate::mux::commands::NAMES.join(" "));
 }
 
-/// What a program not yet ported from Node says.
-pub fn not_yet(name: &str) -> ExitCode {
-    eprintln!("switchboard: {name} isn't ported to Rust yet");
-    ExitCode::from(70)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

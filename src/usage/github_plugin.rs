@@ -1,8 +1,7 @@
 //! The built-in `github` plugin: your open pull requests and the ones
 //! waiting on your review, as a view of their own and, at its top, three in
-//! the sidebar. Ported from lib/sidebar/plugins/github.js, which asked
-//! through the gh command and its login; this asks GitHub's GraphQL API
-//! directly, with the token `integrations::github` finds.
+//! the sidebar. It asks GitHub's GraphQL API directly, with the token
+//! `integrations::github` finds.
 //!
 //! Needs your attention: a review requested of you, or a PR of yours whose
 //! checks failed or that has changes requested. Active: yours, otherwise.

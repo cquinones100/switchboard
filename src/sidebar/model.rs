@@ -506,12 +506,6 @@ fn monitoring_words(tab: &TabModel) -> String {
     joined(watches.into_iter().chain(shells))
 }
 
-/// A self-paced or timed /loop between its ticks has nothing to do until its
-/// next one, so it is in Loops rather than Working.
-pub fn looping_only(tab: &TabModel) -> bool {
-    tab.state == TabState::Background && matches!(tab.tab_loop, Some(TabLoop::Scheduled(_)))
-}
-
 /// An open PR, neither queued nor merged, with a check that failed.
 pub fn build_failing(tab: &TabModel, r: &Rules) -> bool {
     r.build_failing

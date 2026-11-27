@@ -2,7 +2,7 @@
 //! `wtpr` or `wtb` already made for a Linear ticket, a GitHub pull request
 //! or a branch, and hands off to `claude-here` there to resume the session
 //! that was running. The companion to those three for the morning after a
-//! restart. Ported from `bin/worktree-resume`.
+//! restart.
 //!
 //! Nothing is created and nothing is fetched: the worktree is found by
 //! matching the identifier against `git worktree list`, so it works offline

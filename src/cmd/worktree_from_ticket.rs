@@ -1,9 +1,7 @@
 //! `worktree-from-ticket [path] [<work>] [--prompt <text>]` (`wt`): a git
 //! worktree on a new branch for one piece of work, from any of a
 //! repository's ticket sources, with Claude opened in it, told to work on
-//! it. Ported from `bin/worktree-from-ticket`; it took over a note's items
-//! and GitHub issues from the command that started them before, so it is
-//! the one command that starts work.
+//! it. It is the one command that starts work.
 //!
 //! The work is any of:
 //!

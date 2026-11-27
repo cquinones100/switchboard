@@ -1365,7 +1365,7 @@ impl Server {
             Target::Tab(t) if name == "@tab_tint" => self
                 .tabs
                 .get(&t)
-                .filter(|_| crate::settings::is_on("tab_colors_apart"))
+                .filter(|_| crate::tabs::color::TabColors::read().apart)
                 .and_then(|tab| crate::tabs::color::Tint::of_opts(&tab.opts))
                 .map(|tint| format!("{} {}", tint.hue, tint.step.name())),
             Target::Tab(t) if name == "@tab_path" => {

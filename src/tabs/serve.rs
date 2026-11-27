@@ -47,8 +47,8 @@ pub struct Shown {
     pub untitled: Option<String>,
     /// The ticket its branch is for (`names::Facts::ticket`).
     pub ticket: Option<crate::tickets::Ticket>,
-    /// The color it wears: its project's, or gray with the `accent_colors`
-    /// setting off.
+    /// The color it wears: its project's, or gray with `tab_colors`
+    /// `gray`.
     pub color: Option<Rgb>,
     /// The repository its directory is in, by its main clone's directory
     /// (`git::main_clone`), for the sidebar's repository filter.
@@ -132,6 +132,7 @@ impl Server {
         }
         let switches = self.tab_names.names.last_switches();
         let tint = switches
+            .colors
             .apart
             .then(|| self.own_tint(tab_id, facts.tint))
             .flatten();
@@ -144,8 +145,8 @@ impl Server {
             untitled: facts.untitled,
             ticket: facts.ticket,
             color: Some(match tint {
-                _ if !switches.colors => color::GRAY,
-                Some(tint) => color::tab_color(tint, switches.shade),
+                _ if !switches.colors.colored => color::GRAY,
+                Some(tint) => color::tab_color(tint, switches.colors.shade),
                 None => facts.color,
             }),
             repo_dir: Some(
@@ -337,8 +338,8 @@ impl Server {
             .unwrap_or_default()
     }
 
-    /// The color the tab wears: its project's, or gray with the
-    /// `accent_colors` setting off; `None` before its directory is known.
+    /// The color the tab wears: its project's, or gray with
+    /// `tab_colors` `gray`; `None` before its directory is known.
     pub fn tab_color(&self, tab: TabId) -> Option<Rgb> {
         self.tab_names.shown.get(&tab)?.color
     }

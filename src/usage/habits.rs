@@ -2,7 +2,7 @@
 //! anywhere, for suggestions in the sidebar's notifications (the `habits`
 //! setting): a view to turn off that you never open, a key for a command you
 //! keep picking from M-p, and a feature that is off which what you do
-//! suggests. Ported from lib/sidebar/habits.js.
+//! suggests.
 //!
 //! The counts are kept a file a day, `habits/<YYYY-MM-DD>.tsv` in the state
 //! directory, each line `<kind>\t<name>\t<count>`, summed as read: `key` a

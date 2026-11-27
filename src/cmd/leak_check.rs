@@ -1,6 +1,5 @@
 //! `leak-check <range>`: anything that identifies you or your employer in
 //! what a range of commits adds, before it is pushed to a public repository.
-//! Ported from bin/leak-check.
 //!
 //! It reads each line any of the range's commits adds (`git log -p -m
 //! <range>`, every commit and a merge against each parent, so a line a later

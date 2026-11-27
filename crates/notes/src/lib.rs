@@ -1,7 +1,5 @@
 //! Notes: the macOS Notes app's notes, in the terminal, edited with Vim's
-//! keys. Ported from the Neovim plugin in notes/ that bin/notes opened, and
-//! taken out of the `switchboard` crate (src/notes) to be an app of its own
-//! on Switchboard's plugin API, as the diff was before it.
+//! keys.
 //!
 //! It runs two ways, the same program in both:
 //!

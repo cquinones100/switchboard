@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::color::{self, Rgb, Shade, Tint};
+use super::color::{self, Rgb, TabColors, Tint};
 use super::git::{self, GitPlace};
 use super::label;
 use crate::integrations::github::{self, Repo};
@@ -87,12 +87,8 @@ pub struct Switches {
     pub linear: bool,
     /// `tab_lookups`: either of them in tab names.
     pub lookups: bool,
-    /// `accent_colors`: a color per project, else gray.
-    pub colors: bool,
-    /// `tab_colors`: how a project's hue is drawn.
-    pub shade: Shade,
-    /// `tab_colors_apart`: each tab its own hue as it opens.
-    pub apart: bool,
+    /// `tab_colors`.
+    pub colors: TabColors,
 }
 
 impl Default for Switches {
@@ -101,9 +97,7 @@ impl Default for Switches {
             github: true,
             linear: true,
             lookups: true,
-            colors: true,
-            shade: Shade::Soft,
-            apart: true,
+            colors: TabColors::default(),
         }
     }
 }
@@ -118,9 +112,7 @@ impl Switches {
             github: on("github"),
             linear: on("linear"),
             lookups: on("tab_lookups"),
-            colors: on("accent_colors"),
-            apart: on("tab_colors_apart"),
-            shade: Shade::of(all.iter().find(|o| o.key == "tab_colors").map(|o| &o.value)),
+            colors: TabColors::of(all.iter().find(|o| o.key == "tab_colors").map(|o| &o.value)),
         }
     }
 
@@ -373,7 +365,7 @@ impl Names {
     ) -> Facts {
         let name = color::dir_name(dir);
         let tint = color::tint_of(&color::color_key(&name, place));
-        let color = color::tab_color(tint, switches.shade);
+        let color = color::tab_color(tint, switches.colors.shade);
         let window = color::window_name(&name, place);
 
         // The issue the branch was started for (`wt --issue`'s
@@ -863,7 +855,7 @@ mod tests {
         assert_eq!(facts.pr, None);
         assert_eq!(
             facts.color,
-            color::accent_color("app | branch:eng-42-fix-login", Shade::Soft)
+            color::accent_color("app | branch:eng-42-fix-login", color::Shade::Soft)
         );
         let repo_dir = dir.join(".git");
         assert_eq!(

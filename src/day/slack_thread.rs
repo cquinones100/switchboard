@@ -82,10 +82,6 @@ impl SlackFile {
             .find(|(t, _, _)| self.mimetype.eq_ignore_ascii_case(t))
     }
 
-    pub fn is_picture(&self) -> bool {
-        self.kind().is_some_and(|k| !k.2)
-    }
-
     pub fn is_video(&self) -> bool {
         self.kind().is_some_and(|k| k.2)
     }

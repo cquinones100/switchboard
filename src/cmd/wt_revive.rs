@@ -254,13 +254,13 @@ fn recent_sessions(cache: &Map<String, Value>) -> Vec<Recent> {
                 None => {
                     let (cwd, active) = tail_facts(&path, mtime);
                     let mut e = Map::new();
-                    e.insert("mtimeMs".into(), util::js_number(mtime));
-                    e.insert("size".into(), json!(size));
-                    e.insert("facts".into(), json!(FACTS));
+                    e.insert("mtimeMs".into(), mtime.into());
+                    e.insert("size".into(), size.into());
+                    e.insert("facts".into(), FACTS.into());
                     if let Some(cwd) = cwd {
-                        e.insert("cwd".into(), json!(cwd));
+                        e.insert("cwd".into(), cwd.into());
                     }
-                    e.insert("activeMs".into(), util::js_number(active));
+                    e.insert("activeMs".into(), active.into());
                     e
                 }
             };
@@ -413,7 +413,7 @@ fn session_rows() -> Vec<SessionRow> {
             s.entry.insert("prompt".into(), json!(p));
         }
         if !s.entry.contains_key("turns") {
-            s.entry.insert("turns".into(), json!(turns_in(&path)));
+            s.entry.insert("turns".into(), turns_in(&path).into());
         }
         // Where it started is the transcript's own, kept; where it resumes
         // from is worked out on every look, since its folder can go and
@@ -421,7 +421,7 @@ fn session_rows() -> Vec<SessionRow> {
         if !s.entry.contains_key("firstCwd") {
             let first = crate::cmd::claude_here::read_first_cwd(&path);
             s.entry
-                .insert("firstCwd".into(), json!(first.unwrap_or_default()));
+                .insert("firstCwd".into(), first.unwrap_or_default().into());
         }
         let first = s
             .entry

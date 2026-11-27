@@ -1,8 +1,7 @@
 //! `aws-login`: logs in to AWS IAM Identity Center (`aws sso login`),
 //! opening the login page in your Chrome profile rather than whichever
-//! Chrome window is in front. Ported from tmux/aws-login.sh, which M-p's
-//! "Log in to AWS" ran in a popup; the server runs this in a pane beside
-//! yours, which stays until the login is done and a key is pressed, so the
+//! Chrome window is in front. The server runs it in a pane beside yours,
+//! which stays until the login is done and a key is pressed, so the
 //! verification code and any error can be read.
 //!
 //! No profile is named: it logs in to the one `[sso-session]` in

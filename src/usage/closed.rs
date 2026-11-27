@@ -252,11 +252,6 @@ impl Closed {
         self.push(state, event);
     }
 
-    /// Forgets the tabs that are gone without closing (a restart's).
-    pub fn keep_only(&mut self, open: &HashSet<TabId>) {
-        self.last.retain(|t, _| open.contains(t));
-    }
-
     fn push(&mut self, state: &Path, event: Closing) {
         let line = util::json_compact(&event);
         let events = self.load(state);

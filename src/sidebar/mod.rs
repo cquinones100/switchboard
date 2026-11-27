@@ -277,15 +277,6 @@ impl Sidebar {
     pub fn focused(&self, session: &str) -> bool {
         self.sides.get(session).is_some_and(|s| s.focused)
     }
-
-    /// The tab a session's sidebar cursor is on, while it has the focus.
-    pub fn cursor_tab(&self, session: &str) -> Option<TabId> {
-        self.sides
-            .get(session)
-            .filter(|s| s.focused)
-            .and_then(|s| s.cursor.as_ref())
-            .and_then(Owner::tab)
-    }
 }
 
 #[cfg(test)]

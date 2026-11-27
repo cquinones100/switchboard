@@ -1,5 +1,5 @@
 //! `shape-batch`: opens one tab per idea or ticket and runs `shape` in each,
-//! the way `wt-batch` does for `wt`. Ported from bin/shape-batch.
+//! the way `wt-batch` does for `wt`.
 //!
 //! ```text
 //! shape-batch "phase label is unclear" "results load slowly" ABC-123
