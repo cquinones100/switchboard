@@ -18,6 +18,7 @@ use crate::items::{Item, State, ViewData};
 use crate::mission::views::{View, ViewId, header};
 use crate::mux::TabId;
 use crate::phone::views::{self, Kind};
+use crate::remote::places::Choice;
 use crate::sidebar::claude::{LoopRun, Scheduled, SessionRef};
 use crate::sidebar::model::{MergeState, Rules, TabLoop, TabModel, TabState};
 
@@ -695,6 +696,61 @@ pub fn tabs(now_ms: i64) -> Vec<Value> {
         .collect();
     restage(&mut tabs, now_ms);
     tabs
+}
+
+/// The made-up places a tab can be opened in, as `remote::places` lists
+/// them: each repository's checkouts, then the directories outside one.
+pub fn places() -> Vec<(String, Vec<Choice>)> {
+    let place = |label: &str, value: &str| Choice {
+        label: label.into(),
+        value: value.into(),
+    };
+    vec![
+        (
+            "api".into(),
+            vec![
+                place("api", "~/code/api"),
+                place(
+                    "⎇ orders-migration",
+                    "~/code/api/.claude/worktrees/orders-migration",
+                ),
+            ],
+        ),
+        ("web".into(), vec![place("web", "~/code/web")]),
+        ("docs".into(), vec![place("docs", "~/code/docs")]),
+        (
+            "Other directories".into(),
+            vec![place("~/scratch", "~/scratch")],
+        ),
+    ]
+}
+
+/// A made-up tab just opened in a place's repository (`repo`, none for a
+/// directory outside one) on pane `pane`, its Claude working on `prompt`,
+/// as `watch` lists one.
+pub fn opened_tab(pane: u32, index: usize, repo: Option<&str>, prompt: &str, now_ms: i64) -> Value {
+    let name = if prompt.trim().is_empty() {
+        "new Claude".to_string()
+    } else {
+        prompt.trim().chars().take(40).collect()
+    };
+    json!({
+        "tab": format!("@{pane}"),
+        "index": index,
+        "name": name,
+        "repo": repo,
+        "branch": repo.map(|_| "main"),
+        "state": if prompt.trim().is_empty() { "idle" } else { "working" },
+        "pinned": false,
+        "since": now_ms / 1000,
+        "pane": format!("%{pane}"),
+        "wait": null,
+        "transcript": null,
+        "turn": (!prompt.trim().is_empty()).then(|| json!({"prompt": prompt.trim(), "reply": null, "at": now_ms})),
+        "doing": null,
+        "prompt": null,
+        "tab_views": [],
+    })
 }
 
 /// The made-up PR of a tab with one, as the lookups would hold it, and

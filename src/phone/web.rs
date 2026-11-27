@@ -12,13 +12,15 @@
 //! why. No response allows another origin (no CORS headers), and each
 //! carries a strict Content-Security-Policy.
 //!
-//! Eight things change anything, each asked of the server over its socket,
+//! Nine things change anything, each asked of the server over its socket,
 //! which refuses a pane not running Claude: answering a tab's prompt,
 //! sending its Claude a message, marking it seen, setting or clearing its
 //! reminder, pinning or unpinning it, stopping its working Claude's turn and
-//! closing it (the last two asked about first in the app); and running an option of one of mission control's menus
+//! closing it (the last two asked about first in the app); running an option of one of mission control's menus
 //! the phone shows (`phone::mission`), which the server refuses for one
-//! the phone leaves out. A pane is
+//! the phone leaves out; and opening a tab running Claude in one of the
+//! places `remote::places` lists (asked about first in the app), which
+//! the server refuses for a place not listed. A pane is
 //! taken only when the server's own `watch` lists it as a Claude tab. An
 //! image from the phone's photo library is kept on the computer first
 //! (`images`, for that tab alone, under a name made here), and the message
@@ -59,6 +61,7 @@ use super::tailnet::{Peer, Status, peer_from};
 use super::turns;
 use super::{images, looks};
 use crate::remote::notify::{self, Front, Kind};
+use crate::remote::places;
 use crate::remote::protocol::{self, How, Refused, Remote, Server};
 use crate::{assets, platform, settings, util};
 
@@ -275,6 +278,7 @@ fn routes(app: Arc<App>) -> Router {
             get(|s, p| tab_view(s, p, "ticket")),
         )
         .route("/api/tabs/{pane}/note", get(|s, p| tab_view(s, p, "note")))
+        .route("/api/places", get(places_list).post(open_place))
         .route("/api/views/{view}/item", post(view_item))
         .route("/api/views/{view}/act", post(view_act))
         .route("/api/push/key", get(push_key))
@@ -992,6 +996,72 @@ async fn tab_view(
             )
                 .into_response(),
         },
+        Err(refused) => *refused,
+    }
+}
+
+/// The places a tab can be opened in, as the relay's New tab form lists
+/// them (`remote::places`): `{"groups": [{"name", "places": [{"label",
+/// "value"}]}]}`, refused while Settings' `phone_new_tab` is off.
+async fn places_list() -> Response {
+    if !settings::is_on("phone_new_tab") {
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(json!({"error": "opening tabs from the phone is off in Settings"})),
+        )
+            .into_response();
+    }
+    let read = tokio::task::spawn_blocking(|| {
+        let windows = Server::current().windows()?;
+        let known = places::Known::of(&crate::paths::home(), &windows);
+        Some(places_json(&places::place_choices(&known)))
+    })
+    .await;
+    match read {
+        Ok(Some(groups)) => axum::Json(groups).into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "Switchboard isn't running"})),
+        )
+            .into_response(),
+    }
+}
+
+/// The places' groups as the phone reads them.
+pub fn places_json(groups: &[(String, Vec<places::Choice>)]) -> Value {
+    json!({
+        "groups": groups
+            .iter()
+            .map(|(name, choices)| json!({
+                "name": name,
+                "places": choices
+                    .iter()
+                    .map(|c| json!({"label": c.label, "value": c.value}))
+                    .collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// A tab opened in the background running Claude with `prompt` in
+/// `place`, one of the places listed, which the app asks about first: what
+/// the server said and the new tab's pane, for the app to open its channel.
+async fn open_place(axum::Json(body): axum::Json<Value>) -> Response {
+    let (place, prompt) = (text_of(&body, "place"), text_of(&body, "prompt"));
+    match asked(move |s| {
+        let opened = s.open_claude(&place, &prompt, FROM, false)?;
+        Ok(format!("{}\t{}", opened.pane, opened.said))
+    })
+    .await
+    {
+        Ok(out) => {
+            let (pane, said) = out.split_once('\t').unwrap_or((&out, ""));
+            axum::Json(json!({
+                "pane": pane.trim_start_matches('%'),
+                "said": format!("Started Claude in {}", said.replace('`', "")),
+            }))
+            .into_response()
+        }
         Err(refused) => *refused,
     }
 }

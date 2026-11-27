@@ -246,6 +246,7 @@ impl Data {
             "views": self.views,
             "live": self.live,
             "close": true,
+            "new_tab": true,
             "reminders": true,
             "remind_times": super::serve::remind_times(&crate::util::local_now()),
         })
@@ -395,6 +396,7 @@ fn routes(preview: Arc<Preview>) -> Router {
             get(|s, p| tab_view(s, p, "ticket")),
         )
         .route("/api/tabs/{pane}/note", get(|s, p| tab_view(s, p, "note")))
+        .route("/api/places", get(places_list).post(open_place))
         .route("/api/views/{view}/item", post(view_item))
         .route("/api/views/{view}/act", post(view_act))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -929,6 +931,82 @@ async fn stop(State(preview): State<Arc<Preview>>, UrlPath(n): UrlPath<String>) 
         d.set_state(&n, "idle", None);
         said(format!("Stopped tab {index}"))
     })
+}
+
+/// The made-up places, as the real app's sheet lists them.
+async fn places_list(State(preview): State<Arc<Preview>>) -> Response {
+    if !preview.data().live {
+        return offline();
+    }
+    axum::Json(super::web::places_json(&made_up::places())).into_response()
+}
+
+/// A made-up tab opened in a place listed, working on the prompt given, as
+/// the computer would open one; a place not listed refused as it is there.
+async fn open_place(
+    State(preview): State<Arc<Preview>>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let (place, prompt) = (text_of(&body, "place"), text_of(&body, "prompt"));
+    let response = preview.change(|d| {
+        if !d.live {
+            return Err((OFFLINE.0, OFFLINE.1.to_string()));
+        }
+        let Some(group) = made_up::places()
+            .into_iter()
+            .find(|(_, choices)| choices.iter().any(|c| c.value == place))
+            .map(|(group, _)| group)
+        else {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("{place} isn't among the places to start a Claude in, so nothing started."),
+            ));
+        };
+        let pane = d
+            .tabs
+            .iter()
+            .filter_map(|t| {
+                t["pane"]
+                    .as_str()?
+                    .trim_start_matches('%')
+                    .parse::<u32>()
+                    .ok()
+            })
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let index = d
+            .tabs
+            .iter()
+            .filter_map(|t| t["index"].as_u64())
+            .max()
+            .unwrap_or(0) as usize
+            + 1;
+        let repo = (group != "Other directories").then_some(group.as_str());
+        let now = crate::util::now_ms();
+        d.tabs
+            .push(made_up::opened_tab(pane, index, repo, &prompt, now));
+        if !prompt.trim().is_empty() {
+            d.turns.insert(
+                format!("%{pane}"),
+                vec![json!({"who": "you", "text": prompt.trim(), "images": [], "at": now})],
+            );
+        }
+        d.sort();
+        Ok(pane)
+    });
+    match response {
+        Ok(pane) => {
+            if !prompt.trim().is_empty() {
+                preview.reply_later(pane.to_string());
+            }
+            axum::Json(
+                json!({"pane": pane.to_string(), "said": format!("Started Claude in {place}")}),
+            )
+            .into_response()
+        }
+        Err((status, why)) => refused(status, &why),
+    }
 }
 
 async fn close(State(preview): State<Arc<Preview>>, UrlPath(n): UrlPath<String>) -> Response {

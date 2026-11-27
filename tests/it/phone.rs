@@ -763,6 +763,91 @@ const out = [];
     );
 }
 
+/// The New tab sheet (assets/phone/app.js's `newTabSheet`), run in Node
+/// over a page of its own: the drawer's + opens it on the places the
+/// computer lists, by repository; from a channel's ⋯ its tab's repository
+/// leads; Start asks first, only its Start opens the tab, and the app lands
+/// in its channel once the stream lists it; with `new_tab` off neither the
+/// + nor the menu's New tab shows; skipped without Node.
+#[test]
+fn the_new_tab_sheet_lists_the_places_asks_and_lands_in_the_new_channel() {
+    let script = [CHANNEL_PAGE, r##"
+document.body = new Node("body");
+document.removeEventListener = () => {};
+const posted = [];
+const groups = [
+  { name: "api", places: [{ label: "api", value: "~/code/api" }, { label: "⎇ orders", value: "~/code/api/.claude/worktrees/orders" }] },
+  { name: "web", places: [{ label: "web", value: "~/code/web" }] },
+];
+ctx.fetch = (path, opts) => {
+  if (opts && opts.method === "POST") posted.push(path + " " + opts.body);
+  const body = path === "/api/places" && !(opts && opts.method === "POST") ? { groups } : { pane: "9", said: "Started Claude in ~/code/web" };
+  return Promise.resolve({ ok: true, status: 200, json: async () => body });
+};
+const tab = (pane, repo) => ({ pane: "%" + pane, index: Number(pane), name: "t" + pane, repo, state: "idle", wait: "", turn: { prompt: "go" } });
+vm.runInContext(`state.me = { paired: true, computer: "mac" }; listen();`, ctx);
+const update = (tabs, extra) => source.onmessage({ data: JSON.stringify({ live: true, tabs, ...extra }) });
+const button = (label) => document.body.all().find((x) => x.tagName === "button" && x.textContent === label);
+const names = () => document.body.querySelectorAll(".group-name").map((n) => n.textContent).join(",");
+const tick = () => new Promise((r) => setImmediate(r));
+const out = [];
+(async () => {
+  update([tab("5", "web")]);
+  app.querySelector(".head button.new-tab").click();
+  await tick();
+  out.push("drawer=" + names());
+  out.push("chosen=" + document.body.querySelector(".menu-option.place.chosen").textContent);
+  button("Cancel").click();
+  vm.runInContext('state.open = "5"; render();', ctx);
+  app.querySelector(".head button.tab-menu").click();
+  button("New tab").click();
+  await tick();
+  out.push("channel=" + names());
+  document.body.querySelector("input.field").value = "fix it";
+  button("Start").click();
+  out.push("asks=" + document.body.querySelector(".question").textContent);
+  button("No").click();
+  await tick();
+  out.push("no=" + posted.length);
+  app.querySelector(".head button.tab-menu").click();
+  button("New tab").click();
+  await tick();
+  document.body.querySelector("input.field").value = "fix it";
+  button("Start").click();
+  button("Start").click();
+  await tick();
+  out.push("posted=" + posted.join(" | "));
+  out.push("before listed=" + vm.runInContext("state.open", ctx));
+  update([tab("5", "web"), tab("9", "web")]);
+  out.push("landed=" + vm.runInContext("state.open", ctx));
+  update([tab("5", "web")], { new_tab: false });
+  vm.runInContext('state.open = null; render();', ctx);
+  out.push("off=" + !!app.querySelector(".head button.new-tab"));
+  console.log(out.join("\n"));
+})();
+"##]
+    .concat();
+    let Some(stdout) = run_app_js(&script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "drawer=api,web",
+            "chosen=api~/code/api",
+            "channel=web,api",
+            "asks=Start Claude in ~/code/web? [Y/n]",
+            "no=0",
+            r#"posted=/api/places {"place":"~/code/web","prompt":"fix it"}"#,
+            "before listed=5",
+            "landed=9",
+            "off=false",
+        ],
+        "{stdout}"
+    );
+}
+
 /// A channel scrolled to its top (assets/phone/app.js's `loadEarlier`)
 /// asks for the turns before the earliest shown, says "Loading earlier…"
 /// meanwhile, inserts them above with what was on screen kept in place,
@@ -2105,6 +2190,86 @@ fn the_phone_closes_a_claude_tab_and_refuses_any_other() {
         "logged: {}",
         server.log()
     );
+}
+
+/// `claude-tab`, which the phone's New tab sheet asks: a tab opened in
+/// the background in a place the list offers, running Claude with the
+/// prompt and its pane marked as the tab's Claude; a place not listed, a
+/// worktree of someone else's PR checked out untrusted, and anything while
+/// Settings' "Open tabs from the phone" is off refused.
+#[test]
+fn the_phone_opens_a_claude_tab_in_a_listed_place_and_refuses_any_other() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let init = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir).unwrap();
+        let done = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(done.success());
+    };
+    let work = server.home.join("work");
+    init(&work);
+    // As wtpr --untrusted checks a PR out, in the review folder.
+    let review = server.home.join(".cache/switchboard/pr-review/o-r/12345");
+    init(&review);
+    for dir in [&work, &review] {
+        server.ok(&["new-tab", "-d", "-c", dir.to_str().unwrap()]);
+    }
+    let tabs = || {
+        server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(tabs().len(), 3);
+
+    let refused = |place: &str| {
+        let (code, _, err) = server.run(&["claude-tab", "-s", "phone", "-c", place, "--", "hi"]);
+        assert_eq!(code, 1, "{place} refused");
+        err
+    };
+    let elsewhere = refused("~/elsewhere");
+    assert!(elsewhere.contains("isn't among the places"), "{elsewhere}");
+    let untrusted = refused("~/.cache/switchboard/pr-review/o-r/12345");
+    assert!(untrusted.contains("isn't among the places"), "{untrusted}");
+    assert_eq!(tabs().len(), 3, "nothing opened");
+
+    let out = server.ok(&["claude-tab", "-s", "phone", "-c", "~/work", "--", "fix it"]);
+    let parts: Vec<&str> = out.trim_end().split('\t').collect();
+    assert_eq!(parts.len(), 3, "{out}");
+    let (tab, pane) = (parts[0], parts[1]);
+    assert_eq!(parts[2], "`~/work`");
+    let opened = tabs()
+        .into_iter()
+        .find(|t| t["id"] == tab)
+        .unwrap_or_else(|| panic!("{tab} opened: {:?}", tabs()));
+    assert_eq!(opened["options"]["@claude_pane"], pane);
+    assert_eq!(opened["panes"][0]["id"], pane);
+    let cwd = opened["panes"][0]["cwd"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(cwd.ends_with("/home/work"), "{cwd}");
+    wait_until(&server, "claude typed with the prompt", || {
+        screen(&server, pane).contains("claude 'fix it'")
+    });
+    assert!(
+        server.log().contains("from your phone: tab 4 (")
+            && server.log().contains("opened it in `~/work`"),
+        "logged: {}",
+        server.log()
+    );
+
+    common::write_settings(&server.home, json!({ "phone_new_tab": false }));
+    // Asked of a place not listed, so nothing opens while the setting is
+    // read again.
+    wait_until(&server, "the open refused while off", || {
+        refused("~/elsewhere").contains("off in Settings")
+    });
 }
 
 /// `remind`, which the phone's route asks: a typed or offered time sets
@@ -3763,7 +3928,7 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "menu=Mission control›,Pin it,Remind me,Close tab",
+            "menu=Mission control›,Pin it,Remind me,New tab,Close tab",
             "views=landing:○Landing1 in the queue|ci:✕CI11 failing",
             "items=▲#93 stable note IDstab 2 · next train",
             "options=Go to tab 2,Take it out of the merge queue…",

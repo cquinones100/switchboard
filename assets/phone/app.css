@@ -674,6 +674,14 @@ body.refused p { color: var(--dim); }
 .box.sheet .menu-option.time.chosen .clock-time { color: var(--accent); font-weight: 400; }
 .box.sheet .input { margin-top: 6px; }
 .box.sheet .refused { color: var(--red); margin-top: 6px; overflow-wrap: anywhere; }
+/* The New tab sheet's places, under their repositories' names, chosen as Remind me's times are. */
+.box.sheet .place-group .group-name { color: var(--dim); font-size: 12px; padding: var(--s2) 0 2px; }
+.box.sheet .menu-option.place { display: flex; justify-content: space-between; gap: var(--s2); margin: 0 calc(-1 * var(--s4)); width: calc(100% + 2 * var(--s4)); padding-right: var(--s4); }
+.box.sheet .menu-option.place .where { color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: right; }
+.box.sheet .menu-option.place.chosen { background: var(--chosen); font-weight: 700; }
+.box.sheet .menu-option.place.chosen::before { content: "›"; color: var(--yellow); font-weight: 700; margin-left: -16px; margin-right: var(--s2); }
+.box.sheet .menu-option.place.chosen > span:first-child { flex: 1; }
+.box.sheet .menu-option.place.chosen .where { font-weight: 400; }
 .box.sheet .refused:empty { display: none; }
 
 /* ── Motion ── */

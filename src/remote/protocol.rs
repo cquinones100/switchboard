@@ -6,8 +6,9 @@
 //! draft left in its prompt box (`clear-draft`), stop a turn (`stop`),
 //! mark it seen (`seen`), set its reminder (`remind`), pin it (`pin`),
 //! close it (`kill-tab`), read its PR, ticket or note (`phone-tab`), run a
-//! mission control view's menu option (`phone-item`, `phone-view`), and
-//! follow every Claude tab as it changes (`watch`). The server answers
+//! mission control view's menu option (`phone-item`, `phone-view`), open
+//! a tab running Claude in a place (`claude-tab`, src/remote/places.rs),
+//! and follow every Claude tab as it changes (`watch`). The server answers
 //! each in src/remote/serve.rs with the same refusals whoever asks; what
 //! the relay does beyond the phone (a dialog answered, a message after a
 //! draft, Esc on a waiting Claude) it asks for with a flag of its own.
@@ -70,6 +71,29 @@ pub struct How<'a> {
     pub step: Option<&'a str>,
     pub dialog: bool,
     pub after_draft: bool,
+}
+
+/// The option a tab's Claude pane is recorded in, by the relay and as
+/// `claude-tab` opens one.
+pub const CLAUDE_PANE: &str = "@claude_pane";
+
+/// A tab `claude-tab` opened: its id, its pane's, and where, in words.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opened {
+    pub tab: String,
+    pub pane: String,
+    pub said: String,
+}
+
+/// `claude-tab`'s answer, `<tab>\t<pane>\t<where>`.
+pub fn opened_of(out: &str) -> Option<Opened> {
+    let mut parts = out.trim_end_matches('\n').splitn(3, '\t');
+    let (tab, pane) = (parts.next()?, parts.next()?);
+    Some(Opened {
+        tab: tab.to_string(),
+        pane: pane.to_string(),
+        said: parts.next().unwrap_or("").to_string(),
+    })
 }
 
 /// A tab's direct landing, from `list`'s `landing` and its pane's phase.
@@ -236,6 +260,14 @@ pub trait Remote {
         command: Option<&[String]>,
     ) -> Result<(String, String)>;
     fn kill_tab(&self, tab: &str) -> Result<()>;
+    /// A tab opened in the background running Claude with `prompt` in
+    /// `place`, for `from` (the server's log), its pane marked as the
+    /// tab's Claude. Without `anywhere`, `place` is one the list of places
+    /// offers (`places::listed`), as the phone's sheet does; with it, a
+    /// name or any directory, as the relay's `new <place>:` takes it
+    /// (`places::resolve_place`). A worktree checked out untrusted is
+    /// refused either way.
+    fn open_claude(&self, place: &str, prompt: &str, from: &str, anywhere: bool) -> Result<Opened>;
     /// Gives a tab a name of its own; empty for its own name again.
     fn rename_tab(&self, tab: &str, name: &str) -> Result<()>;
     fn select_tab(&self, tab: &str) -> Result<()>;
@@ -558,6 +590,16 @@ impl Remote for Server {
         self.ask(&["kill-tab", "-t", tab]).map(|_| ())
     }
 
+    fn open_claude(&self, place: &str, prompt: &str, from: &str, anywhere: bool) -> Result<Opened> {
+        let mut args = vec!["claude-tab", "-s", from, "-c", place];
+        if anywhere {
+            args.push("-a");
+        }
+        args.extend(["--", prompt]);
+        let out = self.said(&args)?;
+        opened_of(&out).ok_or_else(|| anyhow!("the server didn't say which tab it opened"))
+    }
+
     fn rename_tab(&self, tab: &str, name: &str) -> Result<()> {
         // The name M-p's "Rename the tab" gives is the tab's own; the one a
         // skill sets is its @tab_name. The relay's takes the place of both.
@@ -704,7 +746,7 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                     .and_then(|v| v.trim().parse::<f64>().ok())
                     .is_some_and(|n| n != 0.0)
                     && opt("@autopilot_yours").is_none(),
-                recorded: opt("@claude_pane"),
+                recorded: opt(CLAUDE_PANE),
                 stage: tab
                     .get("stage")
                     .filter(|s| s.is_object())

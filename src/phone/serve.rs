@@ -447,13 +447,14 @@ impl Server {
                 Some(tab)
             })
             .collect();
-        // Whether Close tab and Remind me are offered and the app buzzes, sent again as
+        // Whether Close tab, New tab and Remind me are offered and the app buzzes, sent again as
         // Settings changes them, and the reminder box's times with the
         // clock time each means now, as the box shows them.
         json!({
             "tabs": tabs,
             "views": views,
             "close": crate::settings::is_on("phone_close_tabs"),
+            "new_tab": crate::settings::is_on("phone_new_tab"),
             "haptics": crate::settings::is_on("phone_haptics"),
             "reminders": r.reminders,
             "remind_times": remind_times(&util::local_now()),
