@@ -23,6 +23,7 @@ use crate::agent::screen::Prompt;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::field::{Edit, Field};
+use crate::ui::kit::nav;
 use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
@@ -295,10 +296,7 @@ impl Overlay for AnswerBox {
                         _ => Step::Same,
                     };
                 }
-                KeyCode::Down => wrap_step(at, shown.len(), true),
-                KeyCode::Char('n') if k.mods == Mods::CTRL => wrap_step(at, shown.len(), true),
-                KeyCode::Up => wrap_step(at, shown.len(), false),
-                KeyCode::Char('p') if k.mods == Mods::CTRL => wrap_step(at, shown.len(), false),
+                _ if let Some(by) = nav::typing_rows(k) => wrap_step(at, shown.len(), by > 0),
                 KeyCode::Tab => at + 1,
                 KeyCode::BackTab => at.saturating_sub(1),
                 KeyCode::Char('c') if k.mods == Mods::CTRL => {
@@ -338,13 +336,9 @@ impl Overlay for AnswerBox {
         };
         let options = found.options.len();
         let stops = options + usize::from(look.close);
-        let ctrl = k.mods == Mods::CTRL;
-        let arrow_down = k.code == KeyCode::Down
-            || (ctrl && k.code == KeyCode::Char('n'))
-            || (plain && k.code == KeyCode::Char('j'));
-        let arrow_up = k.code == KeyCode::Up
-            || (ctrl && k.code == KeyCode::Char('p'))
-            || (plain && k.code == KeyCode::Char('k'));
+        let step = nav::step(k).and_then(|m| m.rows());
+        let arrow_down = step == Some(1);
+        let arrow_up = step == Some(-1);
         if (arrow_down || arrow_up) && options > 0 {
             self.focus = Some(match self.focus {
                 None if arrow_down => 0,

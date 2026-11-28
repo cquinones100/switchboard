@@ -24,6 +24,7 @@ use crate::items::Item;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::server::{ClientId, Server};
 use crate::mux::{PaneId, TabId};
+use crate::ui::kit::nav::Move;
 use crate::ui::menu::wrap_step;
 use crate::{paths, settings};
 
@@ -339,21 +340,18 @@ impl Server {
         // j and k wrap, past the last notification to the first and back,
         // as the Notifications view's do.
         let wrapped = |down| wrap_step(at.max(0) as usize, entries.len(), down) as isize;
+        let to = match crate::ui::kit::nav::step(k) {
+            Some(Move::Down) => Some(wrapped(true)),
+            Some(Move::Up) => Some(wrapped(false)),
+            Some(Move::Top) => Some(0),
+            Some(Move::Bottom) => Some(entries.len() as isize - 1),
+            _ => None,
+        };
+        if let Some(to) = to {
+            self.notices_choose(&session, &entries, to);
+            return true;
+        }
         match k.code {
-            KeyCode::Char('j') | KeyCode::Down if none => {
-                self.notices_choose(&session, &entries, wrapped(true))
-            }
-            KeyCode::Char('n') if ctrl => self.notices_choose(&session, &entries, wrapped(true)),
-            KeyCode::Char('k') | KeyCode::Up if none => {
-                self.notices_choose(&session, &entries, wrapped(false))
-            }
-            KeyCode::Char('p') if ctrl => self.notices_choose(&session, &entries, wrapped(false)),
-            KeyCode::Char('g') | KeyCode::Home if none => {
-                self.notices_choose(&session, &entries, 0)
-            }
-            KeyCode::Char('G') | KeyCode::End if none => {
-                self.notices_choose(&session, &entries, entries.len() as isize - 1)
-            }
             // Tab and Shift-Tab go round "‹ tabs", each notification, then
             // the footer's "m view actions", as on a webpage.
             KeyCode::Tab | KeyCode::BackTab if settings::is_on("tab_focus") => {

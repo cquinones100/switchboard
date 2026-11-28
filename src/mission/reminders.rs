@@ -24,7 +24,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use serde_json::{Value, json};
 
-use super::views::View;
+use super::views::{View, ViewId};
 use super::{HitBox, Mission, Spot};
 use crate::items::{Item, State, Target};
 use crate::mux::input::{Key, KeyCode, Mods};
@@ -477,7 +477,7 @@ pub fn month(
         } else {
             cols.saturating_sub(2)
         },
-        beside || m.reminders_lists,
+        beside || m.alone.contains(&ViewId::Reminders),
     );
     let mut out: Vec<GridRow> = Vec::new();
     if pane_w > 0 {

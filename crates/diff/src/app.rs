@@ -98,6 +98,8 @@ use super::sides::{self, Item};
 use super::story::{self, Look as StoryLook, Progress, Reading, Story};
 use super::tell::{self, Asked, Heard, Teller};
 use switchboard_ui::draw::width;
+use switchboard_ui::input::Key;
+use switchboard_ui::kit::nav::Move;
 use switchboard_ui::kit::{self, Tone};
 use switchboard_ui::pointer::Pointer;
 use switchboard_ui::screen::Screen;
@@ -113,6 +115,8 @@ mod reading;
 mod select;
 mod talk;
 mod trail;
+mod vim;
+use vim::ch;
 mod width;
 
 pub use page::story_page;
@@ -774,6 +778,8 @@ pub struct App {
     visual: Option<usize>,
     list_visual: Option<usize>,
     yanked: bool,
+    /// The shared Vim the file's sides move by (vim.rs).
+    vim: switchboard_vim::Editor,
     /// What the mouse selected (select.rs), the rows of text last drawn,
     /// where its button was pressed, and the last press with how many in a
     /// row it made.
@@ -959,6 +965,7 @@ impl App {
             visual: None,
             list_visual: None,
             yanked: false,
+            vim: switchboard_vim::Editor::reader(switchboard_vim::Text::default()),
             selection: None,
             spots: Vec::new(),
             pressed: None,
@@ -2592,6 +2599,7 @@ impl App {
             self.message = None;
             self.filtering = false;
             self.menu = None;
+            self.vim = switchboard_vim::Editor::reader(switchboard_vim::Text::default());
             return Act::Redraw;
         }
         if ctrl && key.code == KeyCode::Char('n') {
@@ -2699,6 +2707,12 @@ impl App {
         if let Some(first) = self.pending.take() {
             return self.second_key(first, key);
         }
+        if self.vim_waiting()
+            && !self.on_story()
+            && let Some(key) = Key::of_crossterm(&key)
+        {
+            return self.vim_keys(&[key], None);
+        }
         if let KeyCode::Char(c @ '0'..='9') = key.code
             && !ctrl
             && (c != '0' || self.count.is_some())
@@ -2707,6 +2721,7 @@ impl App {
             self.count = Some(self.count.unwrap_or(0) * 10 + n);
             return Act::Same;
         }
+        let counted = self.count.is_some();
         let count = self.count.take().unwrap_or(1).max(1);
         // The talk has the keys while it is on the screen.
         if self.on_talk()
@@ -2781,27 +2796,16 @@ impl App {
             }
             KeyCode::Char('J') if list => self.scroll_chosen(SCROLL * count, true),
             KeyCode::Char('K') if list => self.scroll_chosen(SCROLL * count, false),
-            KeyCode::Char('j') | KeyCode::Down if list => self.move_list(count as isize),
-            KeyCode::Char('k') | KeyCode::Up if list => self.move_list(-(count as isize)),
+            _ if list && let Some(by) = nav(&key).and_then(|m| m.along(count as isize)) => {
+                self.move_list(by)
+            }
             KeyCode::Char('d') if ctrl && list => self.move_list((page / 2) as isize),
             KeyCode::Char('u') if ctrl && list => self.move_list(-((page / 2) as isize)),
-            KeyCode::Char('G') | KeyCode::End if list => self.move_list(isize::MAX / 2),
-            KeyCode::Home if list => self.move_list(isize::MIN / 2),
             KeyCode::Enter | KeyCode::Char('l' | 'o') | KeyCode::Right if list => {
                 self.focus = self.main_side();
             }
-            KeyCode::Char('j') | KeyCode::Down => self.move_cursor(count as isize),
-            KeyCode::Char('k') | KeyCode::Up => self.move_cursor(-(count as isize)),
-            KeyCode::Char('d') if ctrl => self.move_cursor((page / 2) as isize),
-            KeyCode::Char('u') if ctrl => self.move_cursor(-((page / 2) as isize)),
-            KeyCode::Char('f') if ctrl => self.move_cursor(page as isize),
-            KeyCode::Char('b') if ctrl => self.move_cursor(-(page as isize)),
-            KeyCode::PageDown => self.move_cursor(page as isize),
-            KeyCode::PageUp => self.move_cursor(-(page as isize)),
             KeyCode::Char('e') if ctrl => self.scroll_diff(count, true),
             KeyCode::Char('y') if ctrl => self.scroll_diff(count, false),
-            KeyCode::Char('G') | KeyCode::End => self.move_cursor(isize::MAX / 2),
-            KeyCode::Home => self.move_cursor(isize::MIN / 2),
             KeyCode::Enter => match self.also_under() {
                 Some((page, hunk)) => self.go_to_also(page, hunk),
                 None => self.open_fold(),
@@ -2816,6 +2820,19 @@ impl App {
                 if self.focus == Focus::Old && self.side_widths().1 > 0 {
                     self.focus = Focus::New;
                 }
+            }
+            // Home and End the file's first and last line, as ever.
+            KeyCode::Home if !list => return self.vim_keys(&[ch('g'), ch('g')], None),
+            KeyCode::End if !list => return self.vim_keys(&[ch('G')], None),
+            // A screen of the file from the list too.
+            KeyCode::Char('f' | 'b') | KeyCode::PageDown | KeyCode::PageUp
+                if list && (ctrl || !matches!(key.code, KeyCode::Char(_))) =>
+            {
+                return self.page_from_list(&key);
+            }
+            // The rest is the shared Vim's, on a side of the file.
+            _ if !list && let Some(key) = Key::of_crossterm(&key) => {
+                return self.vim_keys(&[key], counted.then_some(count));
             }
             _ => return Act::Same,
         }
@@ -2843,6 +2860,7 @@ impl App {
         let KeyCode::Char(c) = key.code else {
             return Act::Redraw;
         };
+        let counted = self.count.is_some();
         let count = self.count.take().unwrap_or(1);
         // The map has no file or line under a cursor: its pairs are the
         // views' and the story's copy.
@@ -2874,7 +2892,9 @@ impl App {
             ('y', 'l') => self.copy_link(),
             ('y', 'S') => self.copy_story(),
             ('g', 'g') if self.focus == Focus::List => self.move_list(isize::MIN / 2),
-            ('g', 'g') => self.move_cursor(isize::MIN / 2),
+            ('g', 'g') => {
+                return self.vim_keys(&[ch('g'), ch('g')], counted.then_some(count));
+            }
             (']', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(1),
             ('[', 'c') if self.focus == Focus::List && self.mapped() => self.chapter_jump(-1),
             (']', 'c') if self.focus == Focus::List => self.page_jump(1),
@@ -2981,30 +3001,6 @@ impl App {
         if self.focus != Focus::List {
             self.keep_side();
         }
-    }
-
-    /// The cursor moved `by` lines within the shown file, stopping at its
-    /// first and last lines: while the files read as one scroll too, where
-    /// another file is the list's to choose, or ]f and [f's.
-    fn move_cursor(&mut self, by: isize) {
-        self.adrift = false;
-        let n = self.screen_lines().len();
-        if n == 0 {
-            return;
-        }
-        let to_an_end = by.unsigned_abs() >= (isize::MAX / 4) as usize;
-        let stopped_at_the_end_with_a_file_after =
-            by > 0 && !to_an_end && self.cur + 1 >= n && self.at + 1 < self.order.len();
-        if stopped_at_the_end_with_a_file_after && !self.said_end {
-            self.said_end = true;
-            let path = self.current().map(|e| e.path.clone()).unwrap_or_default();
-            let name = path.rsplit('/').next().unwrap_or_default();
-            self.say(format!("End of {name} · ]f for the next file"));
-        }
-        self.cur = (self.cur as isize + by).clamp(0, n as isize - 1) as usize;
-        self.col = 0;
-        self.moved = true;
-        self.keep_cursor();
     }
 
     /// The view's file the shown one, but while the files read as one
@@ -3443,8 +3439,9 @@ impl App {
                 self.refilter();
             }
             KeyCode::Enter => self.filtering = false,
-            KeyCode::Down => self.move_list(1),
-            KeyCode::Up => self.move_list(-1),
+            _ if let Some(by) = Key::of_crossterm(&key).and_then(kit::nav::typing_rows) => {
+                self.move_list(by)
+            }
             KeyCode::Backspace => {
                 self.path_filter.pop();
                 self.refilter();
@@ -4792,6 +4789,16 @@ impl App {
     }
 }
 
+/// The step `key` is in one of the diff's lists, as in every list
+/// (`kit::nav`), but `g`, which starts a pair here (`gg` the top), and
+/// C-n and C-p, since the palette's commands press C-\ C-n first.
+fn nav(key: &KeyEvent) -> Option<Move> {
+    use switchboard_ui::input::KeyCode as K;
+    Key::of_crossterm(key)
+        .filter(|k| !k.mods.ctrl && k.code != K::Char('g'))
+        .and_then(kit::nav::step)
+}
+
 /// The side an M-arrow moves to (h, j, k or l), for an arrow with Alt
 /// alone.
 fn alt_arrow(key: &KeyEvent) -> Option<char> {
@@ -5326,6 +5333,25 @@ mod tests {
             uncommitted: None,
         });
         app
+    }
+
+    #[test]
+    fn a_files_side_moves_by_the_shared_vim_and_changes_nothing() {
+        let mut app = app();
+        press(&mut app, "l");
+        assert_ne!(app.focus, Focus::List);
+        press(&mut app, "gg");
+        assert_eq!((app.cur, app.col), (0, 0));
+        let text = app.side_text(app.focus == Focus::New);
+        press(&mut app, "w");
+        assert!(app.col > 0, "w goes to the next word: {text:?}");
+        press(&mut app, "x");
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some(switchboard_vim::editor::READ_ONLY)
+        );
+        press(&mut app, "G");
+        assert_eq!(app.cur, text.len() - 1);
     }
 
     #[test]

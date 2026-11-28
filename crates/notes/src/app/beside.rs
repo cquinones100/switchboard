@@ -975,14 +975,8 @@ impl App {
                 }
                 b.follow = true;
             }
-            KeyCode::Char('j' | 'k' | 'g' | 'G') | KeyCode::Down | KeyCode::Up if !ctrl => {
-                b.line = match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => b.line + 1,
-                    KeyCode::Char('k') | KeyCode::Up => b.line.saturating_sub(1),
-                    KeyCode::Char('g') => 0,
-                    _ => last,
-                }
-                .min(last);
+            _ if let Some(by) = kit::nav::step(key).and_then(|m| m.along(1)) => {
+                b.line = b.line.saturating_add_signed(by).min(last);
                 b.follow = true;
                 follow_card(b, &hits);
             }

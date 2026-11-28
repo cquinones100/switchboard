@@ -2742,30 +2742,22 @@ impl App {
             KeyCode::Char('K') => {
                 self.scroll_column(super::SCROLL * count as usize, false, !outline)
             }
-            KeyCode::Char('j') | KeyCode::Down if outline && !ctrl => {
+            _ if outline && let Some(by) = super::nav(&key).and_then(|m| m.along(count)) => {
                 let last = self.items().len().saturating_sub(1);
-                self.choose_item((self.reader.item + count as usize).min(last));
+                self.choose_item(self.reader.item.saturating_add_signed(by).min(last));
             }
-            KeyCode::Char('k') | KeyCode::Up if outline && !ctrl => {
-                self.choose_item(self.reader.item.saturating_sub(count as usize));
-            }
-            KeyCode::Char('G') | KeyCode::End if outline => {
-                self.choose_item(self.items().len().saturating_sub(1));
-            }
-            KeyCode::Home if outline => self.choose_item(0),
             KeyCode::Enter | KeyCode::Char('o' | ' ') if outline && !ctrl => {
                 self.read_from_here();
             }
-            KeyCode::Char('j') | KeyCode::Down if !ctrl => self.move_reading(count),
-            KeyCode::Char('k') | KeyCode::Up if !ctrl => self.move_reading(-count),
+            _ if let Some(by) = super::nav(&key).and_then(|m| m.along(count)) => {
+                self.move_reading(by)
+            }
             KeyCode::Char('d') if ctrl => self.move_reading(page / 2),
             KeyCode::Char('u') if ctrl => self.move_reading(-(page / 2)),
             KeyCode::Char('f') if ctrl => self.move_reading(page),
             KeyCode::Char('b') if ctrl => self.move_reading(-page),
             KeyCode::PageDown => self.move_reading(page),
             KeyCode::PageUp => self.move_reading(-page),
-            KeyCode::Char('G') | KeyCode::End => self.move_reading(isize::MAX / 2),
-            KeyCode::Home => self.move_reading(isize::MIN / 2),
             KeyCode::Enter | KeyCode::Char('o' | ' ') if !ctrl => self.act_on_line(None),
             _ => return Some(Act::Same),
         }

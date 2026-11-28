@@ -116,7 +116,8 @@ impl App {
             && self.settings.is_none()
             && self.history.is_none()
             && !self.filtering
-            && self.pending.is_none();
+            && self.pending.is_none()
+            && !self.vim_waiting();
         match key.code {
             KeyCode::Char('H') if plain && free => Some(false),
             KeyCode::Char('L') if plain && free => Some(true),

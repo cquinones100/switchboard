@@ -40,6 +40,7 @@ use ratatui::text::{Line, Span};
 
 use super::draw::{self, BoxSpec, Drawn, Gesture, Hit};
 use super::images;
+use super::kit::nav::{self, Move};
 use super::kit::{self, Surface, Tone};
 use super::pointer::{BoxPointer, Pointer};
 use super::{Look, Outcome, Overlay, Step};
@@ -222,8 +223,8 @@ impl Pictures {
                 self.chosen = None;
                 Step::Redraw
             }
-            KeyCode::Char('j') | KeyCode::Down if plain => self.step_choice(true, false),
-            KeyCode::Char('k') | KeyCode::Up if plain => self.step_choice(false, false),
+            _ if nav::step(key) == Some(Move::Down) => self.step_choice(true, false),
+            _ if nav::step(key) == Some(Move::Up) => self.step_choice(false, false),
             KeyCode::Tab if plain => self.step_choice(true, true),
             KeyCode::BackTab if plain || shift => self.step_choice(false, true),
             KeyCode::Enter | KeyCode::Char(' ') if plain => {

@@ -272,7 +272,7 @@ pub fn board(
     let top = lines.len();
     let body = rows.saturating_sub(1 + top);
     let beside = cols >= BESIDE_AT;
-    let alone = !beside && m.routines_pane;
+    let alone = !beside && m.alone.contains(&crate::mission::views::ViewId::Routines);
     if alone {
         hits.push(HitBox::in_place(top));
     }

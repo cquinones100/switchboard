@@ -494,6 +494,15 @@ fn first_non_blank(line: &str) -> usize {
 }
 
 impl<N: Note> Editor<N> {
+    /// One that reads `text` and changes nothing (`read_only`), as the
+    /// views, the code viewer and the diff read.
+    pub fn reader(text: Text) -> Editor<N> {
+        Editor {
+            read_only: true,
+            ..Editor::new(text)
+        }
+    }
+
     pub fn new(text: Text) -> Editor<N> {
         Editor {
             seen: text.clone(),

@@ -25,6 +25,7 @@ use crate::items::{Item, State};
 use crate::mux::TabId;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Mark, Tone};
+use crate::ui::menu::Filter;
 use crate::ui::when::{self, Said};
 
 /// The most lines a tab's name wraps to.
@@ -134,13 +135,6 @@ impl Section {
             items: items.iter().take(shown).cloned().collect(),
         }
     }
-}
-
-/// A / filter on the tabs, being typed or kept.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Filter {
-    pub text: String,
-    pub typing: bool,
 }
 
 /// Where ← or → goes: a tab, or a mission control view by its title.
@@ -574,10 +568,9 @@ pub fn sidebar_lines(
     match view.filter {
         Some(f) => {
             let mut row = Row::default();
-            row.put(" ", Style::new())
-                .put(format!("/{}", f.text), fg(YELLOW));
-            if f.typing {
-                row.put("▏", fg(theme.dim));
+            row.put(" ", Style::new());
+            for span in f.spans(fg(YELLOW), fg(theme.dim)) {
+                row.put(span.content, span.style);
             }
             head.push(row.fit(cols, None));
         }
@@ -2102,10 +2095,7 @@ mod tests {
     #[test]
     fn a_filter_shows_under_the_header_and_the_chosen_tab_is_lit() {
         let tabs = vec![tab(1, "one", TabState::Idle), tab(2, "two", TabState::Idle)];
-        let filter = Filter {
-            text: "tw".into(),
-            typing: true,
-        };
+        let filter = Filter::of("tw", true);
         let owner = Owner::Tab(TabId(2));
         let v = View {
             focused: true,

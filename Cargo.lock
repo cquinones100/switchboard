@@ -3046,6 +3046,7 @@ dependencies = [
  "switchboard-highlight",
  "switchboard-plugin-api",
  "switchboard-ui",
+ "switchboard-vim",
  "tar",
  "unicode-segmentation",
  "unicode-width",

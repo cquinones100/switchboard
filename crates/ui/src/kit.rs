@@ -47,6 +47,8 @@
 //! `Buffer` through `ui::draw::put_line`. Text is measured with
 //! `ui::draw::width`.
 
+pub mod nav;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

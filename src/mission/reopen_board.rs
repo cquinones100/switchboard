@@ -545,7 +545,7 @@ pub fn board(
     // Under PANE_AT, `i` shows the pane in the list's place, while a row
     // is chosen (a view beside it with the focus chooses none here).
     if !wide
-        && m.reopen_pane
+        && m.alone.contains(&ViewId::Reopen)
         && let Some((pane, picture)) = pane
     {
         hits.push(HitBox::in_place(lines.len()));

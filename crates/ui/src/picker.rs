@@ -1098,11 +1098,9 @@ impl Overlay for Picker {
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
             KeyCode::Tab if self.multi => self.mark(true),
             KeyCode::BackTab if self.multi => self.mark(false),
-            KeyCode::Down => self.step(true),
-            KeyCode::Char('n' | 'j') if ctrl => self.step(true),
-            KeyCode::Up => self.step(false),
+            _ if let Some(by) = crate::kit::nav::typing_rows(key) => self.step(by > 0),
             // C-k is the field's, to the line's end.
-            KeyCode::Char('p') if ctrl => self.step(false),
+            KeyCode::Char('j') if ctrl => self.step(true),
             KeyCode::Tab => self.move_to(self.cursor + 1),
             KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
             KeyCode::PageDown => self.move_to(self.cursor + self.room),

@@ -29,11 +29,14 @@
 //! narrower than its title: an option longer than that is cut with ….
 
 use ratatui::buffer::Buffer;
+use ratatui::style::Style;
+use ratatui::text::Span;
 
 use crate::Look;
 use crate::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::field::{Edit, Field};
 use crate::input::{Key, KeyCode, Mods, Mouse};
+use crate::kit::nav::Move;
 use crate::overlay::{Outcome, Overlay, Step};
 
 /// The search a box with a list opens with `/`: what is typed, and which
@@ -62,8 +65,48 @@ pub enum Filtered {
 }
 
 impl Filter {
+    /// One holding `text`, being typed (`open`) or kept once typed.
+    pub fn of(text: &str, open: bool) -> Filter {
+        Filter {
+            open,
+            field: Field::new().with_text(text),
+            room: 0,
+        }
+    }
+
+    /// A list's filter once `key` closed it as a box's search: gone for
+    /// Esc, emptied and still typed for Backspace (the sidebar's, mission control's).
+    pub fn after_close(key: Key) -> Option<Filter> {
+        (key.code == KeyCode::Backspace).then(|| Filter::of("", true))
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Typed into again, what it holds kept.
+    pub fn open(&mut self) {
+        self.open = true;
+    }
+
+    /// No longer typed, what it holds kept, as a list's filter is once
+    /// Enter takes it (the sidebar's, mission control's); whether it was.
+    pub fn keep(&mut self) -> bool {
+        std::mem::replace(&mut self.open, false)
+    }
+
+    /// It on a line where a list keeps it: `/`, what is typed, and while
+    /// it is typed the cursor where it stands.
+    pub fn spans(&self, style: Style, cursor: Style) -> Vec<Span<'static>> {
+        let (before, after) = self.field.text().split_at(self.field.cursor());
+        let mut out = vec![Span::styled(format!("/{before}"), style)];
+        if self.open {
+            out.push(Span::styled("▏", cursor));
+        }
+        if !after.is_empty() {
+            out.push(Span::styled(after.to_string(), style));
+        }
+        out
     }
 
     pub fn typed(&self) -> &str {
@@ -151,7 +194,7 @@ impl Filter {
             &self.field,
             "type to search",
             cols,
-            vec![ratatui::text::Span::styled(
+            vec![Span::styled(
                 count,
                 super::kit::Tone::Dim.style(&look.theme),
             )],
@@ -727,10 +770,9 @@ impl Overlay for Menu {
         if self.filter.is_open() {
             let ctrl = key.mods == Mods::CTRL;
             let to = match key.code {
-                KeyCode::Down => wrap_step(self.cursor, n, true),
-                KeyCode::Char('n') if ctrl => wrap_step(self.cursor, n, true),
-                KeyCode::Up => wrap_step(self.cursor, n, false),
-                KeyCode::Char('p') if ctrl => wrap_step(self.cursor, n, false),
+                _ if let Some(by) = crate::kit::nav::typing_rows(key) => {
+                    wrap_step(self.cursor, n, by > 0)
+                }
                 KeyCode::Tab => self.cursor + 1,
                 KeyCode::BackTab => self.cursor.saturating_sub(1),
                 KeyCode::Enter => return self.take(),
@@ -766,17 +808,14 @@ impl Overlay for Menu {
                 Step::Redraw
             }
         };
+        match crate::kit::nav::step(key) {
+            Some(Move::Down) => return moved(wrap_step(self.cursor, n, true), &mut self.cursor),
+            Some(Move::Up) => return moved(wrap_step(self.cursor, n, false), &mut self.cursor),
+            Some(Move::Top) => return moved(0, &mut self.cursor),
+            Some(Move::Bottom) => return moved(n - 1, &mut self.cursor),
+            _ => {}
+        }
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down if plain => {
-                moved(wrap_step(self.cursor, n, true), &mut self.cursor)
-            }
-            KeyCode::Char('n') if ctrl => moved(wrap_step(self.cursor, n, true), &mut self.cursor),
-            KeyCode::Char('k') | KeyCode::Up if plain => {
-                moved(wrap_step(self.cursor, n, false), &mut self.cursor)
-            }
-            KeyCode::Char('p') if ctrl => moved(wrap_step(self.cursor, n, false), &mut self.cursor),
-            KeyCode::Char('g') | KeyCode::Home if plain => moved(0, &mut self.cursor),
-            KeyCode::Char('G') | KeyCode::End => moved(n - 1, &mut self.cursor),
             KeyCode::Tab | KeyCode::BackTab => {
                 let by = crate::form::tab_by(&key).unwrap_or(1);
                 let to = crate::form::step_index(self.cursor, self.stops(look), by);

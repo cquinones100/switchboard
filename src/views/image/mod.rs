@@ -378,15 +378,13 @@ impl App {
             return true;
         }
         let last = self.shots.len() - 1;
+        let moved = crate::mux::input::Key::of_crossterm(&event::KeyEvent::new(code, mods))
+            .and_then(crate::ui::kit::nav::step)
+            .and_then(|m| m.along(1));
         match code {
-            KeyCode::Char('j' | ' ') | KeyCode::Down | KeyCode::PageDown => {
-                self.at = (self.at + 1).min(last)
-            }
-            KeyCode::Char('k' | 'b') | KeyCode::Up | KeyCode::PageUp => {
-                self.at = self.at.saturating_sub(1)
-            }
-            KeyCode::Char('g') | KeyCode::Home => self.at = 0,
-            KeyCode::Char('G') | KeyCode::End => self.at = last,
+            _ if let Some(by) = moved => self.at = self.at.saturating_add_signed(by).min(last),
+            KeyCode::Char(' ') | KeyCode::PageDown => self.at = (self.at + 1).min(last),
+            KeyCode::Char('b') | KeyCode::PageUp => self.at = self.at.saturating_sub(1),
             KeyCode::Char('r') => {}
             _ => return true,
         }

@@ -736,7 +736,7 @@ pub fn board(
     };
     let chosen = m.chosen_item();
     // Under PANE_AT the ticket shows in the list's place while `i` holds it.
-    let ticket_alone = !wide && m.inbox_pane && chosen.is_some();
+    let ticket_alone = !wide && m.alone.contains(&ViewId::Inbox) && chosen.is_some();
     if ticket_alone {
         hits.push(HitBox::in_place(top));
     }
@@ -1074,7 +1074,7 @@ mod tests {
         );
         assert!(line_with(&texts, "ABC-140").contains("Ana assigned"));
         assert!(!line_with(&texts, "ABC-140").contains("to you by"));
-        m.inbox_pane = true;
+        m.alone.insert(ViewId::Inbox);
         let (texts, _, _) = draw(&m, 120);
         assert!(
             !texts.iter().any(|l| l.contains("TODAY")),

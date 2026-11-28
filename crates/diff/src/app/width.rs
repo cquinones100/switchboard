@@ -42,9 +42,9 @@
 
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
-use switchboard_ui::input::{self, Key, Mods};
+use switchboard_ui::input::{self, Key};
 use switchboard_ui::kit::Tone;
 
 use super::{Act, App, Cell, Focus, LIST_WIDTH, Line, ListRow, Mode, Telling};
@@ -127,29 +127,6 @@ pub(super) fn kept_file() -> PathBuf {
 fn clamped(width: i32, cols: u16) -> u16 {
     let most = (cols / 2).max(LEAST_WIDTH);
     width.clamp(i32::from(LEAST_WIDTH), i32::from(most)) as u16
-}
-
-/// A key as the workspace names one.
-fn ui_key(key: &KeyEvent) -> Option<Key> {
-    let code = match key.code {
-        KeyCode::Char(c) => input::KeyCode::Char(c),
-        KeyCode::Left => input::KeyCode::Left,
-        KeyCode::Right => input::KeyCode::Right,
-        KeyCode::Up => input::KeyCode::Up,
-        KeyCode::Down => input::KeyCode::Down,
-        KeyCode::Home => input::KeyCode::Home,
-        KeyCode::End => input::KeyCode::End,
-        KeyCode::PageUp => input::KeyCode::PageUp,
-        KeyCode::PageDown => input::KeyCode::PageDown,
-        KeyCode::F(n) => input::KeyCode::F(n),
-        _ => return None,
-    };
-    let mods = Mods {
-        shift: key.modifiers.contains(KeyModifiers::SHIFT),
-        alt: key.modifiers.contains(KeyModifiers::ALT),
-        ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-    };
-    Some(Key::new(code, mods))
 }
 
 /// What a screen line of the diff is part of, the same for each of its
@@ -672,7 +649,7 @@ impl App {
         if !self.opts.resize {
             return None;
         }
-        let pressed = ui_key(key)?.normalized();
+        let pressed = Key::of_crossterm(key)?.normalized();
         self.resize_keys
             .iter()
             .find(|k| pressed == k.key.normalized())

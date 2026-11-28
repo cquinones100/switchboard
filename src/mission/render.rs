@@ -352,7 +352,10 @@ fn shelf_folded(cols: usize, open: bool) -> bool {
 /// out, shows only its label: until Enter or a click opens it, or a /
 /// search, whose matches are all reachable.
 pub fn repos_folded(m: &Mission) -> bool {
-    !m.other_repos_open && m.filter.as_ref().is_none_or(|f| f.text.trim().is_empty())
+    !m.other_repos_open
+        && m.filter
+            .as_ref()
+            .is_none_or(|f| f.typed().trim().is_empty())
 }
 
 /// Whether a stage shows only its label, its first tab standing for it:
@@ -2818,7 +2821,7 @@ fn list(
     }
     // `i`'s output over the list, whether the board or the list is drawn.
     if view.id == ViewId::Landing
-        && m.landing_output
+        && m.alone.contains(&ViewId::Landing)
         && cols < LANDING_OUTPUT_AT
         && let Some(landing) = m
             .chosen_item()
@@ -3127,7 +3130,7 @@ fn list(
             let needle = m
                 .filter
                 .as_ref()
-                .map(|f| f.text.trim().to_lowercase())
+                .map(|f| f.typed().trim().to_lowercase())
                 .unwrap_or_default();
             for found in found_lines(item, &needle, cols, theme) {
                 hits.push(HitBox {
@@ -3862,7 +3865,7 @@ fn landing_detail(
             let parsed = footer_key(key);
             let pointed = parsed
                 .is_some_and(|k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k)));
-            let lit = pointed || (key == "i" && m.landing_output);
+            let lit = pointed || (key == "i" && m.alone.contains(&ViewId::Landing));
             spans.extend(kit::keycap(key, what, lit, m.snap.caps, theme));
             if let Some(k) = parsed {
                 hits.push(HitBox {
@@ -5430,7 +5433,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
     } else {
         ("jk", "move")
     };
-    if m.grid.is_some() && !m.filter.as_ref().is_some_and(|f| f.typing) && m.jump.is_none() {
+    if m.grid.is_some() && !m.filter.as_ref().is_some_and(|f| f.is_open()) && m.jump.is_none() {
         let mut out = pairs(&[
             ("tab", "next view"),
             grid_moves,
@@ -5455,8 +5458,13 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
     }
     // While a filter types, letters are the filter's, not keys, and what
     // is typed leads the line: the bar it ends may be too wide to show it.
-    if let Some(f) = m.filter.as_ref().filter(|f| f.typing) {
-        let mut out = vec![(format!("/{}▏", f.text), String::new())];
+    if let Some(f) = m.filter.as_ref().filter(|f| f.is_open()) {
+        let typed: String = f
+            .spans(Style::new(), Style::new())
+            .into_iter()
+            .map(|s| s.content)
+            .collect();
+        let mut out = vec![(typed, String::new())];
         out.extend(pairs(&[("↑↓", "move")]));
         out.extend(if m.picker {
             pairs(&[("Enter", "actions"), ("esc", "close")])
@@ -5554,7 +5562,8 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             let output = m
                 .chosen_item()
                 .is_some_and(|i| i.data["landing"]["record"]["output"].is_object());
-            let rest: &[(&str, &str)] = match (narrow && output, m.landing_output) {
+            let rest: &[(&str, &str)] = match (narrow && output, m.alone.contains(&ViewId::Landing))
+            {
                 (true, true) => &[("i", "back to the list")],
                 (true, false) => &[("i", "its last output")],
                 _ => &[],
@@ -6184,13 +6193,7 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
         filter.push(Span::styled("▏", fg(theme.dim)));
     } else if let Some(f) = &m.filter {
         filter.push(Span::raw("  "));
-        filter.push(Span::styled(
-            format!("/{}", f.text),
-            reverse(fg(YELLOW), filter_lit),
-        ));
-        if f.typing {
-            filter.push(Span::styled("▏", fg(theme.dim)));
-        }
+        filter.extend(f.spans(reverse(fg(YELLOW), filter_lit), fg(theme.dim)));
     } else if filter_stop {
         filter.push(Span::raw("  "));
         filter.push(Span::styled(
@@ -6341,7 +6344,7 @@ pub(super) fn body(
                         &snap.all_tabs
                     },
                     side_top: m.side_top(),
-                    thread_open: m.slack_thread_open,
+                    thread_open: m.alone.contains(&ViewId::Slack),
                     failed: snap.slack_thread_failed.as_deref(),
                     files_failed: &snap.slack_files_failed,
                     files_kept: &snap.slack_files_kept,
@@ -6646,10 +6649,7 @@ mod tests {
     #[test]
     fn a_filter_being_typed_leads_the_keys_line() {
         let mut m = mission(vec![tab(1, "one"), tab(2, "two")], Vec::new());
-        m.filter = Some(crate::sidebar::render::Filter {
-            text: "tw".into(),
-            typing: true,
-        });
+        m.filter = Some(crate::ui::menu::Filter::of("tw", true));
         let (lines, _) = screen(&m, 60, 20);
         let keys = texts(&lines).last().cloned().unwrap();
         assert!(
@@ -7576,10 +7576,7 @@ mod tests {
         let (_, hits) = screen(&m, 120, 20);
         assert!(hits.iter().any(|h| h.spot == Spot::Key(menu)));
         // A filter being typed is no key, whatever its letters.
-        m.filter = Some(crate::sidebar::render::Filter {
-            text: "queue".into(),
-            typing: true,
-        });
+        m.filter = Some(crate::ui::menu::Filter::of("queue", true));
         let (_, typed) = screen(&m, 120, 20);
         let q = crate::mux::input::Key::parse("q").unwrap();
         assert!(!typed.iter().any(|h| h.spot == Spot::Key(q)));
@@ -7732,7 +7729,9 @@ mod tests {
             m.snap.all_tabs = vec![nine.clone()];
             m.view = 1;
             m.size = (cols as u16, 44);
-            m.routines_pane = pane;
+            if pane {
+                m.alone.insert(ViewId::Routines);
+            }
             let (lines, hits, _, _) = drawn(&m, cols, 44);
             (texts(&lines).join("\n"), hits)
         };
@@ -8050,7 +8049,7 @@ mod tests {
             "no letter keys: {:?}",
             t.last()
         );
-        m.reopen_pane = true;
+        m.alone.insert(ViewId::Reopen);
         let (lines, _, images, _) = drawn(&m, 120, 40);
         let t = texts(&lines);
         assert!(t.iter().any(|l| l.contains("Reopening brings back")));
@@ -8519,10 +8518,7 @@ mod tests {
         );
 
         // A search lists the matches of every category.
-        m.filter = Some(crate::sidebar::render::Filter {
-            text: "notif".into(),
-            typing: false,
-        });
+        m.filter = Some(crate::ui::menu::Filter::of("notif", false));
         let shown = views::shown(&m.snap.views[0], "notif", None, &views::Folds::default());
         m.snap.views[0] = shown;
         m.cursor = 1;
@@ -10682,7 +10678,7 @@ mod tests {
             !text.contains("test line 30") && text.contains("i  its last output here"),
             "{text}"
         );
-        m.landing_output = true;
+        m.alone.insert(ViewId::Landing);
         let text = texts(&screen(&m, 130, 50).0).join("\n");
         assert!(
             text.contains("test line 30 ... ok") && !text.contains("leak check"),

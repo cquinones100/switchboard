@@ -468,11 +468,12 @@ fn choose_interactive(lines: &[String]) -> Option<usize> {
                     KeyCode::Enter => break Some(selected),
                     KeyCode::Esc | KeyCode::Char('q') => break None,
                     KeyCode::Char('c') if ctrl => break None,
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        selected = (selected + l.rows.len() - 1) % l.rows.len();
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        selected = (selected + 1) % l.rows.len();
+                    _ if let Some(by) = crate::mux::input::Key::of_crossterm(&key)
+                        .and_then(crate::ui::kit::nav::step)
+                        .and_then(|m| m.rows()) =>
+                    {
+                        let n = l.rows.len() as isize;
+                        selected = (selected as isize + by).rem_euclid(n) as usize;
                     }
                     _ => continue,
                 }

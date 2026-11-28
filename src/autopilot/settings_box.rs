@@ -1565,12 +1565,8 @@ impl Overlay for SettingsBox {
                 self.form.tab(&k, &stops, look);
                 return Step::Redraw;
             }
-            KeyCode::Down => {
-                self.step_focus(1, look);
-                return Step::Redraw;
-            }
-            KeyCode::Up => {
-                self.step_focus(-1, look);
+            _ if let Some(by) = crate::ui::kit::nav::typing_rows(k) => {
+                self.step_focus(by, look);
                 return Step::Redraw;
             }
             _ => {}

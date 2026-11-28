@@ -157,8 +157,7 @@ impl Viewer {
         text: String,
         copy: fn(&str) -> Result<(), String>,
     ) -> Viewer {
-        let mut editor = Editor::new(Text::from_file(&text));
-        editor.read_only = true;
+        let mut editor = Editor::reader(Text::from_file(&text));
         editor.clipboard = true;
         Viewer {
             modified: modified_of(&path),
